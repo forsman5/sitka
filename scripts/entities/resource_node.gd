@@ -1,3 +1,4 @@
+class_name ResourceNode
 extends StaticBody3D
 
 enum Type { WOOD, STONE, FOOD }
