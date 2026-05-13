@@ -1,6 +1,5 @@
 extends Node3D
 
-const Person = preload("res://scripts/entities/person.gd")
 const DRAG_THRESHOLD := 6.0
 
 var _drag_start := Vector2.ZERO
@@ -39,7 +38,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 	elif _any_selected():
 		var pos := _raycast_y0(screen_pos)
 		if pos != Vector3.INF:
-			for p: Person in get_tree().get_nodes_in_group("persons"):
+			for p: Node3D in get_tree().get_nodes_in_group("persons"):
 				if p.selected:
 					p.move_to(pos)
 	else:
@@ -61,16 +60,16 @@ func _update_selection_box(current_pos: Vector2) -> void:
 	_selection_box.size = abs_rect.size
 
 func _deselect_all() -> void:
-	for p: Person in get_tree().get_nodes_in_group("persons"):
+	for p: Node3D in get_tree().get_nodes_in_group("persons"):
 		p.set_selected(false)
 
 func _any_selected() -> bool:
-	for p: Person in get_tree().get_nodes_in_group("persons"):
+	for p: Node3D in get_tree().get_nodes_in_group("persons"):
 		if p.selected:
 			return true
 	return false
 
-func _get_person_at(screen_pos: Vector2) -> Person:
+func _get_person_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()
 	var space := get_world_3d().direct_space_state
 	var from := camera.project_ray_origin(screen_pos)
@@ -85,7 +84,7 @@ func _get_person_at(screen_pos: Vector2) -> Person:
 	if collider is Area3D:
 		var parent: Node = (collider as Area3D).get_parent()
 		if parent.is_in_group("persons"):
-			return parent
+			return parent as Node3D
 	return null
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
