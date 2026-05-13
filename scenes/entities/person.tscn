@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/person.gd" id="1_person"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_1"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="StandardMaterial3D" id="PersonMat_1"]
+albedo_color = Color(0.2, 0.5, 1.0, 1)
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape_1"]
+radius = 0.35
+height = 1.8
+
+[node name="Person" type="CharacterBody3D"]
+script = ExtResource("1_person")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_1")
+surface_material_override/0 = SubResource("PersonMat_1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape_1")
+
+[node name="Area3D" type="Area3D" parent="."]
+position = Vector3(0, 0.9, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
+shape = SubResource("CapsuleShape_1")

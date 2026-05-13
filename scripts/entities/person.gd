@@ -1,3 +1,4 @@
+class_name Person
 extends CharacterBody3D
 
 const MOVE_SPEED := 5.0
