@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
+
+[node name="RTSCamera" type="Node3D"]
+script = ExtResource("1_cam")
+
+; Camera3D sits directly above the pivot point and looks straight down.
+; Orthographic size and projection are set in rts_camera.gd _ready().
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 20, 0)
