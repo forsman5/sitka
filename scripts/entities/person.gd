@@ -1,4 +1,4 @@
-extends Node3D
+extends CharacterBody3D
 
 const MOVE_SPEED := 5.0
 
@@ -13,14 +13,20 @@ var _mat_selected: StandardMaterial3D
 func _ready() -> void:
 	add_to_group("persons")
 	_target = global_position
+	motion_mode = MOTION_MODE_FLOATING
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
 
-func _process(delta: float) -> void:
-	var flat_target := Vector3(_target.x, global_position.y, _target.z)
-	if global_position.distance_to(flat_target) > 0.05:
-		global_position = global_position.move_toward(flat_target, MOVE_SPEED * delta)
+func _physics_process(_delta: float) -> void:
+	var dir := _target - global_position
+	dir.y = 0.0
+	if dir.length() > 0.1:
+		velocity = dir.normalized() * MOVE_SPEED
+	else:
+		velocity = Vector3.ZERO
+	move_and_slide()
+	global_position.y = 0.0
 
 func move_to(world_pos: Vector3) -> void:
 	_target = world_pos

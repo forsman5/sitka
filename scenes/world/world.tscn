@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3]
+[gd_scene load_steps=18 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -68,6 +68,10 @@ height = 2.0
 [sub_resource type="StandardMaterial3D" id="WoodMat_1"]
 albedo_color = Color(0.4, 0.65, 0.2, 1)
 
+[sub_resource type="CylinderShape3D" id="CylinderShape_1"]
+radius = 0.6
+height = 2.0
+
 [sub_resource type="StyleBoxFlat" id="SelectionStyle_1"]
 bg_color = Color(0.3, 0.6, 1.0, 0.12)
 border_width_left = 1
@@ -101,7 +105,7 @@ surface_material_override/0 = SubResource("GridMat_1")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Terrain"]
 shape = SubResource("WorldBoundary_1")
 
-[node name="Person" type="Node3D" parent="."]
+[node name="Person" type="CharacterBody3D" parent="."]
 position = Vector3(5, 0, 5)
 script = ExtResource("3_person")
 
@@ -110,13 +114,17 @@ position = Vector3(0, 0.9, 0)
 mesh = SubResource("CapsuleMesh_1")
 surface_material_override/0 = SubResource("PersonMat_1")
 
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Person"]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape_1")
+
 [node name="Area3D" type="Area3D" parent="Person"]
 position = Vector3(0, 0.9, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Person/Area3D"]
 shape = SubResource("CapsuleShape_1")
 
-[node name="Person2" type="Node3D" parent="."]
+[node name="Person2" type="CharacterBody3D" parent="."]
 position = Vector3(-3, 0, 4)
 script = ExtResource("3_person")
 
@@ -125,13 +133,17 @@ position = Vector3(0, 0.9, 0)
 mesh = SubResource("CapsuleMesh_1")
 surface_material_override/0 = SubResource("PersonMat_1")
 
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Person2"]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape_1")
+
 [node name="Area3D" type="Area3D" parent="Person2"]
 position = Vector3(0, 0.9, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Person2/Area3D"]
 shape = SubResource("CapsuleShape_1")
 
-[node name="Person3" type="Node3D" parent="."]
+[node name="Person3" type="CharacterBody3D" parent="."]
 position = Vector3(1, 0, 8)
 script = ExtResource("3_person")
 
@@ -140,13 +152,17 @@ position = Vector3(0, 0.9, 0)
 mesh = SubResource("CapsuleMesh_1")
 surface_material_override/0 = SubResource("PersonMat_1")
 
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Person3"]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape_1")
+
 [node name="Area3D" type="Area3D" parent="Person3"]
 position = Vector3(0, 0.9, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Person3/Area3D"]
 shape = SubResource("CapsuleShape_1")
 
-[node name="ResourceNode" type="Node3D" parent="."]
+[node name="ResourceNode" type="StaticBody3D" parent="."]
 position = Vector3(-8, 0, -3)
 script = ExtResource("4_resource")
 
@@ -154,6 +170,10 @@ script = ExtResource("4_resource")
 position = Vector3(0, 1, 0)
 mesh = SubResource("CylinderMesh_1")
 surface_material_override/0 = SubResource("WoodMat_1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="ResourceNode"]
+position = Vector3(0, 1, 0)
+shape = SubResource("CylinderShape_1")
 
 [node name="SelectionUI" type="CanvasLayer" parent="."]
 
