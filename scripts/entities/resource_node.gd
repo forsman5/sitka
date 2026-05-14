@@ -1,6 +1,8 @@
 class_name ResourceNode
 extends StaticBody3D
 
+const InventoryItem = preload("res://scripts/inventory/inventory_item.gd")
+
 enum Type { WOOD, STONE, FOOD, GOLD }
 
 signal depleted
@@ -11,8 +13,19 @@ signal depleted
 @export var wait_time: float = 2.0
 
 func mine() -> Array:
-	push_error("%s must implement mine()" % get_script().resource_path)
-	return []
+	await get_tree().create_timer(wait_time).timeout
+	var item: InventoryItem
+	match resource_type:
+		Type.WOOD:  item = InventoryItem.new("Wood",  1.0)
+		Type.STONE: item = InventoryItem.new("Stone", 2.0)
+		Type.FOOD:  item = InventoryItem.new("Food",  0.5)
+		Type.GOLD:  item = InventoryItem.new("Gold",  1.5)
+	if item == null:
+		return []
+	amount -= 1
+	if amount <= 0:
+		depleted.emit()
+	return [item]
 
 func harvest(quantity: int) -> int:
 	var taken := mini(quantity, amount)
