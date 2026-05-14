@@ -15,6 +15,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			_finish_input(event.position)
 			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		_handle_right_click(event.position)
+		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		if event.position.distance_to(_drag_start) > DRAG_THRESHOLD:
 			_dragging = true
@@ -68,6 +71,34 @@ func _any_selected() -> bool:
 		if p.selected:
 			return true
 	return false
+
+func _handle_right_click(screen_pos: Vector2) -> void:
+	if not _any_selected():
+		return
+	var node := _get_resource_at(screen_pos)
+	if node == null:
+		return
+	for p: Node3D in get_tree().get_nodes_in_group("persons"):
+		if p.selected:
+			p.set_objective(node)
+
+func _get_resource_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("resource_nodes"):
+			return parent as Node3D
+	return null
 
 func _get_person_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()

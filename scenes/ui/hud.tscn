@@ -1,6 +1,18 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/hud.gd" id="1_hud"]
+
+[sub_resource type="StyleBoxFlat" id="PanelStyle_1"]
+bg_color = Color(0.08, 0.08, 0.1, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.3, 0.4, 0.8)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_left = 4
+corner_radius_bottom_right = 4
 
 [node name="HUD" type="CanvasLayer"]
 layer = 10
@@ -21,3 +33,40 @@ offset_top = -50.0
 offset_right = -10.0
 offset_bottom = -10.0
 text = "Gold: 0"
+
+[node name="SelectionPanel" type="Panel" parent="Root"]
+visible = false
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = -200.0
+offset_right = 400.0
+offset_bottom = -10.0
+theme_override_styles/panel = SubResource("PanelStyle_1")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Root/SelectionPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+
+[node name="HeaderRow" type="HBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
+
+[node name="UnitHeader" type="Label" parent="Root/SelectionPanel/VBoxContainer/HeaderRow"]
+custom_minimum_size = Vector2(110, 0)
+text = "UNIT"
+
+[node name="ObjHeader" type="Label" parent="Root/SelectionPanel/VBoxContainer/HeaderRow"]
+custom_minimum_size = Vector2(170, 0)
+text = "OBJECTIVE"
+
+[node name="CarryHeader" type="Label" parent="Root/SelectionPanel/VBoxContainer/HeaderRow"]
+custom_minimum_size = Vector2(80, 0)
+text = "CARRY"
+
+[node name="HSeparator" type="HSeparator" parent="Root/SelectionPanel/VBoxContainer"]
+
+[node name="Rows" type="GridContainer" parent="Root/SelectionPanel/VBoxContainer"]
+columns = 3

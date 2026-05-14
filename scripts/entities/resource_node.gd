@@ -12,6 +12,9 @@ signal depleted
 @export var max_amount: int = 100
 @export var wait_time: float = 2.0
 
+func _ready() -> void:
+	add_to_group("resource_nodes")
+
 func mine() -> Array:
 	await get_tree().create_timer(wait_time).timeout
 	var item: InventoryItem
