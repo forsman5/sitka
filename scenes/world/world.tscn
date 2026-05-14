@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -51,6 +51,12 @@ shader = SubResource("GridShader_1")
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundary_1"]
 
+[sub_resource type="NavigationMesh" id="NavMesh_1"]
+agent_radius = 0.4
+agent_height = 2.0
+agent_max_climb = 0.1
+cell_size = 0.25
+
 [sub_resource type="StyleBoxFlat" id="SelectionStyle_1"]
 bg_color = Color(0.3, 0.6, 1.0, 0.12)
 border_width_left = 1
@@ -75,13 +81,16 @@ script = ExtResource("1_cam")
 
 [node name="Camera3D" type="Camera3D" parent="RTSCamera"]
 
-[node name="Terrain" type="StaticBody3D" parent="."]
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavMesh_1")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Terrain"]
+[node name="Terrain" type="StaticBody3D" parent="NavigationRegion3D"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="NavigationRegion3D/Terrain"]
 mesh = SubResource("PlaneMesh_1")
 surface_material_override/0 = SubResource("GridMat_1")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Terrain"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="NavigationRegion3D/Terrain"]
 shape = SubResource("WorldBoundary_1")
 
 [node name="Person" parent="." instance=ExtResource("3_person")]

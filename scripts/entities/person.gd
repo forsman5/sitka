@@ -11,36 +11,45 @@ const Building = preload("res://scripts/entities/building.gd")
 
 var selected := false
 var inventory: Array = []
-var _target: Vector3
 var _objective_node: Node3D = null
 var _move_target: Vector3 = Vector3.INF
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
+@onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
 
 var _mat_normal: Material
 var _mat_selected: StandardMaterial3D
 
 func _ready() -> void:
 	add_to_group("persons")
-	_target = global_position
 	motion_mode = MOTION_MODE_FLOATING
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
+	_nav_agent.target_desired_distance = 1.0
+	_nav_agent.velocity_computed.connect(_on_velocity_computed)
 	_run_task_loop()
 
 func _physics_process(_delta: float) -> void:
-	var dir := _target - global_position
-	dir.y = 0.0
-	if dir.length() > 0.1:
-		velocity = dir.normalized() * MOVE_SPEED
-	else:
+	if _nav_agent.is_navigation_finished():
 		velocity = Vector3.ZERO
+		move_and_slide()
+		global_position.y = 0.0
+		return
+	var next_pos := _nav_agent.get_next_path_position()
+	var dir := next_pos - global_position
+	dir.y = 0.0
+	var desired := dir.normalized() * MOVE_SPEED if dir.length() > 0.01 else Vector3.ZERO
+	_nav_agent.set_velocity(desired)
+
+func _on_velocity_computed(safe_velocity: Vector3) -> void:
+	velocity = safe_velocity
+	velocity.y = 0.0
 	move_and_slide()
 	global_position.y = 0.0
 
 func move_to(world_pos: Vector3) -> void:
-	_target = world_pos
+	_nav_agent.set_target_position(world_pos)
 
 func set_selected(value: bool) -> void:
 	selected = value
@@ -88,6 +97,7 @@ func _run_task_loop() -> void:
 			await get_tree().process_frame
 
 func _do_move(pos: Vector3) -> void:
+	_nav_agent.target_desired_distance = REACH
 	move_to(pos)
 	while _move_target == pos and global_position.distance_to(pos) > REACH:
 		await get_tree().process_frame
@@ -103,6 +113,7 @@ func _do_deposit() -> void:
 	if capital_3d == null:
 		inventory.clear()
 		return
+	_nav_agent.target_desired_distance = DEPOSIT_REACH
 	move_to(capital_3d.global_position)
 	await _wait_until_near(capital_3d, DEPOSIT_REACH)
 	if _move_target != Vector3.INF:
@@ -118,6 +129,7 @@ func _do_harvest(node: Node3D) -> void:
 	if resource == null:
 		_objective_node = null
 		return
+	_nav_agent.target_desired_distance = 1.0
 	while _objective_node == node and is_instance_valid(node) and not _is_carry_full():
 		move_to(node.global_position)
 		await _wait_until_near(node)
@@ -128,7 +140,13 @@ func _do_harvest(node: Node3D) -> void:
 			inventory.append(item)
 
 func _wait_until_near(node: Node3D, reach: float = REACH) -> void:
-	while is_instance_valid(node) and global_position.distance_to(node.global_position) > reach:
+	await get_tree().process_frame
+	while is_instance_valid(node):
+		var dist := global_position.distance_to(node.global_position)
+		if dist <= reach:
+			return
 		if _move_target != Vector3.INF:
+			return
+		if _nav_agent.is_navigation_finished() and dist <= reach * 2.0:
 			return
 		await get_tree().process_frame
