@@ -1,0 +1,11 @@
+[gd_scene format=3 uid="uid://dhpswlo6jyqaw"]
+
+[ext_resource type="PackedScene" path="res://scenes/entities/resource_node.tscn" id="1_ww58t"]
+
+[node name="ResourceNode" unique_id=222818427 instance=ExtResource("1_ww58t")]
+
+[node name="MeshInstance3D" parent="." index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="CollisionShape3D" parent="." index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)

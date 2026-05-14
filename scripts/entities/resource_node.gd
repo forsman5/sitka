@@ -1,13 +1,18 @@
 class_name ResourceNode
 extends StaticBody3D
 
-enum Type { WOOD, STONE, FOOD }
+enum Type { WOOD, STONE, FOOD, GOLD }
 
 signal depleted
 
 @export var resource_type: Type = Type.WOOD
 @export var amount: int = 100
 @export var max_amount: int = 100
+@export var wait_time: float = 2.0
+
+func mine() -> Array:
+	push_error("%s must implement mine()" % get_script().resource_path)
+	return []
 
 func harvest(quantity: int) -> int:
 	var taken := mini(quantity, amount)

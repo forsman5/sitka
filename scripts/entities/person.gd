@@ -3,7 +3,10 @@ extends CharacterBody3D
 
 const MOVE_SPEED := 5.0
 
+@export var carry_capacity: float = 10.0
+
 var selected := false
+var inventory: Array = []
 var _target: Vector3
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
@@ -35,3 +38,15 @@ func move_to(world_pos: Vector3) -> void:
 func set_selected(value: bool) -> void:
 	selected = value
 	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
+
+func current_weight() -> float:
+	var total := 0.0
+	for item in inventory:
+		total += item.weight
+	return total
+
+func can_carry(items: Array) -> bool:
+	var added := 0.0
+	for item in items:
+		added += item.weight
+	return current_weight() + added <= carry_capacity
