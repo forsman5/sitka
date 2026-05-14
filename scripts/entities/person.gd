@@ -13,6 +13,7 @@ var selected := false
 var inventory: Array = []
 var _objective_node: Node3D = null
 var _move_target: Vector3 = Vector3.INF
+var _deposit_queued: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
@@ -62,6 +63,12 @@ func set_objective(node: Node3D) -> void:
 func set_move_objective(pos: Vector3) -> void:
 	_move_target = pos
 	_objective_node = null
+	_deposit_queued = false
+
+func set_deposit_objective() -> void:
+	_deposit_queued = true
+	_objective_node = null
+	_move_target = Vector3.INF
 
 func current_weight() -> float:
 	var total := 0.0
@@ -78,6 +85,8 @@ func can_carry(items: Array) -> bool:
 func objective_label() -> String:
 	if _move_target != Vector3.INF:
 		return "moving"
+	if _deposit_queued:
+		return "depositing"
 	if _objective_node == null or not is_instance_valid(_objective_node):
 		return "idle"
 	var resource: ResourceNode = _objective_node as ResourceNode
@@ -97,7 +106,8 @@ func _run_task_loop() -> void:
 	while true:
 		if _move_target != Vector3.INF:
 			await _do_move(_move_target)
-		elif _is_carry_full():
+		elif _deposit_queued or _is_carry_full():
+			_deposit_queued = false
 			await _do_deposit()
 		elif _objective_node != null and is_instance_valid(_objective_node):
 			await _do_harvest(_objective_node)

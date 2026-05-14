@@ -79,12 +79,35 @@ func _any_selected() -> bool:
 func _handle_right_click(screen_pos: Vector2) -> void:
 	if not _any_selected():
 		return
-	var node := _get_resource_at(screen_pos)
-	if node == null:
+	var resource := _get_resource_at(screen_pos)
+	if resource != null:
+		for p: Node3D in get_tree().get_nodes_in_group("persons"):
+			if p.selected:
+				p.set_objective(resource)
 		return
-	for p: Node3D in get_tree().get_nodes_in_group("persons"):
-		if p.selected:
-			p.set_objective(node)
+	var building := _get_building_at(screen_pos)
+	if building != null:
+		for p: Node3D in get_tree().get_nodes_in_group("persons"):
+			if p.selected:
+				p.set_deposit_objective()
+
+func _get_building_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("capital"):
+			return parent as Node3D
+	return null
 
 func _get_resource_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()
