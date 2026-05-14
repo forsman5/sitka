@@ -16,13 +16,13 @@ func _ready() -> void:
 	add_to_group("resource_nodes")
 
 func mine() -> Array:
-	await get_tree().create_timer(wait_time).timeout
+	await get_tree().create_timer(wait_time / GameState.gather_speed).timeout
 	var item: InventoryItem
 	match resource_type:
 		Type.WOOD:  item = InventoryItem.new("Wood",  1.0)
 		Type.STONE: item = InventoryItem.new("Stone", 2.0)
 		Type.FOOD:  item = InventoryItem.new("Food",  0.5)
-		Type.GOLD:  item = InventoryItem.new("Gold",  1.5)
+		Type.GOLD:  item = InventoryItem.new("Gold",  1.0)
 	if item == null:
 		return []
 	amount -= 1

@@ -43,7 +43,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		if pos != Vector3.INF:
 			for p: Node3D in get_tree().get_nodes_in_group("persons"):
 				if p.selected:
-					p.move_to(pos)
+					p.set_move_objective(pos)
 	else:
 		_deselect_all()
 

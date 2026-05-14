@@ -95,6 +95,7 @@ position = Vector3(1, 0, 8)
 
 [node name="ResourceNode" parent="." instance=ExtResource("4_resource")]
 position = Vector3(-8, 0, -3)
+resource_type = 3
 
 [node name="Building" parent="." instance=ExtResource("5_building")]
 position = Vector3(8, 0, -6)
