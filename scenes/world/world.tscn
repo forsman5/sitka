@@ -1,11 +1,12 @@
-[gd_scene load_steps=14 format=3]
+[gd_scene load_steps=15 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
 [ext_resource type="PackedScene" path="res://scenes/entities/person.tscn" id="3_person"]
-[ext_resource type="PackedScene" path="res://scenes/entities/resource_node.tscn" id="4_resource"]
+[ext_resource type="PackedScene" path="res://scenes/entities/resource_node_gold.tscn" id="4_resource"]
 [ext_resource type="PackedScene" path="res://scenes/entities/building.tscn" id="5_building"]
 [ext_resource type="PackedScene" path="res://scenes/ui/hud.tscn" id="6_hud"]
+[ext_resource type="PackedScene" path="res://scenes/entities/resource_node_wood.tscn" id="7_wood"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -104,7 +105,9 @@ position = Vector3(1, 0, 8)
 
 [node name="ResourceNode" parent="." instance=ExtResource("4_resource")]
 position = Vector3(-8, 0, -3)
-resource_type = 3
+
+[node name="ResourceNodeWood" parent="." instance=ExtResource("7_wood")]
+position = Vector3(-4, 0, 4)
 
 [node name="Building" parent="." instance=ExtResource("5_building")]
 position = Vector3(8, 0, -6)

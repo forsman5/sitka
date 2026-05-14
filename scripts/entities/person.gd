@@ -80,7 +80,15 @@ func objective_label() -> String:
 		return "moving"
 	if _objective_node == null or not is_instance_valid(_objective_node):
 		return "idle"
-	return "mining " + _objective_node.name
+	var resource: ResourceNode = _objective_node as ResourceNode
+	if resource == null:
+		return "mining " + _objective_node.name
+	match resource.resource_type:
+		ResourceNode.Type.WOOD:  return "mine Wood"
+		ResourceNode.Type.STONE: return "mine Stone"
+		ResourceNode.Type.FOOD:  return "mine Food"
+		ResourceNode.Type.GOLD:  return "mine Gold"
+	return "mining"
 
 func _is_carry_full() -> bool:
 	return current_weight() >= carry_capacity

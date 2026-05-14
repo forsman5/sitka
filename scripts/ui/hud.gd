@@ -2,19 +2,25 @@ extends CanvasLayer
 
 const Person = preload("res://scripts/entities/person.gd")
 
+@onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
 @onready var _rows: GridContainer = $Root/SelectionPanel/VBoxContainer/Rows
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
+	GameState.wood_changed.connect(_on_wood_changed)
 	_gold_label.text = "Gold: %d" % GameState.player_gold
+	_wood_label.text = "Wood: %d" % GameState.player_wood
 
 func _process(_delta: float) -> void:
 	_refresh_panel()
 
 func _on_gold_changed(amount: int) -> void:
 	_gold_label.text = "Gold: %d" % amount
+
+func _on_wood_changed(amount: int) -> void:
+	_wood_label.text = "Wood: %d" % amount
 
 func _refresh_panel() -> void:
 	var selected: Array[Node] = []

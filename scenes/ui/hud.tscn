@@ -23,6 +23,17 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 mouse_filter = 2
 
+[node name="WoodLabel" type="Label" parent="Root"]
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -150.0
+offset_top = -90.0
+offset_right = -10.0
+offset_bottom = -50.0
+text = "Wood: 0"
+
 [node name="GoldLabel" type="Label" parent="Root"]
 anchor_left = 1.0
 anchor_top = 1.0

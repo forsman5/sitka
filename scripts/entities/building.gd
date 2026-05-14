@@ -9,5 +9,6 @@ func _ready() -> void:
 	add_to_group("capital")
 
 func deposit(item: InventoryItem) -> void:
-	if item.item_name == "Gold":
-		GameState.player_gold += 1
+	match item.item_name:
+		"Gold": GameState.player_gold += 1
+		"Wood": GameState.player_wood += 1
