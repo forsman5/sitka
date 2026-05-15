@@ -3,7 +3,7 @@ extends Node
 signal gold_changed(amount: int)
 signal wood_changed(amount: int)
 
-@export var gather_speed: float = 1.0
+@export var gather_speed: float = 1.3
 @export var game_speed: float = 1.0
 @export var pause_on_escape: bool = true
 @export var settler_cost: int = 30

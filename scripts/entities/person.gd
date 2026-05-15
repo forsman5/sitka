@@ -4,6 +4,8 @@ extends CharacterBody3D
 const MOVE_SPEED := 5.0
 const REACH := 2.0
 const DEPOSIT_REACH := 3.5
+const SLEEP_TIME := 21.0 / 24.0
+const WAKE_TIME := 5.5 / 24.0
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 const Building = preload("res://scripts/entities/building.gd")
 
@@ -15,6 +17,7 @@ var _objective_node: Node3D = null
 var _last_resource_type: int = -1
 var _move_target: Vector3 = Vector3.INF
 var _deposit_queued: bool = false
+var _sleeping: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
@@ -87,6 +90,8 @@ func can_carry(items: Array) -> bool:
 	return current_weight() + added <= carry_capacity
 
 func objective_label() -> String:
+	if _sleeping:
+		return "sleeping"
 	if _move_target != Vector3.INF:
 		return "moving"
 	if _deposit_queued:
@@ -106,9 +111,14 @@ func objective_label() -> String:
 func _is_carry_full() -> bool:
 	return current_weight() >= carry_capacity
 
+func _is_night_time() -> bool:
+	return GameState.time_of_day >= SLEEP_TIME or GameState.time_of_day < WAKE_TIME
+
 func _run_task_loop() -> void:
 	while is_inside_tree():
-		if _move_target != Vector3.INF:
+		if _is_night_time():
+			await _do_sleep()
+		elif _move_target != Vector3.INF:
 			await _do_move(_move_target)
 		elif _deposit_queued or _is_carry_full():
 			_deposit_queued = false
@@ -129,7 +139,7 @@ func _do_move(pos: Vector3) -> void:
 	if _move_target == pos:
 		_move_target = Vector3.INF
 
-func _do_deposit() -> void:
+func _nearest_capital() -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist := INF
 	for node in get_tree().get_nodes_in_group("capital"):
@@ -137,6 +147,10 @@ func _do_deposit() -> void:
 		if d < nearest_dist:
 			nearest_dist = d
 			nearest = node as Node3D
+	return nearest
+
+func _do_deposit() -> void:
+	var nearest := _nearest_capital()
 	if nearest == null:
 		inventory.clear()
 		return
@@ -151,6 +165,24 @@ func _do_deposit() -> void:
 			building.deposit(item)
 	inventory.clear()
 
+func _do_sleep() -> void:
+	_sleeping = true
+	var capital := _nearest_capital()
+	if capital != null:
+		_nav_agent.target_desired_distance = DEPOSIT_REACH
+		move_to(capital.global_position)
+		await _wait_until_near(capital, DEPOSIT_REACH)
+		var building: Building = capital as Building
+		if building != null:
+			for item in inventory:
+				building.deposit(item)
+		inventory.clear()
+	visible = false
+	while is_inside_tree() and _is_night_time():
+		await get_tree().process_frame
+	visible = true
+	_sleeping = false
+
 func _do_harvest(node: Node3D) -> void:
 	var resource: ResourceNode = node as ResourceNode
 	if resource == null:
@@ -158,13 +190,13 @@ func _do_harvest(node: Node3D) -> void:
 		return
 	var res_type := resource.resource_type
 	_nav_agent.target_desired_distance = 1.0
-	while _objective_node == node and is_instance_valid(node) and not _is_carry_full():
+	while _objective_node == node and is_instance_valid(node) and not _is_carry_full() and not _is_night_time():
 		move_to(node.global_position)
 		await _wait_until_near(node)
-		if _objective_node != node or not is_instance_valid(node) or _move_target != Vector3.INF:
+		if _objective_node != node or not is_instance_valid(node) or _move_target != Vector3.INF or _is_night_time():
 			break
 		await get_tree().create_timer(resource.wait_time / (GameState.gather_speed * GameState.game_speed)).timeout
-		if not is_instance_valid(node) or _objective_node != node or _move_target != Vector3.INF:
+		if not is_instance_valid(node) or _objective_node != node or _move_target != Vector3.INF or _is_night_time():
 			break
 		var items := resource.mine_sync()
 		for item in items:
