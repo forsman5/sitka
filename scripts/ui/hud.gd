@@ -4,8 +4,6 @@ const Person = preload("res://scripts/entities/person.gd")
 const Building = preload("res://scripts/entities/building.gd")
 const PersonScene = preload("res://scenes/entities/person.tscn")
 
-const SPAWN_COST := 30
-
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
@@ -66,15 +64,15 @@ func _refresh_panel() -> void:
 		if building != null:
 			_building_name.text = building.building_name
 			_building_type.text = "Capital"
-		_spawn_btn.disabled = GameState.player_gold < SPAWN_COST
+		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 
 func _on_spawn_pressed() -> void:
-	if GameState.player_gold < SPAWN_COST:
+	if GameState.player_gold < GameState.settler_cost:
 		return
 	var capital: Node3D = get_tree().get_first_node_in_group("capital") as Node3D
 	if capital == null:
 		return
-	GameState.player_gold -= SPAWN_COST
+	GameState.player_gold -= GameState.settler_cost
 	var person: Node3D = PersonScene.instantiate() as Node3D
 	var idx := get_tree().get_nodes_in_group("persons").size() + 1
 	person.name = "Person%d" % idx
