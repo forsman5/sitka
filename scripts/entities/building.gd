@@ -4,6 +4,7 @@ extends StaticBody3D
 const InventoryItem = preload("res://scripts/inventory/inventory_item.gd")
 
 @export var building_name: String = "Building"
+@export var building_type: String = "Building"
 
 var selected: bool = false
 
@@ -13,7 +14,6 @@ var _mat_normal: Material
 var _mat_selected: StandardMaterial3D
 
 func _ready() -> void:
-	add_to_group("capital")
 	add_to_group("buildings")
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()

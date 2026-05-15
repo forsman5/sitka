@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/entities/building.tscn" id="1_base"]
+[ext_resource type="Script" path="res://scripts/entities/deposit_building.gd" id="2_deposit"]
+
+[node name="Building" instance=ExtResource("1_base")]
+script = ExtResource("2_deposit")
+building_name = "Capital"
+building_type = "Capital"

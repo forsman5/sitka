@@ -12,6 +12,7 @@ const Building = preload("res://scripts/entities/building.gd")
 var selected := false
 var inventory: Array = []
 var _objective_node: Node3D = null
+var _last_resource_type: int = -1
 var _move_target: Vector3 = Vector3.INF
 var _deposit_queued: bool = false
 
@@ -59,6 +60,9 @@ func set_selected(value: bool) -> void:
 func set_objective(node: Node3D) -> void:
 	_objective_node = node
 	_move_target = Vector3.INF
+	var r := node as ResourceNode
+	if r != null:
+		_last_resource_type = r.resource_type
 
 func set_move_objective(pos: Vector3) -> void:
 	_move_target = pos
@@ -111,6 +115,9 @@ func _run_task_loop() -> void:
 			await _do_deposit()
 		elif _objective_node != null and is_instance_valid(_objective_node):
 			await _do_harvest(_objective_node)
+		elif _objective_node != null and not is_instance_valid(_objective_node) and _last_resource_type >= 0:
+			_objective_node = _find_nearest_of_type(_last_resource_type as ResourceNode.Type)
+			await get_tree().process_frame
 		else:
 			await get_tree().process_frame
 
@@ -123,20 +130,22 @@ func _do_move(pos: Vector3) -> void:
 		_move_target = Vector3.INF
 
 func _do_deposit() -> void:
-	var capital: Node = get_tree().get_first_node_in_group("capital")
-	if capital == null:
-		inventory.clear()
-		return
-	var capital_3d: Node3D = capital as Node3D
-	if capital_3d == null:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for node in get_tree().get_nodes_in_group("capital"):
+		var d := global_position.distance_to((node as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = node as Node3D
+	if nearest == null:
 		inventory.clear()
 		return
 	_nav_agent.target_desired_distance = DEPOSIT_REACH
-	move_to(capital_3d.global_position)
-	await _wait_until_near(capital_3d, DEPOSIT_REACH)
+	move_to(nearest.global_position)
+	await _wait_until_near(nearest, DEPOSIT_REACH)
 	if _move_target != Vector3.INF:
 		return
-	var building: Building = capital as Building
+	var building: Building = nearest as Building
 	if building != null:
 		for item in inventory:
 			building.deposit(item)
@@ -147,15 +156,36 @@ func _do_harvest(node: Node3D) -> void:
 	if resource == null:
 		_objective_node = null
 		return
+	var res_type := resource.resource_type
 	_nav_agent.target_desired_distance = 1.0
 	while _objective_node == node and is_instance_valid(node) and not _is_carry_full():
 		move_to(node.global_position)
 		await _wait_until_near(node)
 		if _objective_node != node or not is_instance_valid(node) or _move_target != Vector3.INF:
 			break
-		var items: Array = await resource.mine()
+		await get_tree().create_timer(resource.wait_time / GameState.gather_speed).timeout
+		if not is_instance_valid(node) or _objective_node != node or _move_target != Vector3.INF:
+			break
+		var items := resource.mine_sync()
 		for item in items:
 			inventory.append(item)
+	if not is_instance_valid(node) and not _is_carry_full() and not is_instance_valid(_objective_node):
+		_objective_node = _find_nearest_of_type(res_type)
+
+func _find_nearest_of_type(type: ResourceNode.Type) -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for n in get_tree().get_nodes_in_group("resource_nodes"):
+		if not is_instance_valid(n):
+			continue
+		var r: ResourceNode = n as ResourceNode
+		if r == null or r.resource_type != type:
+			continue
+		var d := global_position.distance_to(r.global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = n as Node3D
+	return nearest
 
 func _wait_until_near(node: Node3D, reach: float = REACH) -> void:
 	if not is_inside_tree():

@@ -38,6 +38,12 @@ func _attempt_spawn() -> void:
 				break
 		if too_close:
 			continue
+		for building in get_tree().get_nodes_in_group("buildings"):
+			if is_instance_valid(building) and (building as Node3D).global_position.distance_to(pos) < min_tree_spacing:
+				too_close = true
+				break
+		if too_close:
+			continue
 		var tree: Node3D = TreeScene.instantiate() as Node3D
 		get_parent().add_child(tree)
 		tree.global_position = pos

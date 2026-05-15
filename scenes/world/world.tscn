@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3]
+[gd_scene load_steps=18 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" path="res://scenes/entities/resource_node_wood.tscn" id="7_wood"]
 [ext_resource type="PackedScene" path="res://scenes/ui/escape_menu.tscn" id="8_escape"]
 [ext_resource type="Script" path="res://scripts/world/forest_manager.gd" id="9_forest"]
+[ext_resource type="Script" path="res://scripts/world/building_placement.gd" id="10_bplacement"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -155,6 +156,25 @@ horizontal_alignment = 1
 
 [node name="ForestManager" type="Node" parent="."]
 script = ExtResource("9_forest")
+
+[node name="BuildingPlacement" type="Node" parent="."]
+script = ExtResource("10_bplacement")
+
+[node name="HintUI" type="CanvasLayer" parent="BuildingPlacement"]
+layer = 5
+
+[node name="HintLabel" type="Label" parent="BuildingPlacement/HintUI"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.0
+anchor_right = 0.5
+anchor_bottom = 0.0
+offset_left = -220.0
+offset_top = 20.0
+offset_right = 220.0
+offset_bottom = 50.0
+text = "Right-click to place  •  Esc to cancel"
+horizontal_alignment = 1
 
 [node name="SelectionUI" type="CanvasLayer" parent="."]
 

@@ -1,6 +1,6 @@
 extends Node
 
-const BuildingScene = preload("res://scenes/entities/building.tscn")
+const BuildingScene = preload("res://scenes/entities/capital.tscn")
 
 var _active: bool = true
 

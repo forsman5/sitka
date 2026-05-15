@@ -82,6 +82,16 @@ text = "CARRY"
 [node name="Rows" type="GridContainer" parent="Root/SelectionPanel/VBoxContainer"]
 columns = 3
 
+[node name="ResourceView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
+visible = false
+theme_override_constants/separation = 6
+
+[node name="ResourceName" type="Label" parent="Root/SelectionPanel/VBoxContainer/ResourceView"]
+theme_override_font_sizes/font_size = 16
+
+[node name="AmountLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/ResourceView"]
+modulate = Color(0.7, 0.7, 0.8, 1)
+
 [node name="BuildingView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
 visible = false
 theme_override_constants/separation = 6
@@ -95,4 +105,8 @@ modulate = Color(0.7, 0.7, 0.8, 1)
 [node name="SpawnButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 text = "Spawn Settler (30g)"
 
+[node name="BuildHutButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+text = "Build Forest Hut (50w)"
+
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
+[connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton" to="." method="_on_build_hut_pressed"]

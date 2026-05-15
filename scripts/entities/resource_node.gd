@@ -12,12 +12,25 @@ signal depleted
 @export var max_amount: int = 100
 @export var wait_time: float = 2.0
 
+var selected: bool = false
+
+@onready var _mesh: MeshInstance3D = $MeshInstance3D
+
+var _mat_normal: Material
+var _mat_selected: StandardMaterial3D
+
 func _ready() -> void:
 	add_to_group("resource_nodes")
 	depleted.connect(queue_free)
+	_mat_normal = _mesh.get_surface_override_material(0)
+	_mat_selected = StandardMaterial3D.new()
+	_mat_selected.albedo_color = Color(1.0, 1.0, 0.5, 1)
 
-func mine() -> Array:
-	await get_tree().create_timer(wait_time / GameState.gather_speed).timeout
+func set_selected(value: bool) -> void:
+	selected = value
+	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
+
+func mine_sync() -> Array:
 	if amount <= 0:
 		return []
 	var item: InventoryItem

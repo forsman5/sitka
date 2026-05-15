@@ -6,6 +6,7 @@ signal wood_changed(amount: int)
 @export var gather_speed: float = 1.0
 @export var pause_on_escape: bool = true
 @export var settler_cost: int = 30
+@export var forest_hut_cost: int = 50
 
 var player_gold: int = 0:
 	set(value):
