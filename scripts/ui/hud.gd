@@ -6,7 +6,12 @@ const Building = preload("res://scripts/entities/building.gd")
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
+@onready var _header_row: HBoxContainer = $Root/SelectionPanel/VBoxContainer/HeaderRow
+@onready var _separator: HSeparator = $Root/SelectionPanel/VBoxContainer/HSeparator
 @onready var _rows: GridContainer = $Root/SelectionPanel/VBoxContainer/Rows
+@onready var _building_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView
+@onready var _building_name: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingName
+@onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
@@ -24,28 +29,39 @@ func _on_wood_changed(amount: int) -> void:
 	_wood_label.text = "Wood: %d" % amount
 
 func _refresh_panel() -> void:
-	var selected: Array[Node] = []
+	var persons: Array[Node] = []
+	var buildings: Array[Node] = []
 	for p in get_tree().get_nodes_in_group("persons"):
 		if p.get("selected") == true:
-			selected.append(p)
+			persons.append(p)
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if b.get("selected") == true:
-			selected.append(b)
-	_selection_panel.visible = not selected.is_empty()
-	if selected.is_empty():
-		return
-	for child in _rows.get_children():
-		_rows.remove_child(child)
-		child.queue_free()
-	for node in selected:
-		var person: Person = node as Person
-		if person != null:
-			_add_row(person.name, person.objective_label(),
-				"%.1f / %.1f" % [person.current_weight(), person.carry_capacity])
-			continue
-		var building: Building = node as Building
+			buildings.append(b)
+
+	var has_persons := not persons.is_empty()
+	var has_buildings := not buildings.is_empty()
+	_selection_panel.visible = has_persons or has_buildings
+
+	_header_row.visible = has_persons
+	_separator.visible = has_persons
+	_rows.visible = has_persons
+	_building_view.visible = has_buildings
+
+	if has_persons:
+		for child in _rows.get_children():
+			_rows.remove_child(child)
+			child.queue_free()
+		for node in persons:
+			var person: Person = node as Person
+			if person != null:
+				_add_row(person.name, person.objective_label(),
+					"%.1f / %.1f" % [person.current_weight(), person.carry_capacity])
+
+	if has_buildings:
+		var building: Building = buildings[0] as Building
 		if building != null:
-			_add_row(building.building_name, "capital", "—")
+			_building_name.text = building.building_name
+			_building_type.text = "Capital"
 
 func _add_row(unit: String, objective: String, carry: String) -> void:
 	var name_lbl := Label.new()

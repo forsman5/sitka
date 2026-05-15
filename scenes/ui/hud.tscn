@@ -81,3 +81,13 @@ text = "CARRY"
 
 [node name="Rows" type="GridContainer" parent="Root/SelectionPanel/VBoxContainer"]
 columns = 3
+
+[node name="BuildingView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
+visible = false
+theme_override_constants/separation = 6
+
+[node name="BuildingName" type="Label" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+theme_override_font_sizes/font_size = 16
+
+[node name="BuildingType" type="Label" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+modulate = Color(0.7, 0.7, 0.8, 1)
