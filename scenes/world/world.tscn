@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3]
+[gd_scene load_steps=17 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/hud.tscn" id="6_hud"]
 [ext_resource type="PackedScene" path="res://scenes/entities/resource_node_wood.tscn" id="7_wood"]
 [ext_resource type="PackedScene" path="res://scenes/ui/escape_menu.tscn" id="8_escape"]
+[ext_resource type="Script" path="res://scripts/world/forest_manager.gd" id="9_forest"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -25,10 +26,15 @@ size = Vector2(100, 100)
 code = "shader_type spatial;
 render_mode diffuse_lambert;
 
-uniform vec4 base_color : source_color = vec4(0.25, 0.42, 0.25, 1.0);
-uniform vec4 line_color : source_color = vec4(0.15, 0.28, 0.15, 1.0);
+uniform vec4 grassland_color : source_color = vec4(0.25, 0.42, 0.25, 1.0);
+uniform vec4 forest_color : source_color = vec4(0.16, 0.28, 0.16, 1.0);
+uniform vec4 town_color : source_color = vec4(0.50, 0.46, 0.36, 1.0);
 uniform float cell_size : hint_range(0.5, 10.0, 0.5) = 2.0;
 uniform float line_width : hint_range(0.01, 0.3, 0.01) = 0.06;
+uniform vec2 capital_pos = vec2(9999.0, 9999.0);
+uniform float town_radius = 6.0;
+uniform vec2 forest_center = vec2(-60.0, -3.0);
+uniform float forest_radius = 50.0;
 
 varying vec3 world_pos;
 
@@ -37,12 +43,24 @@ void vertex() {
 }
 
 void fragment() {
-	vec2 p = world_pos.xz;
-	vec2 grid = fract(p / cell_size);
+	vec2 tile_pos = world_pos.xz;
+	float dist_capital = distance(tile_pos, capital_pos);
+	float dist_forest = distance(tile_pos, forest_center);
+
+	vec3 biome;
+	if (dist_capital <= town_radius) {
+		biome = town_color.rgb;
+	} else if (dist_forest <= forest_radius) {
+		biome = forest_color.rgb;
+	} else {
+		biome = grassland_color.rgb;
+	}
+
+	vec2 grid = fract(tile_pos / cell_size);
 	float lw = line_width / cell_size;
 	float gx = step(1.0 - lw, grid.x) + step(grid.x, lw);
 	float gz = step(1.0 - lw, grid.y) + step(grid.y, lw);
-	ALBEDO = mix(base_color.rgb, line_color.rgb, clamp(gx + gz, 0.0, 1.0));
+	ALBEDO = mix(biome, biome * 0.6, clamp(gx + gz, 0.0, 1.0));
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
 }
@@ -134,6 +152,9 @@ horizontal_alignment = 1
 [node name="HUD" parent="." instance=ExtResource("6_hud")]
 
 [node name="EscapeMenu" parent="." instance=ExtResource("8_escape")]
+
+[node name="ForestManager" type="Node" parent="."]
+script = ExtResource("9_forest")
 
 [node name="SelectionUI" type="CanvasLayer" parent="."]
 

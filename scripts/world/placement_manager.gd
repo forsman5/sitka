@@ -18,9 +18,19 @@ func _place_capital(pos: Vector3) -> void:
 	var building: Node3D = BuildingScene.instantiate() as Node3D
 	get_parent().add_child(building)
 	building.global_position = pos
+	_update_town_biome(pos)
 	for p in get_tree().get_nodes_in_group("persons"):
 		(p as Node3D).show()
 	queue_free()
+
+func _update_town_biome(pos: Vector3) -> void:
+	var mesh := get_parent().get_node("NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	if mesh == null:
+		return
+	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+	if mat == null:
+		return
+	mat.set_shader_parameter("capital_pos", Vector2(pos.x, pos.z))
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
