@@ -40,20 +40,23 @@ func _finish_input(screen_pos: Vector2) -> void:
 func _handle_single_click(screen_pos: Vector2) -> void:
 	var person := _get_person_at(screen_pos)
 	if person != null:
+		_deselect_all_buildings()
 		_deselect_all()
 		person.set_selected(true)
-	elif _any_selected():
-		var pos := _raycast_y0(screen_pos)
-		if pos != Vector3.INF:
-			for p: Node3D in get_tree().get_nodes_in_group("persons"):
-				if p.selected:
-					p.set_move_objective(pos)
-	else:
+		return
+	var building := _get_building_at(screen_pos)
+	if building != null:
 		_deselect_all()
+		_deselect_all_buildings()
+		building.set_selected(true)
+		return
+	_deselect_all()
+	_deselect_all_buildings()
 
 func _finish_box_select(end_pos: Vector2) -> void:
 	var rect := Rect2(_drag_start, end_pos - _drag_start).abs()
 	_deselect_all()
+	_deselect_all_buildings()
 	var camera := get_viewport().get_camera_3d()
 	for person: Node3D in get_tree().get_nodes_in_group("persons"):
 		var screen_pos := camera.unproject_position(person.global_position + Vector3(0, 0.9, 0))
@@ -69,6 +72,10 @@ func _update_selection_box(current_pos: Vector2) -> void:
 func _deselect_all() -> void:
 	for p: Node3D in get_tree().get_nodes_in_group("persons"):
 		p.set_selected(false)
+
+func _deselect_all_buildings() -> void:
+	for b: Node3D in get_tree().get_nodes_in_group("buildings"):
+		b.set_selected(false)
 
 func _any_selected() -> bool:
 	for p: Node3D in get_tree().get_nodes_in_group("persons"):
@@ -90,6 +97,12 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 		for p: Node3D in get_tree().get_nodes_in_group("persons"):
 			if p.selected:
 				p.set_deposit_objective()
+		return
+	var pos := _raycast_y0(screen_pos)
+	if pos != Vector3.INF:
+		for p: Node3D in get_tree().get_nodes_in_group("persons"):
+			if p.selected:
+				p.set_move_objective(pos)
 
 func _get_building_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()
