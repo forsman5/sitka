@@ -7,16 +7,11 @@ var _dragging := false
 
 @onready var _selection_box: Panel = $SelectionUI/SelectionBox
 @onready var _nav_region: NavigationRegion3D = $NavigationRegion3D
-@onready var _escape_menu = $EscapeMenu
 
 func _ready() -> void:
 	_nav_region.bake_navigation_mesh()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.keycode == KEY_ESCAPE and event.pressed and not event.is_echo():
-		_escape_menu.show_toggle()
-		get_viewport().set_input_as_handled()
-		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_drag_start = event.position
