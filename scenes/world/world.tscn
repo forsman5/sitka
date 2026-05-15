@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=19 format=3]
 
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/escape_menu.tscn" id="8_escape"]
 [ext_resource type="Script" path="res://scripts/world/forest_manager.gd" id="9_forest"]
 [ext_resource type="Script" path="res://scripts/world/building_placement.gd" id="10_bplacement"]
+[ext_resource type="Script" path="res://scripts/world/day_night_cycle.gd" id="11_dnc"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -175,6 +176,9 @@ offset_right = 220.0
 offset_bottom = 50.0
 text = "Right-click to place  •  Esc to cancel"
 horizontal_alignment = 1
+
+[node name="DayNightCycle" type="Node" parent="."]
+script = ExtResource("11_dnc")
 
 [node name="SelectionUI" type="CanvasLayer" parent="."]
 

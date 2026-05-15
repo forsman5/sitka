@@ -163,7 +163,7 @@ func _do_harvest(node: Node3D) -> void:
 		await _wait_until_near(node)
 		if _objective_node != node or not is_instance_valid(node) or _move_target != Vector3.INF:
 			break
-		await get_tree().create_timer(resource.wait_time / GameState.gather_speed).timeout
+		await get_tree().create_timer(resource.wait_time / (GameState.gather_speed * GameState.game_speed)).timeout
 		if not is_instance_valid(node) or _objective_node != node or _move_target != Vector3.INF:
 			break
 		var items := resource.mine_sync()

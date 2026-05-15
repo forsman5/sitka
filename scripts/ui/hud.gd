@@ -6,6 +6,7 @@ const PersonScene = preload("res://scenes/entities/person.tscn")
 const ForestHutScene = preload("res://scenes/entities/forest_hut.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
+@onready var _time_label: Label = $Root/TimeLabel
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
@@ -29,6 +30,10 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	_refresh_panel()
+	var total_hours := GameState.time_of_day * 24.0
+	var h := int(total_hours) % 24
+	var m := int((total_hours - int(total_hours)) * 60.0)
+	_time_label.text = "%02d:%02d" % [h, m]
 
 func _on_gold_changed(amount: int) -> void:
 	_gold_label.text = "Gold: %d" % amount
