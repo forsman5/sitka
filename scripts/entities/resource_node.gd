@@ -14,9 +14,12 @@ signal depleted
 
 func _ready() -> void:
 	add_to_group("resource_nodes")
+	depleted.connect(queue_free)
 
 func mine() -> Array:
 	await get_tree().create_timer(wait_time / GameState.gather_speed).timeout
+	if amount <= 0:
+		return []
 	var item: InventoryItem
 	match resource_type:
 		Type.WOOD:  item = InventoryItem.new("Wood",  1.0)

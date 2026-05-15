@@ -4,3 +4,5 @@
 
 [node name="ResourceNode" instance=ExtResource("1_base")]
 resource_type = 0
+amount = 50
+max_amount = 50
