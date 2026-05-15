@@ -4,7 +4,7 @@
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
 [ext_resource type="PackedScene" path="res://scenes/entities/person.tscn" id="3_person"]
 [ext_resource type="PackedScene" path="res://scenes/entities/resource_node_gold.tscn" id="4_resource"]
-[ext_resource type="PackedScene" path="res://scenes/entities/building.tscn" id="5_building"]
+[ext_resource type="Script" path="res://scripts/world/placement_manager.gd" id="5_placement"]
 [ext_resource type="PackedScene" path="res://scenes/ui/hud.tscn" id="6_hud"]
 [ext_resource type="PackedScene" path="res://scenes/entities/resource_node_wood.tscn" id="7_wood"]
 [ext_resource type="PackedScene" path="res://scenes/ui/escape_menu.tscn" id="8_escape"]
@@ -97,12 +97,15 @@ shape = SubResource("WorldBoundary_1")
 
 [node name="Person" parent="." instance=ExtResource("3_person")]
 position = Vector3(5, 0, 5)
+visible = false
 
 [node name="Person2" parent="." instance=ExtResource("3_person")]
 position = Vector3(-3, 0, 4)
+visible = false
 
 [node name="Person3" parent="." instance=ExtResource("3_person")]
 position = Vector3(1, 0, 8)
+visible = false
 
 [node name="ResourceNode" parent="." instance=ExtResource("4_resource")]
 position = Vector3(-8, 0, -3)
@@ -110,8 +113,23 @@ position = Vector3(-8, 0, -3)
 [node name="ResourceNodeWood" parent="." instance=ExtResource("7_wood")]
 position = Vector3(-4, 0, 4)
 
-[node name="Building" parent="." instance=ExtResource("5_building")]
-position = Vector3(8, 0, -6)
+[node name="PlacementManager" type="Node" parent="."]
+script = ExtResource("5_placement")
+
+[node name="HintUI" type="CanvasLayer" parent="PlacementManager"]
+layer = 5
+
+[node name="HintLabel" type="Label" parent="PlacementManager/HintUI"]
+anchor_left = 0.5
+anchor_top = 0.0
+anchor_right = 0.5
+anchor_bottom = 0.0
+offset_left = -220.0
+offset_top = 20.0
+offset_right = 220.0
+offset_bottom = 50.0
+text = "Right-click to place your capital"
+horizontal_alignment = 1
 
 [node name="HUD" parent="." instance=ExtResource("6_hud")]
 
