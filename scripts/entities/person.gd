@@ -103,7 +103,7 @@ func _is_carry_full() -> bool:
 	return current_weight() >= carry_capacity
 
 func _run_task_loop() -> void:
-	while true:
+	while is_inside_tree():
 		if _move_target != Vector3.INF:
 			await _do_move(_move_target)
 		elif _deposit_queued or _is_carry_full():
@@ -117,7 +117,7 @@ func _run_task_loop() -> void:
 func _do_move(pos: Vector3) -> void:
 	_nav_agent.target_desired_distance = REACH
 	move_to(pos)
-	while _move_target == pos and global_position.distance_to(pos) > REACH:
+	while _move_target == pos and global_position.distance_to(pos) > REACH and is_inside_tree():
 		await get_tree().process_frame
 	if _move_target == pos:
 		_move_target = Vector3.INF
@@ -158,8 +158,10 @@ func _do_harvest(node: Node3D) -> void:
 			inventory.append(item)
 
 func _wait_until_near(node: Node3D, reach: float = REACH) -> void:
+	if not is_inside_tree():
+		return
 	await get_tree().process_frame
-	while is_instance_valid(node):
+	while is_instance_valid(node) and is_inside_tree():
 		var dist := global_position.distance_to(node.global_position)
 		if dist <= reach:
 			return
