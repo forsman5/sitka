@@ -2,6 +2,9 @@ extends CanvasLayer
 
 const Person = preload("res://scripts/entities/person.gd")
 const Building = preload("res://scripts/entities/building.gd")
+const PersonScene = preload("res://scenes/entities/person.tscn")
+
+const SPAWN_COST := 30
 
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
@@ -12,6 +15,7 @@ const Building = preload("res://scripts/entities/building.gd")
 @onready var _building_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView
 @onready var _building_name: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingName
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
+@onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
@@ -62,6 +66,20 @@ func _refresh_panel() -> void:
 		if building != null:
 			_building_name.text = building.building_name
 			_building_type.text = "Capital"
+		_spawn_btn.disabled = GameState.player_gold < SPAWN_COST
+
+func _on_spawn_pressed() -> void:
+	if GameState.player_gold < SPAWN_COST:
+		return
+	var capital: Node3D = get_tree().get_first_node_in_group("capital") as Node3D
+	if capital == null:
+		return
+	GameState.player_gold -= SPAWN_COST
+	var person: Node3D = PersonScene.instantiate() as Node3D
+	var idx := get_tree().get_nodes_in_group("persons").size() + 1
+	person.name = "Person%d" % idx
+	get_tree().current_scene.add_child(person)
+	person.global_position = capital.global_position + Vector3(randf_range(-3.0, 3.0), 0.0, randf_range(-3.0, 3.0))
 
 func _add_row(unit: String, objective: String, carry: String) -> void:
 	var name_lbl := Label.new()

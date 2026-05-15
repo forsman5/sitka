@@ -91,3 +91,8 @@ theme_override_font_sizes/font_size = 16
 
 [node name="BuildingType" type="Label" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 modulate = Color(0.7, 0.7, 0.8, 1)
+
+[node name="SpawnButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+text = "Spawn Settler (30g)"
+
+[connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
