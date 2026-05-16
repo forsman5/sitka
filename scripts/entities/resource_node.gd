@@ -25,6 +25,10 @@ func _ready() -> void:
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 1.0, 0.5, 1)
+	var obstacle := NavigationObstacle3D.new()
+	obstacle.avoidance_enabled = true
+	obstacle.radius = 0.8
+	add_child(obstacle)
 
 func set_selected(value: bool) -> void:
 	selected = value

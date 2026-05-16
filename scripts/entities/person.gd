@@ -1,7 +1,7 @@
 class_name Person
 extends CharacterBody3D
 
-const MOVE_SPEED := 5.0
+@export var move_speed: float = 5.0
 const REACH := 2.0
 const DEPOSIT_REACH := 3.5
 const SLEEP_TIME := 21.0 / 24.0
@@ -44,7 +44,9 @@ func _physics_process(_delta: float) -> void:
 	var next_pos := _nav_agent.get_next_path_position()
 	var dir := next_pos - global_position
 	dir.y = 0.0
-	var desired := dir.normalized() * MOVE_SPEED if dir.length() > 0.01 else Vector3.ZERO
+	var speed := move_speed * GameState.game_speed
+	_nav_agent.max_speed = speed
+	var desired := dir.normalized() * speed if dir.length() > 0.01 else Vector3.ZERO
 	_nav_agent.set_velocity(desired)
 
 func _on_velocity_computed(safe_velocity: Vector3) -> void:
@@ -116,10 +118,10 @@ func _is_night_time() -> bool:
 
 func _run_task_loop() -> void:
 	while is_inside_tree():
-		if _is_night_time():
-			await _do_sleep()
-		elif _move_target != Vector3.INF:
+		if _move_target != Vector3.INF:
 			await _do_move(_move_target)
+		elif _is_night_time():
+			await _do_sleep()
 		elif _deposit_queued or _is_carry_full():
 			_deposit_queued = false
 			await _do_deposit()
@@ -149,6 +151,16 @@ func _nearest_capital() -> Node3D:
 			nearest = node as Node3D
 	return nearest
 
+func _nearest_sleep_point() -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for node in get_tree().get_nodes_in_group("sleep_point"):
+		var d := global_position.distance_to((node as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = node as Node3D
+	return nearest
+
 func _do_deposit() -> void:
 	var nearest := _nearest_capital()
 	if nearest == null:
@@ -167,7 +179,7 @@ func _do_deposit() -> void:
 
 func _do_sleep() -> void:
 	_sleeping = true
-	var capital := _nearest_capital()
+	var capital := _nearest_sleep_point()
 	if capital != null:
 		_nav_agent.target_desired_distance = DEPOSIT_REACH
 		move_to(capital.global_position)

@@ -1,3 +1,4 @@
+class_name DepositBuilding
 extends Building
 
 var _light: OmniLight3D

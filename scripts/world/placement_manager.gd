@@ -15,10 +15,12 @@ func _input(event: InputEvent) -> void:
 
 func _place_capital(pos: Vector3) -> void:
 	_active = false
+	var nav_region := get_parent().get_node("NavigationRegion3D") as Node
 	var building: Node3D = BuildingScene.instantiate() as Node3D
-	get_parent().add_child(building)
+	nav_region.add_child(building)
 	building.global_position = pos
 	_update_town_biome(pos)
+	nav_region.bake_navigation_mesh()
 	for p in get_tree().get_nodes_in_group("persons"):
 		(p as Node3D).show()
 	queue_free()

@@ -37,9 +37,11 @@ func _place(pos: Vector3) -> void:
 		_disarm()
 		return
 	GameState.player_wood -= _wood_cost
+	var nav_region := get_tree().current_scene.get_node("NavigationRegion3D") as Node
 	var building: Node3D = _scene.instantiate() as Node3D
-	get_tree().current_scene.add_child(building)
+	nav_region.add_child(building)
 	building.global_position = pos
+	nav_region.bake_navigation_mesh()
 	_disarm()
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:

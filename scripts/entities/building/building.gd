@@ -7,6 +7,23 @@ const InventoryItem = preload("res://scripts/inventory/inventory_item.gd")
 @export var building_type: String = "Building"
 
 var selected: bool = false
+var upgrades: Dictionary = {}
+
+func has_upgrade(id: String) -> bool:
+	return upgrades.get(id, false)
+
+func get_available_upgrades() -> Array:
+	return []
+
+func shows_spawn_button() -> bool: return false
+func shows_build_hut_button() -> bool: return false
+
+func apply_upgrade(id: String) -> void:
+	upgrades[id] = true
+	_on_upgrade_applied(id)
+
+func _on_upgrade_applied(_id: String) -> void:
+	pass
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 

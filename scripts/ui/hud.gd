@@ -21,6 +21,9 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 @onready var _build_hut_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton
+@onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
+
+var _last_selected_building: Building = null
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
@@ -94,8 +97,31 @@ func _refresh_panel() -> void:
 		if building != null:
 			_building_name.text = building.building_name
 			_building_type.text = building.building_type
+		_spawn_btn.visible = building != null and building.shows_spawn_button()
+		_build_hut_btn.visible = building != null and building.shows_build_hut_button()
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 		_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
+		if building != _last_selected_building:
+			_last_selected_building = building
+			for child in _upgrades_container.get_children():
+				child.queue_free()
+			if building != null:
+				for upgrade in building.get_available_upgrades():
+					var btn := Button.new()
+					btn.text = upgrade["label"]
+					btn.set_meta("upgrade_cost_wood", upgrade.get("cost_wood", 0))
+					btn.pressed.connect(_apply_upgrade.bind(building, upgrade))
+					_upgrades_container.add_child(btn)
+		for btn in _upgrades_container.get_children():
+			(btn as Button).disabled = GameState.player_wood < (btn as Button).get_meta("upgrade_cost_wood", 0)
+
+func _apply_upgrade(building: Building, upgrade: Dictionary) -> void:
+	var wood_cost: int = upgrade.get("cost_wood", 0)
+	if GameState.player_wood < wood_cost:
+		return
+	GameState.player_wood -= wood_cost
+	building.apply_upgrade(upgrade["id"])
+	_last_selected_building = null
 
 func _on_build_hut_pressed() -> void:
 	if GameState.player_wood < GameState.forest_hut_cost:
