@@ -88,6 +88,7 @@ func set_build_objective(node: Node3D) -> void:
 func set_move_objective(pos: Vector3) -> void:
 	_move_target = pos
 	_objective_node = null
+	_build_target = null
 	_deposit_queued = false
 	_last_resource_type = -1
 
