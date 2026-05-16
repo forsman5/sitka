@@ -25,6 +25,7 @@ var _deposit_queued: bool = false
 var _sleeping: bool = false
 var _camping: bool = false
 var _assigned_sleep_point: Node3D = null
+var _has_eaten_tonight: bool = false
 
 static var _night_assigned: bool = false
 
@@ -141,7 +142,9 @@ func _run_task_loop() -> void:
 		if _move_target != Vector3.INF:
 			await _do_move(_move_target)
 		elif _is_night_time():
+			_do_eat()
 			await _do_sleep()
+			_has_eaten_tonight = false
 		elif _deposit_queued or _is_carry_full():
 			_deposit_queued = false
 			await _do_deposit()
@@ -223,6 +226,15 @@ static func _assign_beds() -> void:
 		capacity[sp] -= 1
 		if capacity[sp] <= 0:
 			capacity.erase(sp)
+
+func _do_eat() -> void:
+	if _has_eaten_tonight:
+		return
+	_has_eaten_tonight = true
+	if GameState.player_food > 0:
+		GameState.player_food -= 1
+	else:
+		take_damage(2)
 
 func _do_sleep() -> void:
 	if not Person._night_assigned:
