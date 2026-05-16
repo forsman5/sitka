@@ -138,7 +138,7 @@ func _run_task_loop() -> void:
 			await _do_deposit()
 		elif _objective_node != null and is_instance_valid(_objective_node):
 			await _do_harvest(_objective_node)
-		elif _objective_node != null and not is_instance_valid(_objective_node) and _last_resource_type >= 0:
+		elif _last_resource_type >= 0 and (_objective_node == null or not is_instance_valid(_objective_node)):
 			_objective_node = _find_nearest_of_type(_last_resource_type as ResourceNode.Type)
 			await get_tree().process_frame
 		else:
@@ -178,6 +178,7 @@ func _do_deposit() -> void:
 		for item in inventory:
 			building.deposit(item)
 	inventory.clear()
+	_objective_node = null
 
 static func _assign_beds() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
