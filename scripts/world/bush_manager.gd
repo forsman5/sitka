@@ -22,6 +22,7 @@ func _spawn_loop() -> void:
 		_attempt_cluster()
 
 func _attempt_cluster() -> void:
+	var town_radius := _get_town_radius()
 	var center := Vector3.ZERO
 	var found := false
 	for _i in range(15):
@@ -34,6 +35,13 @@ func _attempt_cluster() -> void:
 		)
 		if absf(candidate.x) > 49.0 or absf(candidate.z) > 49.0:
 			continue
+		var in_town := false
+		for capital in get_tree().get_nodes_in_group("capital"):
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(candidate) < town_radius:
+				in_town = true
+				break
+		if in_town:
+			continue
 		center = candidate
 		found = true
 		break
@@ -41,9 +49,9 @@ func _attempt_cluster() -> void:
 		return
 	var count := randi_range(min_cluster_size, max_cluster_size)
 	for _i in range(count):
-		_attempt_bush_near(center)
+		_attempt_bush_near(center, town_radius)
 
-func _attempt_bush_near(center: Vector3) -> void:
+func _attempt_bush_near(center: Vector3, town_radius: float) -> void:
 	for _i in range(10):
 		var angle := randf() * TAU
 		var r := randf() * cluster_spread
@@ -61,8 +69,8 @@ func _attempt_bush_near(center: Vector3) -> void:
 				break
 		if too_close:
 			continue
-		for building in get_tree().get_nodes_in_group("buildings"):
-			if is_instance_valid(building) and (building as Node3D).global_position.distance_to(pos) < min_bush_spacing:
+		for capital in get_tree().get_nodes_in_group("capital"):
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < town_radius:
 				too_close = true
 				break
 		if too_close:
@@ -71,3 +79,13 @@ func _attempt_bush_near(center: Vector3) -> void:
 		get_parent().add_child(bush)
 		bush.global_position = pos
 		return
+
+func _get_town_radius() -> float:
+	var mesh := get_tree().current_scene.get_node_or_null(
+		"NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	if mesh == null:
+		return 0.0
+	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+	if mat == null:
+		return 0.0
+	return mat.get_shader_parameter("town_radius")

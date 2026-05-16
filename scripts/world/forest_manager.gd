@@ -19,6 +19,7 @@ func _spawn_loop() -> void:
 		_attempt_spawn()
 
 func _attempt_spawn() -> void:
+	var town_radius := _get_town_radius()
 	for _i in range(10):
 		var angle := randf() * TAU
 		var r := sqrt(randf()) * forest_radius
@@ -36,8 +37,8 @@ func _attempt_spawn() -> void:
 				break
 		if too_close:
 			continue
-		for building in get_tree().get_nodes_in_group("buildings"):
-			if is_instance_valid(building) and (building as Node3D).global_position.distance_to(pos) < min_tree_spacing:
+		for capital in get_tree().get_nodes_in_group("capital"):
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < town_radius:
 				too_close = true
 				break
 		if too_close:
@@ -46,3 +47,13 @@ func _attempt_spawn() -> void:
 		get_parent().add_child(tree)
 		tree.global_position = pos
 		return
+
+func _get_town_radius() -> float:
+	var mesh := get_tree().current_scene.get_node_or_null(
+		"NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	if mesh == null:
+		return 0.0
+	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+	if mat == null:
+		return 0.0
+	return mat.get_shader_parameter("town_radius")
