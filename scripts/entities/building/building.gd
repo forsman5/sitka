@@ -37,13 +37,15 @@ var _mat_selected: StandardMaterial3D
 
 func _ready() -> void:
 	add_to_group("buildings")
-	_mat_normal = _mesh.get_surface_override_material(0)
+	if _mesh.visible:
+		_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(0.85, 0.9, 1.0, 1)
 
 func set_selected(value: bool) -> void:
 	selected = value
-	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
+	if _mesh.visible:
+		_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
 
 func deposit(item: InventoryItem) -> void:
 	match item.item_name:

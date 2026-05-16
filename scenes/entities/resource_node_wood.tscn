@@ -1,8 +1,10 @@
-[gd_scene load_steps=1 format=3]
+[gd_scene load_steps=2 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/entities/resource_node.tscn" id="1_base"]
+[ext_resource type="Script" path="res://scripts/entities/resource_node_wood.gd" id="2_wood"]
 
 [node name="ResourceNode" instance=ExtResource("1_base")]
+script = ExtResource("2_wood")
 resource_type = 0
 amount = 50
 max_amount = 50
