@@ -10,6 +10,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _food_label: Label = $Root/FoodLabel
+@onready var _people_label: Label = $Root/PeopleLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
 @onready var _header_row: HBoxContainer = $Root/SelectionPanel/VBoxContainer/HeaderRow
 @onready var _separator: HSeparator = $Root/SelectionPanel/VBoxContainer/HSeparator
@@ -55,6 +56,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_speed_bar.visible = not get_tree().get_nodes_in_group("capital").is_empty()
 	_refresh_panel()
+	_refresh_people()
 	var total_hours := GameState.time_of_day * 24.0
 	var h := int(total_hours) % 24
 	var m := int((total_hours - int(total_hours)) * 60.0)
@@ -68,6 +70,21 @@ func _on_wood_changed(amount: int) -> void:
 
 func _on_food_changed(amount: int) -> void:
 	_food_label.text = "Food: %d" % amount
+
+func _refresh_people() -> void:
+	var persons := get_tree().get_nodes_in_group("persons")
+	var total := persons.size()
+	var idle := 0
+	for p in persons:
+		var person := p as Person
+		if person != null and person.objective_label() == "idle":
+			idle += 1
+	var beds := 0
+	for sp in get_tree().get_nodes_in_group("sleep_point"):
+		var b := sp as Building
+		if b != null:
+			beds += b.get_bed_count()
+	_people_label.text = "%d people  %d idle  %d beds" % [total, idle, beds]
 
 func _refresh_panel() -> void:
 	var persons: Array[Node] = []
