@@ -7,7 +7,7 @@ const DEPOSIT_REACH := 3.5
 const SLEEP_TIME := 21.0 / 24.0
 const WAKE_TIME := 5.5 / 24.0
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
-const Building = preload("res://scripts/entities/building.gd")
+const Building = preload("res://scripts/entities/building/building.gd")
 
 @export var carry_capacity: float = 10.0
 

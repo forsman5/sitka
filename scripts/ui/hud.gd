@@ -1,9 +1,9 @@
 extends CanvasLayer
 
 const Person = preload("res://scripts/entities/person.gd")
-const Building = preload("res://scripts/entities/building.gd")
+const Building = preload("res://scripts/entities/building/building.gd")
 const PersonScene = preload("res://scenes/entities/person.tscn")
-const ForestHutScene = preload("res://scenes/entities/forest_hut.tscn")
+const ForestHutScene = preload("res://scenes/entities/building/forest_hut.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _time_label: Label = $Root/TimeLabel
