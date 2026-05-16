@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/entities/resource_node.gd" id="1_resource"]
 
@@ -12,6 +12,13 @@ albedo_color = Color(0.28, 0.48, 0.12, 1)
 [sub_resource type="SphereShape3D" id="SphereShape_1"]
 radius = 0.45
 
+[sub_resource type="SphereMesh" id="BerryMesh_1"]
+radius = 0.08
+height = 0.16
+
+[sub_resource type="StandardMaterial3D" id="BerryMat_1"]
+albedo_color = Color(0.82, 0.1, 0.1, 1)
+
 [node name="ResourceNode" type="StaticBody3D"]
 script = ExtResource("1_resource")
 resource_type = 2
@@ -23,6 +30,26 @@ obstacle_radius = 0.5
 position = Vector3(0, 0.45, 0)
 mesh = SubResource("SphereMesh_1")
 surface_material_override/0 = SubResource("Mat_1")
+
+[node name="Berry1" type="MeshInstance3D" parent="."]
+position = Vector3(0.28, 0.72, 0.22)
+mesh = SubResource("BerryMesh_1")
+surface_material_override/0 = SubResource("BerryMat_1")
+
+[node name="Berry2" type="MeshInstance3D" parent="."]
+position = Vector3(-0.3, 0.60, 0.28)
+mesh = SubResource("BerryMesh_1")
+surface_material_override/0 = SubResource("BerryMat_1")
+
+[node name="Berry3" type="MeshInstance3D" parent="."]
+position = Vector3(0.1, 0.85, -0.18)
+mesh = SubResource("BerryMesh_1")
+surface_material_override/0 = SubResource("BerryMat_1")
+
+[node name="Berry4" type="MeshInstance3D" parent="."]
+position = Vector3(-0.18, 0.55, -0.38)
+mesh = SubResource("BerryMesh_1")
+surface_material_override/0 = SubResource("BerryMat_1")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 position = Vector3(0, 0.45, 0)
