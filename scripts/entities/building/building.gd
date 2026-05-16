@@ -25,6 +25,9 @@ func apply_upgrade(id: String) -> void:
 func _on_upgrade_applied(_id: String) -> void:
 	pass
 
+func get_bed_count() -> int:
+	return 0
+
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 
 var _mat_normal: Material

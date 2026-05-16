@@ -18,6 +18,10 @@ var _last_resource_type: int = -1
 var _move_target: Vector3 = Vector3.INF
 var _deposit_queued: bool = false
 var _sleeping: bool = false
+var _camping: bool = false
+var _assigned_sleep_point: Node3D = null
+
+static var _night_assigned: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
@@ -92,6 +96,8 @@ func can_carry(items: Array) -> bool:
 	return current_weight() + added <= carry_capacity
 
 func objective_label() -> String:
+	if _camping:
+		return "camping"
 	if _sleeping:
 		return "sleeping"
 	if _move_target != Vector3.INF:
@@ -151,15 +157,6 @@ func _nearest_capital() -> Node3D:
 			nearest = node as Node3D
 	return nearest
 
-func _nearest_sleep_point() -> Node3D:
-	var nearest: Node3D = null
-	var nearest_dist := INF
-	for node in get_tree().get_nodes_in_group("sleep_point"):
-		var d := global_position.distance_to((node as Node3D).global_position)
-		if d < nearest_dist:
-			nearest_dist = d
-			nearest = node as Node3D
-	return nearest
 
 func _do_deposit() -> void:
 	var nearest := _nearest_capital()
@@ -177,23 +174,65 @@ func _do_deposit() -> void:
 			building.deposit(item)
 	inventory.clear()
 
+static func _assign_beds() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	var capacity: Dictionary = {}
+	for node in tree.get_nodes_in_group("sleep_point"):
+		var b := node as Building
+		if b != null:
+			var cap := b.get_bed_count()
+			if cap > 0:
+				capacity[b] = cap
+	var persons: Array = []
+	for node in tree.get_nodes_in_group("persons"):
+		var p := node as Person
+		if p != null:
+			p._assigned_sleep_point = null
+			persons.append(p)
+	var pairs: Array = []
+	for person in persons:
+		for sp in capacity:
+			var d: float = person.global_position.distance_to((sp as Node3D).global_position)
+			pairs.append({"person": person, "sp": sp, "dist": d})
+	pairs.sort_custom(func(a, b): return a["dist"] < b["dist"])
+	var assigned: Dictionary = {}
+	for pair in pairs:
+		var p: Person = pair["person"]
+		var sp = pair["sp"]
+		if assigned.has(p) or not capacity.has(sp):
+			continue
+		p._assigned_sleep_point = sp
+		assigned[p] = true
+		capacity[sp] -= 1
+		if capacity[sp] <= 0:
+			capacity.erase(sp)
+
 func _do_sleep() -> void:
+	if not Person._night_assigned:
+		Person._assign_beds()
+		Person._night_assigned = true
 	_sleeping = true
-	var capital := _nearest_sleep_point()
-	if capital != null:
+	if _assigned_sleep_point != null:
 		_nav_agent.target_desired_distance = DEPOSIT_REACH
-		move_to(capital.global_position)
-		await _wait_until_near(capital, DEPOSIT_REACH)
-		var building: Building = capital as Building
+		move_to(_assigned_sleep_point.global_position)
+		await _wait_until_near(_assigned_sleep_point, DEPOSIT_REACH)
+		var building: Building = _assigned_sleep_point as Building
 		if building != null:
 			for item in inventory:
 				building.deposit(item)
 		inventory.clear()
-	visible = false
-	while is_inside_tree() and _is_night_time():
-		await get_tree().process_frame
-	visible = true
+		visible = false
+		while is_inside_tree() and _is_night_time():
+			await get_tree().process_frame
+		visible = true
+	else:
+		_camping = true
+		while is_inside_tree() and _is_night_time():
+			await get_tree().process_frame
+		_camping = false
 	_sleeping = false
+	_assigned_sleep_point = null
+	Person._night_assigned = false
 
 func _do_harvest(node: Node3D) -> void:
 	var resource: ResourceNode = node as ResourceNode
