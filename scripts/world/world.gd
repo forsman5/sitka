@@ -38,11 +38,13 @@ func _finish_input(screen_pos: Vector2) -> void:
 	_dragging = false
 
 func _handle_single_click(screen_pos: Vector2) -> void:
+	var shift := Input.is_key_pressed(KEY_SHIFT)
 	var person := _get_person_at(screen_pos)
 	if person != null:
 		_deselect_all_buildings()
 		_deselect_all_resources()
-		_deselect_all()
+		if not shift:
+			_deselect_all()
 		person.set_selected(true)
 		return
 	var building := _get_building_at(screen_pos)
@@ -59,15 +61,18 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_resources()
 		resource.set_selected(true)
 		return
-	_deselect_all()
-	_deselect_all_buildings()
-	_deselect_all_resources()
+	if not shift:
+		_deselect_all()
+		_deselect_all_buildings()
+		_deselect_all_resources()
 
 func _finish_box_select(end_pos: Vector2) -> void:
+	var shift := Input.is_key_pressed(KEY_SHIFT)
 	var rect := Rect2(_drag_start, end_pos - _drag_start).abs()
-	_deselect_all()
 	_deselect_all_buildings()
 	_deselect_all_resources()
+	if not shift:
+		_deselect_all()
 	var camera := get_viewport().get_camera_3d()
 	for person: Node3D in get_tree().get_nodes_in_group("persons"):
 		var screen_pos := camera.unproject_position(person.global_position + Vector3(0, 0.9, 0))
