@@ -47,3 +47,6 @@ func deposit(item: InventoryItem) -> void:
 	match item.item_name:
 		"Gold": GameState.player_gold += 1
 		"Wood": GameState.player_wood += 1
+		"Food":
+			if is_in_group("capital"):
+				GameState.player_food += 1

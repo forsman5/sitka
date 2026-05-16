@@ -2,6 +2,7 @@ extends Node
 
 signal gold_changed(amount: int)
 signal wood_changed(amount: int)
+signal food_changed(amount: int)
 
 @export var gather_speed: float = 1.3
 @export var game_speed: float = 1.0
@@ -19,3 +20,8 @@ var player_wood: int = 0:
 	set(value):
 		player_wood = value
 		wood_changed.emit(value)
+
+var player_food: int = 50:
+	set(value):
+		player_food = value
+		food_changed.emit(value)

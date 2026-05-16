@@ -11,6 +11,7 @@ signal depleted
 @export var amount: int = 100
 @export var max_amount: int = 100
 @export var wait_time: float = 2.0
+@export var obstacle_radius: float = 0.8
 
 var selected: bool = false
 
@@ -27,7 +28,7 @@ func _ready() -> void:
 	_mat_selected.albedo_color = Color(1.0, 1.0, 0.5, 1)
 	var obstacle := NavigationObstacle3D.new()
 	obstacle.avoidance_enabled = true
-	obstacle.radius = 0.8
+	obstacle.radius = obstacle_radius
 	add_child(obstacle)
 
 func set_selected(value: bool) -> void:

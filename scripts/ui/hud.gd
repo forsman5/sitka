@@ -9,6 +9,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _time_label: Label = $Root/TimeLabel
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
+@onready var _food_label: Label = $Root/FoodLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
 @onready var _header_row: HBoxContainer = $Root/SelectionPanel/VBoxContainer/HeaderRow
 @onready var _separator: HSeparator = $Root/SelectionPanel/VBoxContainer/HSeparator
@@ -36,8 +37,10 @@ var _style_inactive: StyleBoxFlat
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
 	GameState.wood_changed.connect(_on_wood_changed)
+	GameState.food_changed.connect(_on_food_changed)
 	_gold_label.text = "Gold: %d" % GameState.player_gold
 	_wood_label.text = "Wood: %d" % GameState.player_wood
+	_food_label.text = "Food: %d" % GameState.player_food
 	_style_active = StyleBoxFlat.new()
 	_style_active.bg_color = Color(1.0, 1.0, 0.5, 1.0)
 	_style_active.set_corner_radius_all(3)
@@ -59,6 +62,9 @@ func _on_gold_changed(amount: int) -> void:
 
 func _on_wood_changed(amount: int) -> void:
 	_wood_label.text = "Wood: %d" % amount
+
+func _on_food_changed(amount: int) -> void:
+	_food_label.text = "Food: %d" % amount
 
 func _refresh_panel() -> void:
 	var persons: Array[Node] = []

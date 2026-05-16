@@ -138,7 +138,7 @@ func _get_building_at(screen_pos: Vector2) -> Node3D:
 	var collider: Object = result.get("collider")
 	if collider is Area3D:
 		var parent: Node = (collider as Area3D).get_parent()
-		if parent.is_in_group("capital"):
+		if parent.is_in_group("buildings"):
 			return parent as Node3D
 	return null
 

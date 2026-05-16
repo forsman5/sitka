@@ -1,0 +1,35 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/resource_node.gd" id="1_resource"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_1"]
+radius = 0.45
+height = 0.9
+
+[sub_resource type="StandardMaterial3D" id="Mat_1"]
+albedo_color = Color(0.28, 0.48, 0.12, 1)
+
+[sub_resource type="SphereShape3D" id="SphereShape_1"]
+radius = 0.45
+
+[node name="ResourceNode" type="StaticBody3D"]
+script = ExtResource("1_resource")
+resource_type = 2
+amount = 10
+max_amount = 10
+obstacle_radius = 0.5
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.45, 0)
+mesh = SubResource("SphereMesh_1")
+surface_material_override/0 = SubResource("Mat_1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.45, 0)
+shape = SubResource("SphereShape_1")
+
+[node name="ClickArea" type="Area3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="ClickArea"]
+position = Vector3(0, 0.45, 0)
+shape = SubResource("SphereShape_1")

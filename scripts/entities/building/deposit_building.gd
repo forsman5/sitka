@@ -5,7 +5,7 @@ var _light: OmniLight3D
 
 func _ready() -> void:
 	super._ready()
-	add_to_group("capital")
+	add_to_group("deposit_point")
 	_light = OmniLight3D.new()
 	_light.position = Vector3(0.0, 1.5, 0.0)
 	_light.light_color = Color(1.0, 0.8, 0.45)

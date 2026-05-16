@@ -152,10 +152,10 @@ func _do_move(pos: Vector3) -> void:
 	if _move_target == pos:
 		_move_target = Vector3.INF
 
-func _nearest_capital() -> Node3D:
+func _nearest_deposit_point() -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist := INF
-	for node in get_tree().get_nodes_in_group("capital"):
+	for node in get_tree().get_nodes_in_group("deposit_point"):
 		var d := global_position.distance_to((node as Node3D).global_position)
 		if d < nearest_dist:
 			nearest_dist = d
@@ -164,7 +164,7 @@ func _nearest_capital() -> Node3D:
 
 
 func _do_deposit() -> void:
-	var nearest := _nearest_capital()
+	var nearest := _nearest_deposit_point()
 	if nearest == null:
 		inventory.clear()
 		return
