@@ -7,8 +7,6 @@ const TreeScene = preload("res://scenes/entities/resource_node_wood.tscn")
 @export var forest_center: Vector2 = Vector2(-60.0, -3.0)
 @export var forest_radius: float = 50.0
 
-var _trees: Array[Node3D] = []
-
 func _ready() -> void:
 	_spawn_loop()
 
@@ -32,8 +30,8 @@ func _attempt_spawn() -> void:
 		if absf(pos.x) > 49.0 or absf(pos.z) > 49.0:
 			continue
 		var too_close := false
-		for tree in _trees:
-			if is_instance_valid(tree) and tree.global_position.distance_to(pos) < min_tree_spacing:
+		for node in get_tree().get_nodes_in_group("resource_nodes"):
+			if is_instance_valid(node) and (node as Node3D).global_position.distance_to(pos) < min_tree_spacing:
 				too_close = true
 				break
 		if too_close:
@@ -47,5 +45,4 @@ func _attempt_spawn() -> void:
 		var tree: Node3D = TreeScene.instantiate() as Node3D
 		get_parent().add_child(tree)
 		tree.global_position = pos
-		_trees.append(tree)
 		return

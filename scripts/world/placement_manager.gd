@@ -20,10 +20,12 @@ func _place_capital(pos: Vector3) -> void:
 	nav_region.add_child(building)
 	building.global_position = pos
 	_update_town_biome(pos)
+	nav_region.bake_finished.connect(func():
+		for p in get_tree().get_nodes_in_group("persons"):
+			(p as Node3D).show()
+		queue_free()
+	, CONNECT_ONE_SHOT)
 	nav_region.bake_navigation_mesh()
-	for p in get_tree().get_nodes_in_group("persons"):
-		(p as Node3D).show()
-	queue_free()
 
 func _update_town_biome(pos: Vector3) -> void:
 	var mesh := get_parent().get_node("NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
