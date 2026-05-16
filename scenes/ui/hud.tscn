@@ -121,5 +121,36 @@ text = "Build Forest Hut (50w)"
 
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
+[node name="SpeedBar" type="HBoxContainer" parent="Root"]
+visible = false
+process_mode = 3
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = -248.0
+offset_right = 230.0
+offset_bottom = -210.0
+theme_override_constants/separation = 2
+
+[node name="PauseButton" type="Button" parent="Root/SpeedBar"]
+custom_minimum_size = Vector2(52, 32)
+text = "||"
+
+[node name="Speed1xButton" type="Button" parent="Root/SpeedBar"]
+custom_minimum_size = Vector2(52, 32)
+text = "1x"
+
+[node name="Speed2xButton" type="Button" parent="Root/SpeedBar"]
+custom_minimum_size = Vector2(52, 32)
+text = "2x"
+
+[node name="Speed5xButton" type="Button" parent="Root/SpeedBar"]
+custom_minimum_size = Vector2(52, 32)
+text = "5x"
+
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton" to="." method="_on_build_hut_pressed"]
+[connection signal="pressed" from="Root/SpeedBar/PauseButton" to="." method="_on_pause_pressed"]
+[connection signal="pressed" from="Root/SpeedBar/Speed1xButton" to="." method="_on_1x_pressed"]
+[connection signal="pressed" from="Root/SpeedBar/Speed2xButton" to="." method="_on_2x_pressed"]
+[connection signal="pressed" from="Root/SpeedBar/Speed5xButton" to="." method="_on_5x_pressed"]

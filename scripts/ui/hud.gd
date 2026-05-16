@@ -22,16 +22,32 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 @onready var _build_hut_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
+@onready var _speed_bar: HBoxContainer = $Root/SpeedBar
+@onready var _btn_pause: Button = $Root/SpeedBar/PauseButton
+@onready var _btn_1x: Button = $Root/SpeedBar/Speed1xButton
+@onready var _btn_2x: Button = $Root/SpeedBar/Speed2xButton
+@onready var _btn_5x: Button = $Root/SpeedBar/Speed5xButton
 
 var _last_selected_building: Building = null
+var _paused: bool = false
+var _style_active: StyleBoxFlat
+var _style_inactive: StyleBoxFlat
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
 	GameState.wood_changed.connect(_on_wood_changed)
 	_gold_label.text = "Gold: %d" % GameState.player_gold
 	_wood_label.text = "Wood: %d" % GameState.player_wood
+	_style_active = StyleBoxFlat.new()
+	_style_active.bg_color = Color(1.0, 1.0, 0.5, 1.0)
+	_style_active.set_corner_radius_all(3)
+	_style_inactive = StyleBoxFlat.new()
+	_style_inactive.bg_color = Color(0.12, 0.12, 0.18, 0.9)
+	_style_inactive.set_corner_radius_all(3)
+	_update_speed_highlight()
 
 func _process(_delta: float) -> void:
+	_speed_bar.visible = not get_tree().get_nodes_in_group("capital").is_empty()
 	_refresh_panel()
 	var total_hours := GameState.time_of_day * 24.0
 	var h := int(total_hours) % 24
@@ -142,6 +158,35 @@ func _on_spawn_pressed() -> void:
 	person.name = "Person%d" % idx
 	get_tree().current_scene.add_child(person)
 	person.global_position = capital.global_position + Vector3(randf_range(-3.0, 3.0), 0.0, randf_range(-3.0, 3.0))
+
+func _on_pause_pressed() -> void:
+	_paused = true
+	get_tree().paused = true
+	_update_speed_highlight()
+
+func _on_1x_pressed() -> void:
+	_paused = false
+	get_tree().paused = false
+	GameState.game_speed = 1.0
+	_update_speed_highlight()
+
+func _on_2x_pressed() -> void:
+	_paused = false
+	get_tree().paused = false
+	GameState.game_speed = 2.0
+	_update_speed_highlight()
+
+func _on_5x_pressed() -> void:
+	_paused = false
+	get_tree().paused = false
+	GameState.game_speed = 5.0
+	_update_speed_highlight()
+
+func _update_speed_highlight() -> void:
+	_btn_pause.add_theme_stylebox_override("normal", _style_active if _paused else _style_inactive)
+	_btn_1x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 1.0 else _style_inactive)
+	_btn_2x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 2.0 else _style_inactive)
+	_btn_5x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 5.0 else _style_inactive)
 
 func _add_row(unit: String, objective: String, carry: String) -> void:
 	var name_lbl := Label.new()
