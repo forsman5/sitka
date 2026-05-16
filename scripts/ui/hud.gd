@@ -3,7 +3,7 @@ extends CanvasLayer
 const Person = preload("res://scripts/entities/person.gd")
 const Building = preload("res://scripts/entities/building/building.gd")
 const PersonScene = preload("res://scenes/entities/person.tscn")
-const ForestHutScene = preload("res://scenes/entities/building/forest_hut.tscn")
+const ForestHutFoundationScene = preload("res://scenes/entities/building/forest_hut_foundation.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _time_label: Label = $Root/TimeLabel
@@ -17,6 +17,9 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _resource_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/ResourceView
 @onready var _resource_name: Label = $Root/SelectionPanel/VBoxContainer/ResourceView/ResourceName
 @onready var _resource_amount: Label = $Root/SelectionPanel/VBoxContainer/ResourceView/AmountLabel
+@onready var _foundation_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/FoundationView
+@onready var _foundation_name: Label = $Root/SelectionPanel/VBoxContainer/FoundationView/FoundationName
+@onready var _foundation_progress: Label = $Root/SelectionPanel/VBoxContainer/FoundationView/ProgressLabel
 @onready var _building_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView
 @onready var _building_name: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingName
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
@@ -70,6 +73,7 @@ func _refresh_panel() -> void:
 	var persons: Array[Node] = []
 	var buildings: Array[Node] = []
 	var resources: Array[Node] = []
+	var foundations: Array[Node] = []
 	for p in get_tree().get_nodes_in_group("persons"):
 		if p.get("selected") == true:
 			persons.append(p)
@@ -79,17 +83,22 @@ func _refresh_panel() -> void:
 	for r in get_tree().get_nodes_in_group("resource_nodes"):
 		if is_instance_valid(r) and r.get("selected") == true:
 			resources.append(r)
+	for f in get_tree().get_nodes_in_group("foundations"):
+		if is_instance_valid(f) and f.get("selected") == true:
+			foundations.append(f)
 
 	var has_persons := not persons.is_empty()
 	var has_buildings := not buildings.is_empty()
 	var has_resources := not resources.is_empty()
-	_selection_panel.visible = has_persons or has_buildings or has_resources
+	var has_foundations := not foundations.is_empty()
+	_selection_panel.visible = has_persons or has_buildings or has_resources or has_foundations
 
 	_header_row.visible = has_persons
 	_separator.visible = has_persons
 	_rows.visible = has_persons
 	_building_view.visible = has_buildings
 	_resource_view.visible = has_resources
+	_foundation_view.visible = has_foundations
 
 	if has_persons:
 		for child in _rows.get_children():
@@ -114,6 +123,12 @@ func _refresh_panel() -> void:
 				_: type_name = "Resource"
 			_resource_name.text = type_name
 			_resource_amount.text = "%d / %d" % [res.amount, res.max_amount]
+
+	if has_foundations:
+		var f = foundations[0]
+		if is_instance_valid(f):
+			_foundation_name.text = "Forest Hut Foundation"
+			_foundation_progress.text = "%d / %d" % [f.get("_progress"), f.get("build_required")]
 
 	if has_buildings:
 		var building: Building = buildings[0] as Building
@@ -151,7 +166,7 @@ func _on_build_hut_pressed() -> void:
 		return
 	var placement = get_tree().get_first_node_in_group("building_placement")
 	if placement:
-		placement.arm(ForestHutScene, GameState.forest_hut_cost)
+		placement.arm(ForestHutFoundationScene, GameState.forest_hut_cost)
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:

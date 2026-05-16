@@ -4,10 +4,12 @@ extends CharacterBody3D
 @export var move_speed: float = 5.0
 const REACH := 2.0
 const DEPOSIT_REACH := 3.5
+const BUILD_REACH := 2.5
 const SLEEP_TIME := 21.0 / 24.0
 const WAKE_TIME := 5.5 / 24.0
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 const Building = preload("res://scripts/entities/building/building.gd")
+const Foundation = preload("res://scripts/entities/building/forest_hut_foundation.gd")
 
 @export var carry_capacity: float = 10.0
 @export var max_health: int = 10
@@ -17,6 +19,7 @@ var selected := false
 var inventory: Array = []
 var _objective_node: Node3D = null
 var _last_resource_type: int = -1
+var _build_target: Node3D = null
 var _move_target: Vector3 = Vector3.INF
 var _deposit_queued: bool = false
 var _sleeping: bool = false
@@ -75,6 +78,10 @@ func set_objective(node: Node3D) -> void:
 	if r != null:
 		_last_resource_type = r.resource_type
 
+func set_build_objective(node: Node3D) -> void:
+	_build_target = node
+	_move_target = Vector3.INF
+
 func set_move_objective(pos: Vector3) -> void:
 	_move_target = pos
 	_objective_node = null
@@ -106,6 +113,8 @@ func objective_label() -> String:
 		return "moving"
 	if _deposit_queued:
 		return "depositing"
+	if _build_target != null and is_instance_valid(_build_target):
+		return "building"
 	if _objective_node == null or not is_instance_valid(_objective_node):
 		return "idle"
 	var resource: ResourceNode = _objective_node as ResourceNode
@@ -136,6 +145,8 @@ func _run_task_loop() -> void:
 		elif _deposit_queued or _is_carry_full():
 			_deposit_queued = false
 			await _do_deposit()
+		elif _build_target != null and is_instance_valid(_build_target):
+			await _do_build(_build_target)
 		elif _objective_node != null and is_instance_valid(_objective_node):
 			await _do_harvest(_objective_node)
 		elif _last_resource_type >= 0 and (_objective_node == null or not is_instance_valid(_objective_node)):
@@ -272,6 +283,40 @@ func _find_nearest_of_type(type: ResourceNode.Type) -> Node3D:
 		if r == null or r.resource_type != type:
 			continue
 		var d := global_position.distance_to(r.global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = n as Node3D
+	return nearest
+
+func _do_build(node: Node3D) -> void:
+	var foundation: Foundation = node as Foundation
+	if foundation == null:
+		_build_target = null
+		return
+	_nav_agent.target_desired_distance = BUILD_REACH
+	var completed := false
+	while _build_target == node and is_instance_valid(node) and not _is_night_time():
+		move_to(node.global_position)
+		await _wait_until_near(node, BUILD_REACH)
+		if _build_target != node or not is_instance_valid(node) or _move_target != Vector3.INF or _is_night_time():
+			break
+		await get_tree().create_timer(foundation.build_tick_time / GameState.game_speed).timeout
+		if not is_instance_valid(node) or _build_target != node or _move_target != Vector3.INF or _is_night_time():
+			break
+		var done := foundation.build_sync()
+		if done:
+			completed = true
+			break
+	if completed or not is_instance_valid(node):
+		_build_target = _find_nearest_foundation()
+
+func _find_nearest_foundation() -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for n in get_tree().get_nodes_in_group("foundations"):
+		if not is_instance_valid(n):
+			continue
+		var d: float = global_position.distance_to((n as Node3D).global_position)
 		if d < nearest_dist:
 			nearest_dist = d
 			nearest = n as Node3D

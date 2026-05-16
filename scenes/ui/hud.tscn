@@ -118,6 +118,16 @@ theme_override_font_sizes/font_size = 16
 [node name="AmountLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/ResourceView"]
 modulate = Color(0.7, 0.7, 0.8, 1)
 
+[node name="FoundationView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
+visible = false
+theme_override_constants/separation = 6
+
+[node name="FoundationName" type="Label" parent="Root/SelectionPanel/VBoxContainer/FoundationView"]
+theme_override_font_sizes/font_size = 16
+
+[node name="ProgressLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/FoundationView"]
+modulate = Color(0.7, 0.7, 0.8, 1)
+
 [node name="BuildingView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
 visible = false
 theme_override_constants/separation = 6
