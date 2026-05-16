@@ -34,7 +34,8 @@ uniform vec4 forest_color : source_color = vec4(0.16, 0.28, 0.16, 1.0);
 uniform vec4 town_color : source_color = vec4(0.50, 0.46, 0.36, 1.0);
 uniform float cell_size : hint_range(0.5, 10.0, 0.5) = 2.0;
 uniform float line_width : hint_range(0.01, 0.3, 0.01) = 0.06;
-uniform vec2 capital_pos = vec2(9999.0, 9999.0);
+uniform vec2 building_positions[32];
+uniform int building_count = 0;
 uniform float town_radius = 6.0;
 uniform vec2 forest_center = vec2(-60.0, -3.0);
 uniform float forest_radius = 50.0;
@@ -47,11 +48,18 @@ void vertex() {
 
 void fragment() {
 	vec2 tile_pos = world_pos.xz;
-	float dist_capital = distance(tile_pos, capital_pos);
 	float dist_forest = distance(tile_pos, forest_center);
 
+	bool in_town = false;
+	for (int i = 0; i < building_count; i++) {
+		if (distance(tile_pos, building_positions[i]) <= town_radius) {
+			in_town = true;
+			break;
+		}
+	}
+
 	vec3 biome;
-	if (dist_capital <= town_radius) {
+	if (in_town) {
 		biome = town_color.rgb;
 	} else if (dist_forest <= forest_radius) {
 		biome = forest_color.rgb;

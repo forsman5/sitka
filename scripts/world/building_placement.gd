@@ -46,6 +46,7 @@ func _place(pos: Vector3) -> void:
 		nav_region.add_child(instance)
 		instance.global_position = pos
 		nav_region.bake_navigation_mesh()
+	get_tree().current_scene.update_town_shader()
 	_disarm()
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:

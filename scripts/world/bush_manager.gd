@@ -7,6 +7,7 @@ const BushScene = preload("res://scenes/entities/resource_node_food.tscn")
 @export var max_cluster_size: int = 5
 @export var cluster_spread: float = 3.0
 @export var min_bush_spacing: float = 2.5
+@export var min_building_clearance: float = 3.5
 @export var zone_center: Vector2 = Vector2(-60.0, -3.0)
 @export var zone_radius: float = 70.0
 
@@ -75,6 +76,14 @@ func _attempt_bush_near(center: Vector3, town_radius: float) -> void:
 				break
 		if too_close:
 			continue
+		for building in get_tree().get_nodes_in_group("buildings"):
+			if building.is_in_group("capital"):
+				continue
+			if is_instance_valid(building) and (building as Node3D).global_position.distance_to(pos) < min_building_clearance:
+				too_close = true
+				break
+		if too_close:
+			continue
 		var bush: Node3D = BushScene.instantiate() as Node3D
 		get_parent().add_child(bush)
 		bush.global_position = pos
@@ -88,4 +97,5 @@ func _get_town_radius() -> float:
 	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
 	if mat == null:
 		return 0.0
-	return mat.get_shader_parameter("town_radius")
+	var v = mat.get_shader_parameter("town_radius")
+	return float(v) if v != null else 6.0

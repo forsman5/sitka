@@ -219,6 +219,21 @@ func _get_person_at(screen_pos: Vector2) -> Node3D:
 			return parent as Node3D
 	return null
 
+func update_town_shader() -> void:
+	var mesh := get_node("NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	if mesh == null:
+		return
+	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+	if mat == null:
+		return
+	var positions := PackedVector2Array()
+	for b in get_tree().get_nodes_in_group("capital"):
+		var b3d := b as Node3D
+		if b3d != null:
+			positions.append(Vector2(b3d.global_position.x, b3d.global_position.z))
+	mat.set_shader_parameter("building_positions", positions)
+	mat.set_shader_parameter("building_count", positions.size())
+
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
 	var origin := camera.project_ray_origin(screen_pos)
