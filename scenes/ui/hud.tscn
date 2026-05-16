@@ -62,7 +62,7 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 10.0
 offset_top = -200.0
-offset_right = 400.0
+offset_right = 470.0
 offset_bottom = -10.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
@@ -88,10 +88,14 @@ text = "OBJECTIVE"
 custom_minimum_size = Vector2(80, 0)
 text = "CARRY"
 
+[node name="HealthHeader" type="Label" parent="Root/SelectionPanel/VBoxContainer/HeaderRow"]
+custom_minimum_size = Vector2(70, 0)
+text = "HEALTH"
+
 [node name="HSeparator" type="HSeparator" parent="Root/SelectionPanel/VBoxContainer"]
 
 [node name="Rows" type="GridContainer" parent="Root/SelectionPanel/VBoxContainer"]
-columns = 3
+columns = 4
 
 [node name="ResourceView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
 visible = false

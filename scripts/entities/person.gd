@@ -10,6 +10,8 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 const Building = preload("res://scripts/entities/building/building.gd")
 
 @export var carry_capacity: float = 10.0
+@export var max_health: int = 10
+var health: int = 10
 
 var selected := false
 var inventory: Array = []
@@ -115,6 +117,9 @@ func objective_label() -> String:
 		ResourceNode.Type.FOOD:  return "mine Food"
 		ResourceNode.Type.GOLD:  return "mine Gold"
 	return "mining"
+
+func take_damage(amount: int) -> void:
+	health = maxi(health - amount, 0)
 
 func _is_carry_full() -> bool:
 	return current_weight() >= carry_capacity
@@ -227,6 +232,7 @@ func _do_sleep() -> void:
 		visible = true
 	else:
 		_camping = true
+		take_damage(2)
 		while is_inside_tree() and _is_night_time():
 			await get_tree().process_frame
 		_camping = false

@@ -93,7 +93,8 @@ func _refresh_panel() -> void:
 			var person: Person = node as Person
 			if person != null:
 				_add_row(person.name, person.objective_label(),
-					"%.1f / %.1f" % [person.current_weight(), person.carry_capacity])
+					"%.1f / %.1f" % [person.current_weight(), person.carry_capacity],
+					"%d / %d" % [person.health, person.max_health])
 
 	if has_resources:
 		var res: ResourceNode = resources[0] as ResourceNode
@@ -188,7 +189,7 @@ func _update_speed_highlight() -> void:
 	_btn_2x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 2.0 else _style_inactive)
 	_btn_5x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 5.0 else _style_inactive)
 
-func _add_row(unit: String, objective: String, carry: String) -> void:
+func _add_row(unit: String, objective: String, carry: String, hp: String) -> void:
 	var name_lbl := Label.new()
 	name_lbl.text = unit
 	name_lbl.custom_minimum_size = Vector2(110, 0)
@@ -198,6 +199,10 @@ func _add_row(unit: String, objective: String, carry: String) -> void:
 	var carry_lbl := Label.new()
 	carry_lbl.text = carry
 	carry_lbl.custom_minimum_size = Vector2(80, 0)
+	var hp_lbl := Label.new()
+	hp_lbl.text = hp
+	hp_lbl.custom_minimum_size = Vector2(70, 0)
 	_rows.add_child(name_lbl)
 	_rows.add_child(obj_lbl)
 	_rows.add_child(carry_lbl)
+	_rows.add_child(hp_lbl)
