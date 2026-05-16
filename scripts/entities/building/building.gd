@@ -8,6 +8,7 @@ const InventoryItem = preload("res://scripts/inventory/inventory_item.gd")
 
 var selected: bool = false
 var upgrades: Dictionary = {}
+var town_radius_contribution: float = 0.0
 
 func has_upgrade(id: String) -> bool:
 	return upgrades.get(id, false)
@@ -17,6 +18,7 @@ func get_available_upgrades() -> Array:
 
 func shows_spawn_button() -> bool: return false
 func shows_build_hut_button() -> bool: return false
+func shows_build_house_button() -> bool: return false
 
 func apply_upgrade(id: String) -> void:
 	upgrades[id] = true

@@ -82,11 +82,14 @@ func set_objective(node: Node3D) -> void:
 func set_build_objective(node: Node3D) -> void:
 	_build_target = node
 	_move_target = Vector3.INF
+	_objective_node = null
+	_last_resource_type = -1
 
 func set_move_objective(pos: Vector3) -> void:
 	_move_target = pos
 	_objective_node = null
 	_deposit_queued = false
+	_last_resource_type = -1
 
 func set_deposit_objective() -> void:
 	_deposit_queued = true
@@ -301,8 +304,7 @@ func _find_nearest_of_type(type: ResourceNode.Type) -> Node3D:
 	return nearest
 
 func _do_build(node: Node3D) -> void:
-	var foundation: Foundation = node as Foundation
-	if foundation == null:
+	if not node.is_in_group("foundations"):
 		_build_target = null
 		return
 	_nav_agent.target_desired_distance = BUILD_REACH
@@ -312,10 +314,11 @@ func _do_build(node: Node3D) -> void:
 		await _wait_until_near(node, BUILD_REACH)
 		if _build_target != node or not is_instance_valid(node) or _move_target != Vector3.INF or _is_night_time():
 			break
-		await get_tree().create_timer(foundation.build_tick_time / GameState.game_speed).timeout
+		var tick_time: float = node.get("build_tick_time") if node.get("build_tick_time") != null else 2.0
+		await get_tree().create_timer(tick_time / GameState.game_speed).timeout
 		if not is_instance_valid(node) or _build_target != node or _move_target != Vector3.INF or _is_night_time():
 			break
-		var done := foundation.build_sync()
+		var done: bool = node.call("build_sync")
 		if done:
 			completed = true
 			break

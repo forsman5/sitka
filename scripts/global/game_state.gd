@@ -9,6 +9,7 @@ signal food_changed(amount: int)
 @export var pause_on_escape: bool = true
 @export var settler_cost: int = 30
 @export var forest_hut_cost: int = 50
+@export var house_cost: int = 40
 var time_of_day: float = 0.25
 
 var player_gold: int = 0:

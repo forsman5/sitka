@@ -1,12 +1,13 @@
 extends Node3D
 
-var foundation_name: String = "Forest Hut Foundation"
-@export var build_required: int = 10
+var foundation_name: String = "House Foundation"
+var town_radius_contribution: float = 2.0
+@export var build_required: int = 15
 @export var build_tick_time: float = 2.0
 var selected := false
 var _progress: int = 0
 var _completed := false
-const BuildScene = preload("res://scenes/entities/building/forest_hut.tscn")
+const BuildScene = preload("res://scenes/entities/building/house.tscn")
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 var _mat_normal: Material
@@ -42,4 +43,5 @@ func _complete() -> void:
 	built.global_position = global_position
 	built.global_rotation = global_rotation
 	nav_region.bake_navigation_mesh()
+	get_tree().current_scene.update_town_shader()
 	queue_free()

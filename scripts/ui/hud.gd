@@ -4,6 +4,7 @@ const Person = preload("res://scripts/entities/person.gd")
 const Building = preload("res://scripts/entities/building/building.gd")
 const PersonScene = preload("res://scenes/entities/person.tscn")
 const ForestHutFoundationScene = preload("res://scenes/entities/building/forest_hut_foundation.tscn")
+const HouseFoundationScene = preload("res://scenes/entities/building/house_foundation.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _time_label: Label = $Root/TimeLabel
@@ -26,6 +27,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 @onready var _build_hut_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton
+@onready var _build_house_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildHouseButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
 @onready var _speed_bar: HBoxContainer = $Root/SpeedBar
 @onready var _btn_pause: Button = $Root/SpeedBar/PauseButton
@@ -144,7 +146,7 @@ func _refresh_panel() -> void:
 	if has_foundations:
 		var f = foundations[0]
 		if is_instance_valid(f):
-			_foundation_name.text = "Forest Hut Foundation"
+			_foundation_name.text = f.get("foundation_name") if f.get("foundation_name") != null else "Foundation"
 			_foundation_progress.text = "%d / %d" % [f.get("_progress"), f.get("build_required")]
 
 	if has_buildings:
@@ -154,8 +156,10 @@ func _refresh_panel() -> void:
 			_building_type.text = building.building_type
 		_spawn_btn.visible = building != null and building.shows_spawn_button()
 		_build_hut_btn.visible = building != null and building.shows_build_hut_button()
+		_build_house_btn.visible = building != null and building.shows_build_house_button()
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 		_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
+		_build_house_btn.disabled = GameState.player_wood < GameState.house_cost
 		if building != _last_selected_building:
 			_last_selected_building = building
 			for child in _upgrades_container.get_children():
@@ -184,6 +188,13 @@ func _on_build_hut_pressed() -> void:
 	var placement = get_tree().get_first_node_in_group("building_placement")
 	if placement:
 		placement.arm(ForestHutFoundationScene, GameState.forest_hut_cost)
+
+func _on_build_house_pressed() -> void:
+	if GameState.player_wood < GameState.house_cost:
+		return
+	var placement = get_tree().get_first_node_in_group("building_placement")
+	if placement:
+		placement.arm(HouseFoundationScene, GameState.house_cost)
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:

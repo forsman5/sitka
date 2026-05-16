@@ -155,6 +155,9 @@ text = "Spawn Settler (30g)"
 [node name="BuildHutButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 text = "Build Forest Hut (50w)"
 
+[node name="BuildHouseButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+text = "Build House (40w)"
+
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
 [node name="SpeedBar" type="HBoxContainer" parent="Root"]
@@ -186,6 +189,7 @@ text = "5x"
 
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/BuildHutButton" to="." method="_on_build_hut_pressed"]
+[connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/BuildHouseButton" to="." method="_on_build_house_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/PauseButton" to="." method="_on_pause_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed1xButton" to="." method="_on_1x_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed2xButton" to="." method="_on_2x_pressed"]

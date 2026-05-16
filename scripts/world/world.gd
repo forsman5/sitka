@@ -227,11 +227,20 @@ func update_town_shader() -> void:
 	if mat == null:
 		return
 	var positions := PackedVector2Array()
-	for b in get_tree().get_nodes_in_group("capital"):
-		var b3d := b as Node3D
-		if b3d != null:
-			positions.append(Vector2(b3d.global_position.x, b3d.global_position.z))
+	var radii := PackedFloat32Array()
+	var groups := ["capital", "buildings", "foundations"]
+	for group in groups:
+		for node in get_tree().get_nodes_in_group(group):
+			var n3d := node as Node3D
+			if n3d == null:
+				continue
+			var r = n3d.get("town_radius_contribution")
+			if r == null or float(r) <= 0.0:
+				continue
+			positions.append(Vector2(n3d.global_position.x, n3d.global_position.z))
+			radii.append(float(r))
 	mat.set_shader_parameter("building_positions", positions)
+	mat.set_shader_parameter("building_radii", radii)
 	mat.set_shader_parameter("building_count", positions.size())
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
