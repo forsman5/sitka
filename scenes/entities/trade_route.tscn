@@ -1,0 +1,29 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/trade_route.gd" id="1_trade"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_1"]
+top_radius = 1.0
+bottom_radius = 1.0
+height = 2.0
+
+[sub_resource type="StandardMaterial3D" id="Material_1"]
+albedo_color = Color(1.0, 0.78, 0.05, 1.0)
+
+[sub_resource type="CylinderShape3D" id="CylinderShape_1"]
+radius = 1.0
+height = 2.0
+
+[node name="TradeRoute" type="Node3D"]
+script = ExtResource("1_trade")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1, 0)
+mesh = SubResource("CylinderMesh_1")
+surface_material_override/0 = SubResource("Material_1")
+
+[node name="Area3D" type="Area3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
+position = Vector3(0, 1, 0)
+shape = SubResource("CylinderShape_1")

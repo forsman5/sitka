@@ -34,5 +34,12 @@ extends Resource
 @export_group("Appearance")
 @export var beach_height: float = 0.55
 
+@export_group("Starting Resources")
+@export var starting_gold_pos: Vector2 = Vector2(-8, -3)
+@export var starting_wood_pos: Vector2 = Vector2(-4, 4)
+
+@export_group("Trade Routes")
+@export var trade_route_offset: float = 70.0
+
 @export_group("Gameplay")
 @export var town_exclusion_radius: float = 6.0

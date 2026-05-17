@@ -2,6 +2,10 @@ extends Node3D
 
 const DRAG_THRESHOLD := 6.0
 
+const GoldScene := preload("res://scenes/entities/resource_node_gold.tscn")
+const WoodScene := preload("res://scenes/entities/resource_node_wood.tscn")
+const TradeScene := preload("res://scenes/entities/trade_route.tscn")
+
 var _drag_start := Vector2.ZERO
 var _dragging := false
 
@@ -10,6 +14,8 @@ var _dragging := false
 
 func _ready() -> void:
 	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	_spawn_starting_resources(terrain)
+	_spawn_trade_routes(terrain)
 	if terrain != null:
 		terrain.prepare_for_bake()
 		_nav_region.bake_finished.connect(func():
@@ -17,6 +23,25 @@ func _ready() -> void:
 				terrain.restore_visual()
 		, CONNECT_ONE_SHOT)
 	_nav_region.bake_navigation_mesh()
+
+func _spawn_starting_resources(terrain: Node) -> void:
+	var cfg: MapConfig = terrain.map_config if terrain != null else MapConfig.new()
+	var gold: Node3D = GoldScene.instantiate()
+	gold.position = Vector3(cfg.starting_gold_pos.x, 0.0, cfg.starting_gold_pos.y)
+	add_child(gold)
+	var wood: Node3D = WoodScene.instantiate()
+	wood.position = Vector3(cfg.starting_wood_pos.x, 0.0, cfg.starting_wood_pos.y)
+	add_child(wood)
+
+func _spawn_trade_routes(terrain: Node) -> void:
+	var cfg: MapConfig = terrain.map_config if terrain != null else MapConfig.new()
+	var d: float = cfg.trade_route_offset
+	var offsets: Array = [Vector2(0.0, -d), Vector2(0.0, d), Vector2(d, 0.0), Vector2(-d, 0.0)]
+	for off in offsets:
+		var v: Vector2 = off as Vector2
+		var tr: Node3D = TradeScene.instantiate()
+		tr.position = Vector3(v.x, 0.0, v.y)
+		add_child(tr)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -154,6 +179,12 @@ func _any_ship_selected() -> bool:
 
 func _handle_right_click(screen_pos: Vector2) -> void:
 	if _any_ship_selected():
+		var trade := _get_trade_route_at(screen_pos)
+		if trade != null:
+			for s: Node3D in get_tree().get_nodes_in_group("ships"):
+				if s.get("selected") == true:
+					s.set_trade_objective(trade)
+			return
 		var pos := _raycast_y0(screen_pos)
 		if pos != Vector3.INF:
 			var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
@@ -304,6 +335,24 @@ func update_town_shader() -> void:
 	mat.set_shader_parameter("building_positions", positions)
 	mat.set_shader_parameter("building_radii", radii)
 	mat.set_shader_parameter("building_count", positions.size())
+
+func _get_trade_route_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("trade_routes"):
+			return parent as Node3D
+	return null
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
