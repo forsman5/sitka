@@ -26,3 +26,10 @@ var player_food: int = 50:
 	set(value):
 		player_food = value
 		food_changed.emit(value)
+
+func reset() -> void:
+	player_gold = 0
+	player_wood = 0
+	player_food = 50
+	game_speed = 1.0
+	time_of_day = 0.25

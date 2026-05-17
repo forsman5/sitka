@@ -37,6 +37,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 var _last_selected_building: Building = null
 var _paused: bool = false
+var _game_over_triggered := false
 var _style_active: StyleBoxFlat
 var _style_inactive: StyleBoxFlat
 
@@ -63,6 +64,17 @@ func _process(_delta: float) -> void:
 	var h := int(total_hours) % 24
 	var m := int((total_hours - int(total_hours)) * 60.0)
 	_time_label.text = "%02d:%02d" % [h, m]
+	if not _game_over_triggered:
+		_check_game_over()
+
+func _check_game_over() -> void:
+	if get_tree().get_nodes_in_group("capital").is_empty():
+		return
+	if get_tree().get_nodes_in_group("persons").is_empty() \
+			and GameState.player_gold < GameState.settler_cost:
+		_game_over_triggered = true
+		get_tree().paused = false
+		get_tree().change_scene_to_file("res://scenes/ui/game_over.tscn")
 
 func _on_gold_changed(amount: int) -> void:
 	_gold_label.text = "Gold: %d" % amount
