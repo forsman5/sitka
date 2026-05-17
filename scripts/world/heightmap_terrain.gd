@@ -81,10 +81,6 @@ func _generate_heights(p_seed: int) -> void:
 
 			height_data[gz_i * GRID_SIZE + gx_i] = h
 
-const _FOREST_CENTER := Vector2(-35.0, 0.0)
-const _FOREST_RADIUS  := 28.0
-const _BEACH_HEIGHT   := 0.55
-
 func _build_mesh() -> void:
 	# Height texture for the visual shader.
 	var img := Image.create(GRID_SIZE, GRID_SIZE, false, Image.FORMAT_RF)
@@ -133,7 +129,6 @@ func _build_mesh() -> void:
 	_mesh_instance.mesh = _plane_mesh
 	_mesh_instance.material_override = _visual_mat
 	_mesh_instance.custom_aabb = AABB(Vector3(-80, -5, -80), Vector3(160, 10, 160))
-	print("[Terrain] built")
 
 func prepare_for_bake() -> void:
 	_mesh_instance.mesh = _nav_array_mesh

@@ -61,14 +61,4 @@ func _attempt_spawn() -> void:
 		return
 
 func _get_town_radius() -> float:
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
-	if terrain == null:
-		return 6.0
-	var mesh := terrain.get_node_or_null("MeshInstance3D") as MeshInstance3D
-	if mesh == null:
-		return 6.0
-	var mat := mesh.material_override as ShaderMaterial
-	if mat == null:
-		return 6.0
-	var v = mat.get_shader_parameter("town_radius")
-	return float(v) if v != null else 6.0
+	return 6.0
