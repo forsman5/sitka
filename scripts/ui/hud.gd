@@ -6,6 +6,7 @@ const PersonScene = preload("res://scenes/entities/person.tscn")
 const ForestHutFoundationScene = preload("res://scenes/entities/building/forest_hut_foundation.tscn")
 const HouseFoundationScene = preload("res://scenes/entities/building/house_foundation.tscn")
 const DockFoundationScene = preload("res://scenes/entities/building/dock_foundation.tscn")
+const ShipScene = preload("res://scenes/entities/ship.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _time_label: Label = $Root/TimeLabel
@@ -27,6 +28,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _building_name: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingName
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
+@onready var _spawn_ship_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnShipButton
 @onready var _build_btn: Button = $Root/BuildButton
 @onready var _build_menu: Panel = $Root/BuildMenu
 @onready var _build_hut_btn: Button = $Root/BuildMenu/VBox/BuildHutButton
@@ -111,12 +113,16 @@ func _refresh_people() -> void:
 
 func _refresh_panel() -> void:
 	var persons: Array[Node] = []
+	var ships: Array[Node] = []
 	var buildings: Array[Node] = []
 	var resources: Array[Node] = []
 	var foundations: Array[Node] = []
 	for p in get_tree().get_nodes_in_group("persons"):
 		if p.get("selected") == true:
 			persons.append(p)
+	for s in get_tree().get_nodes_in_group("ships"):
+		if s.get("selected") == true:
+			ships.append(s)
 	for b in get_tree().get_nodes_in_group("buildings"):
 		if b.get("selected") == true:
 			buildings.append(b)
@@ -128,19 +134,21 @@ func _refresh_panel() -> void:
 			foundations.append(f)
 
 	var has_persons := not persons.is_empty()
+	var has_ships := not ships.is_empty()
+	var has_units := has_persons or has_ships
 	var has_buildings := not buildings.is_empty()
 	var has_resources := not resources.is_empty()
 	var has_foundations := not foundations.is_empty()
-	_selection_panel.visible = has_persons or has_buildings or has_resources or has_foundations
+	_selection_panel.visible = has_units or has_buildings or has_resources or has_foundations
 
-	_header_row.visible = has_persons
-	_separator.visible = has_persons
-	_rows.visible = has_persons
+	_header_row.visible = has_units
+	_separator.visible = has_units
+	_rows.visible = has_units
 	_building_view.visible = has_buildings
 	_resource_view.visible = has_resources
 	_foundation_view.visible = has_foundations
 
-	if has_persons:
+	if has_units:
 		for child in _rows.get_children():
 			_rows.remove_child(child)
 			child.queue_free()
@@ -150,6 +158,10 @@ func _refresh_panel() -> void:
 				_add_row(person.name, person.objective_label(),
 					"%.1f / %.1f" % [person.current_weight(), person.carry_capacity],
 					"%d / %d" % [person.health, person.max_health])
+		for node in ships:
+			var ship: Ship = node as Ship
+			if ship != null:
+				_add_row(ship.name, ship.objective_label(), "-", "-")
 
 	if has_resources:
 		var res: ResourceNode = resources[0] as ResourceNode
@@ -177,6 +189,8 @@ func _refresh_panel() -> void:
 			_building_type.text = building.building_type
 		_spawn_btn.visible = building != null and building.shows_spawn_button()
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
+		_spawn_ship_btn.visible = building != null and building.shows_spawn_ship_button()
+		_spawn_ship_btn.disabled = GameState.player_wood < GameState.ship_cost
 		if building != _last_selected_building:
 			_last_selected_building = building
 			for child in _upgrades_container.get_children():
@@ -225,6 +239,21 @@ func _on_build_dock_pressed() -> void:
 	var placement = get_tree().get_first_node_in_group("building_placement")
 	if placement:
 		placement.arm(DockFoundationScene, GameState.dock_cost, true)
+
+func _on_spawn_ship_pressed() -> void:
+	if GameState.player_wood < GameState.ship_cost:
+		return
+	var building: Building = _last_selected_building
+	if building == null or not building.shows_spawn_ship_button():
+		return
+	GameState.player_wood -= GameState.ship_cost
+	var ship: Node3D = ShipScene.instantiate() as Node3D
+	var idx := get_tree().get_nodes_in_group("ships").size() + 1
+	ship.name = "Ship%d" % idx
+	get_tree().current_scene.add_child(ship)
+	var water_dir := building.global_transform.basis.z
+	ship.global_position = building.global_position + water_dir * 5.0
+	ship.global_position.y = 0.05
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:

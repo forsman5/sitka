@@ -152,6 +152,9 @@ modulate = Color(0.7, 0.7, 0.8, 1)
 [node name="SpawnButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 text = "Spawn Settler (30g)"
 
+[node name="SpawnShipButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+text = "Spawn Ship (50w)"
+
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
 [node name="SpeedBar" type="HBoxContainer" parent="Root"]
@@ -220,6 +223,7 @@ offset_bottom = -210.0
 text = "Build"
 
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
+[connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnShipButton" to="." method="_on_spawn_ship_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHutButton" to="." method="_on_build_hut_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHouseButton" to="." method="_on_build_house_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildDockButton" to="." method="_on_build_dock_pressed"]

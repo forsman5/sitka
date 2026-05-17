@@ -17,6 +17,7 @@ func get_available_upgrades() -> Array:
 	return []
 
 func shows_spawn_button() -> bool: return false
+func shows_spawn_ship_button() -> bool: return false
 
 func apply_upgrade(id: String) -> void:
 	upgrades[id] = true

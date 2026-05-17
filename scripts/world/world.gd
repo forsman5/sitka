@@ -51,9 +51,19 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_buildings()
 		_deselect_all_resources()
 		_deselect_all_foundations()
+		_deselect_all_ships()
 		if not shift:
 			_deselect_all()
 		person.set_selected(true)
+		return
+	var ship := _get_ship_at(screen_pos)
+	if ship != null:
+		_deselect_all()
+		_deselect_all_buildings()
+		_deselect_all_resources()
+		_deselect_all_foundations()
+		_deselect_all_ships()
+		ship.set_selected(true)
 		return
 	var foundation := _get_foundation_at(screen_pos)
 	if foundation != null:
@@ -93,11 +103,16 @@ func _finish_box_select(end_pos: Vector2) -> void:
 	_deselect_all_foundations()
 	if not shift:
 		_deselect_all()
+		_deselect_all_ships()
 	var camera := get_viewport().get_camera_3d()
 	for person: Node3D in get_tree().get_nodes_in_group("persons"):
 		var screen_pos := camera.unproject_position(person.global_position + Vector3(0, 0.9, 0))
 		if rect.has_point(screen_pos):
 			person.set_selected(true)
+	for ship: Node3D in get_tree().get_nodes_in_group("ships"):
+		var screen_pos := camera.unproject_position(ship.global_position + Vector3(0, 0.5, 0))
+		if rect.has_point(screen_pos):
+			ship.set_selected(true)
 
 func _update_selection_box(current_pos: Vector2) -> void:
 	_selection_box.visible = true
@@ -108,6 +123,10 @@ func _update_selection_box(current_pos: Vector2) -> void:
 func _deselect_all() -> void:
 	for p: Node3D in get_tree().get_nodes_in_group("persons"):
 		p.set_selected(false)
+
+func _deselect_all_ships() -> void:
+	for s: Node3D in get_tree().get_nodes_in_group("ships"):
+		s.set_selected(false)
 
 func _deselect_all_buildings() -> void:
 	for b: Node3D in get_tree().get_nodes_in_group("buildings"):
@@ -127,7 +146,22 @@ func _any_selected() -> bool:
 			return true
 	return false
 
+func _any_ship_selected() -> bool:
+	for s: Node3D in get_tree().get_nodes_in_group("ships"):
+		if s.get("selected") == true:
+			return true
+	return false
+
 func _handle_right_click(screen_pos: Vector2) -> void:
+	if _any_ship_selected():
+		var pos := _raycast_y0(screen_pos)
+		if pos != Vector3.INF:
+			var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+			if terrain != null and terrain.is_ocean_water(pos.x, pos.z):
+				for s: Node3D in get_tree().get_nodes_in_group("ships"):
+					if s.get("selected") == true:
+						s.set_move_target(pos)
+		return
 	if not _any_selected():
 		return
 	var foundation := _get_foundation_at(screen_pos)
@@ -205,6 +239,24 @@ func _get_foundation_at(screen_pos: Vector2) -> Node3D:
 	if collider is Area3D:
 		var parent: Node = (collider as Area3D).get_parent()
 		if parent.is_in_group("foundations"):
+			return parent as Node3D
+	return null
+
+func _get_ship_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("ships"):
 			return parent as Node3D
 	return null
 
