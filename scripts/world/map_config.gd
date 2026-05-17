@@ -28,8 +28,8 @@ extends Resource
 @export var forest_radius: float = 25.0
 
 @export_group("Bush Spawning")
-@export var bush_zone_center: Vector2 = Vector2(0.0, 0.0)
-@export var bush_zone_radius: float = 50.0
+@export var bush_zone_center: Vector2 = Vector2(-60.0, -3.0)
+@export var bush_zone_radius: float = 70.0
 
 @export_group("Appearance")
 @export var beach_height: float = 0.55
