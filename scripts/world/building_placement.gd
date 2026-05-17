@@ -151,6 +151,8 @@ func _compute_coast_snap(world_pos: Vector3) -> Dictionary:
 		return {"valid": false}
 	if h_water >= 0.0:
 		return {"valid": false}
+	if not terrain.is_ocean_water(pt.x - grad.x * 4.0, pt.y - grad.y * 4.0):
+		return {"valid": false}
 	return {
 		"valid": true,
 		"position": Vector3(pt.x, maxf(terrain.get_height(pt.x, pt.y), 0.0), pt.y),

@@ -7,6 +7,7 @@ const HEIGHT_TEX_RANGE := 10.0
 @export var map_config: MapConfig
 
 var height_data: PackedFloat32Array
+var ocean_data: PackedByteArray
 var _height_tex: ImageTexture
 var _nav_array_mesh: ArrayMesh
 var _plane_mesh: PlaneMesh
@@ -23,6 +24,7 @@ func _ready() -> void:
 
 func generate(p_seed: int = 0) -> void:
 	_generate_heights(p_seed)
+	_build_ocean_map()
 	_build_mesh()
 	_build_collision()
 
@@ -134,6 +136,52 @@ func prepare_for_bake() -> void:
 func restore_visual() -> void:
 	_mesh_instance.mesh = _plane_mesh
 	_mesh_instance.material_override = _visual_mat
+
+func _build_ocean_map() -> void:
+	ocean_data = PackedByteArray()
+	ocean_data.resize(GRID_SIZE * GRID_SIZE)
+	var queue: Array[int] = []
+	for gx in range(GRID_SIZE):
+		var idx0: int = 0 * GRID_SIZE + gx
+		var idx1: int = (GRID_SIZE - 1) * GRID_SIZE + gx
+		if height_data[idx0] < 0.0 and ocean_data[idx0] == 0:
+			ocean_data[idx0] = 1
+			queue.append(idx0)
+		if height_data[idx1] < 0.0 and ocean_data[idx1] == 0:
+			ocean_data[idx1] = 1
+			queue.append(idx1)
+	for gz in range(GRID_SIZE):
+		var idx0: int = gz * GRID_SIZE + 0
+		var idx1: int = gz * GRID_SIZE + (GRID_SIZE - 1)
+		if height_data[idx0] < 0.0 and ocean_data[idx0] == 0:
+			ocean_data[idx0] = 1
+			queue.append(idx0)
+		if height_data[idx1] < 0.0 and ocean_data[idx1] == 0:
+			ocean_data[idx1] = 1
+			queue.append(idx1)
+	var qi := 0
+	while qi < queue.size():
+		var idx: int = queue[qi]
+		qi += 1
+		var gx: int = idx % GRID_SIZE
+		var gz: int = idx / GRID_SIZE
+		for d in [-1, 1, -GRID_SIZE, GRID_SIZE]:
+			if d == -1 and gx == 0:
+				continue
+			if d == 1 and gx == GRID_SIZE - 1:
+				continue
+			var nidx: int = idx + d
+			if nidx < 0 or nidx >= GRID_SIZE * GRID_SIZE:
+				continue
+			if height_data[nidx] < 0.0 and ocean_data[nidx] == 0:
+				ocean_data[nidx] = 1
+				queue.append(nidx)
+
+func is_ocean_water(world_x: float, world_z: float) -> bool:
+	var half := map_config.world_size * 0.5
+	var gx := int(clampf((world_x + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
+	var gz := int(clampf((world_z + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
+	return ocean_data[gz * GRID_SIZE + gx] == 1
 
 func _build_collision() -> void:
 	var shape := HeightMapShape3D.new()
