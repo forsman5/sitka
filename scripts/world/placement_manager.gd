@@ -20,7 +20,12 @@ func _place_capital(pos: Vector3) -> void:
 	nav_region.add_child(building)
 	building.global_position = pos
 	get_parent().update_town_shader()
+	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain != null:
+		terrain.prepare_for_bake()
 	nav_region.bake_finished.connect(func():
+		if terrain != null and is_instance_valid(terrain):
+			terrain.restore_visual()
 		for p in get_tree().get_nodes_in_group("persons"):
 			(p as Node3D).show()
 		queue_free()
@@ -29,11 +34,12 @@ func _place_capital(pos: Vector3) -> void:
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
-	var origin := camera.project_ray_origin(screen_pos)
-	var dir := camera.project_ray_normal(screen_pos)
-	if absf(dir.y) < 0.0001:
-		return Vector3.INF
-	var t := -origin.y / dir.y
-	if t < 0.0:
-		return Vector3.INF
-	return origin + dir * t
+	var space := camera.get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 2
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+	var result := space.intersect_ray(query)
+	return result.get("position", Vector3.INF)

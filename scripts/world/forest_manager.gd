@@ -21,6 +21,7 @@ func _spawn_loop() -> void:
 
 func _attempt_spawn() -> void:
 	var town_radius := _get_town_radius()
+	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
 	for _i in range(10):
 		var angle := randf() * TAU
 		var r := sqrt(randf()) * forest_radius
@@ -29,8 +30,10 @@ func _attempt_spawn() -> void:
 			0.0,
 			forest_center.y + r * sin(angle)
 		)
-		if absf(pos.x) > 49.0 or absf(pos.z) > 49.0:
+		var terrain_h: float = terrain.get_height(pos.x, pos.z) if terrain != null else 0.0
+		if terrain_h < 0.5:
 			continue
+		pos.y = terrain_h
 		var too_close := false
 		for node in get_tree().get_nodes_in_group("resource_nodes"):
 			if is_instance_valid(node) and (node as Node3D).global_position.distance_to(pos) < min_tree_spacing:
@@ -58,12 +61,14 @@ func _attempt_spawn() -> void:
 		return
 
 func _get_town_radius() -> float:
-	var mesh := get_tree().current_scene.get_node_or_null(
-		"NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain == null:
+		return 6.0
+	var mesh := terrain.get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if mesh == null:
-		return 0.0
-	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+		return 6.0
+	var mat := mesh.material_override as ShaderMaterial
 	if mat == null:
-		return 0.0
+		return 6.0
 	var v = mat.get_shader_parameter("town_radius")
 	return float(v) if v != null else 6.0

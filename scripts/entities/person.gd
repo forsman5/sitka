@@ -32,11 +32,14 @@ static var _night_assigned: bool = false
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
 
+var _terrain: Node = null
+
 var _mat_normal: Material
 var _mat_selected: StandardMaterial3D
 
 func _ready() -> void:
 	add_to_group("persons")
+	_terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	motion_mode = MOTION_MODE_FLOATING
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
@@ -49,7 +52,7 @@ func _physics_process(_delta: float) -> void:
 	if _nav_agent.is_navigation_finished():
 		velocity = Vector3.ZERO
 		move_and_slide()
-		global_position.y = 0.0
+		global_position.y = (_terrain.get_height(global_position.x, global_position.z) if _terrain != null else 0.0) as float
 		return
 	var next_pos := _nav_agent.get_next_path_position()
 	var dir := next_pos - global_position
@@ -63,7 +66,7 @@ func _on_velocity_computed(safe_velocity: Vector3) -> void:
 	velocity = safe_velocity
 	velocity.y = 0.0
 	move_and_slide()
-	global_position.y = 0.0
+	global_position.y = (_terrain.get_height(global_position.x, global_position.z) if _terrain != null else 0.0) as float
 
 func move_to(world_pos: Vector3) -> void:
 	_nav_agent.set_target_position(world_pos)

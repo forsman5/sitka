@@ -31,6 +31,9 @@ func _ready() -> void:
 	obstacle.avoidance_enabled = true
 	obstacle.radius = obstacle_radius
 	add_child(obstacle)
+	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain != null:
+		global_position.y = terrain.get_height(global_position.x, global_position.z)
 
 func set_selected(value: bool) -> void:
 	selected = value

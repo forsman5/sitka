@@ -12,6 +12,7 @@
 [ext_resource type="Script" path="res://scripts/world/building_placement.gd" id="10_bplacement"]
 [ext_resource type="Script" path="res://scripts/world/day_night_cycle.gd" id="11_dnc"]
 [ext_resource type="Script" path="res://scripts/world/bush_manager.gd" id="12_bush"]
+[ext_resource type="PackedScene" path="res://scenes/world/heightmap_terrain.tscn" id="13_terrain"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -22,72 +23,32 @@ ambient_light_energy = 0.4
 
 [sub_resource type="CameraAttributesPractical" id="CamAttr_1"]
 
-[sub_resource type="PlaneMesh" id="PlaneMesh_1"]
-size = Vector2(100, 100)
-
-[sub_resource type="Shader" id="GridShader_1"]
-code = "shader_type spatial;
-render_mode diffuse_lambert;
-
-uniform vec4 grassland_color : source_color = vec4(0.25, 0.42, 0.25, 1.0);
-uniform vec4 forest_color : source_color = vec4(0.16, 0.28, 0.16, 1.0);
-uniform vec4 town_color : source_color = vec4(0.50, 0.46, 0.36, 1.0);
-uniform float cell_size : hint_range(0.5, 10.0, 0.5) = 2.0;
-uniform float line_width : hint_range(0.01, 0.3, 0.01) = 0.06;
-uniform vec2 building_positions[32];
-uniform float building_radii[32];
-uniform int building_count = 0;
-uniform float town_radius = 6.0;
-uniform vec2 forest_center = vec2(-60.0, -3.0);
-uniform float forest_radius = 50.0;
-
-varying vec3 world_pos;
-
-void vertex() {
-	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-}
-
-void fragment() {
-	vec2 tile_pos = world_pos.xz;
-	float dist_forest = distance(tile_pos, forest_center);
-
-	bool in_town = false;
-	for (int i = 0; i < building_count; i++) {
-		if (distance(tile_pos, building_positions[i]) <= building_radii[i]) {
-			in_town = true;
-			break;
-		}
-	}
-
-	vec3 biome;
-	if (in_town) {
-		biome = town_color.rgb;
-	} else if (dist_forest <= forest_radius) {
-		biome = forest_color.rgb;
-	} else {
-		biome = grassland_color.rgb;
-	}
-
-	vec2 grid = fract(tile_pos / cell_size);
-	float lw = line_width / cell_size;
-	float gx = step(1.0 - lw, grid.x) + step(grid.x, lw);
-	float gz = step(1.0 - lw, grid.y) + step(grid.y, lw);
-	ALBEDO = mix(biome, biome * 0.6, clamp(gx + gz, 0.0, 1.0));
-	ROUGHNESS = 1.0;
-	METALLIC = 0.0;
-}
-"
-
-[sub_resource type="ShaderMaterial" id="GridMat_1"]
-shader = SubResource("GridShader_1")
-
-[sub_resource type="WorldBoundaryShape3D" id="WorldBoundary_1"]
-
 [sub_resource type="NavigationMesh" id="NavMesh_1"]
 agent_radius = 0.4
 agent_height = 2.0
-agent_max_climb = 0.1
-cell_size = 0.25
+agent_max_climb = 0.5
+agent_max_slope = 35.0
+cell_size = 0.5
+
+[sub_resource type="PlaneMesh" id="WaterMesh_1"]
+size = Vector2(160, 160)
+
+[sub_resource type="Shader" id="WaterShader_1"]
+code = "shader_type spatial;
+render_mode diffuse_lambert, specular_schlick_ggx;
+
+uniform vec4 water_color : source_color = vec4(0.15, 0.38, 0.65, 1.0);
+
+void fragment() {
+	ALBEDO = water_color.rgb;
+	ROUGHNESS = 0.05;
+	METALLIC = 0.0;
+	SPECULAR = 0.9;
+}
+"
+
+[sub_resource type="ShaderMaterial" id="WaterMat_1"]
+shader = SubResource("WaterShader_1")
 
 [sub_resource type="StyleBoxFlat" id="SelectionStyle_1"]
 bg_color = Color(0.3, 0.6, 1.0, 0.12)
@@ -113,17 +74,15 @@ script = ExtResource("1_cam")
 
 [node name="Camera3D" type="Camera3D" parent="RTSCamera"]
 
+[node name="WaterPlane" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0, 0)
+mesh = SubResource("WaterMesh_1")
+surface_material_override/0 = SubResource("WaterMat_1")
+
 [node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
 navigation_mesh = SubResource("NavMesh_1")
 
-[node name="Terrain" type="StaticBody3D" parent="NavigationRegion3D"]
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="NavigationRegion3D/Terrain"]
-mesh = SubResource("PlaneMesh_1")
-surface_material_override/0 = SubResource("GridMat_1")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="NavigationRegion3D/Terrain"]
-shape = SubResource("WorldBoundary_1")
+[node name="HeightmapTerrain" parent="NavigationRegion3D" instance=ExtResource("13_terrain")]
 
 [node name="Person" parent="." instance=ExtResource("3_person")]
 position = Vector3(5, 0, 5)
@@ -167,9 +126,13 @@ horizontal_alignment = 1
 
 [node name="ForestManager" type="Node" parent="."]
 script = ExtResource("9_forest")
+forest_center = Vector2(-35.0, 0.0)
+forest_radius = 25.0
 
 [node name="BushManager" type="Node" parent="."]
 script = ExtResource("12_bush")
+zone_center = Vector2(0.0, 0.0)
+zone_radius = 50.0
 
 [node name="BuildingPlacement" type="Node" parent="."]
 script = ExtResource("10_bplacement")

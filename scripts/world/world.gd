@@ -9,6 +9,13 @@ var _dragging := false
 @onready var _nav_region: NavigationRegion3D = $NavigationRegion3D
 
 func _ready() -> void:
+	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain != null:
+		terrain.prepare_for_bake()
+		_nav_region.bake_finished.connect(func():
+			if is_instance_valid(terrain):
+				terrain.restore_visual()
+		, CONNECT_ONE_SHOT)
 	_nav_region.bake_navigation_mesh()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -220,10 +227,13 @@ func _get_person_at(screen_pos: Vector2) -> Node3D:
 	return null
 
 func update_town_shader() -> void:
-	var mesh := get_node("NavigationRegion3D/Terrain/MeshInstance3D") as MeshInstance3D
+	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain == null:
+		return
+	var mesh := terrain.get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if mesh == null:
 		return
-	var mat := mesh.get_surface_override_material(0) as ShaderMaterial
+	var mat := mesh.material_override as ShaderMaterial
 	if mat == null:
 		return
 	var positions := PackedVector2Array()
@@ -245,11 +255,12 @@ func update_town_shader() -> void:
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
-	var origin := camera.project_ray_origin(screen_pos)
-	var dir := camera.project_ray_normal(screen_pos)
-	if absf(dir.y) < 0.0001:
-		return Vector3.INF
-	var t := -origin.y / dir.y
-	if t < 0.0:
-		return Vector3.INF
-	return origin + dir * t
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 2
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+	var result := space.intersect_ray(query)
+	return result.get("position", Vector3.INF)
