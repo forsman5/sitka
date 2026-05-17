@@ -17,8 +17,6 @@ func get_available_upgrades() -> Array:
 	return []
 
 func shows_spawn_button() -> bool: return false
-func shows_build_hut_button() -> bool: return false
-func shows_build_house_button() -> bool: return false
 
 func apply_upgrade(id: String) -> void:
 	upgrades[id] = true

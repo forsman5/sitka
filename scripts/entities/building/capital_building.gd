@@ -9,6 +9,4 @@ func _ready() -> void:
 	add_to_group("capital")
 
 func shows_spawn_button() -> bool: return true
-func shows_build_hut_button() -> bool: return true
-func shows_build_house_button() -> bool: return true
 func get_bed_count() -> int: return bed_count
