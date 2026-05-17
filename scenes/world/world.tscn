@@ -126,13 +126,9 @@ horizontal_alignment = 1
 
 [node name="ForestManager" type="Node" parent="."]
 script = ExtResource("9_forest")
-forest_center = Vector2(-35.0, 0.0)
-forest_radius = 25.0
 
 [node name="BushManager" type="Node" parent="."]
 script = ExtResource("12_bush")
-zone_center = Vector2(0.0, 0.0)
-zone_radius = 50.0
 
 [node name="BuildingPlacement" type="Node" parent="."]
 script = ExtResource("10_bplacement")

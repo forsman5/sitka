@@ -8,8 +8,6 @@ const BushScene = preload("res://scenes/entities/resource_node_food.tscn")
 @export var cluster_spread: float = 3.0
 @export var min_bush_spacing: float = 2.5
 @export var min_building_clearance: float = 3.5
-@export var zone_center: Vector2 = Vector2(-60.0, -3.0)
-@export var zone_radius: float = 70.0
 
 func _ready() -> void:
 	_spawn_loop()
@@ -23,17 +21,17 @@ func _spawn_loop() -> void:
 		_attempt_cluster()
 
 func _attempt_cluster() -> void:
-	var town_radius := _get_town_radius()
 	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
+	var config: MapConfig = terrain.map_config if terrain != null else MapConfig.new()
 	var center := Vector3.ZERO
 	var found := false
 	for _i in range(15):
 		var angle := randf() * TAU
-		var r := sqrt(randf()) * zone_radius
+		var r := sqrt(randf()) * config.bush_zone_radius
 		var candidate := Vector3(
-			zone_center.x + r * cos(angle),
+			config.bush_zone_center.x + r * cos(angle),
 			0.0,
-			zone_center.y + r * sin(angle)
+			config.bush_zone_center.y + r * sin(angle)
 		)
 		var terrain_h: float = terrain.get_height(candidate.x, candidate.z) if terrain != null else 0.0
 		if terrain_h < 0.3:
@@ -41,7 +39,7 @@ func _attempt_cluster() -> void:
 		candidate.y = terrain_h
 		var in_town := false
 		for capital in get_tree().get_nodes_in_group("capital"):
-			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(candidate) < town_radius:
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(candidate) < config.town_exclusion_radius:
 				in_town = true
 				break
 		if in_town:
@@ -53,9 +51,9 @@ func _attempt_cluster() -> void:
 		return
 	var count := randi_range(min_cluster_size, max_cluster_size)
 	for _i in range(count):
-		_attempt_bush_near(center, town_radius)
+		_attempt_bush_near(center, config.town_exclusion_radius)
 
-func _attempt_bush_near(center: Vector3, town_radius: float) -> void:
+func _attempt_bush_near(center: Vector3, town_exclusion_radius: float) -> void:
 	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
 	for _i in range(10):
 		var angle := randf() * TAU
@@ -77,7 +75,7 @@ func _attempt_bush_near(center: Vector3, town_radius: float) -> void:
 		if too_close:
 			continue
 		for capital in get_tree().get_nodes_in_group("capital"):
-			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < town_radius:
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < town_exclusion_radius:
 				too_close = true
 				break
 		if too_close:
@@ -94,6 +92,3 @@ func _attempt_bush_near(center: Vector3, town_radius: float) -> void:
 		get_parent().add_child(bush)
 		bush.global_position = pos
 		return
-
-func _get_town_radius() -> float:
-	return 6.0

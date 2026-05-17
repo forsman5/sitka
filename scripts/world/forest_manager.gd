@@ -5,8 +5,6 @@ const TreeScene = preload("res://scenes/entities/resource_node_wood.tscn")
 @export var mean_spawn_time: float = 3.0
 @export var min_tree_spacing: float = 4.0
 @export var min_building_clearance: float = 3.5
-@export var forest_center: Vector2 = Vector2(-60.0, -3.0)
-@export var forest_radius: float = 50.0
 
 func _ready() -> void:
 	_spawn_loop()
@@ -20,15 +18,15 @@ func _spawn_loop() -> void:
 		_attempt_spawn()
 
 func _attempt_spawn() -> void:
-	var town_radius := _get_town_radius()
 	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
+	var config: MapConfig = terrain.map_config if terrain != null else MapConfig.new()
 	for _i in range(10):
 		var angle := randf() * TAU
-		var r := sqrt(randf()) * forest_radius
+		var r := sqrt(randf()) * config.forest_radius
 		var pos := Vector3(
-			forest_center.x + r * cos(angle),
+			config.forest_center.x + r * cos(angle),
 			0.0,
-			forest_center.y + r * sin(angle)
+			config.forest_center.y + r * sin(angle)
 		)
 		var terrain_h: float = terrain.get_height(pos.x, pos.z) if terrain != null else 0.0
 		if terrain_h < 0.5:
@@ -42,7 +40,7 @@ func _attempt_spawn() -> void:
 		if too_close:
 			continue
 		for capital in get_tree().get_nodes_in_group("capital"):
-			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < town_radius:
+			if is_instance_valid(capital) and (capital as Node3D).global_position.distance_to(pos) < config.town_exclusion_radius:
 				too_close = true
 				break
 		if too_close:
@@ -59,6 +57,3 @@ func _attempt_spawn() -> void:
 		get_parent().add_child(tree)
 		tree.global_position = pos
 		return
-
-func _get_town_radius() -> float:
-	return 6.0
