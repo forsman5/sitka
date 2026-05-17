@@ -1,5 +1,4 @@
 shader_type spatial;
-render_mode unshaded;
 
 uniform sampler2D height_map : hint_default_black;
 uniform float height_tex_min   = -4.0;
