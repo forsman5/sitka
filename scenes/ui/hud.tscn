@@ -186,7 +186,7 @@ visible = false
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 260.0
-offset_top = -348.0
+offset_top = -388.0
 offset_right = 440.0
 offset_bottom = -258.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
@@ -206,6 +206,9 @@ text = "Forest Hut (50w)"
 [node name="BuildHouseButton" type="Button" parent="Root/BuildMenu/VBox"]
 text = "House (40w)"
 
+[node name="BuildDockButton" type="Button" parent="Root/BuildMenu/VBox"]
+text = "Dock (60w)"
+
 [node name="BuildButton" type="Button" parent="Root"]
 visible = false
 anchor_top = 1.0
@@ -219,6 +222,7 @@ text = "Build"
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHutButton" to="." method="_on_build_hut_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHouseButton" to="." method="_on_build_house_pressed"]
+[connection signal="pressed" from="Root/BuildMenu/VBox/BuildDockButton" to="." method="_on_build_dock_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/PauseButton" to="." method="_on_pause_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed1xButton" to="." method="_on_1x_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed2xButton" to="." method="_on_2x_pressed"]

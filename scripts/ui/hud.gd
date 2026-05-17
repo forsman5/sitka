@@ -5,6 +5,7 @@ const Building = preload("res://scripts/entities/building/building.gd")
 const PersonScene = preload("res://scenes/entities/person.tscn")
 const ForestHutFoundationScene = preload("res://scenes/entities/building/forest_hut_foundation.tscn")
 const HouseFoundationScene = preload("res://scenes/entities/building/house_foundation.tscn")
+const DockFoundationScene = preload("res://scenes/entities/building/dock_foundation.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _time_label: Label = $Root/TimeLabel
@@ -30,6 +31,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _build_menu: Panel = $Root/BuildMenu
 @onready var _build_hut_btn: Button = $Root/BuildMenu/VBox/BuildHutButton
 @onready var _build_house_btn: Button = $Root/BuildMenu/VBox/BuildHouseButton
+@onready var _build_dock_btn: Button = $Root/BuildMenu/VBox/BuildDockButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
 @onready var _speed_bar: HBoxContainer = $Root/SpeedBar
 @onready var _btn_pause: Button = $Root/SpeedBar/PauseButton
@@ -64,6 +66,7 @@ func _process(_delta: float) -> void:
 	_build_btn.visible = capital_placed
 	_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
 	_build_house_btn.disabled = GameState.player_wood < GameState.house_cost
+	_build_dock_btn.disabled = GameState.player_wood < GameState.dock_cost
 	_refresh_panel()
 	_refresh_people()
 	var total_hours := GameState.time_of_day * 24.0
@@ -214,6 +217,14 @@ func _on_build_house_pressed() -> void:
 	var placement = get_tree().get_first_node_in_group("building_placement")
 	if placement:
 		placement.arm(HouseFoundationScene, GameState.house_cost)
+
+func _on_build_dock_pressed() -> void:
+	_build_menu.visible = false
+	if GameState.player_wood < GameState.dock_cost:
+		return
+	var placement = get_tree().get_first_node_in_group("building_placement")
+	if placement:
+		placement.arm(DockFoundationScene, GameState.dock_cost, true)
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:
