@@ -137,6 +137,8 @@ func objective_label() -> String:
 
 func take_damage(amount: int) -> void:
 	health = maxi(health - amount, 0)
+	if health <= 0:
+		queue_free()
 
 func _is_carry_full() -> bool:
 	return current_weight() >= carry_capacity
