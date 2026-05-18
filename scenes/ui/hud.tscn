@@ -157,6 +157,29 @@ text = "Spawn Ship (50w)"
 
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
+[node name="SelectionBar" type="HBoxContainer" parent="Root"]
+visible = false
+process_mode = 3
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = -290.0
+offset_right = 370.0
+offset_bottom = -252.0
+theme_override_constants/separation = 4
+
+[node name="AllPersonsButton" type="Button" parent="Root/SelectionBar"]
+custom_minimum_size = Vector2(108, 32)
+text = "All People"
+
+[node name="AllShipsButton" type="Button" parent="Root/SelectionBar"]
+custom_minimum_size = Vector2(98, 32)
+text = "All Ships"
+
+[node name="NextPersonButton" type="Button" parent="Root/SelectionBar"]
+custom_minimum_size = Vector2(110, 32)
+text = "Next Person"
+
 [node name="SpeedBar" type="HBoxContainer" parent="Root"]
 visible = false
 process_mode = 3
@@ -227,6 +250,9 @@ text = "Build"
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHutButton" to="." method="_on_build_hut_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHouseButton" to="." method="_on_build_house_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildDockButton" to="." method="_on_build_dock_pressed"]
+[connection signal="pressed" from="Root/SelectionBar/AllPersonsButton" to="." method="_on_all_persons_pressed"]
+[connection signal="pressed" from="Root/SelectionBar/AllShipsButton" to="." method="_on_all_ships_pressed"]
+[connection signal="pressed" from="Root/SelectionBar/NextPersonButton" to="." method="_on_next_person_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/PauseButton" to="." method="_on_pause_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed1xButton" to="." method="_on_1x_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed2xButton" to="." method="_on_2x_pressed"]

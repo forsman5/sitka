@@ -13,11 +13,16 @@ var _drag_last := Vector2.ZERO
 var _current_tilt: float = 90.0  # 90 = top-down, tilt_min = most angled
 
 func _ready() -> void:
+	add_to_group("rts_camera")
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_camera.size = 20.0
 	_current_tilt = 90.0
 	_apply_tilt()
 	_camera.make_current()
+
+func center_on(world_pos: Vector3) -> void:
+	position.x = world_pos.x
+	position.z = world_pos.z
 
 func _process(delta: float) -> void:
 	_pan_keyboard(delta)

@@ -35,6 +35,10 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _build_house_btn: Button = $Root/BuildMenu/VBox/BuildHouseButton
 @onready var _build_dock_btn: Button = $Root/BuildMenu/VBox/BuildDockButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
+@onready var _selection_bar: HBoxContainer = $Root/SelectionBar
+@onready var _btn_all_persons: Button = $Root/SelectionBar/AllPersonsButton
+@onready var _btn_all_ships: Button = $Root/SelectionBar/AllShipsButton
+@onready var _btn_next_person: Button = $Root/SelectionBar/NextPersonButton
 @onready var _speed_bar: HBoxContainer = $Root/SpeedBar
 @onready var _btn_pause: Button = $Root/SpeedBar/PauseButton
 @onready var _btn_1x: Button = $Root/SpeedBar/Speed1xButton
@@ -43,6 +47,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 var _last_selected_building: Building = null
 var _paused: bool = false
+var _person_cycle_idx: int = 0
 var _game_over_triggered := false
 var _style_active: StyleBoxFlat
 var _style_inactive: StyleBoxFlat
@@ -66,6 +71,11 @@ func _process(_delta: float) -> void:
 	var capital_placed := not get_tree().get_nodes_in_group("capital").is_empty()
 	_speed_bar.visible = capital_placed
 	_build_btn.visible = capital_placed
+	_selection_bar.visible = capital_placed
+	_btn_all_ships.disabled = get_tree().get_nodes_in_group("ships").is_empty()
+	var _persons_empty := get_tree().get_nodes_in_group("persons").is_empty()
+	_btn_all_persons.disabled = _persons_empty
+	_btn_next_person.disabled = _persons_empty
 	_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
 	_build_house_btn.disabled = GameState.player_wood < GameState.house_cost
 	_build_dock_btn.disabled = GameState.player_wood < GameState.dock_cost
@@ -267,6 +277,48 @@ func _on_spawn_pressed() -> void:
 	person.name = "Person%d" % idx
 	get_tree().current_scene.add_child(person)
 	person.global_position = capital.global_position + Vector3(randf_range(-3.0, 3.0), 0.0, randf_range(-3.0, 3.0))
+
+func _on_all_persons_pressed() -> void:
+	for s in get_tree().get_nodes_in_group("ships"):
+		s.set_selected(false)
+	for b in get_tree().get_nodes_in_group("buildings"):
+		b.set_selected(false)
+	for r in get_tree().get_nodes_in_group("resource_nodes"):
+		r.set_selected(false)
+	for f in get_tree().get_nodes_in_group("foundations"):
+		f.set_selected(false)
+	for p in get_tree().get_nodes_in_group("persons"):
+		p.set_selected(true)
+
+func _on_all_ships_pressed() -> void:
+	for p in get_tree().get_nodes_in_group("persons"):
+		p.set_selected(false)
+	for b in get_tree().get_nodes_in_group("buildings"):
+		b.set_selected(false)
+	for r in get_tree().get_nodes_in_group("resource_nodes"):
+		r.set_selected(false)
+	for f in get_tree().get_nodes_in_group("foundations"):
+		f.set_selected(false)
+	for s in get_tree().get_nodes_in_group("ships"):
+		s.set_selected(true)
+
+func _on_next_person_pressed() -> void:
+	var persons := get_tree().get_nodes_in_group("persons")
+	if persons.is_empty():
+		return
+	_person_cycle_idx = _person_cycle_idx % persons.size()
+	var person: Node3D = persons[_person_cycle_idx] as Node3D
+	for p in get_tree().get_nodes_in_group("persons"):
+		p.set_selected(false)
+	for s in get_tree().get_nodes_in_group("ships"):
+		s.set_selected(false)
+	for b in get_tree().get_nodes_in_group("buildings"):
+		b.set_selected(false)
+	person.set_selected(true)
+	_person_cycle_idx = (_person_cycle_idx + 1) % persons.size()
+	var cam = get_tree().get_first_node_in_group("rts_camera")
+	if cam != null:
+		cam.center_on(person.global_position)
 
 func _on_pause_pressed() -> void:
 	_paused = true
