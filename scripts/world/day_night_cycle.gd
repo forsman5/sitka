@@ -1,11 +1,15 @@
 extends Node
 
+const WAKE_TIME := 5.5 / 24.0
+
 @export var seconds_per_day: float = 120.0
 @export var min_ambient_energy: float = 0.15
 @export var day_night_enabled: bool = true
 
 @onready var light: DirectionalLight3D = get_parent().get_node("DirectionalLight3D")
 @onready var world_env: WorldEnvironment = get_parent().get_node("WorldEnvironment")
+
+var _prev_time: float = -1.0
 
 # [time(0-1), light_energy, light_color, ambient_energy, ambient_color, bg_color]
 # 0.0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk, 1.0=midnight
@@ -19,8 +23,12 @@ const _KEYS := [
 
 func _process(delta: float) -> void:
 	if day_night_enabled:
+		var prev := GameState.time_of_day
 		GameState.time_of_day = fmod(
 			GameState.time_of_day + delta * GameState.game_speed / seconds_per_day, 1.0)
+		if _prev_time >= 0.0 and prev < WAKE_TIME and GameState.time_of_day >= WAKE_TIME:
+			GameState.day_count += 1
+		_prev_time = GameState.time_of_day
 	_apply(GameState.time_of_day)
 
 func _apply(t: float) -> void:

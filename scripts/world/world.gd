@@ -39,6 +39,7 @@ func _restore_save(data: Dictionary) -> void:
 	GameState.player_food = int(gs.get("food", 50))
 	GameState.time_of_day = float(gs.get("time_of_day", 0.25))
 	GameState.game_speed  = float(gs.get("game_speed", 1.0))
+	GameState.day_count   = int(gs.get("day", 1))
 
 	# Skip capital placement — free the one-shot manager
 	var pm := get_node_or_null("PlacementManager")

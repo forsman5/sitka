@@ -119,6 +119,7 @@ func _pack_game_state() -> Dictionary:
 		"food":        GameState.player_food,
 		"time_of_day": GameState.time_of_day,
 		"game_speed":  GameState.game_speed,
+		"day":         GameState.day_count,
 	}
 
 func _pack_camera(scene_root: Node) -> Dictionary:

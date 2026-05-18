@@ -9,6 +9,7 @@ const DockFoundationScene = preload("res://scenes/entities/building/dock_foundat
 const ShipScene = preload("res://scenes/entities/ship.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
+@onready var _day_label: Label = $Root/DayLabel
 @onready var _time_label: Label = $Root/TimeLabel
 @onready var _wood_label: Label = $Root/WoodLabel
 @onready var _gold_label: Label = $Root/GoldLabel
@@ -85,6 +86,9 @@ func _process(_delta: float) -> void:
 	var h := int(total_hours) % 24
 	var m := int((total_hours - int(total_hours)) * 60.0)
 	_time_label.text = "%02d:%02d" % [h, m]
+	_day_label.visible = GameState.show_day_counter
+	if GameState.show_day_counter:
+		_day_label.text = "Day %d" % GameState.day_count
 	if not _game_over_triggered:
 		_check_game_over()
 

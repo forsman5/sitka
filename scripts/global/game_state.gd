@@ -15,6 +15,8 @@ signal food_changed(amount: int)
 var time_of_day: float = 0.25
 var pending_load: Dictionary = {}
 var current_save_name: String = ""
+var day_count: int = 1
+@export var show_day_counter: bool = false
 
 var player_gold: int = 0:
 	set(value):
@@ -38,3 +40,4 @@ func reset() -> void:
 	game_speed = 1.0
 	time_of_day = 0.25
 	current_save_name = ""
+	day_count = 1

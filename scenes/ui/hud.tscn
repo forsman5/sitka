@@ -23,6 +23,18 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 mouse_filter = 2
 
+[node name="DayLabel" type="Label" parent="Root"]
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -150.0
+offset_top = -250.0
+offset_right = -10.0
+offset_bottom = -210.0
+text = "Day 1"
+visible = false
+
 [node name="TimeLabel" type="Label" parent="Root"]
 anchor_left = 1.0
 anchor_top = 1.0
@@ -211,10 +223,10 @@ text = "5x"
 visible = false
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_left = 260.0
-offset_top = -388.0
-offset_right = 440.0
-offset_bottom = -258.0
+offset_left = 480.0
+offset_top = -190.0
+offset_right = 660.0
+offset_bottom = -60.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
 [node name="VBox" type="VBoxContainer" parent="Root/BuildMenu"]
@@ -239,10 +251,10 @@ text = "Dock (60w)"
 visible = false
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_left = 260.0
-offset_top = -248.0
-offset_right = 380.0
-offset_bottom = -210.0
+offset_left = 480.0
+offset_top = -50.0
+offset_right = 600.0
+offset_bottom = -10.0
 text = "Build"
 
 [connection signal="pressed" from="Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton" to="." method="_on_spawn_pressed"]
