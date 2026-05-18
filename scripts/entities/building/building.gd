@@ -46,6 +46,14 @@ func set_selected(value: bool) -> void:
 	if _mesh.visible:
 		_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
 
+func get_save_data() -> Dictionary:
+	return {
+		"scene_key": building_type,
+		"position": [global_position.x, global_position.y, global_position.z],
+		"rotation_y": global_rotation.y,
+		"upgrades": upgrades.duplicate(),
+	}
+
 func deposit(item: InventoryItem) -> void:
 	match item.item_name:
 		"Gold": GameState.player_gold += 1

@@ -34,6 +34,17 @@ func set_trade_objective(node: Node3D) -> void:
 	_move_target = Vector3.INF
 	_trade_timer = TRADE_INTERVAL
 
+func get_save_data(trade_routes: Array) -> Dictionary:
+	var tr_idx: int = trade_routes.find(_trade_obj) if is_instance_valid(_trade_obj) else -1
+	return {
+		"position": [global_position.x, global_position.y, global_position.z],
+		"trade_route_index": tr_idx,
+	}
+
+func restore_trade_obj(idx: int, trade_routes: Array) -> void:
+	if idx >= 0 and idx < trade_routes.size():
+		set_trade_objective(trade_routes[idx])
+
 func objective_label() -> String:
 	if is_instance_valid(_trade_obj):
 		return "trading" if global_position.distance_to(_trade_obj.global_position) < TRADE_REACH else "en route"

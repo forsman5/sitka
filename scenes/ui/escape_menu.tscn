@@ -35,9 +35,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -150.0
-offset_top = -75.0
+offset_top = -110.0
 offset_right = 150.0
-offset_bottom = 75.0
+offset_bottom = 110.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
 [node name="VBox" type="VBoxContainer" parent="Overlay/Panel"]
@@ -52,8 +52,18 @@ theme_override_constants/separation = 12
 [node name="ResumeButton" type="Button" parent="Overlay/Panel/VBox"]
 text = "Resume"
 
+[node name="SaveButton" type="Button" parent="Overlay/Panel/VBox"]
+text = "Save Game"
+
+[node name="SavedLabel" type="Label" parent="Overlay/Panel/VBox"]
+modulate = Color(0.5, 1.0, 0.5, 0.0)
+text = "Game saved!"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 11
+
 [node name="MainMenuButton" type="Button" parent="Overlay/Panel/VBox"]
 text = "Back to Main Menu"
 
 [connection signal="pressed" from="Overlay/Panel/VBox/ResumeButton" to="." method="_on_resume_pressed"]
+[connection signal="pressed" from="Overlay/Panel/VBox/SaveButton" to="." method="_on_save_pressed"]
 [connection signal="pressed" from="Overlay/Panel/VBox/MainMenuButton" to="." method="_on_main_menu_pressed"]

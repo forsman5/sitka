@@ -75,6 +75,27 @@ func set_selected(value: bool) -> void:
 	selected = value
 	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
 
+func get_save_data() -> Dictionary:
+	var inv: Array = []
+	for item in inventory:
+		inv.append({"name": item.item_name, "weight": item.weight})
+	return {
+		"position": [global_position.x, global_position.y, global_position.z],
+		"health": health,
+		"inventory": inv,
+		"last_resource_type": _last_resource_type,
+	}
+
+func restore_from_save(d: Dictionary) -> void:
+	var p: Array = d["position"]
+	position = Vector3(p[0], p[1], p[2])
+	health = d.get("health", max_health)
+	inventory.clear()
+	for item_d in d.get("inventory", []):
+		inventory.append(InventoryItem.new(item_d["name"], item_d["weight"]))
+	_last_resource_type = d.get("last_resource_type", -1)
+	visible = true
+
 func set_objective(node: Node3D) -> void:
 	_objective_node = node
 	_move_target = Vector3.INF
@@ -285,6 +306,8 @@ func _do_harvest(node: Node3D) -> void:
 		await _wait_until_near(node)
 		if _objective_node != node or not is_instance_valid(node) or _move_target != Vector3.INF or _is_night_time():
 			break
+		if not is_inside_tree():
+			return
 		await get_tree().create_timer(resource.wait_time / (GameState.gather_speed * GameState.game_speed)).timeout
 		if not is_instance_valid(node) or _objective_node != node or _move_target != Vector3.INF or _is_night_time():
 			break
@@ -320,6 +343,8 @@ func _do_build(node: Node3D) -> void:
 		await _wait_until_near(node, BUILD_REACH)
 		if _build_target != node or not is_instance_valid(node) or _move_target != Vector3.INF or _is_night_time():
 			break
+		if not is_inside_tree():
+			return
 		var tick_time: float = node.get("build_tick_time") if node.get("build_tick_time") != null else 2.0
 		await get_tree().create_timer(tick_time / GameState.game_speed).timeout
 		if not is_instance_valid(node) or _build_target != node or _move_target != Vector3.INF or _is_night_time():

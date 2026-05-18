@@ -29,9 +29,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -150.0
-offset_top = -90.0
+offset_top = -115.0
 offset_right = 150.0
-offset_bottom = 90.0
+offset_bottom = 115.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
 [node name="VBox" type="VBoxContainer" parent="Panel"]
@@ -58,4 +58,8 @@ theme_override_font_sizes/font_size = 11
 [node name="ReturnButton" type="Button" parent="Panel/VBox"]
 text = "Return to Menu"
 
+[node name="LoadButton" type="Button" parent="Panel/VBox"]
+text = "Load Game"
+
 [connection signal="pressed" from="Panel/VBox/ReturnButton" to="." method="_on_return_pressed"]
+[connection signal="pressed" from="Panel/VBox/LoadButton" to="." method="_on_load_pressed"]

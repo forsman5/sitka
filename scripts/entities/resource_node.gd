@@ -35,6 +35,13 @@ func _ready() -> void:
 	if terrain != null:
 		global_position.y = terrain.get_height(global_position.x, global_position.z)
 
+func get_save_data() -> Dictionary:
+	return {
+		"resource_type": resource_type,
+		"position": [global_position.x, global_position.y, global_position.z],
+		"amount": amount,
+	}
+
 func set_selected(value: bool) -> void:
 	selected = value
 	if _mesh.visible:

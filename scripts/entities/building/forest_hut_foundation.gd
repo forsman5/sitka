@@ -22,6 +22,14 @@ func set_selected(value: bool) -> void:
 	selected = value
 	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
 
+func get_save_data() -> Dictionary:
+	return {
+		"scene_key": foundation_name,
+		"position": [global_position.x, global_position.y, global_position.z],
+		"rotation_y": global_rotation.y,
+		"progress": _progress,
+	}
+
 func build_sync() -> bool:
 	if _completed:
 		return true

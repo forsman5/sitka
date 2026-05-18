@@ -5,6 +5,8 @@ const DRAG_THRESHOLD := 6.0
 const GoldScene := preload("res://scenes/entities/resource_node_gold.tscn")
 const WoodScene := preload("res://scenes/entities/resource_node_wood.tscn")
 const TradeScene := preload("res://scenes/entities/trade_route.tscn")
+const PersonScene := preload("res://scenes/entities/person.tscn")
+const ShipScene := preload("res://scenes/entities/ship.tscn")
 
 var _drag_start := Vector2.ZERO
 var _dragging := false
@@ -14,8 +16,12 @@ var _dragging := false
 
 func _ready() -> void:
 	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
-	_spawn_starting_resources(terrain)
 	_spawn_trade_routes(terrain)
+	if GameState.pending_load.is_empty():
+		_spawn_starting_resources(terrain)
+	else:
+		_restore_save(GameState.pending_load)
+		GameState.pending_load = {}
 	if terrain != null:
 		terrain.prepare_for_bake()
 		_nav_region.bake_finished.connect(func():
@@ -23,6 +29,96 @@ func _ready() -> void:
 				terrain.restore_visual()
 		, CONNECT_ONE_SHOT)
 	_nav_region.bake_navigation_mesh()
+
+func _restore_save(data: Dictionary) -> void:
+	# Restore global state
+	var gs: Dictionary = data.get("game_state", {})
+	GameState.reset()
+	GameState.player_gold = int(gs.get("gold", 0))
+	GameState.player_wood = int(gs.get("wood", 0))
+	GameState.player_food = int(gs.get("food", 50))
+	GameState.time_of_day = float(gs.get("time_of_day", 0.25))
+	GameState.game_speed  = float(gs.get("game_speed", 1.0))
+
+	# Skip capital placement — free the one-shot manager
+	var pm := get_node_or_null("PlacementManager")
+	if pm != null:
+		pm.queue_free()
+
+	# Remove the 3 initial hidden persons from the scene
+	for p in get_tree().get_nodes_in_group("persons"):
+		p.queue_free()
+
+	# Restore camera position
+	var cam_data: Dictionary = data.get("camera", {})
+	var cam = get_tree().get_first_node_in_group("rts_camera")
+	if cam != null and not cam_data.is_empty():
+		cam.center_on(Vector3(float(cam_data.get("x", 0.0)), 0.0, float(cam_data.get("z", 0.0))))
+
+	# Restore buildings (into NavigationRegion3D)
+	for bd in data.get("buildings", []):
+		var scene_path: String = SaveLoad.BUILDING_SCENES.get(bd.get("scene_key", ""), "")
+		if scene_path.is_empty():
+			continue
+		var node: Node3D = load(scene_path).instantiate()
+		var pos: Array = bd["position"]
+		node.position = Vector3(pos[0], pos[1], pos[2])
+		node.rotation.y = float(bd.get("rotation_y", 0.0))
+		_nav_region.add_child(node)
+		for upgrade_id in bd.get("upgrades", {}).keys():
+			if bd["upgrades"][upgrade_id]:
+				node.apply_upgrade(upgrade_id)
+	update_town_shader()
+
+	# Restore foundations (under World)
+	for fd in data.get("foundations", []):
+		var scene_path: String = SaveLoad.FOUNDATION_SCENES.get(fd.get("scene_key", ""), "")
+		if scene_path.is_empty():
+			continue
+		var node: Node3D = load(scene_path).instantiate()
+		var pos: Array = fd["position"]
+		node.position = Vector3(pos[0], pos[1], pos[2])
+		node.rotation.y = float(fd.get("rotation_y", 0.0))
+		add_child(node)
+		node.set("_progress", int(fd.get("progress", 0)))
+
+	# Restore resource nodes (under World)
+	for rd in data.get("resource_nodes", []):
+		var rtype: int = int(rd.get("resource_type", -1))
+		var scene_path: String = SaveLoad.RESOURCE_SCENES.get(rtype, "")
+		if scene_path.is_empty():
+			continue
+		var node: Node3D = load(scene_path).instantiate()
+		var pos: Array = rd["position"]
+		node.position = Vector3(pos[0], pos[1], pos[2])
+		add_child(node)
+		node.set("amount", int(rd.get("amount", 100)))
+
+	# Restore ships (under World)
+	var ship_nodes: Array = []
+	for sd in data.get("ships", []):
+		var node: Node3D = ShipScene.instantiate()
+		var pos: Array = sd["position"]
+		node.position = Vector3(pos[0], pos[1], pos[2])
+		add_child(node)
+		ship_nodes.append({"node": node, "trade_route_index": int(sd.get("trade_route_index", -1))})
+
+	# Restore persons (under World) — position set after add_child via restore_from_save
+	var person_idx := 1
+	for pd in data.get("persons", []):
+		var node: Node3D = PersonScene.instantiate()
+		node.name = "Person%d" % person_idx
+		person_idx += 1
+		add_child(node)
+		node.restore_from_save(pd)
+
+	# Link ships to trade routes after all nodes exist
+	var trade_routes := get_tree().get_nodes_in_group("trade_routes")
+	for entry in ship_nodes:
+		var ship: Node3D = entry["node"]
+		var tr_idx: int = entry["trade_route_index"]
+		if is_instance_valid(ship):
+			ship.restore_trade_obj(tr_idx, trade_routes)
 
 func _spawn_starting_resources(terrain: Node) -> void:
 	var cfg: MapConfig = terrain.map_config if terrain != null else MapConfig.new()

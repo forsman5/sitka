@@ -13,6 +13,7 @@ signal food_changed(amount: int)
 @export var dock_cost: int = 60
 @export var ship_cost: int = 50
 var time_of_day: float = 0.25
+var pending_load: Dictionary = {}
 
 var player_gold: int = 0:
 	set(value):
