@@ -21,6 +21,9 @@ const RESOURCE_SCENES := {
 	3: "res://scenes/entities/resource_node_gold.tscn",
 }
 
+func delete_save(filename: String) -> void:
+	DirAccess.remove_absolute(SAVE_DIR + filename)
+
 func save_exists(display_name: String) -> bool:
 	return FileAccess.file_exists(SAVE_DIR + _to_filename(display_name) + ".json")
 
