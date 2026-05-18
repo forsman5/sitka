@@ -14,6 +14,7 @@ signal food_changed(amount: int)
 @export var ship_cost: int = 50
 var time_of_day: float = 0.25
 var pending_load: Dictionary = {}
+var current_save_name: String = ""
 
 var player_gold: int = 0:
 	set(value):
@@ -36,3 +37,4 @@ func reset() -> void:
 	player_food = 50
 	game_speed = 1.0
 	time_of_day = 0.25
+	current_save_name = ""

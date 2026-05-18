@@ -1,6 +1,6 @@
 extends Node
 
-const SAVE_PATH := "user://sitka_save.json"
+const SAVE_DIR := "user://saves/"
 
 const BUILDING_SCENES := {
 	"Capital":      "res://scenes/entities/building/capital.tscn",
@@ -21,13 +21,62 @@ const RESOURCE_SCENES := {
 	3: "res://scenes/entities/resource_node_gold.tscn",
 }
 
-func has_save() -> bool:
-	return FileAccess.file_exists(SAVE_PATH)
+func save_exists(display_name: String) -> bool:
+	return FileAccess.file_exists(SAVE_DIR + _to_filename(display_name) + ".json")
 
-func save_game(scene_root: Node) -> void:
+func has_save() -> bool:
+	if not DirAccess.dir_exists_absolute(SAVE_DIR):
+		return false
+	var dir := DirAccess.open(SAVE_DIR)
+	if dir == null:
+		return false
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.ends_with(".json"):
+			dir.list_dir_end()
+			return true
+		fname = dir.get_next()
+	dir.list_dir_end()
+	return false
+
+func get_save_list() -> Array:
+	var list: Array = []
+	if not DirAccess.dir_exists_absolute(SAVE_DIR):
+		return list
+	var dir := DirAccess.open(SAVE_DIR)
+	if dir == null:
+		return list
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.ends_with(".json"):
+			var f := FileAccess.open(SAVE_DIR + fname, FileAccess.READ)
+			if f:
+				var data = JSON.parse_string(f.get_as_text())
+				f.close()
+				if data is Dictionary:
+					list.append({
+						"filename":    fname,
+						"name":        data.get("name", fname.trim_suffix(".json")),
+						"saved_at":    int(data.get("saved_at", 0)),
+						"saved_local": data.get("saved_local", {}),
+						"game_state":  data.get("game_state", {}),
+					})
+		fname = dir.get_next()
+	dir.list_dir_end()
+	list.sort_custom(func(a, b): return a["saved_at"] > b["saved_at"])
+	return list
+
+func save_game(scene_root: Node, display_name: String) -> void:
+	DirAccess.make_dir_recursive_absolute(SAVE_DIR)
+	var filename := _to_filename(display_name) + ".json"
 	var trade_routes := scene_root.get_tree().get_nodes_in_group("trade_routes")
 	var data := {
-		"version": 1,
+		"version":    1,
+		"name":       display_name,
+		"saved_at":   Time.get_unix_time_from_system(),
+		"saved_local": Time.get_datetime_dict_from_system(false),
 		"game_state": _pack_game_state(),
 		"camera":     _pack_camera(scene_root),
 		"persons":    _pack_group("persons", scene_root),
@@ -36,18 +85,29 @@ func save_game(scene_root: Node) -> void:
 		"resource_nodes": _pack_group("resource_nodes", scene_root),
 		"ships":      _pack_ships(scene_root, trade_routes),
 	}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(SAVE_DIR + filename, FileAccess.WRITE)
 	f.store_string(JSON.stringify(data, "\t"))
 	f.close()
 
-func load_game() -> Dictionary:
-	if not has_save():
+func load_game(filename: String) -> Dictionary:
+	var path := SAVE_DIR + filename
+	if not FileAccess.file_exists(path):
 		return {}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var f := FileAccess.open(path, FileAccess.READ)
 	var text := f.get_as_text()
 	f.close()
 	var result = JSON.parse_string(text)
 	return result if result is Dictionary else {}
+
+func _to_filename(display_name: String) -> String:
+	var s := display_name.strip_edges().left(64).replace(" ", "_")
+	var result := ""
+	for ch in s:
+		var code := ch.unicode_at(0)
+		if (code >= 48 and code <= 57) or (code >= 65 and code <= 90) \
+				or (code >= 97 and code <= 122) or ch == "_" or ch == "-":
+			result += ch
+	return result if result.length() > 0 else "save"
 
 func _pack_game_state() -> Dictionary:
 	return {

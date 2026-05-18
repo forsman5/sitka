@@ -10,5 +10,4 @@ func _on_return_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
 func _on_load_pressed() -> void:
-	GameState.pending_load = SaveLoad.load_game()
-	get_tree().change_scene_to_file("res://scenes/world/world.tscn")
+	get_tree().change_scene_to_file("res://scenes/ui/load_game.tscn")

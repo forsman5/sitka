@@ -64,6 +64,87 @@ theme_override_font_sizes/font_size = 11
 [node name="MainMenuButton" type="Button" parent="Overlay/Panel/VBox"]
 text = "Back to Main Menu"
 
+[node name="NameDialog" type="Panel" parent="Overlay"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -120.0
+offset_top = -65.0
+offset_right = 120.0
+offset_bottom = 65.0
+theme_override_styles/panel = SubResource("PanelStyle_1")
+
+[node name="VBox" type="VBoxContainer" parent="Overlay/NameDialog"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
+theme_override_constants/separation = 10
+
+[node name="NameDialogLabel" type="Label" parent="Overlay/NameDialog/VBox"]
+text = "Save As"
+horizontal_alignment = 1
+
+[node name="NameInput" type="LineEdit" parent="Overlay/NameDialog/VBox"]
+placeholder_text = "Enter name..."
+
+[node name="HBox" type="HBoxContainer" parent="Overlay/NameDialog/VBox"]
+theme_override_constants/separation = 8
+
+[node name="OKButton" type="Button" parent="Overlay/NameDialog/VBox/HBox"]
+size_flags_horizontal = 3
+text = "Save"
+
+[node name="CancelButton" type="Button" parent="Overlay/NameDialog/VBox/HBox"]
+size_flags_horizontal = 3
+text = "Cancel"
+
+[node name="ConfirmDialog" type="Panel" parent="Overlay"]
+visible = false
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -120.0
+offset_top = -55.0
+offset_right = 120.0
+offset_bottom = 55.0
+theme_override_styles/panel = SubResource("PanelStyle_1")
+
+[node name="VBox" type="VBoxContainer" parent="Overlay/ConfirmDialog"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
+theme_override_constants/separation = 10
+
+[node name="ConfirmLabel" type="Label" parent="Overlay/ConfirmDialog/VBox"]
+text = "Overwrite?"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="HBox" type="HBoxContainer" parent="Overlay/ConfirmDialog/VBox"]
+theme_override_constants/separation = 8
+
+[node name="YesButton" type="Button" parent="Overlay/ConfirmDialog/VBox/HBox"]
+size_flags_horizontal = 3
+text = "Overwrite"
+
+[node name="NoButton" type="Button" parent="Overlay/ConfirmDialog/VBox/HBox"]
+size_flags_horizontal = 3
+text = "Cancel"
+
 [connection signal="pressed" from="Overlay/Panel/VBox/ResumeButton" to="." method="_on_resume_pressed"]
 [connection signal="pressed" from="Overlay/Panel/VBox/SaveButton" to="." method="_on_save_pressed"]
 [connection signal="pressed" from="Overlay/Panel/VBox/MainMenuButton" to="." method="_on_main_menu_pressed"]
+[connection signal="pressed" from="Overlay/NameDialog/VBox/HBox/OKButton" to="." method="_on_save_ok_pressed"]
+[connection signal="pressed" from="Overlay/NameDialog/VBox/HBox/CancelButton" to="." method="_on_save_cancel_pressed"]
+[connection signal="text_submitted" from="Overlay/NameDialog/VBox/NameInput" to="." method="_on_name_submitted"]
+[connection signal="pressed" from="Overlay/ConfirmDialog/VBox/HBox/YesButton" to="." method="_on_confirm_yes_pressed"]
+[connection signal="pressed" from="Overlay/ConfirmDialog/VBox/HBox/NoButton" to="." method="_on_confirm_no_pressed"]
