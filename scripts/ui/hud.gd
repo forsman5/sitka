@@ -32,6 +32,8 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _spawn_ship_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnShipButton
 @onready var _build_btn: Button = $Root/BuildButton
 @onready var _build_menu: Panel = $Root/BuildMenu
+@onready var _jobs_btn: Button = $Root/JobsButton
+@onready var _jobs_panel: Panel = $Root/JobsPanel
 @onready var _build_hut_btn: Button = $Root/BuildMenu/VBox/BuildHutButton
 @onready var _build_house_btn: Button = $Root/BuildMenu/VBox/BuildHouseButton
 @onready var _build_dock_btn: Button = $Root/BuildMenu/VBox/BuildDockButton
@@ -72,6 +74,7 @@ func _process(_delta: float) -> void:
 	var capital_placed := not get_tree().get_nodes_in_group("capital").is_empty()
 	_speed_bar.visible = capital_placed
 	_build_btn.visible = capital_placed
+	_jobs_btn.visible = capital_placed
 	_selection_bar.visible = capital_placed
 	_btn_all_ships.disabled = get_tree().get_nodes_in_group("ships").is_empty()
 	var _persons_empty := get_tree().get_nodes_in_group("persons").is_empty()
@@ -113,11 +116,7 @@ func _on_food_changed(amount: int) -> void:
 func _refresh_people() -> void:
 	var persons := get_tree().get_nodes_in_group("persons")
 	var total := persons.size()
-	var idle := 0
-	for p in persons:
-		var person := p as Person
-		if person != null and person.objective_label() == "idle":
-			idle += 1
+	var idle := JobsManager.get_idle_count()
 	var beds := 0
 	for sp in get_tree().get_nodes_in_group("sleep_point"):
 		var b := sp as Building
@@ -229,6 +228,11 @@ func _apply_upgrade(building: Building, upgrade: Dictionary) -> void:
 
 func _on_build_btn_pressed() -> void:
 	_build_menu.visible = not _build_menu.visible
+	_jobs_panel.visible = false
+
+func _on_jobs_btn_pressed() -> void:
+	_jobs_panel.visible = not _jobs_panel.visible
+	_build_menu.visible = false
 
 func _on_build_hut_pressed() -> void:
 	_build_menu.visible = false

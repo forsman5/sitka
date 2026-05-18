@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 GameState="*res://scripts/global/game_state.gd"
 SaveLoad="*res://scripts/global/save_load.gd"
+JobsManager="*res://scripts/global/jobs_manager.gd"
 
 [physics]
 

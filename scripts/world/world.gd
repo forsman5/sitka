@@ -292,29 +292,22 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 		return
 	if not _any_selected():
 		return
+	var selected: Array = get_tree().get_nodes_in_group("persons").filter(func(p): return p.selected)
 	var foundation := _get_foundation_at(screen_pos)
 	if foundation != null:
-		for p: Node3D in get_tree().get_nodes_in_group("persons"):
-			if p.selected:
-				p.set_build_objective(foundation)
+		JobsManager.assign_build(selected, foundation)
 		return
 	var resource := _get_resource_at(screen_pos)
 	if resource != null:
-		for p: Node3D in get_tree().get_nodes_in_group("persons"):
-			if p.selected:
-				p.set_objective(resource)
+		JobsManager.assign_gather(selected, resource)
 		return
 	var building := _get_building_at(screen_pos)
 	if building != null:
-		for p: Node3D in get_tree().get_nodes_in_group("persons"):
-			if p.selected:
-				p.set_deposit_objective()
+		JobsManager.assign_deposit(selected)
 		return
 	var pos := _raycast_y0(screen_pos)
 	if pos != Vector3.INF:
-		for p: Node3D in get_tree().get_nodes_in_group("persons"):
-			if p.selected:
-				p.set_move_objective(pos)
+		JobsManager.assign_move(selected, pos)
 
 func _get_building_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()

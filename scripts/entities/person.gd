@@ -26,6 +26,7 @@ var _sleeping: bool = false
 var _camping: bool = false
 var _assigned_sleep_point: Node3D = null
 var _has_eaten_tonight: bool = false
+var _idle_requested: bool = false
 
 static var _night_assigned: bool = false
 
@@ -46,7 +47,11 @@ func _ready() -> void:
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
 	_nav_agent.target_desired_distance = 1.0
 	_nav_agent.velocity_computed.connect(_on_velocity_computed)
+	JobsManager.register_person(self)
 	_run_task_loop()
+
+func _exit_tree() -> void:
+	JobsManager.unregister_person(self)
 
 func _physics_process(_delta: float) -> void:
 	if _nav_agent.is_navigation_finished():
@@ -95,8 +100,10 @@ func restore_from_save(d: Dictionary) -> void:
 		inventory.append(InventoryItem.new(item_d["name"], item_d["weight"]))
 	_last_resource_type = d.get("last_resource_type", -1)
 	visible = true
+	JobsManager.resync_from_state(self)
 
 func set_objective(node: Node3D) -> void:
+	_idle_requested = false
 	_objective_node = node
 	_move_target = Vector3.INF
 	var r := node as ResourceNode
@@ -104,12 +111,14 @@ func set_objective(node: Node3D) -> void:
 		_last_resource_type = r.resource_type
 
 func set_build_objective(node: Node3D) -> void:
+	_idle_requested = false
 	_build_target = node
 	_move_target = Vector3.INF
 	_objective_node = null
 	_last_resource_type = -1
 
 func set_move_objective(pos: Vector3) -> void:
+	_idle_requested = false
 	_move_target = pos
 	_objective_node = null
 	_build_target = null
@@ -117,9 +126,26 @@ func set_move_objective(pos: Vector3) -> void:
 	_last_resource_type = -1
 
 func set_deposit_objective() -> void:
+	_idle_requested = false
 	_deposit_queued = true
 	_objective_node = null
 	_move_target = Vector3.INF
+
+func set_idle() -> void:
+	_idle_requested = true
+	_objective_node = null
+	_build_target = null
+	_move_target = Vector3.INF
+	_deposit_queued = false
+	_last_resource_type = -1
+
+func set_gather_retarget(rtype: int) -> void:
+	_idle_requested = false
+	_objective_node = null
+	_build_target = null
+	_move_target = Vector3.INF
+	_deposit_queued = false
+	_last_resource_type = rtype
 
 func current_weight() -> float:
 	var total := 0.0
@@ -138,23 +164,7 @@ func objective_label() -> String:
 		return "camping"
 	if _sleeping:
 		return "sleeping"
-	if _move_target != Vector3.INF:
-		return "moving"
-	if _deposit_queued:
-		return "depositing"
-	if _build_target != null and is_instance_valid(_build_target):
-		return "building"
-	if _objective_node == null or not is_instance_valid(_objective_node):
-		return "idle"
-	var resource: ResourceNode = _objective_node as ResourceNode
-	if resource == null:
-		return "mining " + _objective_node.name
-	match resource.resource_type:
-		ResourceNode.Type.WOOD:  return "mine Wood"
-		ResourceNode.Type.STONE: return "mine Stone"
-		ResourceNode.Type.FOOD:  return "mine Food"
-		ResourceNode.Type.GOLD:  return "mine Gold"
-	return "mining"
+	return JobsManager.get_job_label(self)
 
 func take_damage(amount: int) -> void:
 	health = maxi(health - amount, 0)
@@ -195,6 +205,7 @@ func _do_move(pos: Vector3) -> void:
 		await get_tree().process_frame
 	if _move_target == pos:
 		_move_target = Vector3.INF
+		JobsManager.notify_task_completed(self)
 
 func _nearest_deposit_point() -> Node3D:
 	var nearest: Node3D = null
@@ -373,6 +384,9 @@ func _wait_until_near(node: Node3D, reach: float = REACH) -> void:
 		return
 	await get_tree().process_frame
 	while is_instance_valid(node) and is_inside_tree():
+		if _idle_requested:
+			_idle_requested = false
+			return
 		var dist := global_position.distance_to(node.global_position)
 		if dist <= reach:
 			return
