@@ -1,3 +1,4 @@
+class_name Island
 extends Node3D
 
 const DRAG_THRESHOLD := 6.0
@@ -8,13 +9,20 @@ const TradeScene := preload("res://scenes/entities/trade_route.tscn")
 const PersonScene := preload("res://scenes/entities/person.tscn")
 const ShipScene := preload("res://scenes/entities/ship.tscn")
 
+var economy: IslandEconomy = IslandEconomy.new()
+@onready var jobs_manager: Node = $JobsManager
+
 var _drag_start := Vector2.ZERO
 var _dragging := false
 
 @onready var _selection_box: Panel = $SelectionUI/SelectionBox
 @onready var _nav_region: NavigationRegion3D = $NavigationRegion3D
 
+func _exit_tree() -> void:
+	IslandsManager.unregister_island(self)
+
 func _ready() -> void:
+	IslandsManager.register_island(self)
 	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	_spawn_trade_routes(terrain)
 	if GameState.pending_load.is_empty():
@@ -34,12 +42,14 @@ func _restore_save(data: Dictionary) -> void:
 	# Restore global state
 	var gs: Dictionary = data.get("game_state", {})
 	GameState.reset()
-	GameState.player_gold = int(gs.get("gold", 0))
-	GameState.player_wood = int(gs.get("wood", 0))
-	GameState.player_food = int(gs.get("food", 50))
 	GameState.time_of_day = float(gs.get("time_of_day", 0.25))
 	GameState.game_speed  = float(gs.get("game_speed", 1.0))
 	GameState.day_count   = int(gs.get("day", 1))
+
+	# Get island data from v2 format
+	var islands_arr: Array = data.get("islands", [])
+	var island_data: Dictionary = islands_arr[0] if not islands_arr.is_empty() else {}
+	economy.restore_from_save(island_data.get("economy", {}))
 
 	# Skip capital placement — free the one-shot manager
 	var pm := get_node_or_null("PlacementManager")
@@ -51,13 +61,13 @@ func _restore_save(data: Dictionary) -> void:
 		p.queue_free()
 
 	# Restore camera position
-	var cam_data: Dictionary = data.get("camera", {})
+	var cam_data: Dictionary = island_data.get("camera", {})
 	var cam = get_tree().get_first_node_in_group("rts_camera")
 	if cam != null and not cam_data.is_empty():
 		cam.center_on(Vector3(float(cam_data.get("x", 0.0)), 0.0, float(cam_data.get("z", 0.0))))
 
 	# Restore buildings (into NavigationRegion3D)
-	for bd in data.get("buildings", []):
+	for bd in island_data.get("buildings", []):
 		var scene_path: String = SaveLoad.BUILDING_SCENES.get(bd.get("scene_key", ""), "")
 		if scene_path.is_empty():
 			continue
@@ -72,7 +82,7 @@ func _restore_save(data: Dictionary) -> void:
 	update_town_shader()
 
 	# Restore foundations (under World)
-	for fd in data.get("foundations", []):
+	for fd in island_data.get("foundations", []):
 		var scene_path: String = SaveLoad.FOUNDATION_SCENES.get(fd.get("scene_key", ""), "")
 		if scene_path.is_empty():
 			continue
@@ -84,7 +94,7 @@ func _restore_save(data: Dictionary) -> void:
 		node.set("_progress", int(fd.get("progress", 0)))
 
 	# Restore resource nodes (under World)
-	for rd in data.get("resource_nodes", []):
+	for rd in island_data.get("resource_nodes", []):
 		var rtype: int = int(rd.get("resource_type", -1))
 		var scene_path: String = SaveLoad.RESOURCE_SCENES.get(rtype, "")
 		if scene_path.is_empty():
@@ -97,7 +107,7 @@ func _restore_save(data: Dictionary) -> void:
 
 	# Restore ships (under World)
 	var ship_nodes: Array = []
-	for sd in data.get("ships", []):
+	for sd in island_data.get("ships", []):
 		var node: Node3D = ShipScene.instantiate()
 		var pos: Array = sd["position"]
 		node.position = Vector3(pos[0], pos[1], pos[2])
@@ -106,7 +116,7 @@ func _restore_save(data: Dictionary) -> void:
 
 	# Restore persons (under World) — position set after add_child via restore_from_save
 	var person_idx := 1
-	for pd in data.get("persons", []):
+	for pd in island_data.get("persons", []):
 		var node: Node3D = PersonScene.instantiate()
 		node.name = "Person%d" % person_idx
 		person_idx += 1
@@ -295,19 +305,19 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 	var selected: Array = get_tree().get_nodes_in_group("persons").filter(func(p): return p.selected)
 	var foundation := _get_foundation_at(screen_pos)
 	if foundation != null:
-		JobsManager.assign_build(selected, foundation)
+		jobs_manager.assign_build(selected, foundation)
 		return
 	var resource := _get_resource_at(screen_pos)
 	if resource != null:
-		JobsManager.assign_gather(selected, resource)
+		jobs_manager.assign_gather(selected, resource)
 		return
 	var building := _get_building_at(screen_pos)
 	if building != null:
-		JobsManager.assign_deposit(selected)
+		jobs_manager.assign_deposit(selected)
 		return
 	var pos := _raycast_y0(screen_pos)
 	if pos != Vector3.INF:
-		JobsManager.assign_move(selected, pos)
+		jobs_manager.assign_move(selected, pos)
 
 func _get_building_at(screen_pos: Vector2) -> Node3D:
 	var camera := get_viewport().get_camera_3d()

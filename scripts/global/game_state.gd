@@ -18,25 +18,52 @@ var current_save_name: String = ""
 var day_count: int = 1
 @export var show_day_counter: bool = false
 
-var player_gold: int = 0:
-	set(value):
-		player_gold = value
-		gold_changed.emit(value)
+var _economy_relay: IslandEconomy = null
 
-var player_wood: int = 0:
-	set(value):
-		player_wood = value
-		wood_changed.emit(value)
+func _ready() -> void:
+	IslandsManager.active_island_changed.connect(_relay_economy)
 
-var player_food: int = 50:
-	set(value):
-		player_food = value
-		food_changed.emit(value)
+func _relay_economy(island: Node) -> void:
+	if _economy_relay:
+		_economy_relay.gold_changed.disconnect(gold_changed.emit)
+		_economy_relay.wood_changed.disconnect(wood_changed.emit)
+		_economy_relay.food_changed.disconnect(food_changed.emit)
+	_economy_relay = island.economy if island else null
+	if _economy_relay:
+		_economy_relay.gold_changed.connect(gold_changed.emit)
+		_economy_relay.wood_changed.connect(wood_changed.emit)
+		_economy_relay.food_changed.connect(food_changed.emit)
+		gold_changed.emit(_economy_relay.gold)
+		wood_changed.emit(_economy_relay.wood)
+		food_changed.emit(_economy_relay.food)
+
+var player_gold: int:
+	get: return _economy_relay.gold if _economy_relay else 0
+	set(v):
+		if _economy_relay:
+			_economy_relay.gold = v
+		else:
+			gold_changed.emit(v)
+
+var player_wood: int:
+	get: return _economy_relay.wood if _economy_relay else 0
+	set(v):
+		if _economy_relay:
+			_economy_relay.wood = v
+		else:
+			wood_changed.emit(v)
+
+var player_food: int:
+	get: return _economy_relay.food if _economy_relay else 0
+	set(v):
+		if _economy_relay:
+			_economy_relay.food = v
+		else:
+			food_changed.emit(v)
 
 func reset() -> void:
-	player_gold = 0
-	player_wood = 0
-	player_food = 50
+	if _economy_relay:
+		_economy_relay.reset()
 	game_speed = 1.0
 	time_of_day = 0.25
 	current_save_name = ""

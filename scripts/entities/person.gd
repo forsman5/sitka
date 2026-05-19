@@ -27,6 +27,7 @@ var _camping: bool = false
 var _assigned_sleep_point: Node3D = null
 var _has_eaten_tonight: bool = false
 var _idle_requested: bool = false
+var _jobs_manager: Node = null
 
 static var _night_assigned: bool = false
 
@@ -47,11 +48,18 @@ func _ready() -> void:
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
 	_nav_agent.target_desired_distance = 1.0
 	_nav_agent.velocity_computed.connect(_on_velocity_computed)
-	JobsManager.register_person(self)
+	var n := get_parent()
+	while n != null:
+		var jm := n.get_node_or_null("JobsManager")
+		if jm != null:
+			_jobs_manager = jm
+			break
+		n = n.get_parent()
+	_jobs_manager.register_person(self)
 	_run_task_loop()
 
 func _exit_tree() -> void:
-	JobsManager.unregister_person(self)
+	_jobs_manager.unregister_person(self)
 
 func _physics_process(_delta: float) -> void:
 	if _nav_agent.is_navigation_finished():
@@ -100,7 +108,7 @@ func restore_from_save(d: Dictionary) -> void:
 		inventory.append(InventoryItem.new(item_d["name"], item_d["weight"]))
 	_last_resource_type = d.get("last_resource_type", -1)
 	visible = true
-	JobsManager.resync_from_state(self)
+	_jobs_manager.resync_from_state(self)
 
 func set_objective(node: Node3D) -> void:
 	_idle_requested = false
@@ -164,7 +172,7 @@ func objective_label() -> String:
 		return "camping"
 	if _sleeping:
 		return "sleeping"
-	return JobsManager.get_job_label(self)
+	return _jobs_manager.get_job_label(self)
 
 func take_damage(amount: int) -> void:
 	health = maxi(health - amount, 0)
@@ -205,7 +213,7 @@ func _do_move(pos: Vector3) -> void:
 		await get_tree().process_frame
 	if _move_target == pos:
 		_move_target = Vector3.INF
-		JobsManager.notify_task_completed(self)
+		_jobs_manager.notify_task_completed(self)
 
 func _nearest_deposit_point() -> Node3D:
 	var nearest: Node3D = null

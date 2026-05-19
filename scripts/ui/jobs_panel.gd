@@ -15,13 +15,32 @@ const ROWS := [
 var _count_labels: Dictionary = {}
 var _plus_btns: Dictionary = {}
 var _minus_btns: Dictionary = {}
+var _connected_jm: Node = null
 
 func _ready() -> void:
-	JobsManager.job_assigned.connect(_refresh)
-	JobsManager.job_completed.connect(_refresh)
-	JobsManager.job_cancelled.connect(_refresh)
-	JobsManager.assignments_changed.connect(_refresh)
+	IslandsManager.active_island_changed.connect(_on_island_changed)
 	_build_rows()
+	_connect_island(IslandsManager.active_island)
+	_refresh()
+
+func _connect_island(island: Node) -> void:
+	if _connected_jm != null and is_instance_valid(_connected_jm):
+		_connected_jm.job_assigned.disconnect(_refresh)
+		_connected_jm.job_completed.disconnect(_refresh)
+		_connected_jm.job_cancelled.disconnect(_refresh)
+		_connected_jm.assignments_changed.disconnect(_refresh)
+	_connected_jm = null
+	if island == null:
+		return
+	var jm: Node = island.jobs_manager
+	jm.job_assigned.connect(_refresh)
+	jm.job_completed.connect(_refresh)
+	jm.job_cancelled.connect(_refresh)
+	jm.assignments_changed.connect(_refresh)
+	_connected_jm = jm
+
+func _on_island_changed(island: Node) -> void:
+	_connect_island(island)
 	_refresh()
 
 func _build_rows() -> void:
@@ -59,33 +78,42 @@ func _build_rows() -> void:
 		_vbox.add_child(hbox)
 
 func _refresh(_a = null, _b = null) -> void:
-	var idle := JobsManager.get_idle_count()
+	var jm: Node = IslandsManager.get_jobs_manager()
+	var idle: int = jm.get_idle_count() if jm else 0
 	for row in ROWS:
 		var lbl: String = row["label"]
-		var count := _get_count(row)
+		var count: int = _get_count(row, jm)
 		_count_labels[lbl].text = str(count)
 		if _plus_btns.has(lbl):
 			_plus_btns[lbl].disabled = (idle == 0)
 		if _minus_btns.has(lbl):
 			_minus_btns[lbl].disabled = (count == 0)
 
-func _get_count(row: Dictionary) -> int:
+func _get_count(row: Dictionary, jm: Node) -> int:
+	if jm == null:
+		return 0
 	match row["type"]:
-		"gather":  return JobsManager.get_gather_count(row["arg"])
-		"build":   return JobsManager.get_build_count()
-		"deposit": return JobsManager.get_deposit_count()
-		"move":    return JobsManager.get_move_count()
-		"idle":    return JobsManager.get_idle_count()
+		"gather":  return jm.get_gather_count(row["arg"])
+		"build":   return jm.get_build_count()
+		"deposit": return jm.get_deposit_count()
+		"move":    return jm.get_move_count()
+		"idle":    return jm.get_idle_count()
 	return 0
 
 func _on_plus(row: Dictionary) -> void:
+	var jm: Node = IslandsManager.get_jobs_manager()
+	if jm == null:
+		return
 	match row["type"]:
-		"gather":  JobsManager.increment_gather(row["arg"])
-		"build":   JobsManager.increment_build()
-		"deposit": JobsManager.increment_deposit()
+		"gather":  jm.increment_gather(row["arg"])
+		"build":   jm.increment_build()
+		"deposit": jm.increment_deposit()
 
 func _on_minus(row: Dictionary) -> void:
+	var jm: Node = IslandsManager.get_jobs_manager()
+	if jm == null:
+		return
 	match row["type"]:
-		"gather":  JobsManager.decrement_gather(row["arg"])
-		"build":   JobsManager.decrement_build()
-		"deposit": JobsManager.decrement_deposit()
+		"gather":  jm.decrement_gather(row["arg"])
+		"build":   jm.decrement_build()
+		"deposit": jm.decrement_deposit()

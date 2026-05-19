@@ -116,7 +116,8 @@ func _on_food_changed(amount: int) -> void:
 func _refresh_people() -> void:
 	var persons := get_tree().get_nodes_in_group("persons")
 	var total := persons.size()
-	var idle := JobsManager.get_idle_count()
+	var jm: Node = IslandsManager.get_jobs_manager()
+	var idle: int = jm.get_idle_count() if jm else 0
 	var beds := 0
 	for sp in get_tree().get_nodes_in_group("sleep_point"):
 		var b := sp as Building

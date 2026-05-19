@@ -75,18 +75,23 @@ func save_game(scene_root: Node, display_name: String) -> void:
 	DirAccess.make_dir_recursive_absolute(SAVE_DIR)
 	var filename := _to_filename(display_name) + ".json"
 	var trade_routes := scene_root.get_tree().get_nodes_in_group("trade_routes")
-	var data := {
-		"version":    1,
-		"name":       display_name,
-		"saved_at":   Time.get_unix_time_from_system(),
-		"saved_local": Time.get_datetime_dict_from_system(false),
-		"game_state": _pack_game_state(),
-		"camera":     _pack_camera(scene_root),
-		"persons":    _pack_group("persons", scene_root),
-		"buildings":  _pack_group("buildings", scene_root),
-		"foundations": _pack_group("foundations", scene_root),
+	var island_data := {
+		"island_id":      0,
+		"economy":        scene_root.economy.get_save_data(),
+		"camera":         _pack_camera(scene_root),
+		"persons":        _pack_group("persons", scene_root),
+		"buildings":      _pack_group("buildings", scene_root),
+		"foundations":    _pack_group("foundations", scene_root),
 		"resource_nodes": _pack_group("resource_nodes", scene_root),
-		"ships":      _pack_ships(scene_root, trade_routes),
+		"ships":          _pack_ships(scene_root, trade_routes),
+	}
+	var data := {
+		"version":     2,
+		"name":        display_name,
+		"saved_at":    Time.get_unix_time_from_system(),
+		"saved_local": Time.get_datetime_dict_from_system(false),
+		"game_state":  _pack_game_state(),
+		"islands":     [island_data],
 	}
 	var f := FileAccess.open(SAVE_DIR + filename, FileAccess.WRITE)
 	f.store_string(JSON.stringify(data, "\t"))
@@ -114,9 +119,6 @@ func _to_filename(display_name: String) -> String:
 
 func _pack_game_state() -> Dictionary:
 	return {
-		"gold":        GameState.player_gold,
-		"wood":        GameState.player_wood,
-		"food":        GameState.player_food,
 		"time_of_day": GameState.time_of_day,
 		"game_speed":  GameState.game_speed,
 		"day":         GameState.day_count,
