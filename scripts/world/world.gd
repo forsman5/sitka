@@ -19,24 +19,25 @@ var _dragging := false
 
 @onready var _selection_box: Panel = $SelectionUI/SelectionBox
 @onready var _nav_region: NavigationRegion3D = $NavigationRegion3D
+@onready var _terrain: Node = $NavigationRegion3D/HeightmapTerrain
 
 func _exit_tree() -> void:
 	IslandsManager.unregister_island(self)
 
 func _ready() -> void:
 	IslandsManager.register_island(self)
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
-	_spawn_trade_routes(terrain)
-	if GameState.pending_load.is_empty():
-		_spawn_starting_resources(terrain)
-	else:
-		_restore_save(GameState.pending_load)
-		GameState.pending_load = {}
-	if terrain != null:
-		terrain.prepare_for_bake()
+	if is_starting_island:
+		_spawn_trade_routes(_terrain)
+		if GameState.pending_load.is_empty():
+			_spawn_starting_resources(_terrain)
+		else:
+			_restore_save(GameState.pending_load)
+			GameState.pending_load = {}
+	if _terrain != null:
+		_terrain.prepare_for_bake()
 		_nav_region.bake_finished.connect(func():
-			if is_instance_valid(terrain):
-				terrain.restore_visual()
+			if is_instance_valid(_terrain):
+				_terrain.restore_visual()
 		, CONNECT_ONE_SHOT)
 	_nav_region.bake_navigation_mesh()
 
@@ -153,6 +154,8 @@ func _spawn_trade_routes(terrain: Node) -> void:
 		add_child(tr)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if IslandsManager.active_island != self:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_drag_start = event.position
@@ -296,8 +299,7 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 			return
 		var pos := _raycast_y0(screen_pos)
 		if pos != Vector3.INF:
-			var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
-			if terrain != null and terrain.is_ocean_water(pos.x, pos.z):
+			if _terrain != null and _terrain.is_ocean_water(pos.x, pos.z):
 				for s: Node3D in get_tree().get_nodes_in_group("ships"):
 					if s.get("selected") == true:
 						s.set_move_target(pos)
@@ -412,10 +414,9 @@ func _get_person_at(screen_pos: Vector2) -> Node3D:
 	return null
 
 func update_town_shader() -> void:
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
-	if terrain == null:
+	if _terrain == null:
 		return
-	var mesh := terrain.get_node_or_null("MeshInstance3D") as MeshInstance3D
+	var mesh := _terrain.get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if mesh == null:
 		return
 	var mat := mesh.material_override as ShaderMaterial

@@ -170,6 +170,14 @@ text = "Spawn Ship (50w)"
 
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
+[node name="IslandBar" type="HBoxContainer" parent="Root"]
+visible = false
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 500.0
+offset_bottom = 46.0
+theme_override_constants/separation = 4
+
 [node name="SelectionBar" type="HBoxContainer" parent="Root"]
 visible = false
 process_mode = 3

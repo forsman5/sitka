@@ -47,6 +47,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _btn_1x: Button = $Root/SpeedBar/Speed1xButton
 @onready var _btn_2x: Button = $Root/SpeedBar/Speed2xButton
 @onready var _btn_5x: Button = $Root/SpeedBar/Speed5xButton
+@onready var _island_bar: HBoxContainer = $Root/IslandBar
 
 var _last_selected_building: Building = null
 var _paused: bool = false
@@ -54,6 +55,7 @@ var _person_cycle_idx: int = 0
 var _game_over_triggered := false
 var _style_active: StyleBoxFlat
 var _style_inactive: StyleBoxFlat
+var _island_btns: Array[Button] = []
 
 func _ready() -> void:
 	GameState.gold_changed.connect(_on_gold_changed)
@@ -69,6 +71,9 @@ func _ready() -> void:
 	_style_inactive.bg_color = Color(0.12, 0.12, 0.18, 0.9)
 	_style_inactive.set_corner_radius_all(3)
 	_update_speed_highlight()
+	IslandsManager.islands_changed.connect(_rebuild_island_bar)
+	IslandsManager.active_island_changed.connect(_on_active_island_changed)
+	_rebuild_island_bar()
 
 func _process(_delta: float) -> void:
 	var capital_placed := not get_tree().get_nodes_in_group("capital").is_empty()
@@ -357,6 +362,35 @@ func _update_speed_highlight() -> void:
 	_btn_1x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 1.0 else _style_inactive)
 	_btn_2x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 2.0 else _style_inactive)
 	_btn_5x.add_theme_stylebox_override("normal", _style_active if not _paused and GameState.game_speed == 5.0 else _style_inactive)
+
+func _rebuild_island_bar() -> void:
+	for btn in _island_btns:
+		if is_instance_valid(btn):
+			btn.queue_free()
+	_island_btns.clear()
+	for i in IslandsManager.islands.size():
+		var island: Node = IslandsManager.islands[i]
+		var btn := Button.new()
+		btn.text = "Island %d" % (i + 1)
+		btn.pressed.connect(IslandsManager.set_active_island.bind(island))
+		btn.add_theme_stylebox_override("normal",
+			_style_active if island == IslandsManager.active_island else _style_inactive)
+		_island_bar.add_child(btn)
+		_island_btns.append(btn)
+	_island_bar.visible = IslandsManager.islands.size() > 1
+
+func _on_active_island_changed(island: Node) -> void:
+	for i in _island_btns.size():
+		if is_instance_valid(_island_btns[i]) and i < IslandsManager.islands.size():
+			_island_btns[i].add_theme_stylebox_override("normal",
+				_style_active if IslandsManager.islands[i] == island else _style_inactive)
+	var cam := get_tree().get_first_node_in_group("rts_camera") as Node3D
+	if cam != null and island != null:
+		cam.center_on(island.global_position)
+	for group in ["persons", "ships", "buildings", "resource_nodes", "foundations"]:
+		for n in get_tree().get_nodes_in_group(group):
+			if n.has_method("set_selected"):
+				n.set_selected(false)
 
 func _add_row(unit: String, objective: String, carry: String, hp: String) -> void:
 	var name_lbl := Label.new()

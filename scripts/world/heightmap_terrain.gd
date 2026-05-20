@@ -29,9 +29,11 @@ func generate(p_seed: int = 0) -> void:
 	_build_collision()
 
 func get_height(world_x: float, world_z: float) -> float:
+	var local_x := world_x - global_position.x
+	var local_z := world_z - global_position.z
 	var half := map_config.world_size * 0.5
-	var gx: float = clampf((world_x + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001)
-	var gz: float = clampf((world_z + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001)
+	var gx: float = clampf((local_x + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001)
+	var gz: float = clampf((local_z + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001)
 	var ix := int(gx)
 	var iz := int(gz)
 	var fx: float = gx - ix
@@ -178,9 +180,11 @@ func _build_ocean_map() -> void:
 				queue.append(nidx)
 
 func is_ocean_water(world_x: float, world_z: float) -> bool:
+	var local_x := world_x - global_position.x
+	var local_z := world_z - global_position.z
 	var half := map_config.world_size * 0.5
-	var gx := int(clampf((world_x + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
-	var gz := int(clampf((world_z + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
+	var gx := int(clampf((local_x + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
+	var gz := int(clampf((local_z + half) / map_config.world_size * float(GRID_SIZE - 1), 0.0, float(GRID_SIZE) - 1.001))
 	return ocean_data[gz * GRID_SIZE + gx] == 1
 
 func _build_collision() -> void:

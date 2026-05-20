@@ -1,6 +1,7 @@
 extends Node
 
 signal active_island_changed(island: Node)
+signal islands_changed()
 
 var islands: Array[Node] = []
 var active_island: Node = null
@@ -8,11 +9,13 @@ var active_island: Node = null
 func register_island(island: Node) -> void:
 	if not islands.has(island):
 		islands.append(island)
+		islands_changed.emit()
 	if active_island == null:
 		_set_active(island)
 
 func unregister_island(island: Node) -> void:
 	islands.erase(island)
+	islands_changed.emit()
 	if active_island == island:
 		_set_active(islands[0] if not islands.is_empty() else null)
 

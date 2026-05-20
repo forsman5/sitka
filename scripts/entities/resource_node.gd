@@ -40,7 +40,13 @@ func _ready() -> void:
 	obstacle.avoidance_enabled = true
 	obstacle.radius = obstacle_radius
 	add_child(obstacle)
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	var terrain: Node = null
+	var p := get_parent()
+	while p != null:
+		if p is Island:
+			terrain = p.get_node_or_null("NavigationRegion3D/HeightmapTerrain")
+			break
+		p = p.get_parent()
 	if terrain != null:
 		global_position.y = terrain.get_height(global_position.x, global_position.z)
 

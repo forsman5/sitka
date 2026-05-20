@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bhjhqbxk43kpl" path="res://scripts/camera/rts_camera.gd" id="1_cam"]
 [ext_resource type="PackedScene" uid="uid://cyq5b6vp4quva" path="res://scenes/world/island_a.tscn" id="5_v5dby"]
+[ext_resource type="PackedScene" uid="uid://cdrpqw7n1b4hf" path="res://scenes/world/island_b.tscn" id="6_isb"]
 [ext_resource type="PackedScene" path="res://scenes/ui/hud.tscn" id="6_hud"]
 [ext_resource type="PackedScene" path="res://scenes/ui/escape_menu.tscn" id="8_escape"]
 [ext_resource type="Script" uid="uid://bge25m5yr3a57" path="res://scripts/world/day_night_cycle.gd" id="11_dnc"]
@@ -64,3 +65,6 @@ surface_material_override/0 = SubResource("WaterMat_1")
 script = ExtResource("11_dnc")
 
 [node name="IslandA" parent="." unique_id=1748152547 instance=ExtResource("5_v5dby")]
+
+[node name="IslandB" parent="." instance=ExtResource("6_isb")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 300, 0, 0)

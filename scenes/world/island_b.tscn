@@ -1,0 +1,66 @@
+[gd_scene format=3 uid="uid://cdrpqw7n1b4hf"]
+
+[ext_resource type="Script" uid="uid://dgxw8wp8m06ru" path="res://scripts/world/world.gd" id="1_isb"]
+[ext_resource type="PackedScene" path="res://scenes/world/heightmap_terrain.tscn" id="2_isb"]
+[ext_resource type="Script" uid="uid://cktirfardm0rn" path="res://scripts/global/jobs_manager.gd" id="3_isb"]
+[ext_resource type="Resource" uid="uid://dm2fq8r3n5kjt" path="res://resources/map_config_flat.tres" id="4_isb"]
+
+[sub_resource type="PlaneMesh" id="WaterMesh_1"]
+size = Vector2(160, 160)
+
+[sub_resource type="Shader" id="WaterShader_1"]
+code = "shader_type spatial;
+render_mode diffuse_lambert, specular_schlick_ggx;
+
+uniform vec4 water_color : source_color = vec4(0.15, 0.38, 0.65, 1.0);
+
+void fragment() {
+	ALBEDO = water_color.rgb;
+	ROUGHNESS = 0.05;
+	METALLIC = 0.0;
+	SPECULAR = 0.9;
+}
+"
+
+[sub_resource type="ShaderMaterial" id="WaterMat_1"]
+render_priority = 0
+shader = SubResource("WaterShader_1")
+shader_parameter/water_color = Color(0.15, 0.38, 0.65, 1)
+
+[sub_resource type="NavigationMesh" id="NavMesh_1"]
+cell_size = 0.5
+agent_height = 2.0
+agent_radius = 0.4
+agent_max_climb = 0.5
+agent_max_slope = 35.0
+
+[sub_resource type="StyleBoxFlat" id="SelectionStyle_1"]
+bg_color = Color(0.3, 0.6, 1, 0.12)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.5, 0.75, 1, 0.9)
+
+[node name="World" type="Node3D"]
+script = ExtResource("1_isb")
+is_starting_island = false
+
+[node name="WaterPlane" type="MeshInstance3D" parent="."]
+mesh = SubResource("WaterMesh_1")
+surface_material_override/0 = SubResource("WaterMat_1")
+
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavMesh_1")
+
+[node name="HeightmapTerrain" parent="NavigationRegion3D" instance=ExtResource("2_isb")]
+map_config = ExtResource("4_isb")
+
+[node name="SelectionUI" type="CanvasLayer" parent="."]
+
+[node name="SelectionBox" type="Panel" parent="SelectionUI"]
+visible = false
+theme_override_styles/panel = SubResource("SelectionStyle_1")
+
+[node name="JobsManager" type="Node" parent="."]
+script = ExtResource("3_isb")

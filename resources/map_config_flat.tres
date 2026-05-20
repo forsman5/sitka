@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="MapConfig" load_steps=2 format=3 uid="uid://dm2fq8r3n5kjt"]
+
+[ext_resource type="Script" uid="uid://d058rr5dyum7l" path="res://scripts/world/map_config.gd" id="1_flat"]
+
+[resource]
+script = ExtResource("1_flat")
+island_radius = 55.0
+noise_amplitude = 0.0
+pond_radius = 0.0
+flatten_radius = 0.0
