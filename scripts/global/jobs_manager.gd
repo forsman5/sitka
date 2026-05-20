@@ -6,10 +6,22 @@ signal job_cancelled(person: Node3D, old_job: Job)
 signal assignments_changed()
 
 var _assignments: Dictionary = {}  # Node3D -> Job
-var _island: Node = null
+var _resources: Array[Node] = []
+var _foundations: Array[Node] = []
 
-func _ready() -> void:
-	_island = get_parent()
+func register_resource(r: Node) -> void:
+	if not _resources.has(r):
+		_resources.append(r)
+
+func unregister_resource(r: Node) -> void:
+	_resources.erase(r)
+
+func register_foundation(f: Node) -> void:
+	if not _foundations.has(f):
+		_foundations.append(f)
+
+func unregister_foundation(f: Node) -> void:
+	_foundations.erase(f)
 
 # --- Lifecycle ---
 
@@ -184,10 +196,8 @@ func _apply_to_person(person: Node3D, job: Job) -> void:
 func _find_nearest_resource(from: Node3D, rtype: int) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist := INF
-	for n in from.get_tree().get_nodes_in_group("resource_nodes"):
+	for n in _resources:
 		if not is_instance_valid(n):
-			continue
-		if _island != null and not _island.is_ancestor_of(n):
 			continue
 		if int(n.get("resource_type")) != rtype:
 			continue
@@ -200,10 +210,8 @@ func _find_nearest_resource(from: Node3D, rtype: int) -> Node3D:
 func _find_nearest_foundation(from: Node3D) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist := INF
-	for n in from.get_tree().get_nodes_in_group("foundations"):
+	for n in _foundations:
 		if not is_instance_valid(n):
-			continue
-		if _island != null and not _island.is_ancestor_of(n):
 			continue
 		var d: float = from.global_position.distance_to((n as Node3D).global_position)
 		if d < nearest_dist:

@@ -60,7 +60,7 @@ func _on_name_submitted(_text: String) -> void:
 
 func _do_save(save_name: String) -> void:
 	GameState.current_save_name = save_name
-	SaveLoad.save_game(get_tree().current_scene, save_name)
+	SaveLoad.save_game(IslandsManager.active_island, save_name)
 	_saved_label.modulate.a = 1.0
 	var tween := create_tween()
 	tween.tween_property(_saved_label, "modulate:a", 0.0, 1.5).set_delay(0.5)

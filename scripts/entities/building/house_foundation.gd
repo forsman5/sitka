@@ -7,6 +7,7 @@ var town_radius_contribution: float = 2.0
 var selected := false
 var _progress: int = 0
 var _completed := false
+var _jm: Node = null
 const BuildScene = preload("res://scenes/entities/building/house.tscn")
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
@@ -18,6 +19,18 @@ func _ready() -> void:
 	_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
+	var n := get_parent()
+	while n != null:
+		var jm := n.get_node_or_null("JobsManager")
+		if jm != null:
+			_jm = jm
+			_jm.register_foundation(self)
+			break
+		n = n.get_parent()
+
+func _exit_tree() -> void:
+	if _jm != null and is_instance_valid(_jm):
+		_jm.unregister_foundation(self)
 
 func set_selected(value: bool) -> void:
 	selected = value
@@ -45,11 +58,21 @@ func progress_ratio() -> float:
 	return float(_progress) / float(build_required)
 
 func _complete() -> void:
-	var nav_region := get_tree().current_scene.get_node("NavigationRegion3D") as NavigationRegion3D
+	var island: Node = null
+	var n := get_parent()
+	while n != null:
+		if n is Island:
+			island = n
+			break
+		n = n.get_parent()
+	if island == null:
+		queue_free()
+		return
+	var nav_region := island.get_node("NavigationRegion3D") as NavigationRegion3D
 	var built := BuildScene.instantiate() as Node3D
 	nav_region.add_child(built)
 	built.global_position = global_position
 	built.global_rotation = global_rotation
 	nav_region.bake_navigation_mesh()
-	get_tree().current_scene.update_town_shader()
+	island.update_town_shader()
 	queue_free()

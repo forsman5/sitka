@@ -1,6 +1,8 @@
 class_name Island
 extends Node3D
 
+@export var is_starting_island: bool = true
+
 const DRAG_THRESHOLD := 6.0
 
 const GoldScene := preload("res://scenes/entities/resource_node_gold.tscn")

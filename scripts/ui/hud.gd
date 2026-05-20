@@ -269,7 +269,7 @@ func _on_spawn_ship_pressed() -> void:
 	var ship: Node3D = ShipScene.instantiate() as Node3D
 	var idx := get_tree().get_nodes_in_group("ships").size() + 1
 	ship.name = "Ship%d" % idx
-	get_tree().current_scene.add_child(ship)
+	IslandsManager.active_island.add_child(ship)
 	var water_dir := building.global_transform.basis.z
 	ship.global_position = building.global_position + water_dir * 5.0
 	ship.global_position.y = 0.05
@@ -284,7 +284,7 @@ func _on_spawn_pressed() -> void:
 	var person: Node3D = PersonScene.instantiate() as Node3D
 	var idx := get_tree().get_nodes_in_group("persons").size() + 1
 	person.name = "Person%d" % idx
-	get_tree().current_scene.add_child(person)
+	IslandsManager.active_island.add_child(person)
 	person.global_position = capital.global_position + Vector3(randf_range(-3.0, 3.0), 0.0, randf_range(-3.0, 3.0))
 
 func _on_all_persons_pressed() -> void:

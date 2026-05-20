@@ -14,6 +14,7 @@ signal depleted
 @export var obstacle_radius: float = 0.8
 
 var selected: bool = false
+var _jm: Node = null
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 
@@ -23,6 +24,14 @@ var _mat_selected: StandardMaterial3D
 func _ready() -> void:
 	add_to_group("resource_nodes")
 	depleted.connect(queue_free)
+	var n := get_parent()
+	while n != null:
+		var jm := n.get_node_or_null("JobsManager")
+		if jm != null:
+			_jm = jm
+			_jm.register_resource(self)
+			break
+		n = n.get_parent()
 	if _mesh.visible:
 		_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
@@ -34,6 +43,10 @@ func _ready() -> void:
 	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	if terrain != null:
 		global_position.y = terrain.get_height(global_position.x, global_position.z)
+
+func _exit_tree() -> void:
+	if _jm != null and is_instance_valid(_jm):
+		_jm.unregister_resource(self)
 
 func get_save_data() -> Dictionary:
 	return {
