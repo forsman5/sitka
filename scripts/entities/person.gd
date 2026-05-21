@@ -373,13 +373,18 @@ func _do_build(node: Node3D) -> void:
 			completed = true
 			break
 	if completed or not is_instance_valid(node):
-		_build_target = _find_nearest_foundation()
+		_build_target = _find_nearest_foundation_excluding(node if is_instance_valid(node) else null)
+		if _build_target == null and is_instance_valid(_jobs_manager):
+			_jobs_manager.notify_task_completed(self)
 
 func _find_nearest_foundation() -> Node3D:
+	return _find_nearest_foundation_excluding(null)
+
+func _find_nearest_foundation_excluding(exclude: Node3D) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist := INF
 	for n in get_tree().get_nodes_in_group("foundations"):
-		if not is_instance_valid(n):
+		if not is_instance_valid(n) or n == exclude:
 			continue
 		var d: float = global_position.distance_to((n as Node3D).global_position)
 		if d < nearest_dist:

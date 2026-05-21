@@ -51,12 +51,12 @@ func objective_label() -> String:
 	return "sailing" if _move_target != Vector3.INF else "idle"
 
 func _process(delta: float) -> void:
+	var terrain := _get_terrain()
 	if is_instance_valid(_trade_obj):
 		var dir := _trade_obj.global_position - global_position
 		dir.y = 0.0
 		if dir.length() > TRADE_REACH:
 			_trade_timer = TRADE_INTERVAL
-			var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 			var next_pos := global_position + dir.normalized() * speed * GameState.game_speed * delta
 			next_pos.y = 0.05
 			if terrain == null or terrain.is_ocean_water(next_pos.x, next_pos.z):
@@ -74,10 +74,17 @@ func _process(delta: float) -> void:
 	if dir.length() < 0.3:
 		_move_target = Vector3.INF
 		return
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	var next_pos := global_position + dir.normalized() * speed * GameState.game_speed * delta
 	next_pos.y = 0.05
 	if terrain == null or terrain.is_ocean_water(next_pos.x, next_pos.z):
 		global_position = next_pos
 	else:
 		_move_target = Vector3.INF
+
+func _get_terrain() -> Node:
+	var n := get_parent()
+	while n != null:
+		if n is Island:
+			return n.get_node_or_null("NavigationRegion3D/HeightmapTerrain")
+		n = n.get_parent()
+	return null

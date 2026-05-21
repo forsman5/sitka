@@ -70,13 +70,14 @@ func _place(pos: Vector3) -> void:
 		_disarm()
 		return
 	GameState.player_wood -= _wood_cost
+	var island: Node = IslandsManager.active_island
 	var instance: Node3D = _scene.instantiate() as Node3D
 	if instance.has_method("build_sync"):
-		get_tree().current_scene.add_child(instance)
+		island.add_child(instance)
 		instance.global_position = pos
 	else:
-		var nav_region := get_tree().current_scene.get_node("NavigationRegion3D") as Node
-		var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+		var nav_region := island.get_node("NavigationRegion3D") as Node
+		var terrain = island.get_node_or_null("NavigationRegion3D/HeightmapTerrain")
 		if terrain != null:
 			terrain.prepare_for_bake()
 		nav_region.add_child(instance)
@@ -86,7 +87,7 @@ func _place(pos: Vector3) -> void:
 				terrain.restore_visual()
 		, CONNECT_ONE_SHOT)
 		nav_region.bake_navigation_mesh()
-	get_tree().current_scene.update_town_shader()
+	island.call("update_town_shader")
 	_disarm()
 
 func _place_coast() -> void:
@@ -94,11 +95,12 @@ func _place_coast() -> void:
 		_disarm()
 		return
 	GameState.player_wood -= _wood_cost
+	var island: Node = IslandsManager.active_island
 	var instance: Node3D = _scene.instantiate() as Node3D
-	get_tree().current_scene.add_child(instance)
+	island.add_child(instance)
 	instance.global_position = _last_coast_snap["position"]
 	instance.rotation.y = _last_coast_snap["rotation_y"]
-	get_tree().current_scene.update_town_shader()
+	island.call("update_town_shader")
 	_disarm()
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
@@ -125,10 +127,10 @@ func _ensure_preview() -> void:
 	_preview_mat.albedo_color = Color(0.3, 0.9, 0.3, 0.5)
 	_preview_node.material_override = _preview_mat
 	_preview_node.visible = false
-	get_tree().current_scene.add_child(_preview_node)
+	IslandsManager.active_island.add_child(_preview_node)
 
 func _compute_coast_snap(world_pos: Vector3) -> Dictionary:
-	var terrain = get_tree().get_first_node_in_group("heightmap_terrain")
+	var terrain = IslandsManager.active_island.get_node_or_null("NavigationRegion3D/HeightmapTerrain")
 	if terrain == null:
 		return {"valid": false}
 	var cx := world_pos.x

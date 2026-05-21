@@ -2,6 +2,11 @@ class_name Island
 extends Node3D
 
 @export var is_starting_island: bool = true
+@export var show_border: bool = false:
+	set(v):
+		show_border = v
+		if is_inside_tree():
+			_update_border()
 
 const DRAG_THRESHOLD := 6.0
 
@@ -40,6 +45,7 @@ func _ready() -> void:
 				_terrain.restore_visual()
 		, CONNECT_ONE_SHOT)
 	_nav_region.bake_navigation_mesh()
+	_update_border()
 
 func _restore_save(data: Dictionary) -> void:
 	# Restore global state
@@ -456,6 +462,48 @@ func _get_trade_route_at(screen_pos: Vector2) -> Node3D:
 		if parent.is_in_group("trade_routes"):
 			return parent as Node3D
 	return null
+
+var _border_node: Node3D = null
+
+func _update_border() -> void:
+	if is_instance_valid(_border_node):
+		_border_node.queue_free()
+		_border_node = null
+	if not show_border:
+		return
+	_spawn_border()
+
+func _spawn_border() -> void:
+	if _terrain == null:
+		return
+	var cfg: MapConfig = _terrain.map_config
+	if cfg == null:
+		return
+	var half: float = cfg.world_size * 0.5
+	var wall_h := 3.0
+	var wall_t := 0.6
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.1, 0.1, 1.0)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_border_node = Node3D.new()
+	add_child(_border_node)
+	# Four sides: [local_position, box_size]
+	var sides: Array = [
+		[Vector3(0.0,   0.0, -half), Vector3(cfg.world_size + wall_t, wall_h, wall_t)],
+		[Vector3(0.0,   0.0,  half), Vector3(cfg.world_size + wall_t, wall_h, wall_t)],
+		[Vector3(-half, 0.0,  0.0),  Vector3(wall_t, wall_h, cfg.world_size + wall_t)],
+		[Vector3( half, 0.0,  0.0),  Vector3(wall_t, wall_h, cfg.world_size + wall_t)],
+	]
+	for side in sides:
+		var box := BoxMesh.new()
+		box.size = side[1]
+		var mi := MeshInstance3D.new()
+		mi.mesh = box
+		mi.material_override = mat
+		mi.position = side[0]
+		mi.position.y = wall_h * 0.5
+		_border_node.add_child(mi)
 
 func _raycast_y0(screen_pos: Vector2) -> Vector3:
 	var camera := get_viewport().get_camera_3d()
