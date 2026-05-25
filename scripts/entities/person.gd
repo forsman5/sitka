@@ -290,6 +290,7 @@ func _do_sleep() -> void:
 		Person._assign_beds()
 		Person._night_assigned = true
 	_sleeping = true
+	var slept_in_bed := false
 	if _assigned_sleep_point != null:
 		_nav_agent.target_desired_distance = DEPOSIT_REACH
 		move_to(_assigned_sleep_point.global_position)
@@ -303,12 +304,15 @@ func _do_sleep() -> void:
 		while is_inside_tree() and _is_night_time():
 			await get_tree().process_frame
 		visible = true
+		slept_in_bed = true
 	else:
 		_camping = true
 		take_damage(2)
 		while is_inside_tree() and _is_night_time():
 			await get_tree().process_frame
 		_camping = false
+	if slept_in_bed and _has_eaten_tonight:
+		health = mini(health + 1, max_health)
 	_sleeping = false
 	_assigned_sleep_point = null
 	Person._night_assigned = false

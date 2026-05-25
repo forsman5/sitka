@@ -9,10 +9,13 @@ const GRAZE_RATE := 12.0
 const SLEEP_TIME := 21.0 / 24.0
 const WAKE_TIME := 5.5 / 24.0
 const SLEEP_REACH := 3.5
+const BARN_RANGE := 50.0
 
 @export var move_speed: float = 2.5
 @export var max_food: float = 100.0
+@export var max_health: int = 5
 var food: float = 50.0
+var health: int = 5
 var selected: bool = false
 var _grazing: bool = false
 var _sleeping: bool = false
@@ -65,6 +68,11 @@ func _process(delta: float) -> void:
 	if _grazing:
 		food = minf(food + GRAZE_RATE * GameState.game_speed * delta, max_food)
 
+func take_damage(amount: int) -> void:
+	health = maxi(health - amount, 0)
+	if health <= 0:
+		queue_free()
+
 func set_selected(v: bool) -> void:
 	selected = v
 	_mesh.set_surface_override_material(0, _mat_selected if v else _mat_normal)
@@ -111,7 +119,7 @@ static func _assign_cow_beds() -> void:
 	for pair in pairs:
 		var c: Cow = pair["cow"]
 		var sp = pair["sp"]
-		if assigned.has(c) or not capacity.has(sp):
+		if assigned.has(c) or not capacity.has(sp) or pair["dist"] > BARN_RANGE:
 			continue
 		c._assigned_sleep_point = sp
 		assigned[c] = true
@@ -124,6 +132,7 @@ func _do_sleep() -> void:
 		Cow._assign_cow_beds()
 		Cow._night_assigned = true
 	_sleeping = true
+	var sheltered := false
 	if _assigned_sleep_point != null and is_instance_valid(_assigned_sleep_point):
 		_nav_agent.target_desired_distance = SLEEP_REACH
 		_nav_agent.set_target_position(_assigned_sleep_point.global_position)
@@ -139,9 +148,16 @@ func _do_sleep() -> void:
 		while is_inside_tree() and _is_night_time():
 			await get_tree().process_frame
 		visible = true
+		sheltered = true
 	else:
 		while is_inside_tree() and _is_night_time():
 			await get_tree().process_frame
+	if not sheltered:
+		take_damage(1)
+	if is_inside_tree() and food < 20.0:
+		take_damage(1)
+	if is_inside_tree() and sheltered:
+		health = mini(health + 1, max_health)
 	_sleeping = false
 	_assigned_sleep_point = null
 	Cow._night_assigned = false

@@ -16,6 +16,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _gold_label: Label = $Root/GoldLabel
 @onready var _food_label: Label = $Root/FoodLabel
 @onready var _people_label: Label = $Root/PeopleLabel
+@onready var _cows_label: Label = $Root/CowsLabel
 @onready var _selection_panel: Panel = $Root/SelectionPanel
 @onready var _header_row: HBoxContainer = $Root/SelectionPanel/VBoxContainer/HeaderRow
 @onready var _separator: HSeparator = $Root/SelectionPanel/VBoxContainer/HSeparator
@@ -54,6 +55,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _cow_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/CowView
 @onready var _cow_name: Label = $Root/SelectionPanel/VBoxContainer/CowView/CowName
 @onready var _cow_food: Label = $Root/SelectionPanel/VBoxContainer/CowView/FoodLabel
+@onready var _cow_health: Label = $Root/SelectionPanel/VBoxContainer/CowView/HealthLabel
 
 var _last_selected_building: Building = null
 var _paused: bool = false
@@ -139,6 +141,12 @@ func _refresh_people() -> void:
 		if b != null:
 			beds += b.get_bed_count()
 	_people_label.text = "%d people  %d idle  %d beds" % [total, idle, beds]
+	var cows := get_tree().get_nodes_in_group("cows")
+	var cow_idle := 0
+	for c in cows:
+		if not c.get("_sleeping") and not c.get("_grazing"):
+			cow_idle += 1
+	_cows_label.text = "%d cows  %d idle" % [cows.size(), cow_idle]
 
 func _refresh_panel() -> void:
 	var persons: Array[Node] = []
@@ -222,6 +230,7 @@ func _refresh_panel() -> void:
 		if cow != null and is_instance_valid(cow):
 			_cow_name.text = cow.name
 			_cow_food.text = "Food: %.0f / %.0f" % [cow.food, cow.max_food]
+			_cow_health.text = "Health: %d / %d" % [cow.health, cow.max_health]
 
 	if has_buildings:
 		var building: Building = buildings[0] as Building

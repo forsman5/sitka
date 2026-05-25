@@ -80,6 +80,17 @@ offset_right = -10.0
 offset_bottom = -50.0
 text = "Food: 50"
 
+[node name="CowsLabel" type="Label" parent="Root"]
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -200.0
+offset_top = -90.0
+offset_right = -10.0
+offset_bottom = -55.0
+text = "0 cows  0 idle"
+
 [node name="PeopleLabel" type="Label" parent="Root"]
 anchor_left = 1.0
 anchor_top = 1.0
@@ -161,6 +172,9 @@ theme_override_font_sizes/font_size = 16
 
 [node name="FoodLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/CowView"]
 modulate = Color(0.7, 0.85, 0.7, 1)
+
+[node name="HealthLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/CowView"]
+modulate = Color(0.85, 0.5, 0.5, 1)
 
 [node name="BuildingView" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer"]
 visible = false
