@@ -48,6 +48,9 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _btn_2x: Button = $Root/SpeedBar/Speed2xButton
 @onready var _btn_5x: Button = $Root/SpeedBar/Speed5xButton
 @onready var _island_bar: HBoxContainer = $Root/IslandBar
+@onready var _cow_view: VBoxContainer = $Root/SelectionPanel/VBoxContainer/CowView
+@onready var _cow_name: Label = $Root/SelectionPanel/VBoxContainer/CowView/CowName
+@onready var _cow_food: Label = $Root/SelectionPanel/VBoxContainer/CowView/FoodLabel
 
 var _last_selected_building: Building = null
 var _paused: bool = false
@@ -103,6 +106,9 @@ func _process(_delta: float) -> void:
 func _check_game_over() -> void:
 	if get_tree().get_nodes_in_group("capital").is_empty():
 		return
+	var island := IslandsManager.active_island
+	if island != null and island.get_node_or_null("PlacementManager") != null:
+		return
 	if get_tree().get_nodes_in_group("persons").is_empty() \
 			and GameState.player_gold < GameState.settler_cost:
 		_game_over_triggered = true
@@ -136,6 +142,7 @@ func _refresh_panel() -> void:
 	var buildings: Array[Node] = []
 	var resources: Array[Node] = []
 	var foundations: Array[Node] = []
+	var cows: Array[Node] = []
 	for p in get_tree().get_nodes_in_group("persons"):
 		if p.get("selected") == true:
 			persons.append(p)
@@ -151,6 +158,9 @@ func _refresh_panel() -> void:
 	for f in get_tree().get_nodes_in_group("foundations"):
 		if is_instance_valid(f) and f.get("selected") == true:
 			foundations.append(f)
+	for c in get_tree().get_nodes_in_group("cows"):
+		if is_instance_valid(c) and c.get("selected") == true:
+			cows.append(c)
 
 	var has_persons := not persons.is_empty()
 	var has_ships := not ships.is_empty()
@@ -158,7 +168,8 @@ func _refresh_panel() -> void:
 	var has_buildings := not buildings.is_empty()
 	var has_resources := not resources.is_empty()
 	var has_foundations := not foundations.is_empty()
-	_selection_panel.visible = has_units or has_buildings or has_resources or has_foundations
+	var has_cows := not cows.is_empty()
+	_selection_panel.visible = has_units or has_buildings or has_resources or has_foundations or has_cows
 
 	_header_row.visible = has_units
 	_separator.visible = has_units
@@ -166,6 +177,7 @@ func _refresh_panel() -> void:
 	_building_view.visible = has_buildings
 	_resource_view.visible = has_resources
 	_foundation_view.visible = has_foundations
+	_cow_view.visible = has_cows
 
 	if has_units:
 		for child in _rows.get_children():
@@ -200,6 +212,12 @@ func _refresh_panel() -> void:
 		if is_instance_valid(f):
 			_foundation_name.text = f.get("foundation_name") if f.get("foundation_name") != null else "Foundation"
 			_foundation_progress.text = "%d / %d" % [f.get("_progress"), f.get("build_required")]
+
+	if has_cows:
+		var cow: Cow = cows[0] as Cow
+		if cow != null and is_instance_valid(cow):
+			_cow_name.text = cow.name
+			_cow_food.text = "Food: %.0f / %.0f" % [cow.food, cow.max_food]
 
 	if has_buildings:
 		var building: Building = buildings[0] as Building
@@ -390,7 +408,7 @@ func _on_active_island_changed(island: Node) -> void:
 	var cam := get_tree().get_first_node_in_group("rts_camera") as Node3D
 	if cam != null and island != null:
 		cam.center_on(island.global_position)
-	for group in ["persons", "ships", "buildings", "resource_nodes", "foundations"]:
+	for group in ["persons", "ships", "buildings", "resource_nodes", "foundations", "cows"]:
 		for n in get_tree().get_nodes_in_group(group):
 			if n.has_method("set_selected"):
 				n.set_selected(false)

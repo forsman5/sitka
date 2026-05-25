@@ -65,10 +65,6 @@ func _restore_save(data: Dictionary) -> void:
 	if pm != null:
 		pm.queue_free()
 
-	# Remove the 3 initial hidden persons from the scene
-	for p in get_tree().get_nodes_in_group("persons"):
-		p.queue_free()
-
 	# Restore camera position
 	var cam_data: Dictionary = island_data.get("camera", {})
 	var cam = get_tree().get_first_node_in_group("rts_camera")
@@ -195,6 +191,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_resources()
 		_deselect_all_foundations()
 		_deselect_all_ships()
+		_deselect_all_cows()
 		if not shift:
 			_deselect_all()
 		person.set_selected(true)
@@ -206,7 +203,18 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_resources()
 		_deselect_all_foundations()
 		_deselect_all_ships()
+		_deselect_all_cows()
 		ship.set_selected(true)
+		return
+	var cow := _get_cow_at(screen_pos)
+	if cow != null:
+		_deselect_all()
+		_deselect_all_ships()
+		_deselect_all_buildings()
+		_deselect_all_resources()
+		_deselect_all_foundations()
+		_deselect_all_cows()
+		cow.set_selected(true)
 		return
 	var foundation := _get_foundation_at(screen_pos)
 	if foundation != null:
@@ -237,6 +245,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_buildings()
 		_deselect_all_resources()
 		_deselect_all_foundations()
+		_deselect_all_cows()
 
 func _finish_box_select(end_pos: Vector2) -> void:
 	var shift := Input.is_key_pressed(KEY_SHIFT)
@@ -244,6 +253,7 @@ func _finish_box_select(end_pos: Vector2) -> void:
 	_deselect_all_buildings()
 	_deselect_all_resources()
 	_deselect_all_foundations()
+	_deselect_all_cows()
 	if not shift:
 		_deselect_all()
 		_deselect_all_ships()
@@ -282,6 +292,10 @@ func _deselect_all_resources() -> void:
 func _deselect_all_foundations() -> void:
 	for f: Node3D in get_tree().get_nodes_in_group("foundations"):
 		f.set_selected(false)
+
+func _deselect_all_cows() -> void:
+	for c: Node3D in get_tree().get_nodes_in_group("cows"):
+		c.set_selected(false)
 
 func _any_selected() -> bool:
 	for p: Node3D in get_tree().get_nodes_in_group("persons"):
@@ -398,6 +412,24 @@ func _get_ship_at(screen_pos: Vector2) -> Node3D:
 	if collider is Area3D:
 		var parent: Node = (collider as Area3D).get_parent()
 		if parent.is_in_group("ships"):
+			return parent as Node3D
+	return null
+
+func _get_cow_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("cows"):
 			return parent as Node3D
 	return null
 

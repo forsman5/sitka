@@ -1,0 +1,35 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/cow.gd" id="1_cow"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1"]
+size = Vector3(0.8, 0.9, 1.4)
+
+[sub_resource type="StandardMaterial3D" id="CowMat_1"]
+albedo_color = Color(0.76, 0.60, 0.42, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape_1"]
+size = Vector3(0.8, 0.9, 1.4)
+
+[node name="Cow" type="CharacterBody3D"]
+script = ExtResource("1_cow")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.45, 0)
+mesh = SubResource("BoxMesh_1")
+surface_material_override/0 = SubResource("CowMat_1")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.45, 0)
+shape = SubResource("BoxShape_1")
+
+[node name="Area3D" type="Area3D" parent="."]
+position = Vector3(0, 0.45, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
+shape = SubResource("BoxShape_1")
+
+[node name="NavigationAgent3D" type="NavigationAgent3D" parent="."]
+avoidance_enabled = true
+radius = 0.5
+max_speed = 2.5

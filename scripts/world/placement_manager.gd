@@ -1,6 +1,8 @@
 extends Node
 
 const BuildingScene = preload("res://scenes/entities/building/capital.tscn")
+const PersonScene = preload("res://scenes/entities/person.tscn")
+const CowScene = preload("res://scenes/entities/cow.tscn")
 
 var _active: bool = true
 
@@ -26,8 +28,19 @@ func _place_capital(pos: Vector3) -> void:
 	nav_region.bake_finished.connect(func():
 		if terrain != null and is_instance_valid(terrain):
 			terrain.restore_visual()
-		for p in get_tree().get_nodes_in_group("persons"):
-			(p as Node3D).show()
+		var island := get_parent()
+		for i in 3:
+			var person: Node3D = PersonScene.instantiate()
+			person.name = "Person%d" % (i + 1)
+			island.add_child(person)
+			var angle := (i * TAU / 3.0) + randf_range(-0.3, 0.3)
+			person.global_position = pos + Vector3(cos(angle) * 4.0, 0.0, sin(angle) * 4.0)
+		for i in 2:
+			var cow: Node3D = CowScene.instantiate()
+			cow.name = "Cow%d" % (i + 1)
+			island.add_child(cow)
+			var angle := i * PI + randf_range(-0.5, 0.5)
+			cow.global_position = pos + Vector3(cos(angle) * 8.0, 0.0, sin(angle) * 8.0)
 		queue_free()
 	, CONNECT_ONE_SHOT)
 	nav_region.bake_navigation_mesh()
