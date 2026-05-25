@@ -373,8 +373,10 @@ func _rebuild_island_bar() -> void:
 		var btn := Button.new()
 		btn.text = "Island %d" % (i + 1)
 		btn.pressed.connect(IslandsManager.set_active_island.bind(island))
-		btn.add_theme_stylebox_override("normal",
-			_style_active if island == IslandsManager.active_island else _style_inactive)
+		var style := _style_active if island == IslandsManager.active_island else _style_inactive
+		btn.add_theme_stylebox_override("normal", style)
+		btn.add_theme_stylebox_override("hover", style)
+		btn.add_theme_stylebox_override("pressed", _style_active)
 		_island_bar.add_child(btn)
 		_island_btns.append(btn)
 	_island_bar.visible = IslandsManager.islands.size() > 1
@@ -382,8 +384,9 @@ func _rebuild_island_bar() -> void:
 func _on_active_island_changed(island: Node) -> void:
 	for i in _island_btns.size():
 		if is_instance_valid(_island_btns[i]) and i < IslandsManager.islands.size():
-			_island_btns[i].add_theme_stylebox_override("normal",
-				_style_active if IslandsManager.islands[i] == island else _style_inactive)
+			var style := _style_active if IslandsManager.islands[i] == island else _style_inactive
+			_island_btns[i].add_theme_stylebox_override("normal", style)
+			_island_btns[i].add_theme_stylebox_override("hover", style)
 	var cam := get_tree().get_first_node_in_group("rts_camera") as Node3D
 	if cam != null and island != null:
 		cam.center_on(island.global_position)
