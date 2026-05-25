@@ -178,6 +178,10 @@ text = "Spawn Settler (30g)"
 [node name="SpawnShipButton" type="Button" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 text = "Spawn Ship (50w)"
 
+[node name="CowBedsLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+visible = false
+modulate = Color(0.7, 0.85, 0.7, 1)
+
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
 [node name="IslandBar" type="HBoxContainer" parent="Root"]
@@ -243,7 +247,7 @@ visible = false
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 480.0
-offset_top = -190.0
+offset_top = -225.0
 offset_right = 660.0
 offset_bottom = -60.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
@@ -265,6 +269,9 @@ text = "House (40w)"
 
 [node name="BuildDockButton" type="Button" parent="Root/BuildMenu/VBox"]
 text = "Dock (60w)"
+
+[node name="BuildBarnButton" type="Button" parent="Root/BuildMenu/VBox"]
+text = "Barn (60w)"
 
 [node name="BuildButton" type="Button" parent="Root"]
 visible = false
@@ -299,6 +306,7 @@ offset_bottom = -60.0
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHutButton" to="." method="_on_build_hut_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildHouseButton" to="." method="_on_build_house_pressed"]
 [connection signal="pressed" from="Root/BuildMenu/VBox/BuildDockButton" to="." method="_on_build_dock_pressed"]
+[connection signal="pressed" from="Root/BuildMenu/VBox/BuildBarnButton" to="." method="_on_build_barn_pressed"]
 [connection signal="pressed" from="Root/SelectionBar/AllPersonsButton" to="." method="_on_all_persons_pressed"]
 [connection signal="pressed" from="Root/SelectionBar/AllShipsButton" to="." method="_on_all_ships_pressed"]
 [connection signal="pressed" from="Root/SelectionBar/NextPersonButton" to="." method="_on_next_person_pressed"]

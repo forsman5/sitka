@@ -6,6 +6,7 @@ const PersonScene = preload("res://scenes/entities/person.tscn")
 const ForestHutFoundationScene = preload("res://scenes/entities/building/forest_hut_foundation.tscn")
 const HouseFoundationScene = preload("res://scenes/entities/building/house_foundation.tscn")
 const DockFoundationScene = preload("res://scenes/entities/building/dock_foundation.tscn")
+const BarnFoundationScene = preload("res://scenes/entities/building/barn_foundation.tscn")
 const ShipScene = preload("res://scenes/entities/ship.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
@@ -37,7 +38,9 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _build_hut_btn: Button = $Root/BuildMenu/VBox/BuildHutButton
 @onready var _build_house_btn: Button = $Root/BuildMenu/VBox/BuildHouseButton
 @onready var _build_dock_btn: Button = $Root/BuildMenu/VBox/BuildDockButton
+@onready var _build_barn_btn: Button = $Root/BuildMenu/VBox/BuildBarnButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
+@onready var _cow_beds_label: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/CowBedsLabel
 @onready var _selection_bar: HBoxContainer = $Root/SelectionBar
 @onready var _btn_all_persons: Button = $Root/SelectionBar/AllPersonsButton
 @onready var _btn_all_ships: Button = $Root/SelectionBar/AllShipsButton
@@ -91,6 +94,7 @@ func _process(_delta: float) -> void:
 	_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
 	_build_house_btn.disabled = GameState.player_wood < GameState.house_cost
 	_build_dock_btn.disabled = GameState.player_wood < GameState.dock_cost
+	_build_barn_btn.disabled = GameState.player_wood < GameState.barn_cost
 	_refresh_panel()
 	_refresh_people()
 	var total_hours := GameState.time_of_day * 24.0
@@ -224,6 +228,15 @@ func _refresh_panel() -> void:
 		if building != null:
 			_building_name.text = building.building_name
 			_building_type.text = building.building_type
+		var is_cow_sleep := building != null and building.is_in_group("cow_sleep_point")
+		_cow_beds_label.visible = is_cow_sleep
+		if is_cow_sleep:
+			var capacity: int = building.get_cow_bed_count() if building.has_method("get_cow_bed_count") else 0
+			var occupied := 0
+			for c in get_tree().get_nodes_in_group("cows"):
+				if c.get("_assigned_sleep_point") == building:
+					occupied += 1
+			_cow_beds_label.text = "%d / %d cow beds" % [occupied, capacity]
 		_spawn_btn.visible = building != null and building.shows_spawn_button()
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 		_spawn_ship_btn.visible = building != null and building.shows_spawn_ship_button()
@@ -273,6 +286,14 @@ func _on_build_house_pressed() -> void:
 	var placement = get_tree().get_first_node_in_group("building_placement")
 	if placement:
 		placement.arm(HouseFoundationScene, GameState.house_cost)
+
+func _on_build_barn_pressed() -> void:
+	_build_menu.visible = false
+	if GameState.player_wood < GameState.barn_cost:
+		return
+	var placement = get_tree().get_first_node_in_group("building_placement")
+	if placement:
+		placement.arm(BarnFoundationScene, GameState.barn_cost)
 
 func _on_build_dock_pressed() -> void:
 	_build_menu.visible = false

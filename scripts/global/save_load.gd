@@ -7,12 +7,14 @@ const BUILDING_SCENES := {
 	"Forest Hut":   "res://scenes/entities/building/forest_hut.tscn",
 	"Dwelling":     "res://scenes/entities/building/house.tscn",
 	"Fishing Dock": "res://scenes/entities/building/dock.tscn",
+	"Barn":         "res://scenes/entities/building/barn.tscn",
 }
 
 const FOUNDATION_SCENES := {
 	"Forest Hut Foundation": "res://scenes/entities/building/forest_hut_foundation.tscn",
 	"House Foundation":      "res://scenes/entities/building/house_foundation.tscn",
 	"Dock Foundation":       "res://scenes/entities/building/dock_foundation.tscn",
+	"Barn Foundation":       "res://scenes/entities/building/barn_foundation.tscn",
 }
 
 const RESOURCE_SCENES := {
