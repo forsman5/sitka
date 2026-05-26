@@ -42,10 +42,12 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _build_barn_btn: Button = $Root/BuildMenu/VBox/BuildBarnButton
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
 @onready var _cow_beds_label: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/CowBedsLabel
+@onready var _barn_range_check: CheckButton = $Root/SelectionPanel/VBoxContainer/BuildingView/BarnRangeCheck
 @onready var _selection_bar: HBoxContainer = $Root/SelectionBar
 @onready var _btn_all_persons: Button = $Root/SelectionBar/AllPersonsButton
 @onready var _btn_all_ships: Button = $Root/SelectionBar/AllShipsButton
 @onready var _btn_next_person: Button = $Root/SelectionBar/NextPersonButton
+@onready var _btn_next_cow: Button = $Root/SelectionBar/NextCowButton
 @onready var _speed_bar: HBoxContainer = $Root/SpeedBar
 @onready var _btn_pause: Button = $Root/SpeedBar/PauseButton
 @onready var _btn_1x: Button = $Root/SpeedBar/Speed1xButton
@@ -60,6 +62,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 var _last_selected_building: Building = null
 var _paused: bool = false
 var _person_cycle_idx: int = 0
+var _cow_cycle_idx: int = 0
 var _game_over_triggered := false
 var _style_active: StyleBoxFlat
 var _style_inactive: StyleBoxFlat
@@ -79,6 +82,7 @@ func _ready() -> void:
 	_style_inactive.bg_color = Color(0.12, 0.12, 0.18, 0.9)
 	_style_inactive.set_corner_radius_all(3)
 	_update_speed_highlight()
+	_barn_range_check.toggled.connect(_on_barn_range_toggled)
 	IslandsManager.islands_changed.connect(_rebuild_island_bar)
 	IslandsManager.active_island_changed.connect(_on_active_island_changed)
 	_rebuild_island_bar()
@@ -93,6 +97,8 @@ func _process(_delta: float) -> void:
 	var _persons_empty := get_tree().get_nodes_in_group("persons").is_empty()
 	_btn_all_persons.disabled = _persons_empty
 	_btn_next_person.disabled = _persons_empty
+	_btn_next_cow.visible = GameState.show_next_cow_btn
+	_btn_next_cow.disabled = get_tree().get_nodes_in_group("cows").is_empty()
 	_build_hut_btn.disabled = GameState.player_wood < GameState.forest_hut_cost
 	_build_house_btn.disabled = GameState.player_wood < GameState.house_cost
 	_build_dock_btn.disabled = GameState.player_wood < GameState.dock_cost
@@ -239,6 +245,7 @@ func _refresh_panel() -> void:
 			_building_type.text = building.building_type
 		var is_cow_sleep := building != null and building.is_in_group("cow_sleep_point")
 		_cow_beds_label.visible = is_cow_sleep
+		_barn_range_check.visible = is_cow_sleep
 		if is_cow_sleep:
 			var capacity: int = building.get_cow_bed_count() if building.has_method("get_cow_bed_count") else 0
 			var occupied := 0
@@ -251,6 +258,10 @@ func _refresh_panel() -> void:
 		_spawn_ship_btn.visible = building != null and building.shows_spawn_ship_button()
 		_spawn_ship_btn.disabled = GameState.player_wood < GameState.ship_cost
 		if building != _last_selected_building:
+			if _last_selected_building != null and is_instance_valid(_last_selected_building) \
+					and _last_selected_building.is_in_group("cow_sleep_point"):
+				_last_selected_building.call("set_range_visible", false)
+			_barn_range_check.set_pressed_no_signal(false)
 			_last_selected_building = building
 			for child in _upgrades_container.get_children():
 				child.queue_free()
@@ -263,6 +274,15 @@ func _refresh_panel() -> void:
 					_upgrades_container.add_child(btn)
 		for btn in _upgrades_container.get_children():
 			(btn as Button).disabled = GameState.player_wood < (btn as Button).get_meta("upgrade_cost_wood", 0)
+	elif _last_selected_building != null:
+		if is_instance_valid(_last_selected_building) and _last_selected_building.is_in_group("cow_sleep_point"):
+			_last_selected_building.call("set_range_visible", false)
+		_barn_range_check.set_pressed_no_signal(false)
+		_last_selected_building = null
+
+func _on_barn_range_toggled(pressed: bool) -> void:
+	if _last_selected_building != null and is_instance_valid(_last_selected_building):
+		_last_selected_building.call("set_range_visible", pressed)
 
 func _apply_upgrade(building: Building, upgrade: Dictionary) -> void:
 	var wood_cost: int = upgrade.get("cost_wood", 0)
@@ -381,6 +401,26 @@ func _on_next_person_pressed() -> void:
 	var cam = get_tree().get_first_node_in_group("rts_camera")
 	if cam != null:
 		cam.center_on(person.global_position)
+
+func _on_next_cow_pressed() -> void:
+	var cows := get_tree().get_nodes_in_group("cows")
+	if cows.is_empty():
+		return
+	_cow_cycle_idx = _cow_cycle_idx % cows.size()
+	var cow: Node3D = cows[_cow_cycle_idx] as Node3D
+	for p in get_tree().get_nodes_in_group("persons"):
+		p.set_selected(false)
+	for s in get_tree().get_nodes_in_group("ships"):
+		s.set_selected(false)
+	for b in get_tree().get_nodes_in_group("buildings"):
+		b.set_selected(false)
+	for c in get_tree().get_nodes_in_group("cows"):
+		c.set_selected(false)
+	cow.set_selected(true)
+	_cow_cycle_idx = (_cow_cycle_idx + 1) % cows.size()
+	var cam = get_tree().get_first_node_in_group("rts_camera")
+	if cam != null:
+		cam.center_on(cow.global_position)
 
 func _on_pause_pressed() -> void:
 	_paused = true

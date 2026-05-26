@@ -9,7 +9,7 @@ const GRAZE_RATE := 12.0
 const SLEEP_TIME := 21.0 / 24.0
 const WAKE_TIME := 5.5 / 24.0
 const SLEEP_REACH := 3.5
-const BARN_RANGE := 50.0
+const BARN_RANGE := 20.0
 
 @export var move_speed: float = 2.5
 @export var max_food: float = 100.0
@@ -94,7 +94,7 @@ func _is_in_forest() -> bool:
 func _is_in_water() -> bool:
 	if _terrain == null:
 		return false
-	return _terrain.is_ocean_water(global_position.x, global_position.z)
+	return _terrain.is_water(global_position.x, global_position.z)
 
 static func _assign_cow_beds() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
@@ -174,12 +174,12 @@ func _pick_wander_target() -> Vector3:
 		var cz := clampf(global_position.z + r * sin(angle), -half + 5.0, half - 5.0)
 		if Vector2(cx, cz).distance_to(cfg.forest_center) < cfg.forest_radius:
 			continue
-		const COAST_MARGIN := 5.0
-		if _terrain.is_ocean_water(cx, cz) \
-				or _terrain.is_ocean_water(cx + COAST_MARGIN, cz) \
-				or _terrain.is_ocean_water(cx - COAST_MARGIN, cz) \
-				or _terrain.is_ocean_water(cx, cz + COAST_MARGIN) \
-				or _terrain.is_ocean_water(cx, cz - COAST_MARGIN):
+		const WATER_MARGIN := 5.0
+		if _terrain.is_water(cx, cz) \
+				or _terrain.is_water(cx + WATER_MARGIN, cz) \
+				or _terrain.is_water(cx - WATER_MARGIN, cz) \
+				or _terrain.is_water(cx, cz + WATER_MARGIN) \
+				or _terrain.is_water(cx, cz - WATER_MARGIN):
 			continue
 		return Vector3(cx, 0.0, cz)
 	return global_position.move_toward(Vector3.ZERO, 15.0)

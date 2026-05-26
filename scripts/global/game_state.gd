@@ -18,6 +18,7 @@ var pending_load: Dictionary = {}
 var current_save_name: String = ""
 var day_count: int = 1
 @export var show_day_counter: bool = false
+@export var show_next_cow_btn: bool = false
 
 var _economy_relay: IslandEconomy = null
 

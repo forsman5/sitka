@@ -179,6 +179,9 @@ func _build_ocean_map() -> void:
 				ocean_data[nidx] = 1
 				queue.append(nidx)
 
+func is_water(world_x: float, world_z: float) -> bool:
+	return get_height(world_x, world_z) < 0.0
+
 func is_ocean_water(world_x: float, world_z: float) -> bool:
 	var local_x := world_x - global_position.x
 	var local_z := world_z - global_position.z

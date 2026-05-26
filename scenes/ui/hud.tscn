@@ -30,9 +30,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -150.0
-offset_top = -250.0
+offset_top = -290.0
 offset_right = -10.0
-offset_bottom = -210.0
+offset_bottom = -250.0
 text = "Day 1"
 visible = false
 
@@ -42,9 +42,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -150.0
-offset_top = -210.0
+offset_top = -250.0
 offset_right = -10.0
-offset_bottom = -170.0
+offset_bottom = -210.0
 text = "06:00"
 
 [node name="WoodLabel" type="Label" parent="Root"]
@@ -53,9 +53,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -150.0
-offset_top = -170.0
+offset_top = -210.0
 offset_right = -10.0
-offset_bottom = -130.0
+offset_bottom = -170.0
 text = "Wood: 0"
 
 [node name="GoldLabel" type="Label" parent="Root"]
@@ -64,9 +64,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -150.0
-offset_top = -130.0
+offset_top = -170.0
 offset_right = -10.0
-offset_bottom = -90.0
+offset_bottom = -130.0
 text = "Gold: 0"
 
 [node name="FoodLabel" type="Label" parent="Root"]
@@ -75,9 +75,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -150.0
-offset_top = -90.0
+offset_top = -130.0
 offset_right = -10.0
-offset_bottom = -50.0
+offset_bottom = -90.0
 text = "Food: 50"
 
 [node name="CowsLabel" type="Label" parent="Root"]
@@ -196,6 +196,10 @@ text = "Spawn Ship (50w)"
 visible = false
 modulate = Color(0.7, 0.85, 0.7, 1)
 
+[node name="BarnRangeCheck" type="CheckButton" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+visible = false
+text = "Show Range"
+
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
 [node name="IslandBar" type="HBoxContainer" parent="Root"]
@@ -213,7 +217,7 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 10.0
 offset_top = -290.0
-offset_right = 370.0
+offset_right = 484.0
 offset_bottom = -252.0
 theme_override_constants/separation = 4
 
@@ -228,6 +232,11 @@ text = "All Ships"
 [node name="NextPersonButton" type="Button" parent="Root/SelectionBar"]
 custom_minimum_size = Vector2(110, 32)
 text = "Next Person"
+
+[node name="NextCowButton" type="Button" parent="Root/SelectionBar"]
+visible = false
+custom_minimum_size = Vector2(110, 32)
+text = "Next Cow"
 
 [node name="SpeedBar" type="HBoxContainer" parent="Root"]
 visible = false
@@ -324,6 +333,7 @@ offset_bottom = -60.0
 [connection signal="pressed" from="Root/SelectionBar/AllPersonsButton" to="." method="_on_all_persons_pressed"]
 [connection signal="pressed" from="Root/SelectionBar/AllShipsButton" to="." method="_on_all_ships_pressed"]
 [connection signal="pressed" from="Root/SelectionBar/NextPersonButton" to="." method="_on_next_person_pressed"]
+[connection signal="pressed" from="Root/SelectionBar/NextCowButton" to="." method="_on_next_cow_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/PauseButton" to="." method="_on_pause_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed1xButton" to="." method="_on_1x_pressed"]
 [connection signal="pressed" from="Root/SpeedBar/Speed2xButton" to="." method="_on_2x_pressed"]

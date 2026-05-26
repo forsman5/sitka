@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/entities/building/barn_building.gd" id="1_barn"]
 
@@ -10,6 +10,17 @@ albedo_color = Color(0.55, 0.27, 0.07, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape_1"]
 size = Vector3(6, 3, 4)
+
+[sub_resource type="TorusMesh" id="TorusMesh_range"]
+inner_radius = 19.6
+outer_radius = 20.0
+rings = 64
+ring_segments = 6
+
+[sub_resource type="StandardMaterial3D" id="Mat_range"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1.0, 0.88, 0.1, 0.6)
 
 [node name="Building" type="StaticBody3D"]
 script = ExtResource("1_barn")
@@ -29,6 +40,12 @@ light_color = Color(1.0, 0.8, 0.45, 1)
 light_energy = 1.5
 omni_range = 8.0
 shadow_enabled = false
+
+[node name="RangeIndicator" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.1, 0)
+visible = false
+mesh = SubResource("TorusMesh_range")
+surface_material_override/0 = SubResource("Mat_range")
 
 [node name="ClickArea" type="Area3D" parent="."]
 

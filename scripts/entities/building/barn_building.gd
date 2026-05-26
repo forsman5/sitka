@@ -2,6 +2,8 @@ extends "res://scripts/entities/building/building.gd"
 
 @export var cow_bed_count: int = 4
 
+@onready var _range_indicator: MeshInstance3D = $RangeIndicator
+
 func _ready() -> void:
 	super._ready()
 	building_name = "Barn"
@@ -11,3 +13,7 @@ func _ready() -> void:
 
 func get_cow_bed_count() -> int:
 	return cow_bed_count
+
+func set_range_visible(v: bool) -> void:
+	if is_instance_valid(_range_indicator):
+		_range_indicator.visible = v
