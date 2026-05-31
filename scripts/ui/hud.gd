@@ -8,6 +8,8 @@ const HouseFoundationScene = preload("res://scenes/entities/building/house_found
 const DockFoundationScene = preload("res://scenes/entities/building/dock_foundation.tscn")
 const BarnFoundationScene = preload("res://scenes/entities/building/barn_foundation.tscn")
 const ShipScene = preload("res://scenes/entities/ship.tscn")
+const TradeShipScene = preload("res://scenes/entities/trade_ship.tscn")
+const CowScene = preload("res://scenes/entities/cow.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _day_label: Label = $Root/DayLabel
@@ -32,6 +34,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _building_type: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BuildingType
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 @onready var _spawn_ship_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnShipButton
+@onready var _buy_cow_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuyCowButton
 @onready var _build_btn: Button = $Root/BuildButton
 @onready var _build_menu: Panel = $Root/BuildMenu
 @onready var _jobs_btn: Button = $Root/JobsButton
@@ -264,6 +267,9 @@ func _refresh_panel() -> void:
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 		_spawn_ship_btn.visible = building != null and building.shows_spawn_ship_button()
 		_spawn_ship_btn.disabled = GameState.player_wood < GameState.ship_cost
+		_buy_cow_btn.visible = building != null and building.shows_buy_cow_button()
+		_buy_cow_btn.disabled = GameState.player_gold < GameState.cow_cost \
+			or (building != null and building.get("delivery_in_progress") == true)
 		if building != _last_selected_building:
 			if _last_selected_building != null and is_instance_valid(_last_selected_building) \
 					and _last_selected_building.is_in_group("cow_sleep_point"):
@@ -353,6 +359,30 @@ func _on_spawn_ship_pressed() -> void:
 	var water_dir := building.global_transform.basis.z
 	ship.global_position = building.global_position + water_dir * 5.0
 	ship.global_position.y = 0.05
+
+func _on_buy_cow_pressed() -> void:
+	var building: Building = _last_selected_building
+	if building == null or not building.shows_buy_cow_button():
+		return
+	if GameState.player_gold < GameState.cow_cost:
+		return
+	if building.get("delivery_in_progress"):
+		return
+	var nearest_tr: Node3D = null
+	var nearest_dist := INF
+	for tr in get_tree().get_nodes_in_group("trade_routes"):
+		var d: float = building.global_position.distance_to((tr as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest_tr = tr as Node3D
+	if nearest_tr == null:
+		return
+	GameState.player_gold -= GameState.cow_cost
+	building.set("delivery_in_progress", true)
+	var ship := TradeShipScene.instantiate() as Node3D
+	IslandsManager.active_island.add_child(ship)
+	ship.global_position = Vector3(nearest_tr.global_position.x, 0.05, nearest_tr.global_position.z)
+	ship.call("setup", building, CowScene, nearest_tr.global_position)
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:
