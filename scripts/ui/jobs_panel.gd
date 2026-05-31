@@ -5,8 +5,9 @@ const ROWS := [
 	{"label": "Gather Food",  "type": "gather",  "arg": 2},
 	{"label": "Gather Gold",  "type": "gather",  "arg": 3},
 	{"label": "Gather Stone", "type": "gather",  "arg": 1},
-	{"label": "Build",        "type": "build",   "arg": -1},
-	{"label": "Moving",       "type": "move",    "arg": -1},
+	{"label": "Build",        "type": "build",     "arg": -1},
+	{"label": "Barn Hand",    "type": "barn_hand", "arg": -1},
+	{"label": "Moving",       "type": "move",      "arg": -1},
 	{"label": "Idle",         "type": "idle",    "arg": -1},
 ]
 
@@ -88,14 +89,18 @@ func _refresh(_a = null, _b = null) -> void:
 			_plus_btns[lbl].disabled = (idle == 0)
 		if _minus_btns.has(lbl):
 			_minus_btns[lbl].disabled = (count == 0)
+	if _plus_btns.has("Barn Hand"):
+		_plus_btns["Barn Hand"].disabled = _plus_btns["Barn Hand"].disabled \
+			or (jm != null and jm.get_barn_hand_count() >= 2)
 
 func _get_count(row: Dictionary, jm: Node) -> int:
 	if jm == null:
 		return 0
 	match row["type"]:
 		"gather":  return jm.get_gather_count(row["arg"])
-		"build":   return jm.get_build_count()
-		"deposit": return jm.get_deposit_count()
+		"build":     return jm.get_build_count()
+		"barn_hand": return jm.get_barn_hand_count()
+		"deposit":   return jm.get_deposit_count()
 		"move":    return jm.get_move_count()
 		"idle":    return jm.get_idle_count()
 	return 0
@@ -105,15 +110,17 @@ func _on_plus(row: Dictionary) -> void:
 	if jm == null:
 		return
 	match row["type"]:
-		"gather":  jm.increment_gather(row["arg"])
-		"build":   jm.increment_build()
-		"deposit": jm.increment_deposit()
+		"gather":    jm.increment_gather(row["arg"])
+		"build":     jm.increment_build()
+		"barn_hand": jm.increment_barn_hand()
+		"deposit":   jm.increment_deposit()
 
 func _on_minus(row: Dictionary) -> void:
 	var jm: Node = IslandsManager.get_jobs_manager()
 	if jm == null:
 		return
 	match row["type"]:
-		"gather":  jm.decrement_gather(row["arg"])
-		"build":   jm.decrement_build()
-		"deposit": jm.decrement_deposit()
+		"gather":    jm.decrement_gather(row["arg"])
+		"build":     jm.decrement_build()
+		"barn_hand": jm.decrement_barn_hand()
+		"deposit":   jm.decrement_deposit()

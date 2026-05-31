@@ -61,6 +61,10 @@ func assign_deposit(persons: Array) -> void:
 	for p: Node3D in persons:
 		assign_job(p, Job.make_deposit())
 
+func assign_barn_hand_to(persons: Array, barn: Node3D) -> void:
+	for p: Node3D in persons:
+		assign_job(p, Job.make_barn_hand(barn))
+
 func assign_idle(persons: Array) -> void:
 	for p: Node3D in persons:
 		var old := get_job(p)
@@ -119,6 +123,28 @@ func decrement_deposit() -> bool:
 			assign_idle([person])
 			return true
 	return false
+
+func increment_barn_hand() -> bool:
+	var idle := get_idle_persons()
+	if idle.is_empty():
+		return false
+	if get_barn_hand_count() >= 2:
+		return false
+	var barn := _find_nearest_barn(idle[0])
+	if barn == null:
+		return false
+	assign_job(idle[0], Job.make_barn_hand(barn))
+	return true
+
+func decrement_barn_hand() -> bool:
+	for person in _assignments.keys():
+		if (_assignments[person] as Job).type == Job.Type.BARN_HAND:
+			assign_idle([person])
+			return true
+	return false
+
+func get_barn_hand_count() -> int:
+	return get_persons_with_type(Job.Type.BARN_HAND).size()
 
 # --- Queries ---
 
@@ -192,6 +218,9 @@ func _apply_to_person(person: Node3D, job: Job) -> void:
 				person.set_build_objective(job.target_node)
 		Job.Type.DEPOSIT:
 			person.set_deposit_objective()
+		Job.Type.BARN_HAND:
+			if job.target_node != null and is_instance_valid(job.target_node):
+				person.set_barn_hand_objective(job.target_node)
 
 func _find_nearest_resource(from: Node3D, rtype: int) -> Node3D:
 	var nearest: Node3D = null
@@ -205,6 +234,18 @@ func _find_nearest_resource(from: Node3D, rtype: int) -> Node3D:
 		if d < nearest_dist:
 			nearest_dist = d
 			nearest = n as Node3D
+	return nearest
+
+func _find_nearest_barn(from: Node3D) -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for b in get_tree().get_nodes_in_group("cow_sleep_point"):
+		if not is_instance_valid(b):
+			continue
+		var d: float = from.global_position.distance_to((b as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = b as Node3D
 	return nearest
 
 func _find_nearest_foundation(from: Node3D) -> Node3D:

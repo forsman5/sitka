@@ -43,6 +43,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _upgrades_container: VBoxContainer = $Root/SelectionPanel/VBoxContainer/BuildingView/UpgradesContainer
 @onready var _cow_beds_label: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/CowBedsLabel
 @onready var _barn_range_check: CheckButton = $Root/SelectionPanel/VBoxContainer/BuildingView/BarnRangeCheck
+@onready var _barn_hands_label: Label = $Root/SelectionPanel/VBoxContainer/BuildingView/BarnHandsLabel
 @onready var _selection_bar: HBoxContainer = $Root/SelectionBar
 @onready var _btn_all_persons: Button = $Root/SelectionBar/AllPersonsButton
 @onready var _btn_all_ships: Button = $Root/SelectionBar/AllShipsButton
@@ -246,6 +247,7 @@ func _refresh_panel() -> void:
 		var is_cow_sleep := building != null and building.is_in_group("cow_sleep_point")
 		_cow_beds_label.visible = is_cow_sleep
 		_barn_range_check.visible = is_cow_sleep
+		_barn_hands_label.visible = is_cow_sleep
 		if is_cow_sleep:
 			var capacity: int = building.get_cow_bed_count() if building.has_method("get_cow_bed_count") else 0
 			var occupied := 0
@@ -253,6 +255,11 @@ func _refresh_panel() -> void:
 				if c.get("_assigned_sleep_point") == building:
 					occupied += 1
 			_cow_beds_label.text = "%d / %d cow beds" % [occupied, capacity]
+			var hand_names: Array[String] = []
+			for p in get_tree().get_nodes_in_group("persons"):
+				if p.get("_barn_hand_target") == building:
+					hand_names.append(p.name)
+			_barn_hands_label.text = "Barn hands: %s" % (", ".join(hand_names) if not hand_names.is_empty() else "(none)")
 		_spawn_btn.visible = building != null and building.shows_spawn_button()
 		_spawn_btn.disabled = GameState.player_gold < GameState.settler_cost
 		_spawn_ship_btn.visible = building != null and building.shows_spawn_ship_button()

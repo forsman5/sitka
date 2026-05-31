@@ -73,6 +73,11 @@ func take_damage(amount: int) -> void:
 	if health <= 0:
 		queue_free()
 
+func assign_barn(barn: Node3D) -> void:
+	_assigned_sleep_point = barn
+	_nav_agent.target_desired_distance = SLEEP_REACH
+	_nav_agent.set_target_position(barn.global_position)
+
 func set_selected(v: bool) -> void:
 	selected = v
 	_mesh.set_surface_override_material(0, _mat_selected if v else _mat_normal)
@@ -151,7 +156,30 @@ func _do_sleep() -> void:
 		sheltered = true
 	else:
 		while is_inside_tree() and _is_night_time():
+			if _assigned_sleep_point != null and is_instance_valid(_assigned_sleep_point):
+				break
 			await get_tree().process_frame
+		if _assigned_sleep_point != null and is_instance_valid(_assigned_sleep_point):
+			if _nav_agent.target_position != _assigned_sleep_point.global_position:
+				_nav_agent.target_desired_distance = SLEEP_REACH
+				_nav_agent.set_target_position(_assigned_sleep_point.global_position)
+			await get_tree().process_frame
+			var reached := false
+			while is_inside_tree() and _is_night_time() and is_instance_valid(_assigned_sleep_point):
+				var dist := global_position.distance_to(_assigned_sleep_point.global_position)
+				if dist <= SLEEP_REACH:
+					reached = true
+					break
+				if _nav_agent.is_navigation_finished() and dist <= SLEEP_REACH * 2.0:
+					reached = true
+					break
+				await get_tree().process_frame
+			if reached:
+				visible = false
+				while is_inside_tree() and _is_night_time():
+					await get_tree().process_frame
+				visible = true
+				sheltered = true
 	if not sheltered:
 		take_damage(1)
 	if is_inside_tree() and food < 20.0:

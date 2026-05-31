@@ -337,7 +337,10 @@ func _handle_right_click(screen_pos: Vector2) -> void:
 		return
 	var building := _get_building_at(screen_pos)
 	if building != null:
-		jobs_manager.assign_deposit(selected)
+		if building.is_in_group("cow_sleep_point"):
+			jobs_manager.assign_barn_hand_to(selected, building)
+		else:
+			jobs_manager.assign_deposit(selected)
 		return
 	var pos := _raycast_y0(screen_pos)
 	if pos != Vector3.INF:

@@ -200,6 +200,11 @@ modulate = Color(0.7, 0.85, 0.7, 1)
 visible = false
 text = "Show Range"
 
+[node name="BarnHandsLabel" type="Label" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
+visible = false
+modulate = Color(0.75, 0.88, 1.0, 1)
+theme_override_font_sizes/font_size = 11
+
 [node name="UpgradesContainer" type="VBoxContainer" parent="Root/SelectionPanel/VBoxContainer/BuildingView"]
 
 [node name="IslandBar" type="HBoxContainer" parent="Root"]

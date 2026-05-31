@@ -27,6 +27,7 @@ var _camping: bool = false
 var _assigned_sleep_point: Node3D = null
 var _has_eaten_tonight: bool = false
 var _idle_requested: bool = false
+var _barn_hand_target: Node3D = null
 var _jobs_manager: Node = null
 
 static var _night_assigned: bool = false
@@ -146,6 +147,16 @@ func set_idle() -> void:
 	_move_target = Vector3.INF
 	_deposit_queued = false
 	_last_resource_type = -1
+	_barn_hand_target = null
+
+func set_barn_hand_objective(barn: Node3D) -> void:
+	_idle_requested = false
+	_barn_hand_target = barn
+	_objective_node = null
+	_build_target = null
+	_move_target = Vector3.INF
+	_deposit_queued = false
+	_last_resource_type = -1
 
 func set_gather_retarget(rtype: int) -> void:
 	_idle_requested = false
@@ -189,6 +200,12 @@ func _run_task_loop() -> void:
 	while is_inside_tree():
 		if _move_target != Vector3.INF:
 			await _do_move(_move_target)
+		elif _is_night_time() and _barn_hand_target != null and is_instance_valid(_barn_hand_target):
+			if not _has_eaten_tonight:
+				_do_eat()
+				_has_eaten_tonight = true
+			await _do_barn_hand_night(_barn_hand_target)
+			_has_eaten_tonight = false
 		elif _is_night_time():
 			_do_eat()
 			await _do_sleep()
@@ -203,6 +220,8 @@ func _run_task_loop() -> void:
 		elif _last_resource_type >= 0 and (_objective_node == null or not is_instance_valid(_objective_node)):
 			_objective_node = _find_nearest_of_type(_last_resource_type as ResourceNode.Type)
 			await get_tree().process_frame
+		elif _barn_hand_target != null and is_instance_valid(_barn_hand_target):
+			await _do_barn_hand_day(_barn_hand_target)
 		else:
 			await get_tree().process_frame
 
@@ -394,6 +413,74 @@ func _find_nearest_foundation_excluding(exclude: Node3D) -> Node3D:
 		if d < nearest_dist:
 			nearest_dist = d
 			nearest = n as Node3D
+	return nearest
+
+func _do_barn_hand_day(barn: Node3D) -> void:
+	var angle := randf() * TAU
+	var r := randf_range(3.0, 10.0)
+	var target := barn.global_position + Vector3(cos(angle) * r, 0.0, sin(angle) * r)
+	_nav_agent.target_desired_distance = 1.0
+	move_to(target)
+	while is_inside_tree() and not _is_night_time() and _barn_hand_target == barn:
+		if _move_target != Vector3.INF:
+			return
+		if _idle_requested:
+			_idle_requested = false
+			return
+		if _nav_agent.is_navigation_finished():
+			break
+		await get_tree().process_frame
+	if is_inside_tree() and not _is_night_time() and _barn_hand_target == barn:
+		await get_tree().create_timer(randf_range(2.0, 5.0) / GameState.game_speed).timeout
+
+func _do_barn_hand_night(barn: Node3D) -> void:
+	while is_inside_tree() and _is_night_time():
+		if Cow._night_assigned:
+			break
+		await get_tree().process_frame
+	if not is_inside_tree() or not _is_night_time():
+		return
+	while is_inside_tree() and _is_night_time() and is_instance_valid(barn):
+		var beds_used := 0
+		for c in get_tree().get_nodes_in_group("cows"):
+			if is_instance_valid(c) and c.get("_assigned_sleep_point") == barn:
+				beds_used += 1
+		if beds_used >= barn.get_cow_bed_count():
+			break
+		var cow := _find_nearest_unassigned_cow()
+		if cow == null:
+			break
+		_nav_agent.target_desired_distance = 3.0
+		move_to(cow.global_position)
+		await _wait_until_near(cow, 3.0)
+		if not is_inside_tree() or not _is_night_time() or not is_instance_valid(barn):
+			break
+		if is_instance_valid(cow) and cow.get("_assigned_sleep_point") == null:
+			cow.call("assign_barn", barn)
+	if is_inside_tree() and is_instance_valid(barn):
+		_nav_agent.target_desired_distance = DEPOSIT_REACH
+		move_to(barn.global_position)
+		await _wait_until_near(barn, DEPOSIT_REACH)
+	if is_inside_tree() and _is_night_time():
+		visible = false
+		while is_inside_tree() and _is_night_time():
+			await get_tree().process_frame
+		visible = true
+	if _has_eaten_tonight:
+		health = mini(health + 1, max_health)
+
+func _find_nearest_unassigned_cow() -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := INF
+	for c in get_tree().get_nodes_in_group("cows"):
+		if not is_instance_valid(c):
+			continue
+		if c.get("_assigned_sleep_point") != null:
+			continue
+		var d := global_position.distance_to((c as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = c as Node3D
 	return nearest
 
 func _wait_until_near(node: Node3D, reach: float = REACH) -> void:

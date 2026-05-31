@@ -42,7 +42,7 @@ omni_range = 8.0
 shadow_enabled = false
 
 [node name="RangeIndicator" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.1, 0)
+position = Vector3(0, 1.5, 0)
 visible = false
 mesh = SubResource("TorusMesh_range")
 surface_material_override/0 = SubResource("Mat_range")

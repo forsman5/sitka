@@ -3,7 +3,7 @@ extends RefCounted
 
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
-enum Type { IDLE, MOVE, GATHER, BUILD, DEPOSIT }
+enum Type { IDLE, MOVE, GATHER, BUILD, DEPOSIT, BARN_HAND }
 
 var type: Type = Type.IDLE
 var target_node: Node3D = null
@@ -46,6 +46,12 @@ static func make_deposit() -> Job:
 	j.type = Type.DEPOSIT
 	return j
 
+static func make_barn_hand(barn: Node3D) -> Job:
+	var j := Job.new()
+	j.type = Type.BARN_HAND
+	j.target_node = barn
+	return j
+
 func get_label() -> String:
 	match type:
 		Type.MOVE:    return "Moving"
@@ -56,6 +62,7 @@ func get_label() -> String:
 				ResourceNode.Type.FOOD:  return "Gathering Food"
 				ResourceNode.Type.GOLD:  return "Gathering Gold"
 			return "Gathering"
-		Type.BUILD:   return "Building"
-		Type.DEPOSIT: return "Depositing"
+		Type.BUILD:     return "Building"
+		Type.DEPOSIT:   return "Depositing"
+		Type.BARN_HAND: return "Barn Hand"
 	return "Idle"
