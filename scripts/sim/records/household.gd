@@ -21,7 +21,7 @@ var wealth: float
 var food_stress: float = 0.0
 
 ## Wants to leave for a settlement with better food security, but there is
-## nowhere to go: Milestone 2's transport/shipments don't exist yet, and
+## nowhere to go: Milestone 1's transport/shipments don't exist yet, and
 ## person-movement between settlements needs that same infrastructure. So
 ## this is expressed desire only -- it never actually removes the household.
 ## See docs/river-valley-vertical-slice.md Milestone 0.76.

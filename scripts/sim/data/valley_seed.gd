@@ -159,7 +159,7 @@ static func _build_transport_edges() -> Dictionary[int, TransportEdge]:
 	# meets the main river at Aldford; Oakmere has no direct navigable-river
 	# access of its own; an existing downstream route already lets Ironbank
 	# and Staithe trade without passing through Aldford. Unused by the tick
-	# loop in Milestone 0/0.5 -- static data only, for Milestone 2's shipments.
+	# loop in Milestone 0/0.5 -- static data only, for Milestone 1's shipments.
 	#
 	# Each edge is one shared physical connection (settlement_a <-> b); roads
 	# and tracks are symmetric, river barge edges are faster downstream

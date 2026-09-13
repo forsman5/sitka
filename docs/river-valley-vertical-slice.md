@@ -446,17 +446,17 @@ This is the minimum closed-loop survival model, not the full Milestone 4 househo
 
 **Accept when:** multi-year headless tests deterministically distinguish equilibrium, contraction, recovery, and collapse; no settlement persists indefinitely without food; viable farms neither collapse nor stockpile without bound; population changes feed back into both labor and consumption; game over is reproducible and explained; and the dashboard exposes the entire causal chain.
 
-### Milestone 1: Static readable valley
-
-Render the five settlements, river, tributary, crossings, roads, terrain/resource regions, and two camera lenses. Expose seeded settlement summaries.
-
-**Accept when:** a player can identify each settlement's likely economic role without reading this document.
-
-### Milestone 2: Goods and routes
+### Milestone 1: Goods and routes
 
 Implement inventories, workplaces, shipments, route costs/capacities, representative carts/barges/herds, and basic market prices.
 
 **Accept when:** blocking one edge or reducing its capacity produces a visible, explainable shortage elsewhere.
+
+### Milestone 2: Static readable valley
+
+Render the five settlements, river, tributary, crossings, roads, terrain/resource regions, and two camera lenses. Expose seeded settlement summaries.
+
+**Accept when:** a player can identify each settlement's likely economic role without reading this document.
 
 ### Milestone 3: Player infrastructure
 
