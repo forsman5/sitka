@@ -11,8 +11,9 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 ##   - no commodity inventory goes negative or past a sanity ceiling;
 ##   - two same-seed runs produce identical settlement summaries AND
 ##     identical daily histories (determinism covers the new accounting too);
-##   - every day's balance equation reconciles (opening + produced -
-##     household - industrial = closing) within floating-point tolerance;
+##   - every day's balance equation reconciles (opening + produced + trade_in
+##     - household - industrial - trade_out = closing) within floating-point
+##     tolerance;
 ##   - Ironbank's bloomery and Staithe's smithy report the correct limiting
 ##     input once their starting stockpiles are depleted (checked mid-year,
 ##     before population collapse -- see LIMITING_INPUT_CHECK_DAY);
@@ -53,9 +54,9 @@ func _init() -> void:
 	_print_summary(result_a["summaries"])
 
 	if _ok:
-		print("\nMilestone 0/0.75 acceptance: PASS")
+		print("\nMilestone 0/0.75/1 acceptance: PASS")
 	else:
-		print("\nMilestone 0/0.75 acceptance: FAIL")
+		print("\nMilestone 0/0.75/1 acceptance: FAIL")
 	quit(0 if _ok else 1)
 
 func _run_year(seed: int) -> Dictionary:
@@ -93,8 +94,9 @@ func _check_invariants(sim: Simulation, on_day: int) -> void:
 				push_error("Stock exceeded sanity ceiling: %s %s = %f on day %d" % [s["name"], name, v, on_day])
 				_ok = false
 
-## opening + produced - household_consumption - industrial_consumption ==
-## closing, per commodity, for every settlement, every day.
+## opening + produced + trade_in - household_consumption -
+## industrial_consumption - trade_out == closing, per commodity, per
+## settlement, every day.
 func _check_balance_reconciliation(sim: Simulation, on_day: int) -> void:
 	for settlement_id in sim.get_settlement_ids():
 		var history := sim.get_settlement_history(settlement_id, 1)
@@ -106,10 +108,12 @@ func _check_balance_reconciliation(sim: Simulation, on_day: int) -> void:
 		var produced: Dictionary = record["produced"]
 		var household_consumption: Dictionary = record["household_consumption"]
 		var industrial_consumption: Dictionary = record["industrial_consumption"]
+		var trade_in: Dictionary = record["trade_in"]
+		var trade_out: Dictionary = record["trade_out"]
 		for c in Commodity.ALL:
 			var name := Commodity.name_of(c)
-			var expected: float = opening.get(name, 0.0) + produced.get(name, 0.0) \
-				- household_consumption.get(name, 0.0) - industrial_consumption.get(name, 0.0)
+			var expected: float = opening.get(name, 0.0) + produced.get(name, 0.0) + trade_in.get(name, 0.0) \
+				- household_consumption.get(name, 0.0) - industrial_consumption.get(name, 0.0) - trade_out.get(name, 0.0)
 			var actual: float = closing.get(name, 0.0)
 			if abs(expected - actual) > BALANCE_TOLERANCE:
 				push_error("Balance mismatch: settlement %d %s expected=%f actual=%f on day %d" % [settlement_id, name, expected, actual, on_day])

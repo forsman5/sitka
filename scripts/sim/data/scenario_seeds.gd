@@ -92,3 +92,69 @@ static func build_no_food_settlement(_rng: RandomNumberGenerator) -> Dictionary:
 ## emigration/starvation consecutive-day thresholds -- and then recover.
 static func build_recovery_boundary(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS, 200.0, VIABLE_FARM_TARGET_LABOR)
+
+# ---------------------------------------------------------------------------
+# Milestone 1: a two-settlement trade pair -- one settlement with a genuine
+# grain surplus, one with none, connected by a single edge. Run with the
+# edge at authored capacity vs. capacity forced to ~0 to prove the spec's
+# Milestone 1 acceptance bar directly: "blocking one edge or reducing its
+# capacity produces a visible, explainable shortage elsewhere."
+# ---------------------------------------------------------------------------
+
+const FARMLAND_ID := 1
+const BARELAND_ID := 2
+const TRADE_EDGE_ID := 1
+
+## Farm sized well above its own population's demand (unlike the viable-farm
+## scenario's tuned-to-equilibrium 55) so it reliably has surplus to export:
+## avg output 60 * 0.875 ~= 52.5/day vs. its own demand of 60 * 0.4 = 24/day.
+const FARMLAND_TARGET_LABOR := 60.0
+const FARMLAND_HOUSEHOLDS := 20 # -> population 60, workers 40
+const BARELAND_HOUSEHOLDS := 15 # -> population 45, workers 30
+
+static func _build_trade_pair(edge_capacity: float) -> Dictionary:
+	var farmland := Settlement.new(FARMLAND_ID, "Farmland")
+	farmland.add_stock(Commodity.Type.GRAIN, 1000.0)
+	var bareland := Settlement.new(BARELAND_ID, "Bareland")
+	bareland.is_player_holding = true
+	bareland.add_stock(Commodity.Type.GRAIN, 300.0)
+
+	var settlements: Dictionary[int, Settlement] = {FARMLAND_ID: farmland, BARELAND_ID: bareland}
+
+	var households: Dictionary[int, Household] = {}
+	var next_id := 1
+	for i in FARMLAND_HOUSEHOLDS:
+		var household := Household.new(next_id, FARMLAND_ID, WORKERS_PER_HOUSEHOLD, DEPENDENTS_PER_HOUSEHOLD)
+		households[next_id] = household
+		farmland.household_ids.append(next_id)
+		next_id += 1
+	for i in BARELAND_HOUSEHOLDS:
+		var household := Household.new(next_id, BARELAND_ID, WORKERS_PER_HOUSEHOLD, DEPENDENTS_PER_HOUSEHOLD)
+		households[next_id] = household
+		bareland.household_ids.append(next_id)
+		next_id += 1
+
+	var workplaces: Dictionary[int, Workplace] = {1: Workplace.new(1, FARMLAND_ID, _farm_recipe(), FARMLAND_TARGET_LABOR)}
+	farmland.workplace_ids.append(1)
+
+	var edges: Dictionary[int, TransportEdge] = {
+		TRADE_EDGE_ID: TransportEdge.new(TRADE_EDGE_ID, FARMLAND_ID, BARELAND_ID, TransportEdge.Mode.CART, edge_capacity, 1.0, 1.0, 0.0, 0.05),
+	}
+
+	return {
+		"settlements": settlements,
+		"households": households,
+		"workplaces": workplaces,
+		"transport_edges": edges,
+	}
+
+## Edge at a generous authored capacity -- Bareland should receive regular
+## shipments and avoid the food-security decline it would suffer alone.
+static func build_trade_pair_connected(_rng: RandomNumberGenerator) -> Dictionary:
+	return _build_trade_pair(30.0)
+
+## Same two settlements, but the edge is effectively closed. Bareland should
+## suffer the same kind of decline as the isolated no-food-settlement
+## scenario, since nothing can reach it.
+static func build_trade_pair_blocked(_rng: RandomNumberGenerator) -> Dictionary:
+	return _build_trade_pair(0.0)

@@ -1,12 +1,12 @@
 extends Control
 
-## Milestone 0.75/0.76: a live, speed-controllable read-out of the
+## Milestone 0.75/0.76/1: a live, speed-controllable read-out of the
 ## simulation. This is a view only -- it holds one Simulation instance,
 ## advances it by calling advance_ticks(), and re-renders from Simulation's
 ## read-only query methods (get_settlement_ids/get_clock_summary/
-## get_settlement_summary/get_workplace_reports/get_game_over_info). It
-## never reaches into Simulation's internal Dictionaries directly. No game
-## logic lives here.
+## get_settlement_summary/get_workplace_reports/get_settlement_prices/
+## get_active_shipments/get_game_over_info). It never reaches into
+## Simulation's internal Dictionaries directly. No game logic lives here.
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -21,6 +21,7 @@ var _game_over_shown := false
 
 var _time_label: Label
 var _game_over_label: Label
+var _shipments_box: VBoxContainer
 # settlement_id -> {"header", "status", "population", "workers", "stress", "grid": {commodity_name: {"stock","today","rolling"}}, "workplaces_box"}
 var _settlement_rows: Dictionary = {}
 
@@ -92,6 +93,19 @@ func _build_ui() -> void:
 	for settlement_id in _simulation.get_settlement_ids():
 		_settlement_rows[settlement_id] = _build_settlement_panel(settlement_list, settlement_id)
 
+	var shipments_header := Label.new()
+	shipments_header.text = "Active Shipments"
+	shipments_header.add_theme_font_size_override("font_size", 16)
+	vbox.add_child(shipments_header)
+
+	var shipments_scroll := ScrollContainer.new()
+	shipments_scroll.custom_minimum_size = Vector2(0, 90)
+	vbox.add_child(shipments_scroll)
+
+	_shipments_box = VBoxContainer.new()
+	_shipments_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shipments_scroll.add_child(_shipments_box)
+
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
@@ -114,15 +128,16 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	inner.add_child(stats_label)
 
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 4
 	inner.add_child(grid)
-	for col_label in ["Commodity", "Stock", "Unmet (today)"]:
+	for col_label in ["Commodity", "Stock", "Price", "Unmet (today)"]:
 		var col_header := Label.new()
 		col_header.text = col_label
 		col_header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(col_header)
 
 	var stock_labels := {}
+	var price_labels := {}
 	var today_labels := {}
 	for c in Commodity.ALL:
 		var name_label := Label.new()
@@ -134,6 +149,12 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 		stock_label.custom_minimum_size = Vector2(90, 0)
 		grid.add_child(stock_label)
 		stock_labels[Commodity.name_of(c)] = stock_label
+
+		var price_label := Label.new()
+		price_label.custom_minimum_size = Vector2(70, 0)
+		price_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
+		grid.add_child(price_label)
+		price_labels[Commodity.name_of(c)] = price_label
 
 		var today_label := Label.new()
 		today_label.custom_minimum_size = Vector2(100, 0)
@@ -148,6 +169,7 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 		"header": header,
 		"stats": stats_label,
 		"stock": stock_labels,
+		"price": price_labels,
 		"today": today_labels,
 		"workplaces_box": workplaces_box,
 		"workplace_labels": {},
@@ -177,15 +199,20 @@ func _refresh() -> void:
 			summary["grain_fulfillment_today"] * 100.0, summary["grain_fulfillment_rolling_30d"] * 100.0]
 
 		var stock_labels: Dictionary = row["stock"]
+		var price_labels: Dictionary = row["price"]
 		var today_labels: Dictionary = row["today"]
 		var unmet_today: Dictionary = summary["unmet_household_demand_today"]
+		var prices: Dictionary = _simulation.get_settlement_prices(settlement_id)
 		for commodity_name in summary["inventory"].keys():
 			var stock: float = summary["inventory"][commodity_name]
 			var today: float = unmet_today.get(commodity_name, 0.0)
 			(stock_labels[commodity_name] as Label).text = "%.1f" % stock
+			(price_labels[commodity_name] as Label).text = "%.2f" % (prices[commodity_name] as float)
 			(today_labels[commodity_name] as Label).text = ("%.1f" % today) if today > 0.01 else ""
 
 		_refresh_workplace_rows(row, settlement_id)
+
+	_refresh_shipments()
 
 func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 	var workplaces_box: VBoxContainer = row["workplaces_box"]
@@ -217,3 +244,24 @@ func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 		else:
 			label.text = "  %s: %.1f / %.1f units" % [report["recipe_id"], actual, planned]
 			label.add_theme_color_override("font_color", Color(0.7, 0.85, 0.7))
+
+func _refresh_shipments() -> void:
+	for child in _shipments_box.get_children():
+		child.queue_free()
+
+	var shipments := _simulation.get_active_shipments()
+	if shipments.is_empty():
+		var label := Label.new()
+		label.text = "(none)"
+		label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+		_shipments_box.add_child(label)
+		return
+
+	for shipment in shipments:
+		var label := Label.new()
+		var days_remaining: int = max(0, int(shipment["arrival_day"]) - _simulation.day)
+		label.text = "  %.1f %s: %s -> %s (arrives in %d day%s)" % [
+			shipment["quantity"], Commodity.name_of(shipment["commodity"]),
+			shipment["origin_name"], shipment["destination_name"],
+			days_remaining, "" if days_remaining == 1 else "s"]
+		_shipments_box.add_child(label)

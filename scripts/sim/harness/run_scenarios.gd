@@ -3,9 +3,10 @@ extends SceneTree
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const ScenarioSeeds = preload("res://scripts/sim/data/scenario_seeds.gd")
 
-## Milestone 0.76 acceptance check: four authored isolated-settlement
+## Milestone 0.76/1 acceptance check: four authored isolated-settlement
 ## scenarios that should deterministically diverge into equilibrium,
-## contraction, collapse, or recovery. Run with:
+## contraction, collapse, or recovery, plus a two-settlement trade scenario
+## for Milestone 1. Run with:
 ##   godot --headless --script res://scripts/sim/harness/run_scenarios.gd
 ##
 ## Assertions are ranges/trends, not exact populations (the settlements are
@@ -24,11 +25,12 @@ func _init() -> void:
 	_check_overpopulated_farm()
 	_check_no_food_settlement()
 	_check_recovery_boundary()
+	_check_trade_pair()
 
 	if _ok:
-		print("\nMilestone 0.76 acceptance: PASS")
+		print("\nMilestone 0.76/1 acceptance: PASS")
 	else:
-		print("\nMilestone 0.76 acceptance: FAIL")
+		print("\nMilestone 0.76/1 acceptance: FAIL")
 	quit(0 if _ok else 1)
 
 func _new_sim(builder_method: String) -> Simulation:
@@ -114,3 +116,26 @@ func _check_recovery_boundary() -> void:
 	_assert(s["avg_food_stress"] < 0.05, "Recovery boundary stress should have recovered by day 245, got %.3f" % s["avg_food_stress"])
 	_assert(s["emigration_desire_count"] == 0, "Recovery boundary should never cross the emigration threshold, got %d households wanting to leave" % s["emigration_desire_count"])
 	_assert(s["starvation_deaths_total"] == 0, "Recovery boundary should never reach starvation, got %d deaths" % s["starvation_deaths_total"])
+
+## The spec's Milestone 1 acceptance bar, directly: "blocking one edge or
+## reducing its capacity produces a visible, explainable shortage
+## elsewhere." Same two settlements, only the edge capacity differs.
+func _check_trade_pair() -> void:
+	print("\n=== Scenario 5: trade pair (connected vs. blocked) ===")
+	var bareland_id := ScenarioSeeds.BARELAND_ID
+	var years := 2 * Simulation.DAYS_PER_YEAR
+
+	var connected := _new_sim("build_trade_pair_connected")
+	connected.advance_ticks(years)
+	var c := connected.get_settlement_summary(bareland_id)
+
+	var blocked := _new_sim("build_trade_pair_blocked")
+	blocked.advance_ticks(years)
+	var b := blocked.get_settlement_summary(bareland_id)
+
+	print("  Bareland connected: population=%d status=%s fulfillment30d=%.0f%%" % [c["population"], c["status"], c["grain_fulfillment_rolling_30d"] * 100.0])
+	print("  Bareland blocked:   population=%d status=%s fulfillment30d=%.0f%%" % [b["population"], b["status"], b["grain_fulfillment_rolling_30d"] * 100.0])
+
+	_assert(c["status"] != "collapsed", "Bareland should survive when connected to Farmland's surplus, got status=%s" % c["status"])
+	_assert(b["status"] == "collapsed" or b["population"] < c["population"], "Blocking the edge should visibly worsen Bareland relative to being connected (population %d vs %d)" % [b["population"], c["population"]])
+	_assert(c["grain_fulfillment_rolling_30d"] > b["grain_fulfillment_rolling_30d"], "Connected Bareland should have better grain fulfillment than blocked Bareland, got %.2f vs %.2f" % [c["grain_fulfillment_rolling_30d"], b["grain_fulfillment_rolling_30d"]])

@@ -6,6 +6,7 @@ const Household = preload("res://scripts/sim/records/household.gd")
 const Settlement = preload("res://scripts/sim/records/settlement.gd")
 const Workplace = preload("res://scripts/sim/records/workplace.gd")
 const TransportEdge = preload("res://scripts/sim/records/transport_edge.gd")
+const Shipment = preload("res://scripts/sim/records/shipment.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 
 ## Deterministic, tick-based economic simulation over plain-data records.
@@ -13,12 +14,14 @@ const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 ## scene tree. See docs/river-valley-vertical-slice.md sections 3-4 and
 ## Milestones 0.75/0.76.
 ##
-## API boundary (Milestone 0.75): callers use these query methods only, never
-## the settlements/households/workplaces Dictionaries directly. Returned
-## dictionaries/arrays are snapshots and cannot mutate simulation state:
+## API boundary (Milestone 0.75, extended in Milestone 1): callers use these
+## query methods only, never the settlements/households/workplaces/
+## transport_edges/shipments Dictionaries directly. Returned dictionaries/
+## arrays are snapshots and cannot mutate simulation state:
 ##   get_settlement_ids(), get_clock_summary(), get_settlement_summary(id),
 ##   get_settlement_history(id, days), get_workplace_reports(id),
-##   get_game_over_info()
+##   get_game_over_info(), get_settlement_prices(id), get_transport_edge_ids(),
+##   get_transport_edge_summary(id), get_active_shipments()
 
 const DAYS_PER_SEASON := 90
 const SEASONS_PER_YEAR := 4
@@ -43,14 +46,53 @@ const STARVATION_EVAL_INTERVAL_DAYS := 30
 const COLLAPSE_HOUSEHOLD_THRESHOLD := 5
 const COLLAPSE_SUSTAINED_DAYS := 30
 
+## Milestone 1 (goods and routes): first-pass placeholder pricing/trade
+## constants. A settlement's price for a commodity is
+## base_price * clamp(reference_stock / stock, MIN, MAX) -- scarce is
+## pricier, abundant is cheaper, both bounded so nothing goes to zero or
+## infinity. Deliberately simple/explainable over a real clearing market.
+const BASE_PRICE: Dictionary[Commodity.Type, float] = {
+	Commodity.Type.GRAIN: 1.0,
+	Commodity.Type.CATTLE: 5.0,
+	Commodity.Type.SHEEP: 3.0,
+	Commodity.Type.WOOL: 2.0,
+	Commodity.Type.TIMBER: 1.0,
+	Commodity.Type.CHARCOAL: 1.5,
+	Commodity.Type.IRON: 4.0,
+	Commodity.Type.TOOLS: 6.0,
+}
+const REFERENCE_STOCK: Dictionary[Commodity.Type, float] = {
+	Commodity.Type.GRAIN: 2000.0,
+	Commodity.Type.CATTLE: 200.0,
+	Commodity.Type.SHEEP: 400.0,
+	Commodity.Type.WOOL: 500.0,
+	Commodity.Type.TIMBER: 500.0,
+	Commodity.Type.CHARCOAL: 300.0,
+	Commodity.Type.IRON: 150.0,
+	Commodity.Type.TOOLS: 100.0,
+}
+const PRICE_MULTIPLIER_MIN := 0.5
+const PRICE_MULTIPLIER_MAX := 4.0
+
+## A settlement won't export a commodity below this fraction of its own
+## reference stock (keeps some at home rather than trading itself bare),
+## and won't send more than this fraction of what's left above that in one
+## shipment.
+const TRADE_EVAL_INTERVAL_DAYS := 7
+const TRADE_RESERVE_FRACTION_OF_REFERENCE := 0.5
+const TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS := 0.5
+const TRADE_MIN_PROFITABLE_PRICE_GAP := 0.5
+
 var settlements: Dictionary[int, Settlement] = {}
 var households: Dictionary[int, Household] = {}
 var workplaces: Dictionary[int, Workplace] = {}
 var transport_edges: Dictionary[int, TransportEdge] = {}
+var shipments: Dictionary[int, Shipment] = {}
 
 var rng: RandomNumberGenerator
 var day: int = 0
 var year: int = 0
+var _next_shipment_id := 1
 
 var _history: Dictionary[int, Array] = {} # settlement_id -> Array[Dictionary], oldest first, capped at HISTORY_MAX_DAYS
 
@@ -174,6 +216,61 @@ func get_workplace_reports(settlement_id: int) -> Array:
 		})
 	return out
 
+## Per-commodity price for this settlement, derived from local scarcity
+## (see BASE_PRICE/REFERENCE_STOCK). Not a full market clearing -- a simple,
+## explainable stand-in for Milestone 1.
+func get_settlement_prices(settlement_id: int) -> Dictionary:
+	var settlement: Settlement = settlements[settlement_id]
+	var prices := {}
+	for c in Commodity.ALL:
+		prices[Commodity.name_of(c)] = _price_for(settlement, c)
+	return prices
+
+func get_transport_edge_ids() -> Array[int]:
+	var ids: Array[int] = []
+	ids.assign(transport_edges.keys())
+	return ids
+
+func get_transport_edge_summary(edge_id: int) -> Dictionary:
+	var edge: TransportEdge = transport_edges[edge_id]
+	return {
+		"id": edge.id,
+		"settlement_a_id": edge.settlement_a_id,
+		"settlement_a_name": (settlements[edge.settlement_a_id] as Settlement).name,
+		"settlement_b_id": edge.settlement_b_id,
+		"settlement_b_name": (settlements[edge.settlement_b_id] as Settlement).name,
+		"mode": edge.mode,
+		"capacity": edge.capacity,
+		"toll": edge.toll,
+		"risk": edge.risk,
+		"travel_time_days_a_to_b": edge.travel_time_days_a_to_b,
+		"travel_time_days_b_to_a": edge.travel_time_days_b_to_a,
+	}
+
+## All shipments not yet arrived, oldest first. progress_fraction is 0.0 at
+## departure, 1.0 on arrival -- what a graphical route display would
+## interpolate a moving marker along.
+func get_active_shipments() -> Array:
+	var out: Array = []
+	var ids := shipments.keys()
+	ids.sort()
+	for shipment_id in ids:
+		var s: Shipment = shipments[shipment_id]
+		out.append({
+			"id": s.id,
+			"commodity": s.commodity,
+			"quantity": s.quantity,
+			"origin_settlement_id": s.origin_settlement_id,
+			"origin_name": (settlements[s.origin_settlement_id] as Settlement).name,
+			"destination_settlement_id": s.destination_settlement_id,
+			"destination_name": (settlements[s.destination_settlement_id] as Settlement).name,
+			"edge_id": s.edge_id,
+			"departure_day": s.departure_day,
+			"arrival_day": s.arrival_day,
+			"progress_fraction": s.progress_fraction(day),
+		})
+	return out
+
 ## Empty until the player's holding (Settlement.is_player_holding) has had
 ## fewer than COLLAPSE_HOUSEHOLD_THRESHOLD households for
 ## COLLAPSE_SUSTAINED_DAYS in a row. Once set, advance_ticks() stops
@@ -182,13 +279,17 @@ func get_game_over_info() -> Dictionary:
 	return _game_over_info.duplicate(true)
 
 # ---------------------------------------------------------------------------
-# Daily tick, in the order documented in Milestone 0.75:
+# Daily tick, in the order documented in Milestone 0.75 (extended in
+# Milestone 1 with trade):
 #   1. reset daily flow records
-#   2. allocate available settlement labor to workplaces
-#   3. run workplace production, record industrial flows
-#   4. run household consumption, record fulfillment
-#   5. finalize closing balances, append history
-#   6. weekly/monthly household evaluations, collapse check, calendar
+#   2. resolve shipments arriving today (goods show up before the day's
+#      business, so they're available to meet today's demand)
+#   3. allocate available settlement labor to workplaces
+#   4. run workplace production, record industrial flows
+#   5. run household consumption, record fulfillment
+#   6. (weekly) decide and depart new shipments, based on today's stock
+#   7. finalize closing balances, append history
+#   8. weekly/monthly household evaluations, collapse check, calendar
 # ---------------------------------------------------------------------------
 
 func _daily_tick() -> void:
@@ -196,9 +297,13 @@ func _daily_tick() -> void:
 	for settlement_id in settlements.keys():
 		records[settlement_id] = _new_daily_record(settlement_id)
 
+	_resolve_shipment_arrivals(records)
 	_allocate_labor()
 	_run_production(records)
 	_run_consumption(records)
+
+	if (day + 1) % TRADE_EVAL_INTERVAL_DAYS == 0:
+		_run_trade(records)
 
 	# Seasonal herd effects land on the day that crosses into a new season,
 	# folded into that same day's record rather than an orphaned gap between
@@ -229,6 +334,8 @@ func _new_daily_record(settlement_id: int) -> Dictionary:
 		"unmet_household_demand": {},
 		"industrial_demand": {},
 		"unmet_industrial_demand": {},
+		"trade_in": {},
+		"trade_out": {},
 		"assigned_workers": 0.0,
 		"population": 0,
 	}
@@ -370,6 +477,57 @@ func _run_seasonal_herds(records: Dictionary) -> void:
 			var name := Commodity.name_of(herd_commodity)
 			record["produced"][name] = record["produced"].get(name, 0.0) + delta
 
+## Step 2: deliver any shipment whose arrival_day is today, before the day's
+## production/consumption runs.
+func _resolve_shipment_arrivals(records: Dictionary) -> void:
+	var arrived: Array[int] = []
+	for shipment_id in shipments.keys():
+		var s: Shipment = shipments[shipment_id]
+		if s.arrival_day > day:
+			continue
+		var destination: Settlement = settlements[s.destination_settlement_id]
+		destination.add_stock(s.commodity, s.quantity)
+		var name := Commodity.name_of(s.commodity)
+		var record: Dictionary = records[s.destination_settlement_id]
+		record["trade_in"][name] = record["trade_in"].get(name, 0.0) + s.quantity
+		arrived.append(shipment_id)
+	for shipment_id in arrived:
+		shipments.erase(shipment_id)
+
+## Step 6 (weekly): a simple trader -- for each edge and commodity, ship from
+## whichever end is cheaper to whichever end is pricier, if the price gap
+## clears transport cost (toll + a flat per-trip risk cost) by a minimum
+## margin. Not a full market; deliberately legible over optimal.
+func _run_trade(records: Dictionary) -> void:
+	for edge_id in transport_edges.keys():
+		var edge: TransportEdge = transport_edges[edge_id]
+		for c in Commodity.ALL:
+			var price_a := _price_for(settlements[edge.settlement_a_id], c)
+			var price_b := _price_for(settlements[edge.settlement_b_id], c)
+			var source_id := edge.settlement_a_id if price_a < price_b else edge.settlement_b_id
+			var dest_id := edge.other_end(source_id)
+			var gap: float = abs(price_a - price_b)
+			var transport_cost := edge.toll + edge.risk * 2.0
+			if gap - transport_cost < TRADE_MIN_PROFITABLE_PRICE_GAP:
+				continue
+
+			var source: Settlement = settlements[source_id]
+			var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
+			var exportable: float = max(0.0, source.stock(c) - reserve)
+			var quantity: float = min(exportable * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS, edge.capacity)
+			if quantity <= 0.01:
+				continue
+
+			source.consume(c, quantity)
+			var name := Commodity.name_of(c)
+			var record: Dictionary = records[source_id]
+			record["trade_out"][name] = record["trade_out"].get(name, 0.0) + quantity
+
+			var travel_days: float = edge.travel_time_days(source_id)
+			var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, edge.id, day, day + ceili(travel_days))
+			shipments[shipment.id] = shipment
+			_next_shipment_id += 1
+
 func _finalize_daily_records(records: Dictionary) -> void:
 	for settlement_id in settlements.keys():
 		var record: Dictionary = records[settlement_id]
@@ -466,6 +624,12 @@ func _avg_food_stress(settlement_id: int) -> float:
 	for household_id in ids:
 		total += (households[household_id] as Household).food_stress
 	return total / ids.size()
+
+func _price_for(settlement: Settlement, commodity: Commodity.Type) -> float:
+	var reference: float = REFERENCE_STOCK[commodity]
+	var stock: float = max(settlement.stock(commodity), 0.01)
+	var multiplier: float = clamp(reference / stock, PRICE_MULTIPLIER_MIN, PRICE_MULTIPLIER_MAX)
+	return BASE_PRICE[commodity] * multiplier
 
 func _latest_record(settlement_id: int) -> Dictionary:
 	var history: Array = _history.get(settlement_id, [])
