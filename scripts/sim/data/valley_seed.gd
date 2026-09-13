@@ -90,11 +90,14 @@ static func _build_workplaces(settlements: Dictionary[int, Settlement]) -> Dicti
 
 	# Subsistence farming: labor and land only, no manufactured inputs.
 	# Seasonal swing: light spring planting, steady summer, harvest bump,
-	# near-dormant winter.
+	# near-dormant winter. Output rate bumped 1.5x from the original 1.0 --
+	# at 1.0, Aldford/Staithe barely covered their own demand and had no
+	# real surplus to export once trade (Milestone 1) existed, so grain
+	# stayed scarce valley-wide even with shipments moving other goods.
 	var farm_recipe := Recipe.new(
 		"farm",
 		{},
-		{Commodity.Type.GRAIN: 1.0},
+		{Commodity.Type.GRAIN: 1.5},
 		[0.8, 1.0, 1.6, 0.1],
 	)
 	_add_workplace(workplaces, settlements, 1, ALDFORD, farm_recipe, 120.0)
