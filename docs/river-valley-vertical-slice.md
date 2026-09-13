@@ -242,32 +242,209 @@ Add a live, speed-controllable dashboard over the headless simulation so stocks,
 
 ### Milestone 0.75: Diagnostic simulation contract
 
-Make economic outcomes explainable before adding additional mechanics. Expose settlement IDs and clock state through query methods; distinguish current or rolling shortage from lifetime totals; record daily production and consumption flows; and report each workplace's planned output, actual output, utilization, and limiting input.
+Make economic outcomes explainable before adding population consequences or transport. This milestone changes observation, accounting, and API boundaries; it must not materially change the seeded economy's behavior.
 
-**Accept when:** the dashboard can explain a stopped production chain—such as Ironbank's bloomery idling for lack of charcoal—and automated tests verify those explanations rather than only checking that inventories remain nonnegative.
+#### Simulation API boundary
+
+Views and test harnesses use queries instead of reading simulation collections directly:
+
+```gdscript
+simulation.get_settlement_ids()
+simulation.get_clock_summary()
+simulation.get_settlement_summary(settlement_id)
+simulation.get_settlement_history(settlement_id, days)
+simulation.get_workplace_reports(settlement_id)
+```
+
+The dashboard may own a `Simulation` instance and call `advance_ticks()`, but must not read `simulation.settlements`, `simulation.workplaces`, or other authoritative collections. Returned dictionaries are snapshots and cannot mutate simulation state.
+
+#### Daily accounting
+
+At the beginning of every daily tick, create a fresh balance record for every settlement and commodity:
+
+```text
+opening stock
++ produced
+- household consumption
+- industrial consumption
+= closing stock
+
+household demand / unmet household demand
+industrial demand / unmet industrial demand
+```
+
+Keep lifetime totals only as explicitly named statistics. The dashboard's primary shortage signal is current day and rolling 30-day fulfillment, not a counter that grows forever. Retain a bounded history sufficient for the dashboard and tests; 360 daily records is adequate for the prototype.
+
+Every workplace produces a daily report containing:
+
+```text
+workplace and recipe ID
+target labor and actual labor
+planned units
+actual units
+utilization ratio
+inputs requested and consumed
+outputs produced
+limiting input, if any
+```
+
+Compute the limiting input before reducing production units. A workplace that requests charcoal but produces nothing must report charcoal as its constraint even though no charcoal is consumed.
+
+#### Tick order
+
+Use one explicit and documented daily order:
+
+1. Reset daily flow records.
+2. Allocate available settlement labor to workplaces.
+3. Run workplace production and record industrial flows.
+4. Run household consumption and record fulfillment.
+5. Finalize closing balances and append immutable history snapshots.
+6. Advance the calendar and run any boundary-triggered seasonal or yearly work.
+
+Milestone 0.75 can preserve the current fixed workplace labor values, but the report should distinguish target from actual labor so Milestone 0.76 can cap it against the household workforce without changing the query contract.
+
+#### Dashboard
+
+For each settlement, show:
+
+- current inventory;
+- today's produced, consumed, and unmet quantities;
+- rolling 30-day fulfillment for grain;
+- each workplace's utilization and limiting input;
+- day, year, and season from the clock query.
+
+A chart is optional. Correct labels and causal explanations are required; cumulative shortage must never be presented as current shortage.
+
+#### Tests and completion gate
+
+Extend the headless harness with focused assertions in addition to broad invariants:
+
+- two runs with the same seed produce identical summaries and daily histories;
+- all daily commodity balance equations reconcile within a small floating-point tolerance;
+- no stock becomes negative;
+- Ironbank's bloomery reports charcoal as its limiting input after its starting stock is depleted;
+- Staithe's smithy reports iron as its limiting input after its starting stock is depleted;
+- the dashboard and harness can enumerate settlements without accessing simulation collections.
+
+**Accept when:** the dashboard can correctly explain a stopped production chain, balance records reconcile, current shortages are distinct from lifetime totals, and callers use only the public simulation query contract.
 
 ### Milestone 0.76: Isolated-settlement equilibrium and collapse
 
-Before enabling inter-settlement transport, enforce the consequences of local depletion. Households consume food from their settlement, accumulate food-security stress when demand is unmet, recover when fed, and emigrate after sustained hardship. Agricultural settlements with viable land and labor should converge toward a bounded population and inventory cycle; structurally deficient settlements should contract rather than survive indefinitely on zero stock.
+Before enabling inter-settlement transport, enforce the consequences of local depletion. This establishes the disconnected baseline against which transport will later be measured: farming settlements can survive alone within their carrying capacity, overpopulated settlements contract, and settlements without food eventually empty.
 
-Use settlement food security as the first causal chain:
+Use food security as the first complete causal chain:
 
 ```text
-production and starting stock -> consumption shortfall -> household stress
--> emigration and/or mortality -> lower labor and demand -> new equilibrium or collapse
+land and labor -> grain production -> household food fulfillment
+-> household stress -> emigration or mortality
+-> changed population and workforce -> changed production and demand
+-> equilibrium or collapse
 ```
 
-For this milestone, emigration may remove households from the isolated test world rather than relocate them to another settlement. Starvation mortality should occur only after prolonged severe shortage and should be slower than emigration; neither consequence should fire from a single bad day. Population changes must feed back into labor capacity, production, and consumption. Define game over as the player's holding losing every viable household or falling below a small recoverable-population threshold for a sustained period.
+#### State additions
 
-Tune and test at least three authored cases:
+Each household gains:
 
-- a viable farming settlement reaches a repeatable seasonal equilibrium;
-- an overpopulated farming settlement contracts and then stabilizes;
-- a settlement with no food production or imports depletes its stock, experiences emigration and starvation, and eventually collapses.
+- `food_stress`, bounded from 0.0 to 1.0;
+- consecutive days below the emigration fulfillment threshold;
+- consecutive days below the severe-starvation threshold.
 
-**Accept when:** multi-year headless tests deterministically distinguish equilibrium, contraction, and collapse; no settlement persists indefinitely without food; viable farms do not grow or stockpile without bound; and the dashboard explains population losses through recent food-security history.
+Each settlement derives rather than separately owns:
 
-This is deliberately a baseline survival model, not the full Milestone 4 household economy. Housing, prosperity-driven immigration, occupational choice, and movement between connected settlements remain deferred.
+- headcount;
+- available worker capacity;
+- daily and rolling 30-day grain fulfillment;
+- recent emigrant and starvation counts;
+- population trend;
+- status: stable, food insecure, contracting, or collapsed.
+
+Population and worker capacity must always be calculated from the authoritative household records so removing or shrinking a household immediately affects both consumption and labor supply.
+
+Workplaces replace fixed effective labor with:
+
+- a target labor value representing useful capacity, including the implicit land or facility limit;
+- actual labor capped by workers available in the settlement.
+
+Allocate labor deterministically. For this milestone, proportional allocation across workplace targets with stable workplace-ID tie-breaking is sufficient. Do not add occupations, wages, or household job choice yet.
+
+#### Food allocation and stress
+
+Aggregate grain demand and consumption at settlement level once per day, then apply the resulting fulfillment ratio to resident households. Do not create household inventories or an allocation market in this milestone.
+
+Initial tuning rules:
+
+- a fully fed day reduces food stress;
+- a partially fed day increases stress in proportion to the shortage;
+- one isolated bad day cannot trigger departure or death;
+- emigration becomes possible after at least 21 consecutive days below 75% fulfillment and elevated stress;
+- starvation becomes possible only after at least 60 consecutive days below 25% fulfillment and near-maximum stress;
+- evaluate emigration weekly and starvation monthly, with deterministic household ordering.
+
+These values are configuration constants, not final balance decisions. Emigration should be the dominant early response. An emigrating household leaves the isolated test world and is counted in the settlement history. During starvation, reduce household members before deleting an empty household; remove dependents before workers for the initial mechanical model. This is deliberately an aggregate pressure model, not an assertion about historical household behavior.
+
+Recovery resets consecutive-shortage counters once the relevant fulfillment threshold is met and gradually reduces stress. This allows a settlement to survive a poor season without retaining permanent hidden damage.
+
+#### Equilibrium requirements
+
+A viable equilibrium is not merely “inventory never went negative.” Over a multi-year window:
+
+- population remains above the collapse threshold;
+- grain stock stays within an authored bound across complete seasonal cycles;
+- there is no persistent unmet food demand;
+- population loss approaches zero after any initial adjustment;
+- production remains constrained by workplace/land capacity rather than creating unbounded stock.
+
+The fixed farm labor target provides the first carrying-capacity mechanism. Above capacity, grain output stops scaling while consumption rises, causing contraction. Below capacity, lost workers reduce output as well as demand. Tune farm productivity, household composition, and seasonal modifiers so at least one stable range exists; do not special-case a target population.
+
+#### Collapse and game over
+
+A settlement is collapsed when it has no households. The player's holding enters an unrecoverable state when it has fewer than five households for 30 consecutive days. At that point the simulation emits a game-over result containing the date and a short causal summary, for example:
+
+```text
+Aldford collapsed after 214 days of severe food shortage:
+grain fulfillment averaged 8% over the final 30 days;
+63 households emigrated and 11 people died.
+```
+
+The dashboard stops automatic advancement on game over but retains the final state for inspection and offers restart with the same seed. Non-player settlement collapse is reported but does not end the run.
+
+#### Authored headless scenarios
+
+Add small scenario builders that use the same simulation code and differ only in seed data:
+
+1. **Viable farm:** enough farm capacity and workers to survive at least ten years, with bounded seasonal grain stocks and no sustained population loss.
+2. **Overpopulated farm:** population begins above carrying capacity, contracts, and reaches a stable range with no emigration or starvation during the final simulated year.
+3. **No-food settlement:** a finite starting stock delays shortage, after which population declines and the settlement reaches collapse/game over within an authored maximum duration.
+4. **Recovery boundary:** a temporary shortage raises stress, restored production prevents emigration or mortality, and stress later falls.
+
+Tests should assert ranges and trends rather than one fragile exact population, while repeated runs with the same seed must still produce identical histories. Run long enough to cover multiple full seasonal cycles; ten simulated years is the default equilibrium horizon.
+
+#### Dashboard
+
+Add:
+
+- household and headcount totals;
+- available and assigned workers;
+- today's and rolling grain fulfillment;
+- average household food stress;
+- recent emigration and mortality;
+- population change over the last year;
+- settlement status and game-over explanation.
+
+The display must let a tester answer: “Did this place shrink because it lacked food, because it lacked workers to operate the farm, or because it was already beyond the farm's capacity?”
+
+#### Explicit deferrals
+
+This is the minimum closed-loop survival model, not the full Milestone 4 household economy. Defer:
+
+- immigration into successful settlements;
+- migration between valley settlements;
+- occupations, wages, wealth, and labor competition;
+- household-specific food purchasing or unequal rationing;
+- births, household formation, aging, and natural mortality;
+- housing and prosperity constraints.
+
+**Accept when:** multi-year headless tests deterministically distinguish equilibrium, contraction, recovery, and collapse; no settlement persists indefinitely without food; viable farms neither collapse nor stockpile without bound; population changes feed back into both labor and consumption; game over is reproducible and explained; and the dashboard exposes the entire causal chain.
 
 ### Milestone 1: Static readable valley
 
