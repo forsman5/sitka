@@ -1,11 +1,12 @@
 extends Control
 
-## Milestone 0.5: a live, speed-controllable read-out of the simulation.
-## This is a view only -- it holds one Simulation instance, advances it by
-## calling advance_ticks(), and re-renders from Simulation's read-only query
-## methods (get_settlement_ids/get_clock_summary/get_settlement_summary/
-## get_workplace_ids/get_workplace_status). It never reaches into
-## Simulation's internal Dictionaries directly. No game logic lives here.
+## Milestone 0.75/0.76: a live, speed-controllable read-out of the
+## simulation. This is a view only -- it holds one Simulation instance,
+## advances it by calling advance_ticks(), and re-renders from Simulation's
+## read-only query methods (get_settlement_ids/get_clock_summary/
+## get_settlement_summary/get_workplace_reports/get_game_over_info). It
+## never reaches into Simulation's internal Dictionaries directly. No game
+## logic lives here.
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -16,9 +17,11 @@ const SECONDS_PER_DAY_AT_1X := 1.0
 var _simulation: Simulation
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
+var _game_over_shown := false
 
 var _time_label: Label
-# settlement_id -> {"header": Label, "stock"/"today"/"rolling": {commodity_name: Label}, "workplaces": {workplace_id: Label}}
+var _game_over_label: Label
+# settlement_id -> {"header", "status", "population", "workers", "stress", "grid": {commodity_name: {"stock","today","rolling"}}, "workplaces_box"}
 var _settlement_rows: Dictionary = {}
 
 func _ready() -> void:
@@ -36,6 +39,10 @@ func _process(delta: float) -> void:
 	_simulation.advance_ticks(days_to_advance)
 	_day_accumulator -= days_to_advance
 	_refresh()
+
+	if not _simulation.get_game_over_info().is_empty() and not _game_over_shown:
+		_game_over_shown = true
+		_speed_multiplier = 0.0
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -67,6 +74,12 @@ func _build_ui() -> void:
 	top_bar.add_child(_make_speed_button("10x", 10.0))
 	top_bar.add_child(_make_speed_button("100x", 100.0))
 
+	_game_over_label = Label.new()
+	_game_over_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	_game_over_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_game_over_label.visible = false
+	vbox.add_child(_game_over_label)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(scroll)
@@ -96,10 +109,14 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	header.add_theme_font_size_override("font_size", 18)
 	inner.add_child(header)
 
+	var stats_label := Label.new()
+	stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
+	inner.add_child(stats_label)
+
 	var grid := GridContainer.new()
-	grid.columns = 4
+	grid.columns = 3
 	inner.add_child(grid)
-	for col_label in ["Commodity", "Stock", "Unmet (today)", "Unmet (30d)"]:
+	for col_label in ["Commodity", "Stock", "Unmet (today)"]:
 		var col_header := Label.new()
 		col_header.text = col_label
 		col_header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -107,7 +124,6 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 
 	var stock_labels := {}
 	var today_labels := {}
-	var rolling_labels := {}
 	for c in Commodity.ALL:
 		var name_label := Label.new()
 		name_label.text = Commodity.name_of(c)
@@ -125,62 +141,79 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 		grid.add_child(today_label)
 		today_labels[Commodity.name_of(c)] = today_label
 
-		var rolling_label := Label.new()
-		rolling_label.custom_minimum_size = Vector2(100, 0)
-		rolling_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.4))
-		grid.add_child(rolling_label)
-		rolling_labels[Commodity.name_of(c)] = rolling_label
-
-	var workplace_labels := {}
-	var workplace_ids := _simulation.get_workplace_ids(settlement_id)
-	if not workplace_ids.is_empty():
-		var wp_header := Label.new()
-		wp_header.text = "Workplaces"
-		wp_header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-		inner.add_child(wp_header)
-		for workplace_id in workplace_ids:
-			var wp_label := Label.new()
-			inner.add_child(wp_label)
-			workplace_labels[workplace_id] = wp_label
+	var workplaces_box := VBoxContainer.new()
+	inner.add_child(workplaces_box)
 
 	return {
 		"header": header,
+		"stats": stats_label,
 		"stock": stock_labels,
 		"today": today_labels,
-		"rolling": rolling_labels,
-		"workplaces": workplace_labels,
+		"workplaces_box": workplaces_box,
+		"workplace_labels": {},
 	}
 
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_time_label.text = "Day %d  |  Year %d, %s" % [clock["day"], clock["year"], clock["season_name"]]
 
+	var game_over := _simulation.get_game_over_info()
+	_game_over_label.visible = not game_over.is_empty()
+	if not game_over.is_empty():
+		_game_over_label.text = "GAME OVER -- " + str(game_over["summary"])
+
 	for settlement_id in _simulation.get_settlement_ids():
 		var summary: Dictionary = _simulation.get_settlement_summary(settlement_id)
 		var row: Dictionary = _settlement_rows[settlement_id]
-		(row["header"] as Label).text = "%s (population %d)" % [summary["name"], summary["population"]]
+
+		(row["header"] as Label).text = "%s (population %d, %s)%s" % [
+			summary["name"], summary["population"], summary["status"],
+			" [player holding]" if summary["is_player_holding"] else ""]
+
+		(row["stats"] as Label).text = "households=%d  workers=%d/%d  avg stress=%.2f  want to leave=%d (no route)  starved=%d (%d lifetime)  grain fulfillment: today=%.0f%% 30d=%.0f%%" % [
+			summary["household_count"], summary["assigned_workers"], summary["available_workers"],
+			summary["avg_food_stress"], summary["emigration_desire_count"],
+			summary["starvation_deaths_recent"], summary["starvation_deaths_total"],
+			summary["grain_fulfillment_today"] * 100.0, summary["grain_fulfillment_rolling_30d"] * 100.0]
 
 		var stock_labels: Dictionary = row["stock"]
 		var today_labels: Dictionary = row["today"]
-		var rolling_labels: Dictionary = row["rolling"]
+		var unmet_today: Dictionary = summary["unmet_household_demand_today"]
 		for commodity_name in summary["inventory"].keys():
 			var stock: float = summary["inventory"][commodity_name]
-			var today: float = summary["unmet_today"][commodity_name]
-			var rolling: float = summary["unmet_rolling_30d"][commodity_name]
+			var today: float = unmet_today.get(commodity_name, 0.0)
 			(stock_labels[commodity_name] as Label).text = "%.1f" % stock
 			(today_labels[commodity_name] as Label).text = ("%.1f" % today) if today > 0.01 else ""
-			(rolling_labels[commodity_name] as Label).text = ("%.1f" % rolling) if rolling > 0.01 else ""
 
-		var workplace_labels: Dictionary = row["workplaces"]
-		for workplace_id in workplace_labels.keys():
-			var status := _simulation.get_workplace_status(workplace_id)
-			var label := workplace_labels[workplace_id] as Label
-			var planned: float = status["planned_units"]
-			var actual: float = status["actual_units"]
-			var limiting = status["limiting_input"]
-			if limiting != null:
-				label.text = "  %s: %.1f / %.1f units -- limited by %s" % [status["recipe_id"], actual, planned, Commodity.name_of(limiting)]
-				label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
-			else:
-				label.text = "  %s: %.1f / %.1f units" % [status["recipe_id"], actual, planned]
-				label.add_theme_color_override("font_color", Color(0.7, 0.85, 0.7))
+		_refresh_workplace_rows(row, settlement_id)
+
+func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
+	var workplaces_box: VBoxContainer = row["workplaces_box"]
+	var workplace_labels: Dictionary = row["workplace_labels"]
+	var reports := _simulation.get_workplace_reports(settlement_id)
+
+	if workplace_labels.is_empty() and not reports.is_empty():
+		var header := Label.new()
+		header.text = "Workplaces"
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		workplaces_box.add_child(header)
+		for report in reports:
+			var label := Label.new()
+			workplaces_box.add_child(label)
+			workplace_labels[report["workplace_id"]] = label
+
+	for report in reports:
+		var label := workplace_labels[report["workplace_id"]] as Label
+		var actual: float = report["actual_units"]
+		var planned: float = report["planned_units"]
+		var limiting = report["limiting_input"]
+		var labor_note := "" if report["actual_labor"] >= report["target_labor"] - 0.01 else " (understaffed: %.0f/%.0f labor)" % [report["actual_labor"], report["target_labor"]]
+		if limiting != null:
+			label.text = "  %s: %.1f / %.1f units -- limited by %s%s" % [report["recipe_id"], actual, planned, Commodity.name_of(limiting), labor_note]
+			label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+		elif labor_note != "":
+			label.text = "  %s: %.1f / %.1f units%s" % [report["recipe_id"], actual, planned, labor_note]
+			label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.4))
+		else:
+			label.text = "  %s: %.1f / %.1f units" % [report["recipe_id"], actual, planned]
+			label.add_theme_color_override("font_color", Color(0.7, 0.85, 0.7))

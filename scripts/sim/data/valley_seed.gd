@@ -34,6 +34,7 @@ const HOUSEHOLDS_PER_SETTLEMENT := {
 static func build_default_valley(rng: RandomNumberGenerator) -> Dictionary:
 	var settlements: Dictionary[int, Settlement] = {}
 	settlements[ALDFORD] = Settlement.new(ALDFORD, "Aldford")
+	settlements[ALDFORD].is_player_holding = true
 	settlements[HIGH_FELL] = Settlement.new(HIGH_FELL, "High Fell")
 	settlements[OAKMERE] = Settlement.new(OAKMERE, "Oakmere")
 	settlements[IRONBANK] = Settlement.new(IRONBANK, "Ironbank")
@@ -75,16 +76,13 @@ static func _build_households(settlements: Dictionary[int, Settlement], rng: Ran
 	var next_id := 1
 	for settlement_id in HOUSEHOLDS_PER_SETTLEMENT.keys():
 		var settlement: Settlement = settlements[settlement_id]
-		var total_headcount := 0
 		for i in HOUSEHOLDS_PER_SETTLEMENT[settlement_id]:
 			var worker_capacity := rng.randi_range(1, 3)
 			var dependents := rng.randi_range(0, 4)
 			var household := Household.new(next_id, settlement_id, worker_capacity, dependents)
 			households[next_id] = household
 			settlement.household_ids.append(next_id)
-			total_headcount += household.headcount()
 			next_id += 1
-		settlement.set_population(total_headcount)
 	return households
 
 static func _build_workplaces(settlements: Dictionary[int, Settlement]) -> Dictionary[int, Workplace]:
@@ -150,8 +148,8 @@ static func _build_workplaces(settlements: Dictionary[int, Settlement]) -> Dicti
 
 	return workplaces
 
-static func _add_workplace(workplaces: Dictionary[int, Workplace], settlements: Dictionary[int, Settlement], id: int, settlement_id: int, recipe: Recipe, labor_assigned: float) -> void:
-	var workplace := Workplace.new(id, settlement_id, recipe, labor_assigned)
+static func _add_workplace(workplaces: Dictionary[int, Workplace], settlements: Dictionary[int, Settlement], id: int, settlement_id: int, recipe: Recipe, target_labor: float) -> void:
+	var workplace := Workplace.new(id, settlement_id, recipe, target_labor)
 	workplaces[id] = workplace
 	settlements[settlement_id].workplace_ids.append(id)
 
