@@ -234,6 +234,41 @@ Define the authored valley, initial stocks, production recipes, household aggreg
 
 **Accept when:** one simulated year can run deterministically and inventories remain bounded under the starting configuration.
 
+### Milestone 0.5: Simulation dashboard
+
+Add a live, speed-controllable dashboard over the headless simulation so stocks, shortages, population, season, and year can be observed without building the world view.
+
+**Accept when:** the simulation can be paused and accelerated, every settlement can be inspected, and the dashboard reads simulation snapshots rather than owning economic rules.
+
+### Milestone 0.75: Diagnostic simulation contract
+
+Make economic outcomes explainable before adding additional mechanics. Expose settlement IDs and clock state through query methods; distinguish current or rolling shortage from lifetime totals; record daily production and consumption flows; and report each workplace's planned output, actual output, utilization, and limiting input.
+
+**Accept when:** the dashboard can explain a stopped production chain—such as Ironbank's bloomery idling for lack of charcoal—and automated tests verify those explanations rather than only checking that inventories remain nonnegative.
+
+### Milestone 0.76: Isolated-settlement equilibrium and collapse
+
+Before enabling inter-settlement transport, enforce the consequences of local depletion. Households consume food from their settlement, accumulate food-security stress when demand is unmet, recover when fed, and emigrate after sustained hardship. Agricultural settlements with viable land and labor should converge toward a bounded population and inventory cycle; structurally deficient settlements should contract rather than survive indefinitely on zero stock.
+
+Use settlement food security as the first causal chain:
+
+```text
+production and starting stock -> consumption shortfall -> household stress
+-> emigration and/or mortality -> lower labor and demand -> new equilibrium or collapse
+```
+
+For this milestone, emigration may remove households from the isolated test world rather than relocate them to another settlement. Starvation mortality should occur only after prolonged severe shortage and should be slower than emigration; neither consequence should fire from a single bad day. Population changes must feed back into labor capacity, production, and consumption. Define game over as the player's holding losing every viable household or falling below a small recoverable-population threshold for a sustained period.
+
+Tune and test at least three authored cases:
+
+- a viable farming settlement reaches a repeatable seasonal equilibrium;
+- an overpopulated farming settlement contracts and then stabilizes;
+- a settlement with no food production or imports depletes its stock, experiences emigration and starvation, and eventually collapses.
+
+**Accept when:** multi-year headless tests deterministically distinguish equilibrium, contraction, and collapse; no settlement persists indefinitely without food; viable farms do not grow or stockpile without bound; and the dashboard explains population losses through recent food-security history.
+
+This is deliberately a baseline survival model, not the full Milestone 4 household economy. Housing, prosperity-driven immigration, occupational choice, and movement between connected settlements remain deferred.
+
 ### Milestone 1: Static readable valley
 
 Render the five settlements, river, tributary, crossings, roads, terrain/resource regions, and two camera lenses. Expose seeded settlement summaries.
