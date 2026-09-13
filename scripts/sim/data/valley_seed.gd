@@ -161,11 +161,15 @@ static func _build_transport_edges() -> Dictionary[int, TransportEdge]:
 	# meets the main river at Aldford; Oakmere has no direct navigable-river
 	# access of its own; an existing downstream route already lets Ironbank
 	# and Staithe trade without passing through Aldford. Unused by the tick
-	# loop in Milestone 0 -- static data only, for Milestone 2's shipments.
-	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 20.0, 1.5, 0.0, 0.1)
-	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 15.0, 1.0, 0.0, 0.1)
-	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 15.0, 0.5, 0.0, 0.05)
-	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 25.0, 0.5, 0.0, 0.05)
-	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 10.0, 1.0, 0.05, 0.1)
-	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 30.0, 1.0, 0.05, 0.05)
+	# loop in Milestone 0/0.5 -- static data only, for Milestone 2's shipments.
+	#
+	# Each edge is one shared physical connection (settlement_a <-> b); roads
+	# and tracks are symmetric, river barge edges are faster downstream
+	# (a -> b, with the current) than upstream (b -> a).
+	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 20.0, 1.5, 1.5, 0.0, 0.1)
+	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 15.0, 1.0, 1.0, 0.0, 0.1)
+	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 15.0, 0.5, 0.5, 0.0, 0.05)
+	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 25.0, 0.4, 0.7, 0.0, 0.05)
+	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 10.0, 0.8, 1.4, 0.05, 0.1)
+	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 30.0, 0.8, 1.4, 0.05, 0.05)
 	return edges

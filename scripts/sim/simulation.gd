@@ -17,6 +17,7 @@ const SEASONS_PER_YEAR := 4
 const DAYS_PER_YEAR := DAYS_PER_SEASON * SEASONS_PER_YEAR
 
 enum Season { SPRING, SUMMER, AUTUMN, WINTER }
+const SEASON_NAMES := ["Spring", "Summer", "Autumn", "Winter"]
 
 const GRAIN_PER_PERSON_PER_DAY := 0.4
 const WOOL_PER_PERSON_PER_DAY := 0.01
@@ -58,22 +59,68 @@ func advance_ticks(days: int) -> void:
 		if day % DAYS_PER_YEAR == 0:
 			_yearly_tick()
 
+func get_settlement_ids() -> Array[int]:
+	var ids: Array[int] = []
+	ids.assign(settlements.keys())
+	return ids
+
+func get_workplace_ids(settlement_id: int) -> Array[int]:
+	var ids: Array[int] = []
+	ids.assign((settlements[settlement_id] as Settlement).workplace_ids)
+	return ids
+
+func get_clock_summary() -> Dictionary:
+	var s := season()
+	return {
+		"day": day,
+		"year": year,
+		"season": s,
+		"season_name": SEASON_NAMES[s],
+	}
+
 func get_settlement_summary(settlement_id: int) -> Dictionary:
 	var s: Settlement = settlements[settlement_id]
 	var inventory := {}
-	var unmet := {}
+	var unmet_total := {}
+	var unmet_today := {}
+	var unmet_rolling := {}
 	for c in Commodity.ALL:
-		inventory[Commodity.name_of(c)] = s.stock(c)
-		unmet[Commodity.name_of(c)] = s.unmet_demand.get(c, 0.0)
+		var name := Commodity.name_of(c)
+		inventory[name] = s.stock(c)
+		unmet_total[name] = s.unmet_demand.get(c, 0.0)
+		unmet_today[name] = s.unmet_today.get(c, 0.0)
+		unmet_rolling[name] = s.unmet_rolling(c)
 	return {
 		"id": s.id,
 		"name": s.name,
 		"population": s.population(),
 		"inventory": inventory,
-		"unmet_demand": unmet,
+		"unmet_demand_total": unmet_total,
+		"unmet_today": unmet_today,
+		"unmet_rolling_30d": unmet_rolling,
+	}
+
+## Diagnoses the workplace's most recent daily production: how much it was
+## staffed to produce, how much it actually produced, and (if less) which
+## input commodity ran out first. This is where a stalled bloomery shows up
+## -- settlement-level unmet_demand only tracks population/herd consumption,
+## not a workplace quietly throttling itself for lack of an input.
+func get_workplace_status(workplace_id: int) -> Dictionary:
+	var w: Workplace = workplaces[workplace_id]
+	return {
+		"id": w.id,
+		"settlement_id": w.settlement_id,
+		"recipe_id": w.recipe.id,
+		"planned_units": w.last_planned_units,
+		"actual_units": w.last_actual_units,
+		"limiting_input": w.last_limiting_input,
+		"input_consumed": w.last_input_consumed.duplicate(),
+		"output_produced": w.last_output_produced.duplicate(),
 	}
 
 func _daily_tick() -> void:
+	for settlement_id in settlements.keys():
+		(settlements[settlement_id] as Settlement).start_new_day()
 	_run_production()
 	_run_consumption()
 
@@ -83,16 +130,37 @@ func _run_production() -> void:
 		var workplace: Workplace = workplaces[workplace_id]
 		var settlement: Settlement = settlements[workplace.settlement_id]
 		var recipe := workplace.recipe
-		var units: float = workplace.labor_assigned * recipe.seasonal_modifiers[s]
+
+		var planned_units: float = workplace.labor_assigned * recipe.seasonal_modifiers[s]
+		var actual_units := planned_units
+		var limiting_input = null
 		for commodity in recipe.inputs.keys():
 			var rate: float = recipe.inputs[commodity]
-			if rate > 0.0:
-				units = min(units, settlement.stock(commodity) / rate)
-		units = max(units, 0.0)
+			if rate <= 0.0:
+				continue
+			var affordable: float = settlement.stock(commodity) / rate
+			if affordable < actual_units:
+				actual_units = affordable
+				limiting_input = commodity
+		actual_units = max(actual_units, 0.0)
+
+		var input_consumed := {}
 		for commodity in recipe.inputs.keys():
-			settlement.consume(commodity, recipe.inputs[commodity] * units)
+			var amount: float = recipe.inputs[commodity] * actual_units
+			settlement.consume(commodity, amount)
+			input_consumed[commodity] = amount
+
+		var output_produced := {}
 		for commodity in recipe.outputs.keys():
-			settlement.add_stock(commodity, recipe.outputs[commodity] * units)
+			var amount: float = recipe.outputs[commodity] * actual_units
+			settlement.add_stock(commodity, amount)
+			output_produced[commodity] = amount
+
+		workplace.last_planned_units = planned_units
+		workplace.last_actual_units = actual_units
+		workplace.last_limiting_input = limiting_input
+		workplace.last_input_consumed = input_consumed
+		workplace.last_output_produced = output_produced
 
 func _run_consumption() -> void:
 	for settlement_id in settlements.keys():

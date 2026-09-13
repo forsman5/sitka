@@ -1,7 +1,6 @@
 extends SceneTree
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
-const Settlement = preload("res://scripts/sim/records/settlement.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 ## Headless Milestone 0 acceptance check. Run with:
@@ -42,20 +41,21 @@ func _run_year(seed: int) -> Dictionary:
 		_check_invariants(sim, d)
 
 	var summary := {}
-	for settlement_id in sim.settlements.keys():
+	for settlement_id in sim.get_settlement_ids():
 		summary[settlement_id] = sim.get_settlement_summary(settlement_id)
 	return summary
 
 func _check_invariants(sim: Simulation, on_day: int) -> void:
-	for settlement_id in sim.settlements.keys():
-		var s: Settlement = sim.settlements[settlement_id]
+	for settlement_id in sim.get_settlement_ids():
+		var s := sim.get_settlement_summary(settlement_id)
 		for c in Commodity.ALL:
-			var v: float = s.stock(c)
+			var name := Commodity.name_of(c)
+			var v: float = s["inventory"][name]
 			if v < -0.001:
-				push_error("Negative stock: %s %s = %f on day %d" % [s.name, Commodity.name_of(c), v, on_day])
+				push_error("Negative stock: %s %s = %f on day %d" % [s["name"], name, v, on_day])
 				_ok = false
 			elif v > SANITY_CEILING:
-				push_error("Stock exceeded sanity ceiling: %s %s = %f on day %d" % [s.name, Commodity.name_of(c), v, on_day])
+				push_error("Stock exceeded sanity ceiling: %s %s = %f on day %d" % [s["name"], name, v, on_day])
 				_ok = false
 
 func _print_summary(summary: Dictionary) -> void:
@@ -65,6 +65,7 @@ func _print_summary(summary: Dictionary) -> void:
 		print("\n%s (population %d)" % [s["name"], s["population"]])
 		for commodity_name in s["inventory"].keys():
 			var stock: float = s["inventory"][commodity_name]
-			var unmet: float = s["unmet_demand"][commodity_name]
-			if stock > 0.01 or unmet > 0.01:
-				print("  %-10s stock=%8.1f  unmet_demand=%8.1f" % [commodity_name, stock, unmet])
+			var unmet_total: float = s["unmet_demand_total"][commodity_name]
+			var unmet_today: float = s["unmet_today"][commodity_name]
+			if stock > 0.01 or unmet_total > 0.01:
+				print("  %-10s stock=%8.1f  unmet_total=%8.1f  unmet_today=%6.1f" % [commodity_name, stock, unmet_total, unmet_today])

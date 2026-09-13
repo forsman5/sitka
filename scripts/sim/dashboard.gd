@@ -2,23 +2,23 @@ extends Control
 
 ## Milestone 0.5: a live, speed-controllable read-out of the simulation.
 ## This is a view only -- it holds one Simulation instance, advances it by
-## calling advance_ticks() (never touches its internals directly), and
-## re-renders from get_settlement_summary() snapshots. No game logic lives
-## here.
+## calling advance_ticks(), and re-renders from Simulation's read-only query
+## methods (get_settlement_ids/get_clock_summary/get_settlement_summary/
+## get_workplace_ids/get_workplace_status). It never reaches into
+## Simulation's internal Dictionaries directly. No game logic lives here.
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 const SEED := 12345
 const SECONDS_PER_DAY_AT_1X := 1.0
-const SEASON_NAMES := ["Spring", "Summer", "Autumn", "Winter"]
 
 var _simulation: Simulation
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _time_label: Label
-# settlement_id -> {"header": Label, "stock": {commodity_name: Label}, "unmet": {commodity_name: Label}}
+# settlement_id -> {"header": Label, "stock"/"today"/"rolling": {commodity_name: Label}, "workplaces": {workplace_id: Label}}
 var _settlement_rows: Dictionary = {}
 
 func _ready() -> void:
@@ -76,8 +76,8 @@ func _build_ui() -> void:
 	settlement_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(settlement_list)
 
-	for settlement_id in _simulation.settlements.keys():
-		_settlement_rows[settlement_id] = _build_settlement_panel(settlement_list)
+	for settlement_id in _simulation.get_settlement_ids():
+		_settlement_rows[settlement_id] = _build_settlement_panel(settlement_list, settlement_id)
 
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
@@ -85,7 +85,7 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
 	return btn
 
-func _build_settlement_panel(parent: VBoxContainer) -> Dictionary:
+func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dictionary:
 	var panel := PanelContainer.new()
 	parent.add_child(panel)
 
@@ -97,11 +97,17 @@ func _build_settlement_panel(parent: VBoxContainer) -> Dictionary:
 	inner.add_child(header)
 
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 4
 	inner.add_child(grid)
+	for col_label in ["Commodity", "Stock", "Unmet (today)", "Unmet (30d)"]:
+		var col_header := Label.new()
+		col_header.text = col_label
+		col_header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(col_header)
 
 	var stock_labels := {}
-	var unmet_labels := {}
+	var today_labels := {}
+	var rolling_labels := {}
 	for c in Commodity.ALL:
 		var name_label := Label.new()
 		name_label.text = Commodity.name_of(c)
@@ -113,27 +119,68 @@ func _build_settlement_panel(parent: VBoxContainer) -> Dictionary:
 		grid.add_child(stock_label)
 		stock_labels[Commodity.name_of(c)] = stock_label
 
-		var unmet_label := Label.new()
-		unmet_label.custom_minimum_size = Vector2(120, 0)
-		unmet_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
-		grid.add_child(unmet_label)
-		unmet_labels[Commodity.name_of(c)] = unmet_label
+		var today_label := Label.new()
+		today_label.custom_minimum_size = Vector2(100, 0)
+		today_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+		grid.add_child(today_label)
+		today_labels[Commodity.name_of(c)] = today_label
 
-	return {"header": header, "stock": stock_labels, "unmet": unmet_labels}
+		var rolling_label := Label.new()
+		rolling_label.custom_minimum_size = Vector2(100, 0)
+		rolling_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.4))
+		grid.add_child(rolling_label)
+		rolling_labels[Commodity.name_of(c)] = rolling_label
+
+	var workplace_labels := {}
+	var workplace_ids := _simulation.get_workplace_ids(settlement_id)
+	if not workplace_ids.is_empty():
+		var wp_header := Label.new()
+		wp_header.text = "Workplaces"
+		wp_header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		inner.add_child(wp_header)
+		for workplace_id in workplace_ids:
+			var wp_label := Label.new()
+			inner.add_child(wp_label)
+			workplace_labels[workplace_id] = wp_label
+
+	return {
+		"header": header,
+		"stock": stock_labels,
+		"today": today_labels,
+		"rolling": rolling_labels,
+		"workplaces": workplace_labels,
+	}
 
 func _refresh() -> void:
-	var s := _simulation.season()
-	_time_label.text = "Day %d  |  Year %d, %s" % [_simulation.day, _simulation.year, SEASON_NAMES[s]]
+	var clock := _simulation.get_clock_summary()
+	_time_label.text = "Day %d  |  Year %d, %s" % [clock["day"], clock["year"], clock["season_name"]]
 
-	for settlement_id in _simulation.settlements.keys():
+	for settlement_id in _simulation.get_settlement_ids():
 		var summary: Dictionary = _simulation.get_settlement_summary(settlement_id)
 		var row: Dictionary = _settlement_rows[settlement_id]
 		(row["header"] as Label).text = "%s (population %d)" % [summary["name"], summary["population"]]
 
 		var stock_labels: Dictionary = row["stock"]
-		var unmet_labels: Dictionary = row["unmet"]
+		var today_labels: Dictionary = row["today"]
+		var rolling_labels: Dictionary = row["rolling"]
 		for commodity_name in summary["inventory"].keys():
 			var stock: float = summary["inventory"][commodity_name]
-			var unmet: float = summary["unmet_demand"][commodity_name]
+			var today: float = summary["unmet_today"][commodity_name]
+			var rolling: float = summary["unmet_rolling_30d"][commodity_name]
 			(stock_labels[commodity_name] as Label).text = "%.1f" % stock
-			(unmet_labels[commodity_name] as Label).text = ("unmet %.1f" % unmet) if unmet > 0.01 else ""
+			(today_labels[commodity_name] as Label).text = ("%.1f" % today) if today > 0.01 else ""
+			(rolling_labels[commodity_name] as Label).text = ("%.1f" % rolling) if rolling > 0.01 else ""
+
+		var workplace_labels: Dictionary = row["workplaces"]
+		for workplace_id in workplace_labels.keys():
+			var status := _simulation.get_workplace_status(workplace_id)
+			var label := workplace_labels[workplace_id] as Label
+			var planned: float = status["planned_units"]
+			var actual: float = status["actual_units"]
+			var limiting = status["limiting_input"]
+			if limiting != null:
+				label.text = "  %s: %.1f / %.1f units -- limited by %s" % [status["recipe_id"], actual, planned, Commodity.name_of(limiting)]
+				label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+			else:
+				label.text = "  %s: %.1f / %.1f units" % [status["recipe_id"], actual, planned]
+				label.add_theme_color_override("font_color", Color(0.7, 0.85, 0.7))
