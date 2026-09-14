@@ -109,12 +109,12 @@ func _check_recovery_boundary() -> void:
 
 	sim.advance_ticks(150)
 	var s := sim.get_settlement_summary(SETTLEMENT_ID)
-	print("  food_stress: peak(day95)=%.2f -> day245=%.2f, emigration_desire=%d, starvation_deaths=%d" % [
-		stress_at_shortage, s["avg_food_stress"], s["emigration_desire_count"], s["starvation_deaths_total"]])
+	print("  food_stress: peak(day95)=%.2f -> day245=%.2f, migration_pressure=%d, starvation_deaths=%d" % [
+		stress_at_shortage, s["avg_food_stress"], s["migration_pressure_count"], s["starvation_deaths_total"]])
 
 	_assert(stress_at_shortage > 0.15, "Recovery boundary should show a real stress rise from the thin starting buffer, got %.3f" % stress_at_shortage)
 	_assert(s["avg_food_stress"] < 0.05, "Recovery boundary stress should have recovered by day 245, got %.3f" % s["avg_food_stress"])
-	_assert(s["emigration_desire_count"] == 0, "Recovery boundary should never cross the emigration threshold, got %d households wanting to leave" % s["emigration_desire_count"])
+	_assert(s["migration_pressure_count"] == 0, "Recovery boundary should never cross the migration-pressure threshold, got %d households under pressure" % s["migration_pressure_count"])
 	_assert(s["starvation_deaths_total"] == 0, "Recovery boundary should never reach starvation, got %d deaths" % s["starvation_deaths_total"])
 
 ## The spec's Milestone 1 acceptance bar, directly: "blocking one edge or
@@ -142,7 +142,7 @@ func _check_trade_pair() -> void:
 	# Connected must demonstrate actual viability, not just "not collapsed".
 	_assert(c["grain_fulfillment_rolling_30d"] > 0.90, "Connected Bareland should have high grain fulfillment, got %.2f" % c["grain_fulfillment_rolling_30d"])
 	_assert(c["starvation_deaths_total"] == 0, "Connected Bareland should have zero starvation deaths, got %d" % c["starvation_deaths_total"])
-	_assert(c["emigration_desire_count"] == 0, "Connected Bareland should have no persistent emigration desire, got %d" % c["emigration_desire_count"])
+	_assert(c["migration_pressure_count"] == 0, "Connected Bareland should have no persistent migration pressure, got %d" % c["migration_pressure_count"])
 	_assert(c["population"] == initial_population, "Connected Bareland population should be stable, got %d -> %d" % [initial_population, c["population"]])
 	_assert(c["shipments_received_total"] > 0, "Connected Bareland should have received at least one shipment, got %d" % c["shipments_received_total"])
 

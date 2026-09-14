@@ -336,7 +336,7 @@ Use food security as the first complete causal chain:
 
 ```text
 land and labor -> grain production -> household food fulfillment
--> household stress -> emigration or mortality
+-> household stress -> migration pressure or mortality
 -> changed population and workforce -> changed production and demand
 -> equilibrium or collapse
 ```
@@ -346,7 +346,7 @@ land and labor -> grain production -> household food fulfillment
 Each household gains:
 
 - `food_stress`, bounded from 0.0 to 1.0;
-- consecutive days below the emigration fulfillment threshold;
+- consecutive days below the migration-pressure fulfillment threshold;
 - consecutive days below the severe-starvation threshold.
 
 Each settlement derives rather than separately owns:
@@ -354,7 +354,7 @@ Each settlement derives rather than separately owns:
 - headcount;
 - available worker capacity;
 - daily and rolling 30-day grain fulfillment;
-- recent emigrant and starvation counts;
+- recent migration-pressure and starvation counts;
 - population trend;
 - status: stable, food insecure, contracting, or collapsed.
 
@@ -376,11 +376,12 @@ Initial tuning rules:
 - a fully fed day reduces food stress;
 - a partially fed day increases stress in proportion to the shortage;
 - one isolated bad day cannot trigger departure or death;
-- emigration becomes possible after at least 21 consecutive days below 75% fulfillment and elevated stress;
+- migration pressure becomes possible after at least 21 consecutive days below 75% fulfillment and elevated stress;
 - starvation becomes possible only after at least 60 consecutive days below 25% fulfillment and near-maximum stress;
-- evaluate emigration weekly and starvation monthly, with deterministic household ordering.
+- evaluate migration pressure weekly and starvation monthly, with deterministic household ordering;
+- both consecutive-day counts are read off the settlement's rolling 30-day fulfillment, not that single day's ratio, so a periodic shipment delivery can't reset weeks of real shortage back to zero.
 
-These values are configuration constants, not final balance decisions. Emigration should be the dominant early response. An emigrating household leaves the isolated test world and is counted in the settlement history. During starvation, reduce household members before deleting an empty household; remove dependents before workers for the initial mechanical model. This is deliberately an aggregate pressure model, not an assertion about historical household behavior.
+These values are configuration constants, not final balance decisions. Migration pressure should be the dominant early signal of hardship, but for this milestone it is tracked and reported, not realized: a household under sustained pressure is marked as wanting to relocate, and that pressure is visible in settlement/game-over reporting, but no household actually leaves. Realized migration needs the same connectivity/movement mechanics goods movement uses (Milestone 1's shipments move goods, not people) and is deferred to a later milestone. During starvation, reduce household members before deleting an empty household; remove dependents before workers for the initial mechanical model. This is deliberately an aggregate pressure model, not an assertion about historical household behavior.
 
 Recovery resets consecutive-shortage counters once the relevant fulfillment threshold is met and gradually reduces stress. This allows a settlement to survive a poor season without retaining permanent hidden damage.
 
@@ -403,7 +404,7 @@ A settlement is collapsed when it has no households. The player's holding enters
 ```text
 Aldford collapsed after 214 days of severe food shortage:
 grain fulfillment averaged 8% over the final 30 days;
-63 households emigrated and 11 people died.
+63 households were under sustained migration pressure (relocation not yet possible) and 11 people died.
 ```
 
 The dashboard stops automatic advancement on game over but retains the final state for inspection and offers restart with the same seed. Non-player settlement collapse is reported but does not end the run.
@@ -413,9 +414,9 @@ The dashboard stops automatic advancement on game over but retains the final sta
 Add small scenario builders that use the same simulation code and differ only in seed data:
 
 1. **Viable farm:** enough farm capacity and workers to survive at least ten years, with bounded seasonal grain stocks and no sustained population loss.
-2. **Overpopulated farm:** population begins above carrying capacity, contracts, and reaches a stable range with no emigration or starvation during the final simulated year.
+2. **Overpopulated farm:** population begins above carrying capacity, contracts, and reaches a stable range with no migration pressure or starvation during the final simulated year.
 3. **No-food settlement:** a finite starting stock delays shortage, after which population declines and the settlement reaches collapse/game over within an authored maximum duration.
-4. **Recovery boundary:** a temporary shortage raises stress, restored production prevents emigration or mortality, and stress later falls.
+4. **Recovery boundary:** a temporary shortage raises stress, restored production prevents migration pressure or mortality, and stress later falls.
 
 Tests should assert ranges and trends rather than one fragile exact population, while repeated runs with the same seed must still produce identical histories. Run long enough to cover multiple full seasonal cycles; ten simulated years is the default equilibrium horizon.
 
@@ -427,7 +428,7 @@ Add:
 - available and assigned workers;
 - today's and rolling grain fulfillment;
 - average household food stress;
-- recent emigration and mortality;
+- recent migration pressure and mortality;
 - population change over the last year;
 - settlement status and game-over explanation.
 

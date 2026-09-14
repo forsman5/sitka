@@ -26,6 +26,7 @@ var actual_labor: float = 0.0
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
 var last_limiting_input = null # Commodity.Type, or null if not input-constrained
+var last_input_requested: Dictionary = {} # what planned_units would need, before affordability capped it
 var last_input_consumed: Dictionary = {}
 var last_output_produced: Dictionary = {}
 var last_utilization_ratio: float = 1.0 # actual_units / fully-staffed-and-unconstrained potential

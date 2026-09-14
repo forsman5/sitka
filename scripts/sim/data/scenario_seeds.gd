@@ -74,22 +74,23 @@ static func build_viable_farm(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS, 3000.0, VIABLE_FARM_TARGET_LABOR)
 
 ## Same land/labor capacity as the viable farm, but starts well above the
-## carrying capacity it supports. Should contract via starvation (emigration
-## is desire-only right now -- there's nowhere to go) until population falls
-## back toward roughly the same ~120 equilibrium, then stabilize.
+## carrying capacity it supports. Should contract via starvation (migration
+## pressure is tracked/reported but not yet realized -- relocation isn't
+## implemented) until population falls back toward roughly the same ~120
+## equilibrium, then stabilize.
 static func build_overpopulated_farm(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS * 3, 3000.0, VIABLE_FARM_TARGET_LABOR)
 
 ## No farm at all -- a finite starting stock delays the reckoning, but with
 ## zero production the settlement must eventually exhaust it, then decline
-## through emigration desire and starvation to collapse.
+## through migration pressure and starvation to collapse.
 static func build_no_food_settlement(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS, 2000.0, 0.0)
 
 ## Same viable farm, but with a much thinner starting buffer: a real (not
 ## just cosmetic) shortage in the first spring, before summer's higher
 ## output arrives, that should raise stress without crossing the
-## emigration/starvation consecutive-day thresholds -- and then recover.
+## migration-pressure/starvation consecutive-day thresholds -- and then recover.
 static func build_recovery_boundary(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS, 200.0, VIABLE_FARM_TARGET_LABOR)
 

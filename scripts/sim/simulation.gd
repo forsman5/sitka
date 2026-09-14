@@ -41,7 +41,7 @@ const HERD_GROWTH_RATE := 0.05
 const HERD_HARD_CEILING := 3000.0
 
 const HISTORY_MAX_DAYS := 360
-const EMIGRATION_EVAL_INTERVAL_DAYS := 7
+const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const STARVATION_EVAL_INTERVAL_DAYS := 30
 const COLLAPSE_HOUSEHOLD_THRESHOLD := 5
 const COLLAPSE_SUSTAINED_DAYS := 30
@@ -96,7 +96,7 @@ var _next_shipment_id := 1
 
 var _history: Dictionary[int, Array] = {} # settlement_id -> Array[Dictionary], oldest first, capped at HISTORY_MAX_DAYS
 
-var _emigration_desire_count: Dictionary = {} # settlement_id -> int, recomputed weekly
+var _migration_pressure_count: Dictionary = {} # settlement_id -> int, recomputed weekly
 var _starvation_deaths_recent: Dictionary = {} # settlement_id -> int, recomputed monthly
 var _starvation_deaths_total: Dictionary = {} # settlement_id -> int, lifetime
 var _shipments_delivered_total: Dictionary = {} # settlement_id (destination) -> int, lifetime
@@ -168,7 +168,7 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"available_workers": _live_available_workers(settlement_id),
 		"assigned_workers": record.get("assigned_workers", 0.0),
 		"avg_food_stress": _avg_food_stress(settlement_id),
-		"emigration_desire_count": _emigration_desire_count.get(settlement_id, 0),
+		"migration_pressure_count": _migration_pressure_count.get(settlement_id, 0),
 		"starvation_deaths_recent": _starvation_deaths_recent.get(settlement_id, 0),
 		"starvation_deaths_total": _starvation_deaths_total.get(settlement_id, 0),
 		"shipments_received_total": _shipments_delivered_total.get(settlement_id, 0),
@@ -216,6 +216,7 @@ func get_workplace_reports(settlement_id: int) -> Array:
 			"actual_units": w.last_actual_units,
 			"utilization_ratio": w.last_utilization_ratio,
 			"limiting_input": w.last_limiting_input,
+			"input_requested": w.last_input_requested.duplicate(),
 			"input_consumed": w.last_input_consumed.duplicate(),
 			"output_produced": w.last_output_produced.duplicate(),
 		})
@@ -294,8 +295,11 @@ func get_game_over_info() -> Dictionary:
 #   4. run workplace production, record industrial flows
 #   5. run household consumption, record fulfillment
 #   6. (weekly) decide and depart new shipments, based on today's stock
-#   7. finalize closing balances, append history
-#   8. weekly/monthly household evaluations, collapse check, calendar
+#   7. weekly/monthly household evaluations (migration pressure, starvation --
+#      before finalizing, so a starvation death this same day is reflected
+#      in the record about to be appended, not the day after)
+#   8. finalize closing balances (re-synced population included), append
+#      history, then check collapse/game-over, then advance the calendar
 # ---------------------------------------------------------------------------
 
 func _daily_tick() -> void:
@@ -318,12 +322,12 @@ func _daily_tick() -> void:
 	if (day + 1) % DAYS_PER_SEASON == 0:
 		_run_seasonal_herds(records)
 
-	_finalize_daily_records(records)
-
-	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
-		_evaluate_emigration_desire()
+	if (day + 1) % MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS == 0:
+		_evaluate_migration_pressure()
 	if (day + 1) % STARVATION_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_starvation()
+
+	_finalize_daily_records(records)
 	_evaluate_collapse_and_game_over()
 
 	if (day + 1) % DAYS_PER_YEAR == 0:
@@ -417,6 +421,7 @@ func _run_production(records: Dictionary) -> void:
 		workplace.last_planned_units = planned_units
 		workplace.last_actual_units = actual_units
 		workplace.last_limiting_input = limiting_input
+		workplace.last_input_requested = input_requested
 		workplace.last_input_consumed = input_consumed
 		workplace.last_output_produced = output_produced
 		workplace.last_utilization_ratio = (actual_units / planned_units) if planned_units > 0.0 else 1.0
@@ -452,7 +457,7 @@ func _run_consumption(records: Dictionary) -> void:
 		# (today's record isn't finalized/appended to history yet), which is
 		# fine for a 30-day smoothing window.
 		var rolling_ratio := _rolling_fulfillment_ratio(settlement_id, grain_name, 30)
-		var rolling_is_low := rolling_ratio < Household.EMIGRATION_FULFILLMENT_THRESHOLD
+		var rolling_is_low := rolling_ratio < Household.MIGRATION_PRESSURE_FULFILLMENT_THRESHOLD
 		var rolling_is_severe := rolling_ratio < Household.STARVATION_FULFILLMENT_THRESHOLD
 		for household_id in settlement.household_ids:
 			(households[household_id] as Household).apply_daily_fulfillment(fulfillment, rolling_is_low, rolling_is_severe)
@@ -565,13 +570,17 @@ func _run_trade(records: Dictionary) -> void:
 func _finalize_daily_records(records: Dictionary) -> void:
 	for settlement_id in settlements.keys():
 		var record: Dictionary = records[settlement_id]
+		# Re-sync now, after this same day's starvation evaluation may have
+		# removed/shrunk households -- record["population"] was set earlier
+		# in _run_consumption, before that happened.
+		record["population"] = _live_population(settlement_id)
 		record["closing_stock"] = _snapshot_stock(settlement_id)
 		var history: Array = _history[settlement_id]
 		history.append(record)
 		if history.size() > HISTORY_MAX_DAYS:
 			history.pop_front()
 
-func _evaluate_emigration_desire() -> void:
+func _evaluate_migration_pressure() -> void:
 	for settlement_id in settlements.keys():
 		var settlement: Settlement = settlements[settlement_id]
 		var ids := settlement.household_ids.duplicate()
@@ -579,10 +588,10 @@ func _evaluate_emigration_desire() -> void:
 		var count := 0
 		for household_id in ids:
 			var h: Household = households[household_id]
-			h.update_emigration_desire()
-			if h.wants_to_emigrate:
+			h.update_migration_pressure()
+			if h.has_migration_pressure:
 				count += 1
-		_emigration_desire_count[settlement_id] = count
+		_migration_pressure_count[settlement_id] = count
 
 func _evaluate_starvation() -> void:
 	for settlement_id in settlements.keys():
@@ -625,17 +634,17 @@ func _trigger_game_over(settlement_id: int) -> void:
 		"year": year,
 		"settlement_id": settlement_id,
 		"settlement_name": settlement.name,
-		"summary": "%s collapsed on day %d (year %d): grain fulfillment averaged %.0f%% over the final 30 days; %d households wanted to leave (no viable route) and %d people died of starvation." % [
+		"summary": "%s collapsed on day %d (year %d): grain fulfillment averaged %.0f%% over the final 30 days; %d households were under sustained migration pressure (relocation not yet possible) and %d people died of starvation." % [
 			settlement.name, day, year, avg_fulfillment,
-			_emigration_desire_count.get(settlement_id, 0),
+			_migration_pressure_count.get(settlement_id, 0),
 			_starvation_deaths_total.get(settlement_id, 0),
 		],
 	}
 
 # ---------------------------------------------------------------------------
 # Derived-state helpers (population/workforce are always computed from the
-# authoritative household records, never cached, so a starvation death or
-# emigration is immediately reflected everywhere).
+# authoritative household records, never cached, so a starvation death is
+# immediately reflected everywhere).
 # ---------------------------------------------------------------------------
 
 func _live_population(settlement_id: int) -> int:
