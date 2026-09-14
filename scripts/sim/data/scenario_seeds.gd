@@ -141,7 +141,7 @@ static func _build_trade_pair(edge_capacity: float) -> Dictionary:
 	farmland.workplace_ids.append(1)
 
 	var edges: Dictionary[int, TransportEdge] = {
-		TRADE_EDGE_ID: TransportEdge.new(TRADE_EDGE_ID, FARMLAND_ID, BARELAND_ID, TransportEdge.Mode.CART, edge_capacity, 1.0, 1.0, 0.0, 0.05),
+		TRADE_EDGE_ID: TransportEdge.new(TRADE_EDGE_ID, FARMLAND_ID, BARELAND_ID, TransportEdge.Mode.CART, edge_capacity, 4.0, 4.0, 0.0, 0.05),
 	}
 
 	return {

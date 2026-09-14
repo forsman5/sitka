@@ -166,11 +166,14 @@ static func _build_transport_edges() -> Dictionary[int, TransportEdge]:
 	#
 	# Each edge is one shared physical connection (settlement_a <-> b); roads
 	# and tracks are symmetric, river barge edges are faster downstream
-	# (a -> b, with the current) than upstream (b -> a).
-	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 20.0, 1.5, 1.5, 0.0, 0.1)
-	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 15.0, 1.0, 1.0, 0.0, 0.1)
-	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 15.0, 0.5, 0.5, 0.0, 0.05)
-	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 25.0, 0.4, 0.7, 0.0, 0.05)
-	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 10.0, 0.8, 1.4, 0.05, 0.1)
-	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 30.0, 0.8, 1.4, 0.05, 0.05)
+	# (a -> b, with the current) than upstream (b -> a). Travel times bumped
+	# 4x from the original figures so a shipment is actually visible in
+	# transit for a few days (on the route map, Milestone 1.1) instead of
+	# resolving almost instantly relative to the weekly trade cadence.
+	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 20.0, 6.0, 6.0, 0.0, 0.1)
+	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 15.0, 4.0, 4.0, 0.0, 0.1)
+	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 15.0, 2.0, 2.0, 0.0, 0.05)
+	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 25.0, 1.6, 2.8, 0.0, 0.05)
+	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 10.0, 3.2, 5.6, 0.05, 0.1)
+	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 30.0, 3.2, 5.6, 0.05, 0.05)
 	return edges

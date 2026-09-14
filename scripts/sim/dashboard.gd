@@ -1,15 +1,18 @@
 extends Control
 
-## Milestone 0.75/0.76/1: a live, speed-controllable read-out of the
+## Milestone 0.75/0.76/1/1.1: a live, speed-controllable read-out of the
 ## simulation. This is a view only -- it holds one Simulation instance,
 ## advances it by calling advance_ticks(), and re-renders from Simulation's
 ## read-only query methods (get_settlement_ids/get_clock_summary/
 ## get_settlement_summary/get_workplace_reports/get_settlement_prices/
-## get_active_shipments/get_game_over_info). It never reaches into
-## Simulation's internal Dictionaries directly. No game logic lives here.
+## get_active_shipments/get_transport_edge_ids/get_game_over_info). It never
+## reaches into Simulation's internal Dictionaries directly. No game logic
+## lives here. The schematic route map (route_map.gd) is a sibling view of
+## the same Simulation instance, not a separate authority.
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const RouteMap = preload("res://scripts/sim/route_map.gd")
 
 const SEED := 12345
 const SECONDS_PER_DAY_AT_1X := 1.0
@@ -21,6 +24,7 @@ var _game_over_shown := false
 
 var _time_label: Label
 var _game_over_label: Label
+var _route_map: RouteMap
 var _shipments_box: VBoxContainer
 # settlement_id -> {"header", "status", "population", "workers", "stress", "grid": {commodity_name: {"stock","today","rolling"}}, "workplaces_box"}
 var _settlement_rows: Dictionary = {}
@@ -80,6 +84,12 @@ func _build_ui() -> void:
 	_game_over_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_game_over_label.visible = false
 	vbox.add_child(_game_over_label)
+
+	_route_map = RouteMap.new()
+	_route_map.simulation = _simulation
+	_route_map.custom_minimum_size = Vector2(0, 320)
+	_route_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_route_map)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -213,6 +223,7 @@ func _refresh() -> void:
 		_refresh_workplace_rows(row, settlement_id)
 
 	_refresh_shipments()
+	_route_map.queue_redraw()
 
 func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 	var workplaces_box: VBoxContainer = row["workplaces_box"]
