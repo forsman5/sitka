@@ -1,0 +1,475 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "link_mode": "sparse",
+  "valley_count": 4,
+  "settlements": [
+    {
+      "id": 1,
+      "name": "Valley 01 / 01",
+      "valley": 1,
+      "archetype": 1,
+      "households": 131
+    },
+    {
+      "id": 2,
+      "name": "Valley 01 / 02",
+      "valley": 1,
+      "archetype": 5,
+      "households": 64
+    },
+    {
+      "id": 3,
+      "name": "Valley 01 / 03",
+      "valley": 1,
+      "archetype": 1,
+      "households": 81
+    },
+    {
+      "id": 4,
+      "name": "Valley 01 / 04",
+      "valley": 1,
+      "archetype": 4,
+      "households": 63
+    },
+    {
+      "id": 5,
+      "name": "Valley 01 / 05",
+      "valley": 1,
+      "archetype": 4,
+      "households": 61
+    },
+    {
+      "id": 6,
+      "name": "Valley 01 / 06",
+      "valley": 1,
+      "archetype": 4,
+      "households": 127
+    },
+    {
+      "id": 7,
+      "name": "Valley 02 / 01",
+      "valley": 2,
+      "archetype": 1,
+      "households": 139
+    },
+    {
+      "id": 8,
+      "name": "Valley 02 / 02",
+      "valley": 2,
+      "archetype": 5,
+      "households": 119
+    },
+    {
+      "id": 9,
+      "name": "Valley 02 / 03",
+      "valley": 2,
+      "archetype": 1,
+      "households": 107
+    },
+    {
+      "id": 10,
+      "name": "Valley 02 / 04",
+      "valley": 2,
+      "archetype": 2,
+      "households": 139
+    },
+    {
+      "id": 11,
+      "name": "Valley 02 / 05",
+      "valley": 2,
+      "archetype": 2,
+      "households": 77
+    },
+    {
+      "id": 12,
+      "name": "Valley 02 / 06",
+      "valley": 2,
+      "archetype": 3,
+      "households": 94
+    },
+    {
+      "id": 13,
+      "name": "Valley 03 / 01",
+      "valley": 3,
+      "archetype": 1,
+      "households": 65
+    },
+    {
+      "id": 14,
+      "name": "Valley 03 / 02",
+      "valley": 3,
+      "archetype": 5,
+      "households": 98
+    },
+    {
+      "id": 15,
+      "name": "Valley 03 / 03",
+      "valley": 3,
+      "archetype": 1,
+      "households": 87
+    },
+    {
+      "id": 16,
+      "name": "Valley 03 / 04",
+      "valley": 3,
+      "archetype": 2,
+      "households": 140
+    },
+    {
+      "id": 17,
+      "name": "Valley 03 / 05",
+      "valley": 3,
+      "archetype": 2,
+      "households": 148
+    },
+    {
+      "id": 18,
+      "name": "Valley 03 / 06",
+      "valley": 3,
+      "archetype": 3,
+      "households": 108
+    },
+    {
+      "id": 19,
+      "name": "Valley 04 / 01",
+      "valley": 4,
+      "archetype": 1,
+      "households": 135
+    },
+    {
+      "id": 20,
+      "name": "Valley 04 / 02",
+      "valley": 4,
+      "archetype": 5,
+      "households": 84
+    },
+    {
+      "id": 21,
+      "name": "Valley 04 / 03",
+      "valley": 4,
+      "archetype": 1,
+      "households": 118
+    },
+    {
+      "id": 22,
+      "name": "Valley 04 / 04",
+      "valley": 4,
+      "archetype": 3,
+      "households": 98
+    },
+    {
+      "id": 23,
+      "name": "Valley 04 / 05",
+      "valley": 4,
+      "archetype": 4,
+      "households": 78
+    },
+    {
+      "id": 24,
+      "name": "Valley 04 / 06",
+      "valley": 4,
+      "archetype": 2,
+      "households": 79
+    }
+  ],
+  "edges": [
+    {
+      "id": 1,
+      "a": 1,
+      "b": 2,
+      "kind": "river",
+      "capacity": 170,
+      "days_ab": 2,
+      "days_ba": 3.5,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 2,
+      "a": 2,
+      "b": 3,
+      "kind": "river",
+      "capacity": 135,
+      "days_ab": 3,
+      "days_ba": 5.25,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 3,
+      "a": 3,
+      "b": 4,
+      "kind": "feeder",
+      "capacity": 77,
+      "days_ab": 9,
+      "days_ba": 9,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 4,
+      "a": 3,
+      "b": 5,
+      "kind": "feeder",
+      "capacity": 22,
+      "days_ab": 7,
+      "days_ba": 7,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 5,
+      "a": 4,
+      "b": 5,
+      "kind": "track",
+      "capacity": 34,
+      "days_ab": 5,
+      "days_ba": 5,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 6,
+      "a": 1,
+      "b": 6,
+      "kind": "feeder",
+      "capacity": 32,
+      "days_ab": 8,
+      "days_ba": 8,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 7,
+      "a": 7,
+      "b": 8,
+      "kind": "river",
+      "capacity": 156,
+      "days_ab": 5,
+      "days_ba": 8.75,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 8,
+      "a": 8,
+      "b": 9,
+      "kind": "river",
+      "capacity": 101,
+      "days_ab": 4,
+      "days_ba": 7.0,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 9,
+      "a": 8,
+      "b": 10,
+      "kind": "feeder",
+      "capacity": 37,
+      "days_ab": 6,
+      "days_ba": 6,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 10,
+      "a": 8,
+      "b": 11,
+      "kind": "feeder",
+      "capacity": 25,
+      "days_ab": 4,
+      "days_ba": 4,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 11,
+      "a": 9,
+      "b": 12,
+      "kind": "feeder",
+      "capacity": 71,
+      "days_ab": 6,
+      "days_ba": 6,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 12,
+      "a": 11,
+      "b": 12,
+      "kind": "track",
+      "capacity": 54,
+      "days_ab": 7,
+      "days_ba": 7,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 13,
+      "a": 13,
+      "b": 14,
+      "kind": "river",
+      "capacity": 241,
+      "days_ab": 2,
+      "days_ba": 3.5,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 14,
+      "a": 14,
+      "b": 15,
+      "kind": "river",
+      "capacity": 247,
+      "days_ab": 4,
+      "days_ba": 7.0,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 15,
+      "a": 13,
+      "b": 16,
+      "kind": "feeder",
+      "capacity": 62,
+      "days_ab": 4,
+      "days_ba": 4,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 16,
+      "a": 14,
+      "b": 17,
+      "kind": "feeder",
+      "capacity": 74,
+      "days_ab": 4,
+      "days_ba": 4,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 17,
+      "a": 16,
+      "b": 17,
+      "kind": "track",
+      "capacity": 44,
+      "days_ab": 4,
+      "days_ba": 4,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 18,
+      "a": 15,
+      "b": 18,
+      "kind": "feeder",
+      "capacity": 43,
+      "days_ab": 10,
+      "days_ba": 10,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 19,
+      "a": 17,
+      "b": 18,
+      "kind": "track",
+      "capacity": 33,
+      "days_ab": 6,
+      "days_ba": 6,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 20,
+      "a": 19,
+      "b": 20,
+      "kind": "river",
+      "capacity": 143,
+      "days_ab": 2,
+      "days_ba": 3.5,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 21,
+      "a": 20,
+      "b": 21,
+      "kind": "river",
+      "capacity": 141,
+      "days_ab": 3,
+      "days_ba": 5.25,
+      "toll": 0.0,
+      "risk": 0.04
+    },
+    {
+      "id": 22,
+      "a": 20,
+      "b": 22,
+      "kind": "feeder",
+      "capacity": 64,
+      "days_ab": 9,
+      "days_ba": 9,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 23,
+      "a": 21,
+      "b": 23,
+      "kind": "feeder",
+      "capacity": 73,
+      "days_ab": 6,
+      "days_ba": 6,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 24,
+      "a": 19,
+      "b": 24,
+      "kind": "feeder",
+      "capacity": 40,
+      "days_ab": 10,
+      "days_ba": 10,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 25,
+      "a": 1,
+      "b": 7,
+      "kind": "pass",
+      "capacity": 33,
+      "days_ab": 4,
+      "days_ba": 4,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 26,
+      "a": 7,
+      "b": 13,
+      "kind": "pass",
+      "capacity": 76,
+      "days_ab": 8,
+      "days_ba": 8,
+      "toll": 0.0,
+      "risk": 0.1
+    },
+    {
+      "id": 27,
+      "a": 13,
+      "b": 19,
+      "kind": "pass",
+      "capacity": 40,
+      "days_ab": 9,
+      "days_ba": 9,
+      "toll": 0.0,
+      "risk": 0.1
+    }
+  ]
+}

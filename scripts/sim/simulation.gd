@@ -98,7 +98,7 @@ const PRICE_BUFFER_DAYS := 30.0
 ## nothing (population never drops there in testing); a destination running
 ## dry costs households. Left at 0.5.
 const TRADE_EVAL_INTERVAL_DAYS := 3
-const TRADE_RESERVE_FRACTION_OF_REFERENCE := 0.5
+const TRADE_RESERVE_FRACTION_OF_TARGET := 0.5
 const TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS := 0.5
 const TRADE_MIN_PROFITABLE_PRICE_GAP := 0.5
 
@@ -243,7 +243,7 @@ func get_workplace_reports(settlement_id: int) -> Array:
 	return out
 
 ## Per-commodity price for this settlement, derived from local scarcity
-## (see BASE_PRICE/REFERENCE_STOCK). Not a full market clearing -- a simple,
+## (see BASE_PRICE/_target_stock). Not a full market clearing -- a simple,
 ## explainable stand-in for Milestone 1.
 func get_settlement_prices(settlement_id: int) -> Dictionary:
 	var settlement: Settlement = settlements[settlement_id]
@@ -586,8 +586,7 @@ func _run_trade(records: Dictionary) -> void:
 				var net_gap: float = destination_price - source_price - (edge.toll + edge.risk * 2.0)
 				if net_gap < TRADE_MIN_PROFITABLE_PRICE_GAP:
 					continue
-				var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
-				var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * staffing_ratio
+				var exportable: float = _exportable_surplus(source, c) * staffing_ratio
 				if exportable <= 0.01:
 					continue
 				opportunities.append({
@@ -650,8 +649,7 @@ func _run_trade(records: Dictionary) -> void:
 		# Recompute against live stock because one center may have several
 		# opportunities (different edges and/or commodities) in this same
 		# ranked pass.
-		var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
-		var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * opportunity["staffing_ratio"]
+		var exportable: float = _exportable_surplus(source, c) * opportunity["staffing_ratio"]
 		var quantity: float = min(exportable, remaining_capacity)
 		if quantity <= 0.01:
 			continue
@@ -786,6 +784,14 @@ func _target_stock(settlement: Settlement, commodity: Commodity.Type) -> float:
 		+ _expected_industrial_demand_per_day(settlement, commodity)
 	var target: float = daily_demand * PRICE_BUFFER_DAYS + _seasonal_commitment(settlement, commodity)
 	return target if target > 0.0 else REFERENCE_STOCK[commodity]
+
+## How much of `commodity` a settlement's trade center may send out this
+## evaluation, above its own reserve. Shared by both the discovery pass
+## (net_gap/exportable check) and the allocation pass (live recompute against
+## already-adjusted stock) in _run_trade so the two can't drift apart.
+func _exportable_surplus(settlement: Settlement, commodity: Commodity.Type) -> float:
+	var reserve: float = _target_stock(settlement, commodity) * TRADE_RESERVE_FRACTION_OF_TARGET
+	return max(0.0, settlement.stock(commodity) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS
 
 ## Grain/wool/tools are the only commodities households draw on directly
 ## (see _run_consumption) -- mirrors those per-person rates so the price

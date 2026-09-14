@@ -18,6 +18,13 @@ const RouteMap = preload("res://scripts/sim/route_map.gd")
 const SEED := 12345
 const SECONDS_PER_DAY_AT_1X := 1.0
 
+## Set by main_menu.gd immediately before change_scene_to_file, as an
+## alternative to the --graph= command line arg for launches that have no
+## command line to read from (the in-editor "Large Valleys" button). Consumed
+## and cleared on the next _ready(); the headless/CLI --graph= path above is
+## unaffected.
+static var pending_graph_path: String = ""
+
 var _builder: MultiValleySeed
 var _graph: Dictionary = {}
 var _selected_id: int = -1
@@ -39,19 +46,23 @@ var _shipments_box: VBoxContainer
 var _settlement_rows: Dictionary = {}
 
 func _ready() -> void:
+	var graph_path := pending_graph_path
+	pending_graph_path = ""
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--graph="):
-			_builder = MultiValleySeed.new()
-			var error: String = _builder.load_graph(arg.trim_prefix("--graph="))
-			if not error.is_empty():
-				var message := Label.new()
-				message.text = error
-				message.position = Vector2(24, 24)
-				add_child(message)
-				push_error(error)
-				set_process(false)
-				return
-			_graph = _builder.graph
+			graph_path = arg.trim_prefix("--graph=")
+	if not graph_path.is_empty():
+		_builder = MultiValleySeed.new()
+		var error: String = _builder.load_graph(graph_path)
+		if not error.is_empty():
+			var message := Label.new()
+			message.text = error
+			message.position = Vector2(24, 24)
+			add_child(message)
+			push_error(error)
+			set_process(false)
+			return
+		_graph = _builder.graph
 	if _graph.is_empty():
 		_simulation = Simulation.new(SEED)
 	else:

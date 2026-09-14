@@ -2,3 +2,8 @@
 .godot/
 /android/
 /exports/
+
+# Multi-valley scale-probe outputs (see docs/multivalley-scale-probe.md) --
+# generated graphs/run logs are meant to stay local, not be committed.
+/multivalley.json
+/*.jsonl
