@@ -46,11 +46,13 @@ const STARVATION_EVAL_INTERVAL_DAYS := 30
 const COLLAPSE_HOUSEHOLD_THRESHOLD := 5
 const COLLAPSE_SUSTAINED_DAYS := 30
 
-## Milestone 1 (goods and routes): first-pass placeholder pricing/trade
-## constants. A settlement's price for a commodity is
-## base_price * clamp(reference_stock / stock, MIN, MAX) -- scarce is
-## pricier, abundant is cheaper, both bounded so nothing goes to zero or
-## infinity. Deliberately simple/explainable over a real clearing market.
+## Milestone 1 (goods and routes), retuned: a settlement's price for a
+## commodity is base_price * clamp(target_stock / stock, MIN, MAX) -- scarce
+## is pricier, abundant is cheaper, both bounded so nothing goes to zero or
+## infinity. target_stock is that settlement's OWN expected days-of-supply
+## need (see _target_stock), not a single valley-wide number, so the same
+## 500-grain stockpile reads as ample in a small settlement and thin in a
+## large one. Deliberately simple/explainable over a real clearing market.
 const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 1.0,
 	Commodity.Type.CATTLE: 5.0,
@@ -61,6 +63,10 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.IRON: 4.0,
 	Commodity.Type.TOOLS: 6.0,
 }
+## Fallback target stock for commodities _target_stock() can't derive from
+## demand -- cattle and sheep are herd capital (bred and held), not consumed
+## at a daily rate by anything this model tracks. Also still used as-is by
+## _run_trade's export reserve, which stays a flat per-commodity floor.
 const REFERENCE_STOCK: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 2000.0,
 	Commodity.Type.CATTLE: 200.0,
@@ -73,6 +79,9 @@ const REFERENCE_STOCK: Dictionary[Commodity.Type, float] = {
 }
 const PRICE_MULTIPLIER_MIN := 0.5
 const PRICE_MULTIPLIER_MAX := 4.0
+## Days of expected demand a settlement's price target holds as buffer --
+## the knob that turns a daily flow rate into a target stock.
+const PRICE_BUFFER_DAYS := 30.0
 
 ## A settlement won't export a commodity below this fraction of its own
 ## reference stock (keeps some at home rather than trading itself bare),
@@ -718,10 +727,62 @@ func _avg_food_stress(settlement_id: int) -> float:
 	return total / ids.size()
 
 func _price_for(settlement: Settlement, commodity: Commodity.Type) -> float:
-	var reference: float = REFERENCE_STOCK[commodity]
+	var target: float = _target_stock(settlement, commodity)
 	var stock: float = max(settlement.stock(commodity), 0.01)
-	var multiplier: float = clamp(reference / stock, PRICE_MULTIPLIER_MIN, PRICE_MULTIPLIER_MAX)
+	var multiplier: float = clamp(target / stock, PRICE_MULTIPLIER_MIN, PRICE_MULTIPLIER_MAX)
 	return BASE_PRICE[commodity] * multiplier
+
+## This settlement's target stock for `commodity`: expected household demand
+## plus expected industrial (workplace input) demand, each held for
+## PRICE_BUFFER_DAYS, plus any lump seasonal commitment (winter fodder).
+## Falls back to REFERENCE_STOCK when nothing here actually consumes the
+## commodity as a flow (cattle/sheep are herd capital, not a rate).
+func _target_stock(settlement: Settlement, commodity: Commodity.Type) -> float:
+	var daily_demand: float = _expected_household_demand_per_day(settlement, commodity) \
+		+ _expected_industrial_demand_per_day(settlement, commodity)
+	var target: float = daily_demand * PRICE_BUFFER_DAYS + _seasonal_commitment(settlement, commodity)
+	return target if target > 0.0 else REFERENCE_STOCK[commodity]
+
+## Grain/wool/tools are the only commodities households draw on directly
+## (see _run_consumption) -- mirrors those per-person rates so the price
+## target tracks the same demand the tick loop actually enforces.
+func _expected_household_demand_per_day(settlement: Settlement, commodity: Commodity.Type) -> float:
+	var population: float = _live_population(settlement.id)
+	match commodity:
+		Commodity.Type.GRAIN:
+			return population * GRAIN_PER_PERSON_PER_DAY
+		Commodity.Type.WOOL:
+			return population * WOOL_PER_PERSON_PER_DAY
+		Commodity.Type.TOOLS:
+			return population * TOOLS_PER_PERSON_PER_DAY
+	return 0.0
+
+## Sum of this settlement's own workplaces' authored demand for `commodity`
+## as a recipe input, at the current season's output modifier. Uses
+## target_labor rather than the labor-constrained actual_labor so the price
+## target reflects designed capacity, not this tick's staffing shortfall.
+func _expected_industrial_demand_per_day(settlement: Settlement, commodity: Commodity.Type) -> float:
+	var s := season()
+	var total := 0.0
+	for workplace_id in settlement.workplace_ids:
+		var workplace: Workplace = workplaces[workplace_id]
+		if workplace.kind != Workplace.Kind.PRODUCTION:
+			continue
+		var rate: float = workplace.recipe.inputs.get(commodity, 0.0)
+		if rate <= 0.0:
+			continue
+		total += rate * workplace.target_labor * workplace.recipe.seasonal_modifiers[s]
+	return total
+
+## Lump addition to grain's target stock for this settlement's current
+## herd's full winter fodder need. Held year-round (not scaled by season) so
+## the price signal builds ahead of winter instead of only reacting once
+## herds are already being fed down.
+func _seasonal_commitment(settlement: Settlement, commodity: Commodity.Type) -> float:
+	if commodity != Commodity.Type.GRAIN:
+		return 0.0
+	var herd_head: float = settlement.stock(Commodity.Type.CATTLE) + settlement.stock(Commodity.Type.SHEEP)
+	return herd_head * FODDER_PER_HEAD_PER_SEASON
 
 func _latest_record(settlement_id: int) -> Dictionary:
 	var history: Array = _history.get(settlement_id, [])
