@@ -271,6 +271,11 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	var workplaces_box := VBoxContainer.new()
 	inner.add_child(workplaces_box)
 
+	var connections_label := Label.new()
+	connections_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	connections_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
+	inner.add_child(connections_label)
+
 	return {
 		"header": header,
 		"stats": stats_label,
@@ -279,6 +284,7 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 		"today": today_labels,
 		"workplaces_box": workplaces_box,
 		"workplace_labels": {},
+		"connections": connections_label,
 	}
 
 func _refresh() -> void:
@@ -318,6 +324,7 @@ func _refresh() -> void:
 			(today_labels[commodity_name] as Label).text = ("%.1f" % today) if today > 0.01 else ""
 
 		_refresh_workplace_rows(row, settlement_id)
+		(row["connections"] as Label).text = "Connected to: " + _connected_settlement_names(settlement_id)
 
 	_refresh_shipments()
 	_route_map.refresh_snapshot()
@@ -362,6 +369,21 @@ func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 		else:
 			label.text = "  %s: %.1f / %.1f units" % [report["recipe_id"], actual, planned]
 			label.add_theme_color_override("font_color", Color(0.7, 0.85, 0.7))
+
+## Names of settlements this one has a transport edge to, comma-separated.
+## Detail about each connection (mode, capacity, travel time, etc.) will be
+## added later -- this is just the list.
+func _connected_settlement_names(settlement_id: int) -> String:
+	var names: Array[String] = []
+	for edge_id in _simulation.get_transport_edge_ids():
+		var edge := _simulation.get_transport_edge_summary(edge_id)
+		if edge["settlement_a_id"] == settlement_id:
+			names.append(edge["settlement_b_name"])
+		elif edge["settlement_b_id"] == settlement_id:
+			names.append(edge["settlement_a_name"])
+	if names.is_empty():
+		return "(none)"
+	return ", ".join(names)
 
 func _refresh_shipments() -> void:
 	for child in _shipments_box.get_children():
