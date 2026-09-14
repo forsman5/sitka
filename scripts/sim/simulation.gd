@@ -65,8 +65,12 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 }
 ## Fallback target stock for commodities _target_stock() can't derive from
 ## demand -- cattle and sheep are herd capital (bred and held), not consumed
-## at a daily rate by anything this model tracks. Also still used as-is by
-## _run_trade's export reserve, which stays a flat per-commodity floor.
+## at a daily rate by anything this model tracks. _run_trade's export
+## reserve also goes through _target_stock() (not this directly), so a
+## settlement's own growing demand is protected before anything trades away
+## -- a flat reserve let a settlement's trade center export past what its
+## own population needed once edge capacity was large enough to make that
+## possible.
 const REFERENCE_STOCK: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 2000.0,
 	Commodity.Type.CATTLE: 200.0,
@@ -84,10 +88,16 @@ const PRICE_MULTIPLIER_MAX := 4.0
 const PRICE_BUFFER_DAYS := 30.0
 
 ## A settlement won't export a commodity below this fraction of its own
-## reference stock (keeps some at home rather than trading itself bare),
-## and won't send more than this fraction of what's left above that in one
-## shipment.
-const TRADE_EVAL_INTERVAL_DAYS := 7
+## target stock (keeps some at home rather than trading itself bare), and
+## won't send more than this fraction of what's left above that in one
+## shipment. Tried raising this to 1.0 (a full PRICE_BUFFER_DAYS worth) to
+## stop a source settlement's own occasional zero-stock dip -- made things
+## worse: it starved the settlements actually depending on that export
+## faster, since less volume reached them during the critical early weeks.
+## The source dipping to "food_insecure" for a checkpoint or two costs it
+## nothing (population never drops there in testing); a destination running
+## dry costs households. Left at 0.5.
+const TRADE_EVAL_INTERVAL_DAYS := 3
 const TRADE_RESERVE_FRACTION_OF_REFERENCE := 0.5
 const TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS := 0.5
 const TRADE_MIN_PROFITABLE_PRICE_GAP := 0.5
@@ -571,7 +581,7 @@ func _run_trade(records: Dictionary) -> void:
 				var net_gap: float = destination_price - source_price - (edge.toll + edge.risk * 2.0)
 				if net_gap < TRADE_MIN_PROFITABLE_PRICE_GAP:
 					continue
-				var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
+				var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
 				var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * staffing_ratio
 				if exportable <= 0.01:
 					continue
@@ -607,7 +617,7 @@ func _run_trade(records: Dictionary) -> void:
 			var source: Settlement = settlements[source_id]
 			# Recompute against live stock because one center may export over
 			# several edges during the same weekly planning pass.
-			var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
+			var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
 			var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * opportunity["staffing_ratio"]
 			var quantity: float = min(exportable, remaining_capacity)
 			if quantity <= 0.01:

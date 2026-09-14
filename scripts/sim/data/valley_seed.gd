@@ -180,10 +180,22 @@ static func _build_transport_edges() -> Dictionary[int, TransportEdge]:
 	# 4x from the original figures so a shipment is actually visible in
 	# transit for a few days (on the route map, Milestone 1.1) instead of
 	# resolving almost instantly relative to the weekly trade cadence.
-	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 20.0, 6.0, 6.0, 0.0, 0.1)
-	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 15.0, 4.0, 4.0, 0.0, 0.1)
-	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 15.0, 2.0, 2.0, 0.0, 0.05)
-	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 25.0, 1.6, 2.8, 0.0, 0.05)
-	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 10.0, 3.2, 5.6, 0.05, 0.1)
-	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 30.0, 3.2, 5.6, 0.05, 0.05)
+	#
+	# Capacity bumped ~8x from the original figures: a settlement's weekly
+	# grain demand (population * 0.4/day * 7) runs 700-2000+ for the valley's
+	# larger settlements, and the original 10-30/week capacities were so far
+	# below that they were never the thing limiting a settlement's own
+	# exportable surplus -- they just meant every edge's whole weekly
+	# capacity got consumed by whichever single commodity/direction had the
+	# largest price gap (e.g. High Fell's wool surplus crowding out its own
+	# grain imports on its one edge to Aldford, since wool's abundance/
+	# scarcity gap outranked grain's). Bounded, not unlimited: still a real
+	# route capacity, just sized so more than one urgent trade can clear the
+	# same edge in the same week.
+	edges[1] = TransportEdge.new(1, HIGH_FELL, ALDFORD, TransportEdge.Mode.CART, 160.0, 6.0, 6.0, 0.0, 0.1)
+	edges[2] = TransportEdge.new(2, OAKMERE, ALDFORD, TransportEdge.Mode.CART, 120.0, 4.0, 4.0, 0.0, 0.1)
+	edges[3] = TransportEdge.new(3, OAKMERE, IRONBANK, TransportEdge.Mode.CART, 120.0, 2.0, 2.0, 0.0, 0.05)
+	edges[4] = TransportEdge.new(4, IRONBANK, ALDFORD, TransportEdge.Mode.RIVER_BARGE, 200.0, 1.6, 2.8, 0.0, 0.05)
+	edges[5] = TransportEdge.new(5, ALDFORD, STAITHE, TransportEdge.Mode.RIVER_BARGE, 80.0, 3.2, 5.6, 0.05, 0.1)
+	edges[6] = TransportEdge.new(6, IRONBANK, STAITHE, TransportEdge.Mode.RIVER_BARGE, 240.0, 3.2, 5.6, 0.05, 0.05)
 	return edges

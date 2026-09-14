@@ -132,7 +132,11 @@ func _check_trade_centers() -> void:
 			_assert(is_equal_approx(centers[0]["target_labor"], 4.0), "Settlement %d trade center should target four workers" % settlement_id)
 
 	var connected := _new_sim("build_trade_pair_connected")
-	connected.advance_ticks(Simulation.TRADE_EVAL_INTERVAL_DAYS)
+	# Several trade-evaluation cycles, not just one: the price gap between two
+	# settlements needs time to actually widen past TRADE_MIN_PROFITABLE_PRICE_GAP,
+	# and how many days that takes shifts with TRADE_EVAL_INTERVAL_DAYS itself,
+	# so this shouldn't assume any particular number of evaluations suffices.
+	connected.advance_ticks(30)
 	var farmland_center: Dictionary = {}
 	for report in connected.get_workplace_reports(ScenarioSeeds.FARMLAND_ID):
 		if report["kind"] == "trade_center":
@@ -142,7 +146,7 @@ func _check_trade_centers() -> void:
 		_assert(farmland_center["actual_labor"] > 0.0 and farmland_center["actual_labor"] < farmland_center["target_labor"], "Farmland trade center should share its constrained labor pool with the farm")
 
 	var active := connected.get_active_shipments()
-	_assert(not active.is_empty(), "A staffed source trade center should dispatch a shipment after one trade period")
+	_assert(not active.is_empty(), "A staffed source trade center should dispatch a shipment within 30 days")
 	for shipment in active:
 		_assert(shipment["origin_settlement_id"] == ScenarioSeeds.FARMLAND_ID, "Only the cheaper surplus settlement should originate this scenario's shipments")
 		_assert(shipment["origin_trade_center_workplace_id"] == farmland_center.get("workplace_id", -1), "Shipment should identify Farmland's trade center")
