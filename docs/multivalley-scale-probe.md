@@ -1,4 +1,4 @@
-# Headless multi-valley scale probe
+# Multi-valley scale probe and graph dashboard
 
 This is a parallel engineering experiment, not a replacement for the authored
 five-settlement slice or a new requirement to render 100 settlements. Use five
@@ -26,7 +26,52 @@ inter-valley connections change. Sparse uses a chain of passes, so closures can
 partition regions. Redundant adds a second link where distinct endpoints exist.
 Singleton valleys cannot have two distinct links to another singleton valley.
 
-## Run the existing simulation (Godot 4.6)
+## Interactive graph dashboard
+
+Generate the graph as above, then launch the existing dashboard scene:
+
+```powershell
+godot --path . scenes/sim/dashboard.tscn -- --graph=multivalley.json
+```
+
+For a quoted executable path, use PowerShell's call operator:
+
+```powershell
+& "C:/path/to/Godot_console.exe" --path . scenes/sim/dashboard.tscn -- --graph=multivalley.json
+```
+
+The generated world starts paused. Choose 1x, 10x, or 100x to advance it. Large
+worlds may run below the requested speed: per-frame tick work and accumulated
+backlog are capped to keep the controls usable. This does not skip simulation
+days. Omit `--graph` to inspect the original five-settlement scenario.
+
+- **Layout:** deterministic settlement grids grouped in labeled valley boxes;
+  all generated IDs use graph membership, including IDs 1–5. Positions are view
+  data only, not terrain, travel distance, or authoritative geography.
+- **Navigate:** wheel zooms around the pointer; drag background, middle-drag, or
+  right-drag pans. Fit graph button or F while the map is focused restores the
+  whole network. Node names/statuses are available on hover; IDs appear as you
+  zoom in, avoiding 100 overlapping labels at the overview scale.
+- **Inspect:** click a node or choose its name from the settlement picker. The
+  existing inventory, prices, food security, population and workplace dashboard
+  shows that settlement. The shipment list is filtered to its incoming/outgoing
+  cargo. Only one detailed panel is built at a time.
+- **Routes:** blue river connections and brown overland connections. Hover an
+  edge for shared weekly capacity, cargo in transit, and directional travel times.
+- **Weekly capacity overlay:** line width represents the edge's dispatch quota.
+- **Cargo in transit overlay:** gold line width represents cargo currently on the
+  edge, summed across both directions and all commodities. This is **not capacity
+  utilization**: cargo can remain in transit across multiple weekly dispatches.
+- **Shipment markers:** directional moving triangles derived from shipment
+  snapshots, interpolated between ticks. Opposing directions are slightly offset.
+- **Settlement colors:** green stable, yellow food insecure, orange contracting,
+  red collapsed. All settlements continue to run even if an individual one fails.
+
+The headless runner and graph dashboard share `data/multivalley_seed.gd`; neither
+implements separate economic rules. The route map caches public snapshots on
+simulation refresh rather than querying every settlement on every animation frame.
+
+## Run the existing simulation headlessly (Godot 4.6)
 
 ```powershell
 godot --headless --path . --script scripts/sim/harness/run_multivalley.gd -- --graph=multivalley.json --days=360 --out=multivalley-run.jsonl
@@ -47,7 +92,7 @@ holdings, so individual collapse is reported without stopping the world.
 and possibly regions that fail. No ongoing food injection, automatic balancing,
 new demand model, or global routing is supplied. These results help evaluate
 Milestone 3A rather than bypassing it. Inter-valley links need not carry useful
-trade simply because they exist, particularly with the current stock-based prices.
+trade simply because they exist, under whatever local price and allocation rules the current simulation implements.
 
 Monthly JSONL samples retain every settlement summary and active shipments,
 population, cumulative starvation deaths, collapsed settlement count, and completed
@@ -81,5 +126,17 @@ py -m unittest discover -s tools -p test_generate_multivalley.py
 
 Generator tests cover connected/disconnected cases, uneven valley sizes,
 singletons, reproducibility, invalid configurations, and preservation of the local
-world between connectivity experiments. The Godot runner still needs execution
-in a Godot 4.6 environment; the authoring environment did not have Godot installed.
+world between connectivity experiments.
+
+Godot 4.6 headless checks for both the five-settlement and generated dashboard:
+
+```powershell
+godot --headless --path . --script scripts/sim/harness/check_graph_view.gd
+godot --headless --path . --script scripts/sim/harness/check_graph_view.gd -- --graph=multivalley.json
+```
+
+These check layout coverage/non-overlap, click-to-inspect, picker synchronization,
+cursor-anchored zoom, dragging, all overlay modes, economic state isolation, and
+shipment/traffic snapshot agreement. Both passed during implementation, alongside
+a 30-day 100-settlement headless simulation. The checks use the actual engine but
+do not substitute for a visual review of the native Windows window.

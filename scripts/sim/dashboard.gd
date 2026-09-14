@@ -12,11 +12,17 @@ extends Control
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const MultiValleySeed = preload("res://scripts/sim/data/multivalley_seed.gd")
 const RouteMap = preload("res://scripts/sim/route_map.gd")
 
 const SEED := 12345
 const SECONDS_PER_DAY_AT_1X := 1.0
 
+var _builder: MultiValleySeed
+var _graph: Dictionary = {}
+var _selected_id: int = -1
+var _settlement_list: VBoxContainer
+var _settlement_picker: OptionButton
 var _simulation: Simulation
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
@@ -30,19 +36,44 @@ var _shipments_box: VBoxContainer
 var _settlement_rows: Dictionary = {}
 
 func _ready() -> void:
-	_simulation = Simulation.new(SEED)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--graph="):
+			_builder = MultiValleySeed.new()
+			var error: String = _builder.load_graph(arg.trim_prefix("--graph="))
+			if not error.is_empty():
+				var message := Label.new()
+				message.text = error
+				message.position = Vector2(24, 24)
+				add_child(message)
+				push_error(error)
+				set_process(false)
+				return
+			_graph = _builder.graph
+	if _graph.is_empty():
+		_simulation = Simulation.new(SEED)
+	else:
+		_simulation = Simulation.new(int(_graph["seed"]), Callable(_builder, "build"))
+		_speed_multiplier = 0.0
 	_build_ui()
 	_refresh()
 
 func _process(delta: float) -> void:
-	if _speed_multiplier <= 0.0:
+	if _simulation == null or _speed_multiplier <= 0.0:
 		return
-	_day_accumulator += delta * _speed_multiplier / SECONDS_PER_DAY_AT_1X
-	var days_to_advance := int(_day_accumulator)
+	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
+	# Bound interactive work; large worlds slow down rather than freezing the UI.
+	_day_accumulator = minf(_day_accumulator, 8.0)
+	_route_map.tick_fraction = fmod(_day_accumulator, 1.0)
+	_route_map.queue_redraw()
+	var days_to_advance := mini(int(_day_accumulator), 4)
 	if days_to_advance <= 0:
 		return
-	_simulation.advance_ticks(days_to_advance)
-	_day_accumulator -= days_to_advance
+	var started_usec: int = Time.get_ticks_usec()
+	for i in range(days_to_advance):
+		_simulation.advance_ticks(1)
+		_day_accumulator -= 1.0
+		if Time.get_ticks_usec() - started_usec >= 12000:
+			break
 	_refresh()
 
 	if not _simulation.get_game_over_info().is_empty() and not _game_over_shown:
@@ -85,26 +116,59 @@ func _build_ui() -> void:
 	_game_over_label.visible = false
 	vbox.add_child(_game_over_label)
 
+	var map_tools := HBoxContainer.new()
+	vbox.add_child(map_tools)
+	var fit := Button.new()
+	fit.text = "Fit graph (F)"
+	fit.pressed.connect(func() -> void: _route_map.fit_graph())
+	map_tools.add_child(fit)
+	var overlay := OptionButton.new()
+	for title in ["Routes", "Weekly capacity", "Cargo in transit"]:
+		overlay.add_item(title)
+	overlay.item_selected.connect(func(index: int) -> void:
+		_route_map.overlay = index
+		_route_map.queue_redraw())
+	map_tools.add_child(overlay)
+	_settlement_picker = OptionButton.new()
+	_settlement_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for sid in _simulation.get_settlement_ids():
+		_settlement_picker.add_item(_simulation.get_settlement_summary(sid)["name"], sid)
+	_settlement_picker.item_selected.connect(func(index: int) -> void:
+		_select_settlement(_settlement_picker.get_item_id(index)))
+	map_tools.add_child(_settlement_picker)
+	var help := Label.new()
+	help.text = "Wheel: zoom · Drag background: pan · Click node: inspect | Blue: river · Brown: road | Nodes: green stable, yellow shortage, orange shrinking, red collapsed"
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(help)
+	var legend := Label.new()
+	legend.text = "Width shows selected overlay. Cargo in transit is not weekly utilization. Hover routes for quantities and directional travel times."
+	legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(legend)
+
 	_route_map = RouteMap.new()
 	_route_map.simulation = _simulation
-	_route_map.custom_minimum_size = Vector2(0, 320)
+	_route_map.graph = _graph
+	_route_map.settlement_selected.connect(_select_settlement)
+	_route_map.custom_minimum_size = Vector2(0, 260)
+	_route_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_route_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_route_map)
 
 	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size = Vector2(0, 210)
 	vbox.add_child(scroll)
 
-	var settlement_list := VBoxContainer.new()
-	settlement_list.add_theme_constant_override("separation", 16)
-	settlement_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(settlement_list)
+	_settlement_list = VBoxContainer.new()
+	_settlement_list.add_theme_constant_override("separation", 16)
+	_settlement_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_settlement_list)
 
-	for settlement_id in _simulation.get_settlement_ids():
-		_settlement_rows[settlement_id] = _build_settlement_panel(settlement_list, settlement_id)
+	_selected_id = _simulation.get_settlement_ids()[0]
+	_settlement_rows[_selected_id] = _build_settlement_panel(_settlement_list, _selected_id)
+	_route_map.selected_id = _selected_id
 
 	var shipments_header := Label.new()
-	shipments_header.text = "Active Shipments"
+	shipments_header.text = "Active shipments — selected settlement"
 	shipments_header.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(shipments_header)
 
@@ -134,6 +198,7 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	inner.add_child(header)
 
 	var stats_label := Label.new()
+	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
 	inner.add_child(stats_label)
 
@@ -194,7 +259,7 @@ func _refresh() -> void:
 	if not game_over.is_empty():
 		_game_over_label.text = "GAME OVER -- " + str(game_over["summary"])
 
-	for settlement_id in _simulation.get_settlement_ids():
+	for settlement_id in _settlement_rows.keys():
 		var summary: Dictionary = _simulation.get_settlement_summary(settlement_id)
 		var row: Dictionary = _settlement_rows[settlement_id]
 
@@ -223,7 +288,7 @@ func _refresh() -> void:
 		_refresh_workplace_rows(row, settlement_id)
 
 	_refresh_shipments()
-	_route_map.queue_redraw()
+	_route_map.refresh_snapshot()
 
 func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 	var workplaces_box: VBoxContainer = row["workplaces_box"]
@@ -269,7 +334,8 @@ func _refresh_shipments() -> void:
 	for child in _shipments_box.get_children():
 		child.queue_free()
 
-	var shipments := _simulation.get_active_shipments()
+	var shipments: Array = _simulation.get_active_shipments().filter(func(s: Dictionary) -> bool:
+		return s["origin_settlement_id"] == _selected_id or s["destination_settlement_id"] == _selected_id)
 	if shipments.is_empty():
 		var label := Label.new()
 		label.text = "(none)"
@@ -286,3 +352,15 @@ func _refresh_shipments() -> void:
 			shipment["origin_name"], shipment["destination_name"],
 			days_remaining, "" if days_remaining == 1 else "s"]
 		_shipments_box.add_child(label)
+
+
+func _select_settlement(settlement_id: int) -> void:
+	_selected_id = settlement_id
+	_route_map.selected_id = settlement_id
+	_settlement_picker.select(_settlement_picker.get_item_index(settlement_id))
+	for child in _settlement_list.get_children():
+		_settlement_list.remove_child(child)
+		child.queue_free()
+	_settlement_rows.clear()
+	_settlement_rows[settlement_id] = _build_settlement_panel(_settlement_list, settlement_id)
+	_refresh()
