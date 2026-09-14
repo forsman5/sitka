@@ -70,13 +70,16 @@ func _run() -> void:
 		await process_frame
 		check(dashboard._bottom_tabs.size.y <= 230, "Bottom tabs must remain compact")
 	for commodity in map.Commodity.ALL:
-		map.price_commodity = commodity
+		map.selected_commodity = commodity
 		map.refresh_prices()
 		var total: float = 0.0
 		for sid in ids:
 			total += float(sim.get_settlement_prices(sid)[map.Commodity.name_of(commodity)])
 		check(is_equal_approx(map.price_mean, total / ids.size()), "Mean must include all nodes equally")
 		check(map._get_tooltip(map._screen(last_id)).contains("world mean"), "Price tooltip must show global comparison")
+	map.selected_commodity = -1
+	map.refresh_prices()
+	check(map.price_mean == 0.0 and map._prices.is_empty(), "\"All\" filter must not compute a single-commodity price")
 	var mean_color: Color = map.price_color(2.0, 2.0)
 	var low_color: Color = map.price_color(1.0, 2.0)
 	var high_color: Color = map.price_color(3.0, 2.0)

@@ -19,7 +19,13 @@ const STATUS_COLORS := {
 var simulation: Simulation
 var graph: Dictionary = {}
 var overlay: int = 0 # 0 routes, 1 weekly capacity, 2 cargo currently in transit, 3 commodity price
-var price_commodity: int = Commodity.Type.GRAIN
+## The one persistent commodity filter shared by every overlay that cares
+## about a specific commodity: -1 means "All" (no filter). In the "cargo in
+## transit" overlay it restricts which shipments count/draw; in "commodity
+## price" it picks which commodity's price colors the nodes. "All" has no
+## sensible single price to show, so price mode falls back to the default
+## population/status coloring when this is -1 (see _draw()).
+var selected_commodity: int = -1
 var price_mean: float = 0.0
 var _prices: Dictionary = {}
 var selected_id: int = -1
@@ -57,6 +63,8 @@ func refresh_snapshot() -> void:
 	for eid in simulation.get_transport_edge_ids():
 		_edges.append(simulation.get_transport_edge_summary(eid))
 	_shipments = simulation.get_active_shipments()
+	if selected_commodity != -1:
+		_shipments = _shipments.filter(func(s: Dictionary) -> bool: return s["commodity"] == selected_commodity)
 	_traffic.clear()
 	for shipment in _shipments:
 		var eid: int = shipment["edge_id"]
@@ -156,16 +164,17 @@ func _get_tooltip(at_position: Vector2) -> String:
 	if sid >= 0 and _summaries.has(sid):
 		var s: Dictionary = _summaries[sid]
 		var price_note := ""
-		if overlay == 3:
+		if overlay == 3 and selected_commodity != -1:
 			var price: float = _prices.get(sid, 0.0)
 			var deviation: float = (price / price_mean - 1.0) * 100.0 if price_mean > 0 else 0.0
-			price_note = "\n%s price %.2f | world mean %.2f | %+.1f%%" % [Commodity.name_of(price_commodity), price, price_mean, deviation]
+			price_note = "\n%s price %.2f | world mean %.2f | %+.1f%%" % [Commodity.name_of(selected_commodity), price, price_mean, deviation]
 		return "%s\nPopulation %d | %s\n30-day food fulfillment %.0f%%\nClick to inspect" % [s["name"], s["population"], s["status"], s["grain_fulfillment_rolling_30d"] * 100] + price_note
 	for edge in _edges:
 		var a: Vector2 = _screen(edge["settlement_a_id"])
 		var b: Vector2 = _screen(edge["settlement_b_id"])
 		if at_position.distance_to(Geometry2D.get_closest_point_to_segment(at_position, a, b)) <= 6:
-			return "%s ↔ %s\nCapacity %.1f units/week (shared both directions)\nCargo in transit %.1f units\nTravel %.1f / %.1f days\nToll/risk are routing signals" % [edge["settlement_a_name"], edge["settlement_b_name"], edge["capacity"], _traffic.get(edge["id"], 0.0), edge["travel_time_days_a_to_b"], edge["travel_time_days_b_to_a"]]
+			var cargo_label: String = "Cargo in transit" if selected_commodity == -1 else "%s in transit" % Commodity.name_of(selected_commodity)
+			return "%s ↔ %s\nCapacity %.1f units/week (shared both directions)\n%s %.1f units\nTravel %.1f / %.1f days\nToll/risk are routing signals" % [edge["settlement_a_name"], edge["settlement_b_name"], edge["capacity"], cargo_label, _traffic.get(edge["id"], 0.0), edge["travel_time_days_a_to_b"], edge["travel_time_days_b_to_a"]]
 	return "Wheel: zoom | Drag background / middle / right: pan | F: fit"
 
 func _draw() -> void:
@@ -198,7 +207,7 @@ func _draw() -> void:
 		if sid == selected_id:
 			draw_circle(pos, radius + 4, Color("ffffff"), false, 2, true)
 		var node_color: Color
-		if overlay == 3:
+		if overlay == 3 and selected_commodity != -1:
 			node_color = price_color(float(_prices.get(sid, price_mean)), price_mean)
 		elif int(summary.get("migration_pressure_count", 0)) > 0:
 			# Households under sustained migration pressure outrank the normal
@@ -227,9 +236,9 @@ func _draw() -> void:
 func refresh_prices() -> void:
 	_prices.clear()
 	price_mean = 0.0
-	if simulation == null:
+	if simulation == null or selected_commodity == -1:
 		return
-	var name: String = Commodity.name_of(price_commodity)
+	var name: String = Commodity.name_of(selected_commodity)
 	for sid in simulation.get_settlement_ids():
 		var price: float = simulation.get_settlement_prices(sid)[name]
 		_prices[sid] = price

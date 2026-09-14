@@ -141,17 +141,23 @@ func _build_ui() -> void:
 		overlay.add_item(title)
 	overlay.item_selected.connect(func(index: int) -> void:
 		_route_map.overlay = index
-		_commodity_picker.visible = index == 3
 		_update_map_legend()
 		_route_map.queue_redraw())
 	map_tools.add_child(overlay)
+	# One persistent commodity filter shared by every overlay that cares about
+	# a specific commodity, rather than a separate picker per mode: it narrows
+	# "cargo in transit" to just that commodity's shipments, and picks which
+	# commodity's price colors "commodity prices". "All" (the default) means
+	# no filter for cargo, and for prices there's no single sensible color
+	# for every commodity at once, so it falls back to the normal population/
+	# status coloring instead -- see route_map.gd's selected_commodity.
 	_commodity_picker = OptionButton.new()
+	_commodity_picker.add_item("All", -1)
 	for c in Commodity.ALL:
 		_commodity_picker.add_item(Commodity.name_of(c), c)
-	_commodity_picker.visible = false
 	_commodity_picker.item_selected.connect(func(index: int) -> void:
-		_route_map.price_commodity = _commodity_picker.get_item_id(index)
-		_route_map.refresh_prices()
+		_route_map.selected_commodity = _commodity_picker.get_item_id(index)
+		_route_map.refresh_snapshot()
 		_update_map_legend())
 	map_tools.add_child(_commodity_picker)
 	_settlement_picker = OptionButton.new()
@@ -393,7 +399,10 @@ func _select_settlement(settlement_id: int) -> void:
 	_refresh()
 
 func _update_map_legend() -> void:
-	if _route_map.overlay == 3:
-		_map_legend.text = "%s prices · World mean %.2f (each settlement equally weighted) · Green: below mean · Neutral: mean · Red: above mean" % [Commodity.name_of(_route_map.price_commodity), _route_map.price_mean]
+	var filter_note := "" if _route_map.selected_commodity == -1 else " · Trade filter: %s only" % Commodity.name_of(_route_map.selected_commodity)
+	if _route_map.overlay == 3 and _route_map.selected_commodity != -1:
+		_map_legend.text = "%s prices · World mean %.2f (each settlement equally weighted) · Green: below mean · Neutral: mean · Red: above mean" % [Commodity.name_of(_route_map.selected_commodity), _route_map.price_mean]
+	elif _route_map.overlay == 3:
+		_map_legend.text = "Commodity prices: pick a commodity in the filter to color by its price. Showing population/status coloring until then. Nodes: green stable, yellow shortage, orange shrinking, red collapsed."
 	else:
-		_map_legend.text = "Nodes: green stable, yellow shortage, orange shrinking, red collapsed. Width: selected overlay; cargo in transit is not weekly utilization."
+		_map_legend.text = "Nodes: green stable, yellow shortage, orange shrinking, red collapsed. Width: selected overlay; cargo in transit is not weekly utilization." + filter_note
