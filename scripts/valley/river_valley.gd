@@ -27,6 +27,13 @@ var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
 var _terrain: AuthoredValleyTerrain
 
+## settlement_id -> ground-plane (x,z) of its (possibly CLUSTER_OFFSETS-shifted)
+## building cluster, populated by _build_settlements(). ValleyVegetation reads
+## this so scattered scenery avoids the actual house positions, not just the
+## district's authored anchor point (which for Aldford/Oakmere/Staithe is the
+## riverbank, not where their houses ended up).
+var settlement_cluster_positions: Dictionary = {}
+
 func _ready() -> void:
 	_simulation = Simulation.new(12345)
 	_camera = $RTSCamera/Camera3D
@@ -96,14 +103,39 @@ func _build_landscape() -> void:
 func get_valley_ground_height(point: Vector2) -> float:
 	return _terrain.get_height(point.x, point.y) if _terrain != null else 0.0
 
+## Aldford, Oakmere, and Staithe's authored positions double as vertices of
+## the main river or tributary polyline (the river network was authored
+## against the settlement layout, e.g. so Aldford sits at the ford), so their
+## houses and fields need to sit off to the side of the water instead of
+## literally on top of it. High Fell and Ironbank aren't on the river network
+## at all and need no offset. Each offset was picked by measuring clearance
+## against the actual river/tributary segments meeting at that settlement,
+## not eyeballed.
+const CLUSTER_OFFSETS := {
+	ValleySeed.ALDFORD: Vector3(-16.0, 0.0, 12.0), # off the ford confluence
+	ValleySeed.OAKMERE: Vector3(-9.0, 0.0, 14.0),  # off the tributary bend
+	ValleySeed.STAITHE: Vector3(-11.0, 0.0, 14.0), # off the river bend
+}
+
 func _build_settlements() -> void:
 	for settlement_id in _simulation.get_settlement_ids():
 		var spec: Dictionary = Layout.SETTLEMENTS[settlement_id]
 		var center: Vector3 = spec["position"]
 		center.y = get_valley_ground_height(Vector2(center.x, center.z))
-		_add_resource_region(center, spec["district"], spec["accent"])
-		_add_settlement_cluster(settlement_id, center, spec["accent"])
-		_add_label(settlement_id, center + Vector3(0.0, 5.2, 0.0))
+		var cluster_center: Vector3 = center + CLUSTER_OFFSETS.get(settlement_id, Vector3.ZERO)
+		cluster_center.y = get_valley_ground_height(Vector2(cluster_center.x, cluster_center.z))
+		settlement_cluster_positions[settlement_id] = Vector2(cluster_center.x, cluster_center.z)
+		_add_resource_region(cluster_center, spec["district"], spec["accent"])
+		_add_settlement_cluster(settlement_id, cluster_center, spec["accent"])
+		_add_label(settlement_id, cluster_center + Vector3(0.0, 5.2, 0.0))
+
+## The settlement's authored (unoffset) position, ground-projected -- for the
+## small riverside structures that belong at the water regardless of where
+## CLUSTER_OFFSETS moved the settlement's houses.
+func _river_edge_anchor(settlement_id: int) -> Vector3:
+	var anchor := Layout.settlement_position(settlement_id)
+	anchor.y = get_valley_ground_height(Vector2(anchor.x, anchor.z))
+	return anchor
 
 func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color) -> void:
 	var marker := _add_cylinder("SettlementMarker%d" % settlement_id, center + Vector3(0.0, 0.2, 0.0), 2.3, 0.20, accent.lightened(0.15))
@@ -118,10 +150,19 @@ func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color)
 	_add_house(center + Vector3(0.0, 1.35, 0.0), Vector3(4.6, 2.7, 3.8), accent.darkened(0.38))
 
 	if settlement_id == ValleySeed.ALDFORD:
-		_add_box("AldfordLanding", center + Vector3(5.0, 0.28, -4.0), Vector3(3.5, 0.35, 7.0), Color("7d6044"))
+		# Anchored to the actual ford/riverbank, not `center` -- these
+		# settlements' houses are offset away from the water (see
+		# CLUSTER_OFFSETS), but a landing or quay still needs to sit at the
+		# river itself.
+		var river_edge := _river_edge_anchor(ValleySeed.ALDFORD)
+		_add_box("AldfordLanding", river_edge + Vector3(5.0, 0.28, -4.0), Vector3(3.5, 0.35, 7.0), Color("7d6044"))
 	elif settlement_id == ValleySeed.STAITHE:
-		_add_box("StaitheQuay", center + Vector3(-4.0, 0.32, 5.0), Vector3(4.0, 0.42, 13.0), Color("76573e"))
-		_add_box("StaitheMill", center + Vector3(5.5, 1.4, 5.0), Vector3(3.0, 2.8, 3.0), Color("c5b27d"))
+		var river_edge := _river_edge_anchor(ValleySeed.STAITHE)
+		_add_box("StaitheQuay", river_edge + Vector3(-4.0, 0.32, 5.0), Vector3(4.0, 0.42, 13.0), Color("76573e"))
+		# On the bank near the quay's landward end, not out past it into the
+		# 18-unit-wide channel -- a physical mill building can't float on the
+		# water the way the quay's jetty is meant to.
+		_add_box("StaitheMill", river_edge + Vector3(-7.0, 1.4, 10.0), Vector3(3.0, 2.8, 3.0), Color("c5b27d"))
 
 func _add_resource_region(center: Vector3, district: String, accent: Color) -> void:
 	match district:
@@ -137,7 +178,10 @@ func _add_resource_region(center: Vector3, district: String, accent: Color) -> v
 			for offset in [Vector2(-13, 10), Vector2(-6, 12), Vector2(8, 10), Vector2(14, 13)]:
 				_add_box("Field", center + Vector3(offset.x, 0.08, offset.y), Vector3(5.5, 0.12, 4.5), Color("b8ad58"))
 		"port":
-			_add_box("MarketGround", center + Vector3(7.0, 0.10, -2.0), Vector3(11.0, 0.12, 8.0), Color("b69762"))
+			# Offset away from the river (Staithe's `center` here is already
+			# CLUSTER_OFFSETS-shifted off the water) so an 11x8 plaza doesn't
+			# reach back into it.
+			_add_box("MarketGround", center + Vector3(7.0, 0.10, 7.0), Vector3(11.0, 0.12, 8.0), Color("b69762"))
 
 func _add_label(settlement_id: int, position: Vector3) -> void:
 	var label := Label3D.new()
@@ -201,29 +245,83 @@ func _select_settlement(settlement_id: int) -> void:
 	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
 
 func _add_route(edge_id: int, from_pos: Vector3, to_pos: Vector3, width: float, color: Color) -> void:
-	from_pos.y = get_valley_ground_height(Vector2(from_pos.x, from_pos.z)) + 0.32
-	to_pos.y = get_valley_ground_height(Vector2(to_pos.x, to_pos.z)) + 0.32
-	_add_segment("Route%d" % edge_id, from_pos, to_pos, width, color, 0.14)
+	_add_ribbon("Route%d" % edge_id, PackedVector3Array([from_pos, to_pos]), width, color, 0.14)
 
 func _add_polyline(prefix: String, points: PackedVector3Array, width: float, color: Color, y: float) -> void:
-	for i in range(points.size() - 1):
-		var from := points[i]
-		var to := points[i + 1]
-		from.y = get_valley_ground_height(Vector2(from.x, from.z)) + y
-		to.y = get_valley_ground_height(Vector2(to.x, to.z)) + y
-		_add_segment("%s%d" % [prefix, i], from, to, width, color, 0.10)
+	_add_ribbon(prefix, points, width, color, y)
 
-func _add_segment(node_name: String, from: Vector3, to: Vector3, width: float, color: Color, height: float) -> void:
-	var direction := to - from
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(width, height, direction.length())
+## A single mesh strip following the ground under every point of `points`,
+## instead of one rigid straight segment per pair -- a straight segment only
+## samples terrain height at its two endpoints, so anywhere the authored
+## heightmap rises or dips between them (routinely tens of units over the
+## length of a route or river reach) the geometry either floats above the
+## hillside or clips through it, and adjoining segments land at unrelated
+## heights and visibly separate at the joint. Densifying first and sharing
+## vertices between neighboring quads keeps the ribbon glued to the ground
+## and seamless along its whole length.
+const RIBBON_STEP := 5.0
+
+func _add_ribbon(node_name: String, points: PackedVector3Array, width: float, color: Color, y_offset: float) -> void:
+	var dense := _densify(points, RIBBON_STEP)
+	if dense.size() < 2:
+		return
+	for i in range(dense.size()):
+		var p: Vector3 = dense[i]
+		p.y = get_valley_ground_height(Vector2(p.x, p.z)) + y_offset
+		dense[i] = p
+
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	for i in range(dense.size()):
+		var p: Vector3 = dense[i]
+		var prev: Vector3 = dense[i - 1] if i > 0 else p
+		var next: Vector3 = dense[i + 1] if i < dense.size() - 1 else p
+		var direction := next - prev
+		direction.y = 0.0
+		if direction.length() < 0.0001:
+			direction = Vector3.FORWARD
+		var side := direction.normalized().cross(Vector3.UP) * (width * 0.5)
+		vertices.append(p - side)
+		vertices.append(p + side)
+		normals.append(Vector3.UP)
+		normals.append(Vector3.UP)
+
+	var indices := PackedInt32Array()
+	for i in range(dense.size() - 1):
+		var a := i * 2
+		indices.append_array([a, a + 1, a + 2, a + 1, a + 3, a + 2])
+
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var instance := MeshInstance3D.new()
 	instance.name = node_name
 	instance.mesh = mesh
-	instance.material_override = _material(color)
-	instance.position = (from + to) * 0.5
-	instance.rotation.y = atan2(direction.x, direction.z)
+	var material := _material(color)
+	# These quads come out back-facing to the top-down camera; disabling
+	# backface culling is simpler than chasing the winding order, and costs
+	# nothing visible for a thin single-layer strip like a road or river.
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	instance.material_override = material
 	add_child(instance)
+
+## Resamples a polyline to points no more than `step` apart (measured in the
+## ground plane), preserving every original vertex so authored bends stay put.
+func _densify(points: PackedVector3Array, step: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	for i in range(points.size() - 1):
+		var a: Vector3 = points[i]
+		var b: Vector3 = points[i + 1]
+		var length := Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z))
+		var subdivisions: int = max(1, int(ceil(length / step)))
+		for k in range(subdivisions):
+			out.append(a.lerp(b, float(k) / float(subdivisions)))
+	out.append(points[points.size() - 1])
+	return out
 
 func _add_house(position: Vector3, size: Vector3, color: Color) -> void:
 	_add_box("House", position, size, color)

@@ -9,8 +9,25 @@ extends Node3D
 
 const TreeA := preload("res://assets/models/nature/tree_single_A.gltf")
 const TreeB := preload("res://assets/models/nature/tree_single_B.gltf")
+const AuthoredValleyTerrain = preload("res://scripts/valley/authored_valley_terrain.gd")
 
 const TREE_SCENES: Array[PackedScene] = [TreeA, TreeB]
+
+## Oakmere's ellipse radius (46 units) reaches past the heightmap's west edge
+## (world half-width 160 at that center's x=-128), so a slice of it used to
+## land beyond the terrain mesh -- get_height() clamps out-of-range samples to
+## the boundary row/column instead of extrapolating, so those trees floated
+## over empty space at a flat height. Keeping every candidate point strictly
+## inside the heightmap bounds is more robust than re-tuning each ellipse by
+## hand, and covers any region added later too.
+const MAP_EDGE_MARGIN := 4.0
+
+## Keeps scenery off a settlement's actual house footprint. Checked against
+## settlement_cluster_positions (the parent's post-CLUSTER_OFFSETS positions)
+## rather than each ellipse's own authored center, since for Aldford, Oakmere,
+## and Staithe those two points differ -- the ellipse is still centered on the
+## district's riverside anchor, but the houses were moved off the water.
+const SETTLEMENT_CLEARANCE := 8.0
 
 func _ready() -> void:
 	# The parent first creates the valley's ground geometry in its _ready().
@@ -38,12 +55,29 @@ func _scatter_ellipse(region: String, center: Vector2, radii: Vector2, count: in
 		var angle := rng.randf_range(0.0, TAU)
 		var radial := sqrt(rng.randf())
 		var point := center + Vector2(cos(angle) * radii.x * radial, sin(angle) * radii.y * radial)
+		if not _within_map_bounds(point):
+			continue
 		if point.distance_to(center) < center_clearance:
+			continue
+		if _too_close_to_settlement(point):
 			continue
 		if _too_close_to_tree(point, 2.7):
 			continue
 		_add_tree(region, point, rng)
 		placed += 1
+
+func _within_map_bounds(point: Vector2) -> bool:
+	var half_extent := AuthoredValleyTerrain.WORLD_SIZE * 0.5 - Vector2.ONE * MAP_EDGE_MARGIN
+	return absf(point.x) <= half_extent.x and absf(point.y) <= half_extent.y
+
+func _too_close_to_settlement(point: Vector2) -> bool:
+	var valley := get_parent()
+	if valley == null or not ("settlement_cluster_positions" in valley):
+		return false
+	for cluster_position in valley.settlement_cluster_positions.values():
+		if point.distance_to(cluster_position) < SETTLEMENT_CLEARANCE:
+			return true
+	return false
 
 func _too_close_to_tree(point: Vector2, minimum_distance: float) -> bool:
 	for tree in get_children():
