@@ -90,14 +90,17 @@ static func _build_workplaces(settlements: Dictionary[int, Settlement]) -> Dicti
 
 	# Subsistence farming: labor and land only, no manufactured inputs.
 	# Seasonal swing: light spring planting, steady summer, harvest bump,
-	# near-dormant winter. Output rate bumped 1.5x from the original 1.0 --
-	# at 1.0, Aldford/Staithe barely covered their own demand and had no
-	# real surplus to export once trade (Milestone 1) existed, so grain
-	# stayed scarce valley-wide even with shipments moving other goods.
+	# near-dormant winter. Output rate doubled again to 3.0 (was 1.5, before
+	# that 1.0): total valley grain demand (~794/day at current populations)
+	# ran to roughly 2.75x total supply from Aldford+Staithe at 1.5 -- no
+	# trade-allocation fix can close a supply gap that size, only decide who
+	# goes without. Not aiming to fully close the gap here, just narrow it
+	# enough that "settlements subsist" is achievable before tuning
+	# allocation logic further.
 	var farm_recipe := Recipe.new(
 		"farm",
 		{},
-		{Commodity.Type.GRAIN: 1.5},
+		{Commodity.Type.GRAIN: 3.0},
 		[0.8, 1.0, 1.6, 0.1],
 	)
 	_add_workplace(workplaces, settlements, 1, ALDFORD, farm_recipe, 120.0)
