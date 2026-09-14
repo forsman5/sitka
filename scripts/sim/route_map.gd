@@ -197,7 +197,17 @@ func _draw() -> void:
 		var radius: float = clampf(13 * _zoom, 5, 15)
 		if sid == selected_id:
 			draw_circle(pos, radius + 4, Color("ffffff"), false, 2, true)
-		var node_color: Color = price_color(float(_prices.get(sid, price_mean)), price_mean) if overlay == 3 else STATUS_COLORS.get(summary["status"], Color.GRAY)
+		var node_color: Color
+		if overlay == 3:
+			node_color = price_color(float(_prices.get(sid, price_mean)), price_mean)
+		elif int(summary.get("migration_pressure_count", 0)) > 0:
+			# Households under sustained migration pressure outrank the normal
+			# status color -- it's the clearest single "this place is hurting
+			# people" signal the graph view has, worth flagging even on an
+			# otherwise "stable" settlement.
+			node_color = Color("d9453b")
+		else:
+			node_color = STATUS_COLORS.get(summary["status"], Color.GRAY)
 		draw_circle(pos, radius, node_color)
 		if _zoom >= 0.55 or sid == selected_id:
 			var label: String = summary["name"] if graph.is_empty() else "#%d" % sid

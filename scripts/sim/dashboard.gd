@@ -292,9 +292,10 @@ func _refresh() -> void:
 			summary["name"], summary["population"], summary["status"],
 			" [player holding]" if summary["is_player_holding"] else ""]
 
-		(row["stats"] as Label).text = "households=%d  workers=%d/%d  avg stress=%.2f  migration pressure=%d (relocation not yet possible)  starved=%d (%d lifetime)  grain fulfillment: today=%.0f%% 30d=%.0f%%" % [
+		(row["stats"] as Label).text = "households=%d  workers=%d/%d  avg stress=%.2f  migration pressure=%d  relocated: %d out / %d in  starved=%d (%d lifetime)  grain fulfillment: today=%.0f%% 30d=%.0f%%" % [
 			summary["household_count"], summary["assigned_workers"], summary["available_workers"],
 			summary["avg_food_stress"], summary["migration_pressure_count"],
+			summary["relocations_out_total"], summary["relocations_in_total"],
 			summary["starvation_deaths_recent"], summary["starvation_deaths_total"],
 			summary["grain_fulfillment_today"] * 100.0, summary["grain_fulfillment_rolling_30d"] * 100.0]
 

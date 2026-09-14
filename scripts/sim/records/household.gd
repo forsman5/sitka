@@ -12,6 +12,13 @@ const STARVATION_FULFILLMENT_THRESHOLD := 0.25
 const STARVATION_MIN_CONSECUTIVE_DAYS := 60
 const STARVATION_STRESS_THRESHOLD := 0.9
 
+## After actually relocating, a household gets this many migration-pressure
+## evaluation cycles (weekly, see Simulation.MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS)
+## before it can be REPORTED as pressured again -- a newly-arrived household
+## reads as settled-in rather than immediately flagged if its new home also
+## has a rough week.
+const RELOCATION_COOLDOWN_CYCLES := 4
+
 var id: int
 var settlement_id: int
 var worker_capacity: int
@@ -21,16 +28,19 @@ var wealth: float
 var food_stress: float = 0.0
 
 ## Sustained hardship signal: this household would relocate given the
-## chance. This milestone tracks and reports that pressure only -- it never
-## actually removes or moves the household. Realized migration needs its own
-## movement/connectivity mechanics (Milestone 1's shipments move goods, not
-## people) and is deferred to a later milestone; this is not a claim that no
-## route exists, just that relocation isn't implemented yet.
+## chance. Reporting only -- it does NOT by itself cause the household to
+## move (early testing showed acting on this looser/earlier signal directly
+## drained otherwise-stable settlements). Simulation._evaluate_starvation()
+## is where relocation actually happens, gated on the much stricter
+## is_starvation_candidate() condition instead: a household on the brink of
+## a starvation death gets a chance to relocate to a better-connected
+## settlement rather than die (see Simulation._find_relocation_target()).
 ## See docs/river-valley-vertical-slice.md Milestone 0.76.
 var has_migration_pressure: bool = false
 
 var _consecutive_low_fulfillment_days: int = 0
 var _consecutive_severe_shortage_days: int = 0
+var _relocation_cooldown_cycles: int = 0
 
 func _init(p_id: int, p_settlement_id: int, p_worker_capacity: int, p_dependents: int, p_wealth: float = 0.0) -> void:
 	id = p_id
@@ -65,8 +75,14 @@ func apply_daily_fulfillment(daily_ratio: float, rolling_is_low: bool, rolling_i
 
 ## Called weekly. One isolated bad day (or week) can't trigger this --
 ## it requires a sustained run of low-fulfillment days plus elevated stress.
-## Recomputed (and cleared) every call, so recovery un-sets it too.
+## Recomputed (and cleared) every call, so recovery un-sets it too. A
+## household still settling in after a relocation is exempt until its
+## cooldown lapses.
 func update_migration_pressure() -> void:
+	if _relocation_cooldown_cycles > 0:
+		_relocation_cooldown_cycles -= 1
+		has_migration_pressure = false
+		return
 	has_migration_pressure = _consecutive_low_fulfillment_days >= MIGRATION_PRESSURE_MIN_CONSECUTIVE_DAYS \
 		and food_stress >= MIGRATION_PRESSURE_STRESS_THRESHOLD
 
@@ -83,3 +99,15 @@ func remove_member() -> void:
 		dependents -= 1
 	elif worker_capacity > 0:
 		worker_capacity -= 1
+
+## Moves this household to `new_settlement_id`. Caller (Simulation) is
+## responsible for updating both settlements' household_ids. Clears the
+## pressure signal and its day-counters -- a fresh settlement gets a fresh
+## evaluation window -- and starts a cooldown so the household can't
+## immediately be flagged again while it settles in.
+func relocate_to(new_settlement_id: int) -> void:
+	settlement_id = new_settlement_id
+	has_migration_pressure = false
+	_consecutive_low_fulfillment_days = 0
+	_consecutive_severe_shortage_days = 0
+	_relocation_cooldown_cycles = RELOCATION_COOLDOWN_CYCLES

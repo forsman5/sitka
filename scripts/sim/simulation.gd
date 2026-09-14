@@ -43,8 +43,27 @@ const HERD_HARD_CEILING := 3000.0
 const HISTORY_MAX_DAYS := 360
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const STARVATION_EVAL_INTERVAL_DAYS := 30
+
+## A household on the brink of starvation only relocates to a settlement
+## it's actually connected to by a transport edge, and only if that
+## settlement's rolling 30-day grain fulfillment beats its own by at least
+## this much -- moving sideways into equally-hard times isn't worth the
+## disruption modeled here. See _evaluate_starvation() for why this is
+## gated on imminent starvation, not the much earlier/looser migration
+## pressure signal.
+const MIGRATION_RELOCATION_MIN_ADVANTAGE := 0.2
 const COLLAPSE_HOUSEHOLD_THRESHOLD := 5
 const COLLAPSE_SUSTAINED_DAYS := 30
+
+## Relocation will never take a settlement's LAST few households away --
+## some minimum stays behind (the ones with the most tying them to the
+## place, whatever that means for a given settlement) even under sustained
+## hardship. This is deliberately the same scale as COLLAPSE_HOUSEHOLD_
+## THRESHOLD: below it a settlement is already a skeleton crew, not a going
+## concern, and further shrinkage from here is starvation's story to tell,
+## not relocation's. Starvation has no such floor -- if a settlement truly
+## can't feed the households it has left, it can still collapse to zero.
+const MIGRATION_RELOCATION_FLOOR_HOUSEHOLDS := COLLAPSE_HOUSEHOLD_THRESHOLD
 
 ## Milestone 1 (goods and routes), retuned: a settlement's price for a
 ## commodity is base_price * clamp(target_stock / stock, MIN, MAX) -- scarce
@@ -116,6 +135,8 @@ var _next_shipment_id := 1
 var _history: Dictionary[int, Array] = {} # settlement_id -> Array[Dictionary], oldest first, capped at HISTORY_MAX_DAYS
 
 var _migration_pressure_count: Dictionary = {} # settlement_id -> int, recomputed weekly
+var _relocations_out_total: Dictionary = {} # settlement_id -> int, lifetime count of households that left
+var _relocations_in_total: Dictionary = {} # settlement_id -> int, lifetime count of households that arrived
 var _starvation_deaths_recent: Dictionary = {} # settlement_id -> int, recomputed monthly
 var _starvation_deaths_total: Dictionary = {} # settlement_id -> int, lifetime
 var _shipments_delivered_total: Dictionary = {} # settlement_id (destination) -> int, lifetime
@@ -188,6 +209,8 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"assigned_workers": record.get("assigned_workers", 0.0),
 		"avg_food_stress": _avg_food_stress(settlement_id),
 		"migration_pressure_count": _migration_pressure_count.get(settlement_id, 0),
+		"relocations_out_total": _relocations_out_total.get(settlement_id, 0),
+		"relocations_in_total": _relocations_in_total.get(settlement_id, 0),
 		"starvation_deaths_recent": _starvation_deaths_recent.get(settlement_id, 0),
 		"starvation_deaths_total": _starvation_deaths_total.get(settlement_id, 0),
 		"shipments_received_total": _shipments_delivered_total.get(settlement_id, 0),
@@ -680,6 +703,15 @@ func _finalize_daily_records(records: Dictionary) -> void:
 		if history.size() > HISTORY_MAX_DAYS:
 			history.pop_front()
 
+## Purely a reporting signal -- see _evaluate_starvation() for where pressure
+## actually causes a household to move. Acting on this early/loose signal
+## directly was tried and reverted: households under migration pressure sit
+## at 30-75% fulfillment for long stretches even in an otherwise-stable
+## valley (that's what "food_insecure but surviving" looks like), so treating
+## every pressured household as a candidate to move drained workers out of
+## struggling settlements fast enough that it destabilized settlements that
+## were never actually at risk of collapsing on their own -- the departures
+## themselves caused the shortage that then finished them off via starvation.
 func _evaluate_migration_pressure() -> void:
 	for settlement_id in settlements.keys():
 		var settlement: Settlement = settlements[settlement_id]
@@ -693,20 +725,83 @@ func _evaluate_migration_pressure() -> void:
 				count += 1
 		_migration_pressure_count[settlement_id] = count
 
+## Best connected settlement to relocate a household to, or -1 if none
+## qualifies. "Connected" means a shared transport edge -- relocation reuses
+## the same route network goods travel, it doesn't invent teleportation.
+## A neighbor only qualifies if it has at least one household (an empty/
+## collapsed settlement reads as 100% fulfillment simply for lack of any
+## demand, which would otherwise look like the best destination in the
+## valley) and its rolling 30-day grain fulfillment beats the origin's by at
+## least MIGRATION_RELOCATION_MIN_ADVANTAGE. Picks the single best qualifying
+## neighbor, not just the first one that clears the bar.
+func _find_relocation_target(origin_settlement_id: int, origin_fulfillment: float) -> int:
+	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
+	var best_id := -1
+	var best_fulfillment: float = origin_fulfillment + MIGRATION_RELOCATION_MIN_ADVANTAGE
+	for edge_id in transport_edges.keys():
+		var edge: TransportEdge = transport_edges[edge_id]
+		if not edge.connects(origin_settlement_id):
+			continue
+		var neighbor_id: int = edge.other_end(origin_settlement_id)
+		var neighbor: Settlement = settlements[neighbor_id]
+		if neighbor.household_ids.is_empty():
+			continue
+		var neighbor_fulfillment: float = _rolling_fulfillment_ratio(neighbor_id, grain_name, 30)
+		if neighbor_fulfillment > best_fulfillment:
+			best_fulfillment = neighbor_fulfillment
+			best_id = neighbor_id
+	return best_id
+
+## Moves one household between settlements' rosters and updates its own
+## settlement_id/pressure state. The household keeps its worker_capacity/
+## dependents/wealth -- it's the same family, just living somewhere else now.
+func _relocate_household(household_id: int, origin_settlement_id: int, destination_settlement_id: int) -> void:
+	var household: Household = households[household_id]
+	(settlements[origin_settlement_id] as Settlement).household_ids.erase(household_id)
+	(settlements[destination_settlement_id] as Settlement).household_ids.append(household_id)
+	household.relocate_to(destination_settlement_id)
+	_relocations_out_total[origin_settlement_id] = _relocations_out_total.get(origin_settlement_id, 0) + 1
+	_relocations_in_total[destination_settlement_id] = _relocations_in_total.get(destination_settlement_id, 0) + 1
+
+## A household on the brink of a starvation death gets one chance to
+## relocate instead, if it's connected to a settlement genuinely better off
+## and its own settlement isn't already down to its last few households
+## (MIGRATION_RELOCATION_FLOOR_HOUSEHOLDS). This is deliberately the ONLY
+## place relocation actually moves anyone -- gating it here, on the same
+## strict condition that would otherwise mean death, rather than on the much
+## looser/earlier migration-pressure signal, means it converts some deaths
+## into moves without ever draining a settlement that was merely
+## food-insecure but stable. At most one household is rescued this way per
+## settlement per monthly evaluation (same reasoning as the trade allocator:
+## when many households cross the threshold in the same cycle, take the
+## gentlest available action one household at a time rather than evacuating
+## everyone who qualifies in a single tick). A settlement with nowhere
+## better to send its starving households, or already at the floor, still
+## collapses for real: relocation rescues people, it doesn't prevent a
+## settlement from being unable to support anyone.
 func _evaluate_starvation() -> void:
+	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
 	for settlement_id in settlements.keys():
 		var settlement: Settlement = settlements[settlement_id]
 		var ids := settlement.household_ids.duplicate()
 		ids.sort()
 		var deaths := 0
 		var to_remove: Array[int] = []
+		var origin_fulfillment: float = _rolling_fulfillment_ratio(settlement_id, grain_name, 30)
+		var relocation_target: int = _find_relocation_target(settlement_id, origin_fulfillment)
+		var relocated := false
 		for household_id in ids:
 			var h: Household = households[household_id]
-			if h.is_starvation_candidate():
-				h.remove_member()
-				deaths += 1
-				if h.is_empty():
-					to_remove.append(household_id)
+			if not h.is_starvation_candidate():
+				continue
+			if not relocated and relocation_target != -1 and settlement.household_ids.size() > MIGRATION_RELOCATION_FLOOR_HOUSEHOLDS:
+				_relocate_household(household_id, settlement_id, relocation_target)
+				relocated = true
+				continue
+			h.remove_member()
+			deaths += 1
+			if h.is_empty():
+				to_remove.append(household_id)
 		for household_id in to_remove:
 			settlement.household_ids.erase(household_id)
 			households.erase(household_id)
@@ -734,9 +829,10 @@ func _trigger_game_over(settlement_id: int) -> void:
 		"year": year,
 		"settlement_id": settlement_id,
 		"settlement_name": settlement.name,
-		"summary": "%s collapsed on day %d (year %d): grain fulfillment averaged %.0f%% over the final 30 days; %d households were under sustained migration pressure (relocation not yet possible) and %d people died of starvation." % [
+		"summary": "%s collapsed on day %d (year %d): grain fulfillment averaged %.0f%% over the final 30 days; %d households were under sustained migration pressure (%d relocated elsewhere in the valley) and %d people died of starvation." % [
 			settlement.name, day, year, avg_fulfillment,
 			_migration_pressure_count.get(settlement_id, 0),
+			_relocations_out_total.get(settlement_id, 0),
 			_starvation_deaths_total.get(settlement_id, 0),
 		],
 	}

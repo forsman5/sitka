@@ -77,10 +77,10 @@ static func build_viable_farm(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS, 3000.0, VIABLE_FARM_TARGET_LABOR)
 
 ## Same land/labor capacity as the viable farm, but starts well above the
-## carrying capacity it supports. Should contract via starvation (migration
-## pressure is tracked/reported but not yet realized -- relocation isn't
-## implemented) until population falls back toward roughly the same ~120
-## equilibrium, then stabilize.
+## carrying capacity it supports. Should contract via starvation (this
+## scenario has no transport edges, so migration pressure is tracked/
+## reported but has nowhere to relocate to) until population falls back
+## toward roughly the same ~120 equilibrium, then stabilize.
 static func build_overpopulated_farm(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_uniform_valley(VIABLE_FARM_HOUSEHOLDS * 3, 3000.0, VIABLE_FARM_TARGET_LABOR)
 
