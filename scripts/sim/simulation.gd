@@ -547,12 +547,16 @@ func _resolve_shipment_arrivals(records: Dictionary) -> void:
 ## Step 6 (weekly): every staffed trade center proposes exports from its home
 ## settlement to directly connected neighbors. Capacity arbitration remains
 ## a property of the edge itself (the road/river, not the trader), so it is
-## shared across commodities and both directions for the period. This is not
-## a monetary market: prices, toll, and risk remain routing signals.
+## shared across commodities and both directions for the period -- except
+## grain, which always wins contested capacity ahead of price-gap ranking
+## (see the allocator below): this is a subsistence valley, not a spot
+## market, and a trade center should never sell its way into starving its
+## own settlement. This is not a monetary market: prices, toll, and risk
+## remain routing signals.
 ## (Future: commodities could consume capacity at different rates -- a
 ## cattle drive isn't a sack of grain. Not implemented yet.)
 func _run_trade(records: Dictionary) -> void:
-	var offers_by_edge: Dictionary = {}
+	var opportunities: Array = []
 	var workplace_ids := workplaces.keys()
 	workplace_ids.sort()
 	var edge_ids := transport_edges.keys()
@@ -560,6 +564,8 @@ func _run_trade(records: Dictionary) -> void:
 
 	# Centers know only their immediate neighbors. A center can dispatch only
 	# when its own settlement is the cheaper/source side of the opportunity.
+	# One global list across every edge (not grouped/allocated per edge) --
+	# see the ranking below for why.
 	for workplace_id in workplace_ids:
 		var trade_center: Workplace = workplaces[workplace_id]
 		if trade_center.kind != Workplace.Kind.TRADE_CENTER or trade_center.actual_labor <= 0.01:
@@ -572,7 +578,6 @@ func _run_trade(records: Dictionary) -> void:
 				continue
 			var dest_id := edge.other_end(source.id)
 			var destination: Settlement = settlements[dest_id]
-			var edge_offers: Array = offers_by_edge.get(edge_id, [])
 			for c in Commodity.ALL:
 				var source_price := _price_for(source, c)
 				var destination_price := _price_for(destination, c)
@@ -585,55 +590,84 @@ func _run_trade(records: Dictionary) -> void:
 				var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * staffing_ratio
 				if exportable <= 0.01:
 					continue
-				edge_offers.append({
+				opportunities.append({
 					"commodity": c,
 					"source_id": source.id,
 					"dest_id": dest_id,
 					"trade_center_id": trade_center.id,
 					"staffing_ratio": staffing_ratio,
 					"net_gap": net_gap,
+					"edge_id": edge_id,
 				})
-			offers_by_edge[edge_id] = edge_offers
 
-	# The allocator is physical route contention, not a global merchant. It
-	# ranks independently-created center offers and never creates an offer.
+	# Ranked once, globally, then allocated in a single pass -- not grouped
+	# and allocated edge by edge. A source with several outgoing edges (e.g.
+	# Aldford, connected to four settlements) has ONE shared exportable
+	# stock; allocating edge-by-edge in a fixed order let whichever edge
+	# happened to sort first (by nothing more meaningful than its authored
+	# id) claim that shared stock every single week, systematically
+	# shortchanging any destination on a higher-numbered edge regardless of
+	# how badly it needed the goods. Ranking globally means the neediest
+	# destination gets served first no matter which edge connects it.
+	#
+	# Subsistence goods (grain -- the only commodity this model ties to
+	# starvation/population loss) always win contested capacity ahead of
+	# everything else, regardless of price gap. Ranking by raw price
+	# difference alone was structurally biased toward whichever commodity
+	# happens to have a higher BASE_PRICE: a settlement's own wool or iron
+	# surplus (base price 2x/4x grain's) could always outrank its own grain
+	# import at equal scarcity, so a settlement could starve while its trade
+	# center kept "correctly" selling something more valuable instead of
+	# buying food. This isn't a market failure to price around -- feeding
+	# people isn't optional the way exporting wool is, so it doesn't compete
+	# on the same axis.
+	opportunities.sort_custom(func(a, b):
+		var a_subsistence: bool = a["commodity"] == Commodity.Type.GRAIN
+		var b_subsistence: bool = b["commodity"] == Commodity.Type.GRAIN
+		if a_subsistence != b_subsistence:
+			return a_subsistence
+		if not is_equal_approx(a["net_gap"], b["net_gap"]):
+			return a["net_gap"] > b["net_gap"]
+		if a["commodity"] != b["commodity"]:
+			return a["commodity"] < b["commodity"]
+		if a["source_id"] != b["source_id"]:
+			return a["source_id"] < b["source_id"]
+		return a["dest_id"] < b["dest_id"]
+	)
+
+	var remaining_capacity_by_edge: Dictionary = {}
 	for edge_id in edge_ids:
+		remaining_capacity_by_edge[edge_id] = (transport_edges[edge_id] as TransportEdge).capacity
+
+	for opportunity in opportunities:
+		var edge_id: int = opportunity["edge_id"]
+		var remaining_capacity: float = remaining_capacity_by_edge[edge_id]
+		if remaining_capacity <= 0.01:
+			continue # this edge is full; other opportunities may use other edges
+		var c: Commodity.Type = opportunity["commodity"]
+		var source_id: int = opportunity["source_id"]
+		var source: Settlement = settlements[source_id]
+		# Recompute against live stock because one center may have several
+		# opportunities (different edges and/or commodities) in this same
+		# ranked pass.
+		var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
+		var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * opportunity["staffing_ratio"]
+		var quantity: float = min(exportable, remaining_capacity)
+		if quantity <= 0.01:
+			continue
+
+		source.consume(c, quantity)
+		var name := Commodity.name_of(c)
+		var record: Dictionary = records[source_id]
+		record["trade_out"][name] = record["trade_out"].get(name, 0.0) + quantity
+
+		var dest_id: int = opportunity["dest_id"]
 		var edge: TransportEdge = transport_edges[edge_id]
-		var opportunities: Array = offers_by_edge.get(edge_id, [])
-		opportunities.sort_custom(func(a, b):
-			if not is_equal_approx(a["net_gap"], b["net_gap"]):
-				return a["net_gap"] > b["net_gap"]
-			if a["commodity"] != b["commodity"]:
-				return a["commodity"] < b["commodity"]
-			return a["trade_center_id"] < b["trade_center_id"]
-		)
-
-		var remaining_capacity: float = edge.capacity
-		for opportunity in opportunities:
-			if remaining_capacity <= 0.01:
-				break
-			var c: Commodity.Type = opportunity["commodity"]
-			var source_id: int = opportunity["source_id"]
-			var source: Settlement = settlements[source_id]
-			# Recompute against live stock because one center may export over
-			# several edges during the same weekly planning pass.
-			var reserve: float = _target_stock(source, c) * TRADE_RESERVE_FRACTION_OF_REFERENCE
-			var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * opportunity["staffing_ratio"]
-			var quantity: float = min(exportable, remaining_capacity)
-			if quantity <= 0.01:
-				continue
-
-			source.consume(c, quantity)
-			var name := Commodity.name_of(c)
-			var record: Dictionary = records[source_id]
-			record["trade_out"][name] = record["trade_out"].get(name, 0.0) + quantity
-
-			var dest_id: int = opportunity["dest_id"]
-			var travel_days: float = edge.travel_time_days(source_id)
-			var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, opportunity["trade_center_id"], edge.id, day, day + ceili(travel_days))
-			shipments[shipment.id] = shipment
-			_next_shipment_id += 1
-			remaining_capacity -= quantity
+		var travel_days: float = edge.travel_time_days(source_id)
+		var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, opportunity["trade_center_id"], edge.id, day, day + ceili(travel_days))
+		shipments[shipment.id] = shipment
+		_next_shipment_id += 1
+		remaining_capacity_by_edge[edge_id] = remaining_capacity - quantity
 
 func _finalize_daily_records(records: Dictionary) -> void:
 	for settlement_id in settlements.keys():
