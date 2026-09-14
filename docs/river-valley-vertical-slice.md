@@ -1,7 +1,7 @@
 # Sitka: Five-Settlement River Valley Vertical Slice
 
-**Status:** Directional prototype specification  
-**Scope:** Design and architecture only; no Godot implementation in this pass  
+**Status:** Living prototype specification; simulation implementation underway  
+**Scope:** Five-settlement vertical slice; Milestone 2 display iteration and the next simulation milestone proceed in parallel  
 **Setting:** Northern Britain, approximately AD 600–800 for the prototype  
 **Primary question:** Can a physically grounded transport economy make settlement growth and regional specialization feel legible, consequential, and fun?
 
@@ -449,7 +449,7 @@ This is the minimum closed-loop survival model, not the full Milestone 4 househo
 
 ### Milestone 1: Goods and routes
 
-Implement inventories, workplaces, shipments, route costs/capacities, representative carts/barges/herds, and basic market prices. Every settlement has a four-worker trade-center workplace. It exports only its home settlement's surplus to direct neighbors, with available volume scaled by staffing; shipments retain the originating center's ID for explanation and display.
+Implement inventories, workplaces, shipments, route costs/capacities, and basic market prices. Representative carts/barges/herds are presented in Milestone 2. Every settlement has a four-worker trade-center workplace. It exports only its home settlement's surplus to direct neighbors, with available volume scaled by staffing; shipments retain the originating center's ID for explanation and display.
 
 Prices remain scarcity signals rather than transaction prices in this milestone. Settlement inventories exchange goods without money changing hands: household wealth is unused, source sellers are not paid, destination buyers do not spend, and toll/risk values reduce the routing score without being collected or incurred. Wages, household purchasing, merchant capital/profit, realized tolls, and cargo losses remain deferred until a monetary economy is designed as a closed loop.
 
@@ -457,15 +457,130 @@ Prices remain scarcity signals rather than transaction prices in this milestone.
 
 ### Milestone 2: Static readable valley
 
-Render the five settlements, river, tributary, crossings, roads, terrain/resource regions, and two camera lenses. Expose seeded settlement summaries.
+Render the five settlements, river, tributary, crossings, roads, terrain/resource regions, and two camera lenses. Expose settlement summaries and derive representative shipment movement from simulation records. Display iteration continues concurrently with Milestone 3; it does not gate headless simulation work.
 
 **Accept when:** a player can identify each settlement's likely economic role without reading this document.
 
-### Milestone 3: Player infrastructure
+### Milestone 3: Player infrastructure and local trade response
 
-Allow road, bridge, landing, port, storage, and selected workplace projects. Apply construction cost and upkeep.
+**Next simulation milestone; Milestone 2 display iteration continues in parallel.** The goal is the first consequential player decision: invest scarce materials and labor in a connection, then explain how independently acting local trade centers change the valley's flows.
 
-**Accept when:** two materially different infrastructure strategies lead to different trade patterns rather than simple linear bonuses.
+Implement this in two passes: **3A, demand and bottleneck accounting**, followed by **3B, one funded infrastructure choice**. Complete 3A before tuning project benefits. Neither pass depends on finished terrain, camera work, or a new UI layout; headless commands and immutable snapshots are sufficient.
+
+#### Preserve the local-actor boundary
+
+- Each staffed trade center originates offers only from its home settlement to directly connected neighbors.
+- The edge allocator arbitrates submitted offers against physical capacity. It does not originate trade, search for distant buyers, or optimize the valley.
+- A shipment has one edge and one destination. Delivered goods enter that settlement's stock; a local center may independently export them in a later planning period.
+- Neighbor prices remain exact observations for this cut. Money, ownership accounts, merchant profit, stale information, and household migration remain deferred.
+- Prices and toll/risk adjustments remain routing signals. Infrastructure can consume physical resources without pretending that sellers or toll collectors have been paid.
+
+#### 3A: Demand-relative scarcity and reserves
+
+Replace universal reference-stock thresholds with a public, explainable local demand calculation. Use the same demand basis for prices, source protection, and destination replenishment:
+
+```daily need =
+    household requested consumption at current population
+  + recipe inputs at labor-supported planned production
+
+target stock = daily need × target buffer days + seasonal reserve
+protected stock = daily need × protected buffer days + seasonal reserve
+
+routing price = base price × clamp(target stock / max(on-hand stock, epsilon), 0.5, 4.0)
+```
+
+Start with 30 target days and 14 protected days as named tuning constants. Industrial need uses inputs requested before input constraints reduce production: an idle bloomery must still demand charcoal. Calculate this from current workforce and recipes even at day zero; do not derive demand from actual consumption, which falls during shortage. Show household, industrial, and seasonal contributions separately.
+
+For the first seasonal reserve, ramp the next winter's fodder requirement over the preceding 90 days, using the same herd quantities and per-head requirement as the actual seasonal deduction. Release that earmark after the winter charge; do not count seasonal fodder again in daily industrial demand. This is a simple known commitment, not a general harvest forecaster.
+
+Zero-use commodities must not acquire fictional household demand. Return null days-of-supply and the minimum routing price when target stock is zero. Any breeding-herd protection must be a separate, explicitly authored reserve rather than invented consumption. Preserve current livestock mechanics; this milestone need not make livestock trade fully developed.
+
+**Local transshipment needs an explicit buffer.** A center may retain a small commodity-specific resale target where a directly adjacent market has local replenishment demand and an attractive spread. Derive that target from one planning period of the neighbor's local need, capped by center handling capacity; keep it separate from household/industrial need. Do not recursively include neighbors' resale targets or inspect distant settlements. Initially disable this for live animals. Expose the resulting resale target and its adjacent demand source. This allows Aldford to acquire charcoal for onward sale without falsely treating its residents as charcoal consumers.
+
+Include resale stock in the price target, but not in the protected local-use reserve. Thus a transshipment center can actually re-export it. If this narrow resale rule does not produce stable intermediary behavior, report the failed scenario and revise the rule before adding merchant finances or global routing.
+
+At each weekly planning boundary:
+
+1. Snapshot current local needs, neighbor observations, stock, and already incoming shipments.
+2. Each center creates stable-ID, adjacent-only offers using those observations.
+3. Limit proposed exports to a configured fraction of stock above the protected reserve. Maintain one source/commodity budget across every outgoing edge, not a fresh fraction per edge.
+4. Bound destination replenishment by target stock minus on-hand and already incoming cargo. Decrement that budget as offers are accepted, preventing several neighbors from filling the same deficit repeatedly. Incoming cargo affects replenishment eligibility; it is not available for consumption before arrival.
+5. Give each center one dispatch allowance per week, proportional to actual labor, shared across commodities and edges. The current per-offer staffing multiplier alone is not an aggregate handling limit.
+6. Allocate each edge's weekly dispatch capacity across both directions and all commodities. Retain one unit of cargo per capacity unit for now. Use stable edge and offer tie-breakers, and document that deterministic edge order can bias allocation.
+7. Remove accepted goods into shipments. Rejected offers are reconsidered next week; they do not become a persistent queue.
+
+Keep the existing one-edge travel timing. Weekly capacity is a dispatch quota, not simultaneous occupancy of a road; travel lasting several weeks does not reserve several future quotas. A later occupancy model would be a separate design change.
+
+#### 3A: Bottleneck snapshots
+
+Provide proposed APIs such as:
+
+```gdscript
+simulation.get_market_report(settlement_id, commodity_id)
+simulation.get_trade_center_report(workplace_id)
+simulation.get_transport_report(edge_id)
+simulation.get_transport_history(edge_id, periods)
+```
+
+Return deep-copied snapshots. Market reports expose need components, target/protected/resale stock, on-hand/incoming stock, days of supply, price, and replenishment gap. Center reports expose staffing, dispatch allowance, proposed and dispatched volume. Edge reports expose the planning day, effective capacity, used/unused capacity, directional and commodity totals, and reduced/rejected offers.
+
+For each offer record requested quantity, accepted quantity, and the quantity curtailed at each sequential constraint: source reserve, destination replenishment, center handling, or edge capacity. Record unprofitable/no-demand checks separately from capacity rejection. Do not double-count the same curtailed quantity as several kinds of unmet demand. Label reports as the latest weekly planning period; daily zero departures do not mean the road is unused.
+
+A useful explanation is: “Oakmere proposed 80 charcoal; 30 departed and 50 were excluded by the feeder track's capacity.” Do not claim shipment delay or queue length when no waiting queue exists. In later periods, the shortage and blocked offer may change.
+
+#### 3B: One funded infrastructure choice
+
+Start with three authored alternatives, each explicitly permitted to the player through project data. Permission can represent an existing access agreement; adjacency alone does not grant ownership.
+
+| Project | First mechanical effect | Hypothesis to test |
+| --- | --- | --- |
+| Improve High Fell–Aldford road | Raise that edge's capacity and reduce travel time | More upland output reaches Aldford, potentially shifting congestion downstream. |
+| Expand Aldford landing | Raise capacity on the explicitly named Aldford river connection | River throughput improves only if local production, feeder links, and trade-center labor can supply it. |
+| Improve Oakmere feeder track | Raise capacity on its authored Aldford connection | Fuel delivery supports downstream iron/tools production through successive local trades. |
+
+Use the actual edge IDs from valley seed data; the landing is initially an upgrade to a named river edge, not a new hidden node or bonus to every route. Do not add bridges, full ports, storage limits, or workplace construction in the first implementation. Those remain later extensions of Milestone 3 after the first choice passes.
+
+Represent each project as plain data: stable ID, payer settlement, authorized actor, target edge, prerequisites, timber/tools costs, worker-days, maximum daily crew, upkeep, and explicit before/after edge values. Seed enough materials to make each individual choice feasible but make the initial alternatives unaffordable together. A funding shortfall must be visible; do not require a broken import chain to be solved before the first experiment can start.
+
+Use physical construction accounting:
+
+- Accept a start command at a daily tick boundary, validate authorization/prerequisites/resources, then deduct timber/tools once into a recorded construction sink. Never allow negative stock or partial side effects on rejection.
+- Allow one active clan project. No cancellation/refunds or construction supply shipments in the first cut.
+- Cap the construction crew against live local workers before allocating remaining labor to existing workplaces. Record the opportunity cost in production and trade-center staffing.
+- Accumulate worker-days from actual crew, not calendar days. No workers means no progress.
+- Complete at the end of a daily tick; apply upgraded properties from the next day. Already dispatched shipments retain their original arrival times.
+- Charge named physical upkeep at a fixed cadence after completion. An unpaid charge suspends the upgrade bonus until a later successful payment, retaining base-edge service; no hidden debt, negative stock, or cumulative bonus stacking.
+
+Extend commodity reconciliation to include construction and upkeep sinks. Keep clan cash unused. These costs buy scarce infrastructure using the current pooled inventories; they are not yet a property-rights or monetary model.
+
+Commands and snapshots should be enough for the concurrent display work:
+
+```gdscript
+simulation.issue_command({"type": "start_infrastructure_project", "project_id": id})
+simulation.get_available_projects(settlement_id)
+simulation.get_project_report(project_id)
+```
+
+Return a stable rejection reason or accepted project ID, and emit start/completion/upkeep events. Repeated start commands must not charge twice. The display can show cost, labor commitment, progress, and expected edge changes without owning any construction rules.
+
+#### Deterministic scenarios and acceptance
+
+Implement small causal scenarios before tuning the whole valley:
+
+1. **Demand scaling:** equally stocked settlements with different populations have different grain scarcity; equal days-of-supply have equal prices absent other reserve components. An input-starved workplace retains requested demand. Zero-use goods do not generate phantom demand.
+2. **Seasonal protection:** a source retains its approaching winter fodder reserve; paying winter fodder releases that commitment without double charging or preserving a stale reserve.
+3. **Contention:** multiple commodities, opposite directions, and multiple outgoing edges respect edge, center, source, and destination budgets. Reports reconcile requested, dispatched, and curtailed volume; repeated runs agree.
+4. **Local relay:** in an A–B–C chain, A supplies a good C consumes. Separate centers execute A–B and later B–C shipments, each with its own origin ID. Disable B's center and onward dispatch stops. Goods cannot pass through B in the same planning pass before they arrive.
+5. **Construction contract:** unauthorized/unaffordable/duplicate commands cannot mutate stock; material costs reconcile; workers compete with production; completion changes only future dispatches; unpaid upkeep suspends and later restores the bonus correctly.
+6. **Matched valley experiments:** run the same seed and start day with no project and each alternative. Observe construction plus at least two full post-completion seasonal cycles. Collect history incrementally in the harness if the runtime retains only 360 days.
+
+Compare directional commodity flow, edge utilization and rejection, Aldford arrivals/departures, workplace input fulfillment/utilization, food security, population loss, construction opportunity cost, and upkeep. Arrivals plus departures are gross handling, not unique cargo volume: do not double-count them as new trade or claim tracked cargo provenance after stock pools mix.
+
+**Accept 3A when:** local needs and reserves are explainable; one-edge local relay works without a global planner; all budgets and goods including in-flight cargo reconcile; bottleneck reports identify the actual limiting constraint.
+
+**Accept 3B / Milestone 3 first cut when:** at least two affordable project choices produce materially different commodity/directional trade patterns and a downstream production or food-security effect. Demonstrate one case where increasing an unconstrained edge has little benefit and one where removing a real bottleneck helps. No project may obtain success by losing population and thereby reducing demand. Freeze quantitative scenario bounds after establishing the baseline; do not require every investment to improve every settlement or make Aldford win by script.
+
+The intended player conclusion is: “The landing alone did little because the feeder track was full; improving the track let local traders supply the ironworks.” Migration-driven growth belongs to Milestone 4, and full scenario victory belongs to Milestone 5.
 
 ### Milestone 4: Households and growth
 
