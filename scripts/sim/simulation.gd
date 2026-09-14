@@ -209,6 +209,7 @@ func get_workplace_reports(settlement_id: int) -> Array:
 		out.append({
 			"workplace_id": w.id,
 			"settlement_id": w.settlement_id,
+			"kind": w.kind_name(),
 			"recipe_id": w.recipe.id,
 			"target_labor": w.target_labor,
 			"actual_labor": w.actual_labor,
@@ -270,6 +271,7 @@ func get_active_shipments() -> Array:
 			"origin_name": (settlements[s.origin_settlement_id] as Settlement).name,
 			"destination_settlement_id": s.destination_settlement_id,
 			"destination_name": (settlements[s.destination_settlement_id] as Settlement).name,
+			"origin_trade_center_workplace_id": s.origin_trade_center_workplace_id,
 			"edge_id": s.edge_id,
 			"departure_day": s.departure_day,
 			"arrival_day": s.arrival_day,
@@ -380,6 +382,16 @@ func _run_production(records: Dictionary) -> void:
 	var s := season()
 	for workplace_id in workplaces.keys():
 		var workplace: Workplace = workplaces[workplace_id]
+		if workplace.kind == Workplace.Kind.TRADE_CENTER:
+			workplace.last_planned_units = 0.0
+			workplace.last_actual_units = 0.0
+			workplace.last_limiting_input = null
+			workplace.last_input_requested = {}
+			workplace.last_input_consumed = {}
+			workplace.last_output_produced = {}
+			workplace.last_utilization_ratio = 1.0
+			records[workplace.settlement_id]["assigned_workers"] += workplace.actual_labor
+			continue
 		var settlement: Settlement = settlements[workplace.settlement_id]
 		var recipe := workplace.recipe
 		var record: Dictionary = records[workplace.settlement_id]
@@ -513,58 +525,95 @@ func _resolve_shipment_arrivals(records: Dictionary) -> void:
 	for shipment_id in arrived:
 		shipments.erase(shipment_id)
 
-## Step 6 (weekly): a simple trader. Capacity is a property of the edge
-## itself (the road/river, not any one commodity), so it's shared across
-## every commodity AND both directions for that edge this period -- ranked
-## by net price gap (richest trade first), not handed out independently per
-## commodity. Not a full market; deliberately legible over optimal.
+## Step 6 (weekly): every staffed trade center proposes exports from its home
+## settlement to directly connected neighbors. Capacity arbitration remains
+## a property of the edge itself (the road/river, not the trader), so it is
+## shared across commodities and both directions for the period. This is not
+## a monetary market: prices, toll, and risk remain routing signals.
 ## (Future: commodities could consume capacity at different rates -- a
 ## cattle drive isn't a sack of grain. Not implemented yet.)
 func _run_trade(records: Dictionary) -> void:
-	for edge_id in transport_edges.keys():
+	var offers_by_edge: Dictionary = {}
+	var workplace_ids := workplaces.keys()
+	workplace_ids.sort()
+	var edge_ids := transport_edges.keys()
+	edge_ids.sort()
+
+	# Centers know only their immediate neighbors. A center can dispatch only
+	# when its own settlement is the cheaper/source side of the opportunity.
+	for workplace_id in workplace_ids:
+		var trade_center: Workplace = workplaces[workplace_id]
+		if trade_center.kind != Workplace.Kind.TRADE_CENTER or trade_center.actual_labor <= 0.01:
+			continue
+		var source: Settlement = settlements[trade_center.settlement_id]
+		var staffing_ratio: float = clamp(trade_center.actual_labor / trade_center.target_labor, 0.0, 1.0) if trade_center.target_labor > 0.0 else 0.0
+		for edge_id in edge_ids:
+			var edge: TransportEdge = transport_edges[edge_id]
+			if not edge.connects(source.id):
+				continue
+			var dest_id := edge.other_end(source.id)
+			var destination: Settlement = settlements[dest_id]
+			var edge_offers: Array = offers_by_edge.get(edge_id, [])
+			for c in Commodity.ALL:
+				var source_price := _price_for(source, c)
+				var destination_price := _price_for(destination, c)
+				if source_price >= destination_price:
+					continue
+				var net_gap: float = destination_price - source_price - (edge.toll + edge.risk * 2.0)
+				if net_gap < TRADE_MIN_PROFITABLE_PRICE_GAP:
+					continue
+				var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
+				var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * staffing_ratio
+				if exportable <= 0.01:
+					continue
+				edge_offers.append({
+					"commodity": c,
+					"source_id": source.id,
+					"dest_id": dest_id,
+					"trade_center_id": trade_center.id,
+					"staffing_ratio": staffing_ratio,
+					"net_gap": net_gap,
+				})
+			offers_by_edge[edge_id] = edge_offers
+
+	# The allocator is physical route contention, not a global merchant. It
+	# ranks independently-created center offers and never creates an offer.
+	for edge_id in edge_ids:
 		var edge: TransportEdge = transport_edges[edge_id]
-		var opportunities: Array = []
-		for c in Commodity.ALL:
-			var price_a: float = _price_for(settlements[edge.settlement_a_id], c)
-			var price_b: float = _price_for(settlements[edge.settlement_b_id], c)
-			var source_id: int = edge.settlement_a_id if price_a < price_b else edge.settlement_b_id
-			var dest_id: int = edge.other_end(source_id)
-			var net_gap: float = abs(price_a - price_b) - (edge.toll + edge.risk * 2.0)
-			if net_gap < TRADE_MIN_PROFITABLE_PRICE_GAP:
-				continue
-
-			var source: Settlement = settlements[source_id]
-			var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
-			var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS
-			if exportable <= 0.01:
-				continue
-
-			opportunities.append({"commodity": c, "source_id": source_id, "dest_id": dest_id, "exportable": exportable, "net_gap": net_gap})
-
-		opportunities.sort_custom(func(a, b): return a["net_gap"] > b["net_gap"])
+		var opportunities: Array = offers_by_edge.get(edge_id, [])
+		opportunities.sort_custom(func(a, b):
+			if not is_equal_approx(a["net_gap"], b["net_gap"]):
+				return a["net_gap"] > b["net_gap"]
+			if a["commodity"] != b["commodity"]:
+				return a["commodity"] < b["commodity"]
+			return a["trade_center_id"] < b["trade_center_id"]
+		)
 
 		var remaining_capacity: float = edge.capacity
 		for opportunity in opportunities:
 			if remaining_capacity <= 0.01:
 				break
-			var quantity: float = min(opportunity["exportable"], remaining_capacity)
+			var c: Commodity.Type = opportunity["commodity"]
+			var source_id: int = opportunity["source_id"]
+			var source: Settlement = settlements[source_id]
+			# Recompute against live stock because one center may export over
+			# several edges during the same weekly planning pass.
+			var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
+			var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS * opportunity["staffing_ratio"]
+			var quantity: float = min(exportable, remaining_capacity)
 			if quantity <= 0.01:
 				continue
 
-			var c: Commodity.Type = opportunity["commodity"]
-			var source_id: int = opportunity["source_id"]
-			var dest_id: int = opportunity["dest_id"]
-			var source: Settlement = settlements[source_id]
 			source.consume(c, quantity)
 			var name := Commodity.name_of(c)
 			var record: Dictionary = records[source_id]
 			record["trade_out"][name] = record["trade_out"].get(name, 0.0) + quantity
 
+			var dest_id: int = opportunity["dest_id"]
 			var travel_days: float = edge.travel_time_days(source_id)
-			var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, edge.id, day, day + ceili(travel_days))
+			var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, opportunity["trade_center_id"], edge.id, day, day + ceili(travel_days))
 			shipments[shipment.id] = shipment
 			_next_shipment_id += 1
-
 			remaining_capacity -= quantity
 
 func _finalize_daily_records(records: Dictionary) -> void:

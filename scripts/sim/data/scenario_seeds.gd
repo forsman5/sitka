@@ -37,6 +37,9 @@ static func _farm_recipe() -> Recipe:
 		[0.8, 1.0, 1.6, 0.1],
 	)
 
+static func _trade_center_recipe() -> Recipe:
+	return Recipe.new("trade_center", {}, {})
+
 static func _build_uniform_valley(household_count: int, starting_grain: float, target_labor: float) -> Dictionary:
 	var settlement := Settlement.new(SETTLEMENT_ID, "Testfarm")
 	settlement.is_player_holding = true
@@ -115,9 +118,9 @@ const FARMLAND_TARGET_LABOR := 100.0
 const FARMLAND_HOUSEHOLDS := 50 # -> population 150, workers 100
 const BARELAND_HOUSEHOLDS := 15 # -> population 45, workers 30 (needs 45*0.4*7 = 126 grain/week)
 
-static func _build_trade_pair(edge_capacity: float) -> Dictionary:
+static func _build_trade_pair(edge_capacity: float, farmland_household_count: int = FARMLAND_HOUSEHOLDS, farmland_starting_grain: float = 1000.0) -> Dictionary:
 	var farmland := Settlement.new(FARMLAND_ID, "Farmland")
-	farmland.add_stock(Commodity.Type.GRAIN, 1000.0)
+	farmland.add_stock(Commodity.Type.GRAIN, farmland_starting_grain)
 	var bareland := Settlement.new(BARELAND_ID, "Bareland")
 	bareland.is_player_holding = true
 	bareland.add_stock(Commodity.Type.GRAIN, 300.0)
@@ -126,7 +129,7 @@ static func _build_trade_pair(edge_capacity: float) -> Dictionary:
 
 	var households: Dictionary[int, Household] = {}
 	var next_id := 1
-	for i in FARMLAND_HOUSEHOLDS:
+	for i in farmland_household_count:
 		var household := Household.new(next_id, FARMLAND_ID, WORKERS_PER_HOUSEHOLD, DEPENDENTS_PER_HOUSEHOLD)
 		households[next_id] = household
 		farmland.household_ids.append(next_id)
@@ -137,8 +140,14 @@ static func _build_trade_pair(edge_capacity: float) -> Dictionary:
 		bareland.household_ids.append(next_id)
 		next_id += 1
 
-	var workplaces: Dictionary[int, Workplace] = {1: Workplace.new(1, FARMLAND_ID, _farm_recipe(), FARMLAND_TARGET_LABOR)}
+	var workplaces: Dictionary[int, Workplace] = {
+		1: Workplace.new(1, FARMLAND_ID, _farm_recipe(), FARMLAND_TARGET_LABOR),
+		2: Workplace.new(2, FARMLAND_ID, _trade_center_recipe(), Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER),
+		3: Workplace.new(3, BARELAND_ID, _trade_center_recipe(), Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER),
+	}
 	farmland.workplace_ids.append(1)
+	farmland.workplace_ids.append(2)
+	bareland.workplace_ids.append(3)
 
 	var edges: Dictionary[int, TransportEdge] = {
 		TRADE_EDGE_ID: TransportEdge.new(TRADE_EDGE_ID, FARMLAND_ID, BARELAND_ID, TransportEdge.Mode.CART, edge_capacity, 4.0, 4.0, 0.0, 0.05),
@@ -162,3 +171,8 @@ static func build_trade_pair_connected(_rng: RandomNumberGenerator) -> Dictionar
 ## scenario, since nothing can reach it.
 static func build_trade_pair_blocked(_rng: RandomNumberGenerator) -> Dictionary:
 	return _build_trade_pair(0.0)
+
+## The source has a genuine exportable grain stock but no resident workers,
+## proving that a destination's staffed center cannot originate the import.
+static func build_trade_pair_unstaffed_source(_rng: RandomNumberGenerator) -> Dictionary:
+	return _build_trade_pair(150.0, 0, 2000.0)

@@ -3,9 +3,13 @@ extends RefCounted
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 
+enum Kind { PRODUCTION, TRADE_CENTER }
+const TRADE_CENTER_TARGET_LABOR := 4.0
+
 var id: int
 var settlement_id: int
 var recipe: Recipe
+var kind: Kind
 
 ## Useful capacity this workplace is staffed/built for -- includes the
 ## implicit land/facility limit (a farm can't grow more than its fields
@@ -31,8 +35,12 @@ var last_input_consumed: Dictionary = {}
 var last_output_produced: Dictionary = {}
 var last_utilization_ratio: float = 1.0 # actual_units / fully-staffed-and-unconstrained potential
 
-func _init(p_id: int, p_settlement_id: int, p_recipe: Recipe, p_target_labor: float) -> void:
+func _init(p_id: int, p_settlement_id: int, p_recipe: Recipe, p_target_labor: float, p_kind: Kind = Kind.PRODUCTION) -> void:
 	id = p_id
 	settlement_id = p_settlement_id
 	recipe = p_recipe
 	target_labor = p_target_labor
+	kind = p_kind
+
+func kind_name() -> String:
+	return "trade_center" if kind == Kind.TRADE_CENTER else "production"

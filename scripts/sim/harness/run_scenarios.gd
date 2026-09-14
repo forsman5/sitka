@@ -25,6 +25,7 @@ func _init() -> void:
 	_check_overpopulated_farm()
 	_check_no_food_settlement()
 	_check_recovery_boundary()
+	_check_trade_centers()
 	_check_trade_pair()
 
 	if _ok:
@@ -116,6 +117,43 @@ func _check_recovery_boundary() -> void:
 	_assert(s["avg_food_stress"] < 0.05, "Recovery boundary stress should have recovered by day 245, got %.3f" % s["avg_food_stress"])
 	_assert(s["migration_pressure_count"] == 0, "Recovery boundary should never cross the migration-pressure threshold, got %d households under pressure" % s["migration_pressure_count"])
 	_assert(s["starvation_deaths_total"] == 0, "Recovery boundary should never reach starvation, got %d deaths" % s["starvation_deaths_total"])
+
+func _check_trade_centers() -> void:
+	print("\n=== Trade centers: local ownership and staffing ===")
+	var valley := Simulation.new(SEED)
+	valley.advance_ticks(1)
+	for settlement_id in valley.get_settlement_ids():
+		var centers: Array = []
+		for report in valley.get_workplace_reports(settlement_id):
+			if report["kind"] == "trade_center":
+				centers.append(report)
+		_assert(centers.size() == 1, "Settlement %d should have exactly one trade center, got %d" % [settlement_id, centers.size()])
+		if centers.size() == 1:
+			_assert(is_equal_approx(centers[0]["target_labor"], 4.0), "Settlement %d trade center should target four workers" % settlement_id)
+
+	var connected := _new_sim("build_trade_pair_connected")
+	connected.advance_ticks(Simulation.TRADE_EVAL_INTERVAL_DAYS)
+	var farmland_center: Dictionary = {}
+	for report in connected.get_workplace_reports(ScenarioSeeds.FARMLAND_ID):
+		if report["kind"] == "trade_center":
+			farmland_center = report
+	_assert(not farmland_center.is_empty(), "Farmland should expose its trade center through workplace reports")
+	if not farmland_center.is_empty():
+		_assert(farmland_center["actual_labor"] > 0.0 and farmland_center["actual_labor"] < farmland_center["target_labor"], "Farmland trade center should share its constrained labor pool with the farm")
+
+	var active := connected.get_active_shipments()
+	_assert(not active.is_empty(), "A staffed source trade center should dispatch a shipment after one trade period")
+	for shipment in active:
+		_assert(shipment["origin_settlement_id"] == ScenarioSeeds.FARMLAND_ID, "Only the cheaper surplus settlement should originate this scenario's shipments")
+		_assert(shipment["origin_trade_center_workplace_id"] == farmland_center.get("workplace_id", -1), "Shipment should identify Farmland's trade center")
+		var edge := connected.get_transport_edge_summary(shipment["edge_id"])
+		_assert(edge["settlement_a_id"] == shipment["origin_settlement_id"] or edge["settlement_b_id"] == shipment["origin_settlement_id"], "Shipment origin must be directly connected to its edge")
+		_assert(edge["settlement_a_id"] == shipment["destination_settlement_id"] or edge["settlement_b_id"] == shipment["destination_settlement_id"], "Shipment destination must be directly connected to its edge")
+
+	var unstaffed := _new_sim("build_trade_pair_unstaffed_source")
+	unstaffed.advance_ticks(30)
+	_assert(unstaffed.get_active_shipments().is_empty(), "An unstaffed source trade center must not dispatch shipments")
+	_assert(unstaffed.get_settlement_summary(ScenarioSeeds.BARELAND_ID)["shipments_received_total"] == 0, "The destination trade center must not create a duplicate import")
 
 ## The spec's Milestone 1 acceptance bar, directly: "blocking one edge or
 ## reducing its capacity produces a visible, explainable shortage

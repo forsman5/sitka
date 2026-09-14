@@ -149,10 +149,20 @@ static func _build_workplaces(settlements: Dictionary[int, Settlement]) -> Dicti
 	)
 	_add_workplace(workplaces, settlements, 6, STAITHE, smithy_recipe, 50.0)
 
+	# Every settlement operates a small local trade center. It draws from the
+	# same pooled workforce as productive workplaces; four workers represents
+	# roughly two of the seed's households without assigning named families.
+	var trade_center_recipe := Recipe.new("trade_center", {}, {})
+	_add_workplace(workplaces, settlements, 8, ALDFORD, trade_center_recipe, Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER)
+	_add_workplace(workplaces, settlements, 9, HIGH_FELL, trade_center_recipe, Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER)
+	_add_workplace(workplaces, settlements, 10, OAKMERE, trade_center_recipe, Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER)
+	_add_workplace(workplaces, settlements, 11, IRONBANK, trade_center_recipe, Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER)
+	_add_workplace(workplaces, settlements, 12, STAITHE, trade_center_recipe, Workplace.TRADE_CENTER_TARGET_LABOR, Workplace.Kind.TRADE_CENTER)
+
 	return workplaces
 
-static func _add_workplace(workplaces: Dictionary[int, Workplace], settlements: Dictionary[int, Settlement], id: int, settlement_id: int, recipe: Recipe, target_labor: float) -> void:
-	var workplace := Workplace.new(id, settlement_id, recipe, target_labor)
+static func _add_workplace(workplaces: Dictionary[int, Workplace], settlements: Dictionary[int, Settlement], id: int, settlement_id: int, recipe: Recipe, target_labor: float, kind: Workplace.Kind = Workplace.Kind.PRODUCTION) -> void:
+	var workplace := Workplace.new(id, settlement_id, recipe, target_labor, kind)
 	workplaces[id] = workplace
 	settlements[settlement_id].workplace_ids.append(id)
 

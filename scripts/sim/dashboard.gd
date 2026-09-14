@@ -242,6 +242,15 @@ func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 
 	for report in reports:
 		var label := workplace_labels[report["workplace_id"]] as Label
+		if report["kind"] == "trade_center":
+			var staffed: float = report["actual_labor"]
+			var target: float = report["target_labor"]
+			label.text = "  trade center #%d: %.1f / %.1f labor%s" % [
+				report["workplace_id"], staffed, target,
+				" (understaffed)" if staffed < target - 0.01 else "",
+			]
+			label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.4) if staffed < target - 0.01 else Color(0.7, 0.85, 0.7))
+			continue
 		var actual: float = report["actual_units"]
 		var planned: float = report["planned_units"]
 		var limiting = report["limiting_input"]
@@ -271,7 +280,8 @@ func _refresh_shipments() -> void:
 	for shipment in shipments:
 		var label := Label.new()
 		var days_remaining: int = shipment["days_remaining"]
-		label.text = "  %.1f %s: %s -> %s (arrives in %d day%s)" % [
+		label.text = "  Center #%d: %.1f %s, %s -> %s (arrives in %d day%s)" % [
+			shipment["origin_trade_center_workplace_id"],
 			shipment["quantity"], Commodity.name_of(shipment["commodity"]),
 			shipment["origin_name"], shipment["destination_name"],
 			days_remaining, "" if days_remaining == 1 else "s"]

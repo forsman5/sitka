@@ -120,14 +120,14 @@ The prototype should allow fast restart and comparison of strategies. A complete
 
 A **household** represents a family or dependent group with members summarized by worker capacity and dependents. It owns or accesses a home, an occupation, modest inventory, livestock where relevant, wealth, and clan/settlement affiliation. Individual people may be rendered, but they are not authoritative simulation objects.
 
-A **workplace** converts inputs, land, labor, and time into outputs. A **settlement** supplies a local market, storage, labor pool, and service capacity. A **shipment** reserves a quantity of goods and moves it along a route between inventories. A **transport edge** connects nodes and specifies mode, capacity, travel time, seasonal modifier, toll, and risk.
+A **workplace** uses labor to provide production or a service. Each settlement's trade center is a workplace staffed from the same pooled labor supply as farms and workshops. A **settlement** supplies a local market, storage, labor pool, and service capacity. A **shipment** reserves a quantity of goods and moves it along a route between inventories. A **transport edge** connects nodes and specifies mode, capacity, travel time, seasonal modifier, toll, and risk.
 
 The first economic model should favor legibility over realism:
 
 - Settlements clear simple local markets on a regular discrete tick.
 - Households supply labor and consume food and basic goods.
 - Workplaces choose production from recent expected input and output prices.
-- Traders or a simple planner create shipments when price differences exceed transport cost and risk.
+- Each staffed trade center proposes exports from its home settlement to directly connected settlements when price differences exceed transport cost and risk. Edge capacity arbitrates competing offers.
 - Household movement responds slowly to food security, work, housing, kin ties, and relative prosperity.
 - Herds are inventories with seasonal reproduction, fodder needs, and self-propelled transport along eligible routes.
 
@@ -449,7 +449,9 @@ This is the minimum closed-loop survival model, not the full Milestone 4 househo
 
 ### Milestone 1: Goods and routes
 
-Implement inventories, workplaces, shipments, route costs/capacities, representative carts/barges/herds, and basic market prices.
+Implement inventories, workplaces, shipments, route costs/capacities, representative carts/barges/herds, and basic market prices. Every settlement has a four-worker trade-center workplace. It exports only its home settlement's surplus to direct neighbors, with available volume scaled by staffing; shipments retain the originating center's ID for explanation and display.
+
+Prices remain scarcity signals rather than transaction prices in this milestone. Settlement inventories exchange goods without money changing hands: household wealth is unused, source sellers are not paid, destination buyers do not spend, and toll/risk values reduce the routing score without being collected or incurred. Wages, household purchasing, merchant capital/profit, realized tolls, and cargo losses remain deferred until a monetary economy is designed as a closed loop.
 
 **Accept when:** blocking one edge or reducing its capacity produces a visible, explainable shortage elsewhere.
 
