@@ -106,11 +106,13 @@ const BARELAND_ID := 2
 const TRADE_EDGE_ID := 1
 
 ## Farm sized well above its own population's demand (unlike the viable-farm
-## scenario's tuned-to-equilibrium 55) so it reliably has surplus to export:
-## avg output 60 * 0.875 ~= 52.5/day vs. its own demand of 60 * 0.4 = 24/day.
-const FARMLAND_TARGET_LABOR := 60.0
-const FARMLAND_HOUSEHOLDS := 20 # -> population 60, workers 40
-const BARELAND_HOUSEHOLDS := 15 # -> population 45, workers 30
+## scenario's tuned-to-equilibrium 55) so it reliably has surplus to export.
+## 100 workers comfortably clears target_labor=100 (land, not labor, is the
+## binding constraint): avg output 100 * 0.875 ~= 87.5/day vs. Farmland's own
+## demand of 150 * 0.4 = 60/day, leaving real surplus after feeding itself.
+const FARMLAND_TARGET_LABOR := 100.0
+const FARMLAND_HOUSEHOLDS := 50 # -> population 150, workers 100
+const BARELAND_HOUSEHOLDS := 15 # -> population 45, workers 30 (needs 45*0.4*7 = 126 grain/week)
 
 static func _build_trade_pair(edge_capacity: float) -> Dictionary:
 	var farmland := Settlement.new(FARMLAND_ID, "Farmland")
@@ -148,10 +150,11 @@ static func _build_trade_pair(edge_capacity: float) -> Dictionary:
 		"transport_edges": edges,
 	}
 
-## Edge at a generous authored capacity -- Bareland should receive regular
-## shipments and avoid the food-security decline it would suffer alone.
+## Edge capacity (150/week) comfortably covers Bareland's ~126/week grain
+## need -- connected should demonstrate real viability (high fulfillment,
+## stable population), not just "technically not collapsed".
 static func build_trade_pair_connected(_rng: RandomNumberGenerator) -> Dictionary:
-	return _build_trade_pair(30.0)
+	return _build_trade_pair(150.0)
 
 ## Same two settlements, but the edge is effectively closed. Bareland should
 ## suffer the same kind of decline as the isolated no-food-settlement

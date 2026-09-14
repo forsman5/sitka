@@ -259,7 +259,7 @@ func _refresh_shipments() -> void:
 
 	for shipment in shipments:
 		var label := Label.new()
-		var days_remaining: int = max(0, int(shipment["arrival_day"]) - _simulation.day)
+		var days_remaining: int = shipment["days_remaining"]
 		label.text = "  %.1f %s: %s -> %s (arrives in %d day%s)" % [
 			shipment["quantity"], Commodity.name_of(shipment["commodity"]),
 			shipment["origin_name"], shipment["destination_name"],

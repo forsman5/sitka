@@ -126,6 +126,7 @@ func _check_trade_pair() -> void:
 	var years := 2 * Simulation.DAYS_PER_YEAR
 
 	var connected := _new_sim("build_trade_pair_connected")
+	var initial_population: int = connected.get_settlement_summary(bareland_id)["population"]
 	connected.advance_ticks(years)
 	var c := connected.get_settlement_summary(bareland_id)
 
@@ -133,9 +134,19 @@ func _check_trade_pair() -> void:
 	blocked.advance_ticks(years)
 	var b := blocked.get_settlement_summary(bareland_id)
 
-	print("  Bareland connected: population=%d status=%s fulfillment30d=%.0f%%" % [c["population"], c["status"], c["grain_fulfillment_rolling_30d"] * 100.0])
-	print("  Bareland blocked:   population=%d status=%s fulfillment30d=%.0f%%" % [b["population"], b["status"], b["grain_fulfillment_rolling_30d"] * 100.0])
+	print("  Bareland connected: population=%d status=%s fulfillment30d=%.0f%% starved=%d shipments=%d" % [
+		c["population"], c["status"], c["grain_fulfillment_rolling_30d"] * 100.0, c["starvation_deaths_total"], c["shipments_received_total"]])
+	print("  Bareland blocked:   population=%d status=%s fulfillment30d=%.0f%% starved=%d shipments=%d" % [
+		b["population"], b["status"], b["grain_fulfillment_rolling_30d"] * 100.0, b["starvation_deaths_total"], b["shipments_received_total"]])
 
-	_assert(c["status"] != "collapsed", "Bareland should survive when connected to Farmland's surplus, got status=%s" % c["status"])
-	_assert(b["status"] == "collapsed" or b["population"] < c["population"], "Blocking the edge should visibly worsen Bareland relative to being connected (population %d vs %d)" % [b["population"], c["population"]])
+	# Connected must demonstrate actual viability, not just "not collapsed".
+	_assert(c["grain_fulfillment_rolling_30d"] > 0.90, "Connected Bareland should have high grain fulfillment, got %.2f" % c["grain_fulfillment_rolling_30d"])
+	_assert(c["starvation_deaths_total"] == 0, "Connected Bareland should have zero starvation deaths, got %d" % c["starvation_deaths_total"])
+	_assert(c["emigration_desire_count"] == 0, "Connected Bareland should have no persistent emigration desire, got %d" % c["emigration_desire_count"])
+	_assert(c["population"] == initial_population, "Connected Bareland population should be stable, got %d -> %d" % [initial_population, c["population"]])
+	_assert(c["shipments_received_total"] > 0, "Connected Bareland should have received at least one shipment, got %d" % c["shipments_received_total"])
+
+	# Blocked must measurably fail the same conditions.
+	_assert(b["grain_fulfillment_rolling_30d"] < 0.5, "Blocked Bareland should have low grain fulfillment, got %.2f" % b["grain_fulfillment_rolling_30d"])
+	_assert(b["shipments_received_total"] == 0, "Blocked Bareland should have received no shipments, got %d" % b["shipments_received_total"])
 	_assert(c["grain_fulfillment_rolling_30d"] > b["grain_fulfillment_rolling_30d"], "Connected Bareland should have better grain fulfillment than blocked Bareland, got %.2f vs %.2f" % [c["grain_fulfillment_rolling_30d"], b["grain_fulfillment_rolling_30d"]])

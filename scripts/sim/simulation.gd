@@ -99,6 +99,7 @@ var _history: Dictionary[int, Array] = {} # settlement_id -> Array[Dictionary], 
 var _emigration_desire_count: Dictionary = {} # settlement_id -> int, recomputed weekly
 var _starvation_deaths_recent: Dictionary = {} # settlement_id -> int, recomputed monthly
 var _starvation_deaths_total: Dictionary = {} # settlement_id -> int, lifetime
+var _shipments_delivered_total: Dictionary = {} # settlement_id (destination) -> int, lifetime
 var _low_population_days: Dictionary = {} # settlement_id -> consecutive days below COLLAPSE_HOUSEHOLD_THRESHOLD
 var _game_over_info: Dictionary = {} # empty until the player's holding collapses
 
@@ -170,13 +171,17 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"emigration_desire_count": _emigration_desire_count.get(settlement_id, 0),
 		"starvation_deaths_recent": _starvation_deaths_recent.get(settlement_id, 0),
 		"starvation_deaths_total": _starvation_deaths_total.get(settlement_id, 0),
+		"shipments_received_total": _shipments_delivered_total.get(settlement_id, 0),
 		"status": _settlement_status(settlement_id),
 		"inventory": inventory,
-		"produced_today": record.get("produced", {}),
-		"household_consumption_today": record.get("household_consumption", {}),
-		"industrial_consumption_today": record.get("industrial_consumption", {}),
-		"unmet_household_demand_today": record.get("unmet_household_demand", {}),
-		"unmet_industrial_demand_today": record.get("unmet_industrial_demand", {}),
+		# .duplicate() -- record.get(...) below, once history is non-empty, IS
+		# the live object stored in _history (see _latest_record). Without
+		# copying, a caller mutating these would corrupt simulation state.
+		"produced_today": (record.get("produced", {}) as Dictionary).duplicate(),
+		"household_consumption_today": (record.get("household_consumption", {}) as Dictionary).duplicate(),
+		"industrial_consumption_today": (record.get("industrial_consumption", {}) as Dictionary).duplicate(),
+		"unmet_household_demand_today": (record.get("unmet_household_demand", {}) as Dictionary).duplicate(),
+		"unmet_industrial_demand_today": (record.get("unmet_industrial_demand", {}) as Dictionary).duplicate(),
 		"grain_fulfillment_today": _fulfillment_ratio(record, grain_name),
 		"grain_fulfillment_rolling_30d": _rolling_fulfillment_ratio(settlement_id, grain_name, 30),
 	}
@@ -267,6 +272,7 @@ func get_active_shipments() -> Array:
 			"edge_id": s.edge_id,
 			"departure_day": s.departure_day,
 			"arrival_day": s.arrival_day,
+			"days_remaining": max(0, s.arrival_day - day),
 			"progress_fraction": s.progress_fraction(day),
 		})
 	return out
@@ -441,8 +447,15 @@ func _run_consumption(records: Dictionary) -> void:
 		var tools_demand := population * TOOLS_PER_PERSON_PER_DAY
 		_record_household_flow(record, Commodity.name_of(Commodity.Type.TOOLS), tools_demand, settlement.consume(Commodity.Type.TOOLS, tools_demand))
 
+		# Rolling (not today's raw) ratio drives eligibility -- see
+		# Household.apply_daily_fulfillment for why. This trails by one day
+		# (today's record isn't finalized/appended to history yet), which is
+		# fine for a 30-day smoothing window.
+		var rolling_ratio := _rolling_fulfillment_ratio(settlement_id, grain_name, 30)
+		var rolling_is_low := rolling_ratio < Household.EMIGRATION_FULFILLMENT_THRESHOLD
+		var rolling_is_severe := rolling_ratio < Household.STARVATION_FULFILLMENT_THRESHOLD
 		for household_id in settlement.household_ids:
-			(households[household_id] as Household).apply_daily_fulfillment(fulfillment)
+			(households[household_id] as Household).apply_daily_fulfillment(fulfillment, rolling_is_low, rolling_is_severe)
 
 func _record_household_flow(record: Dictionary, commodity_name: String, demand: float, taken: float) -> void:
 	record["household_demand"][commodity_name] = demand
@@ -490,34 +503,53 @@ func _resolve_shipment_arrivals(records: Dictionary) -> void:
 		var name := Commodity.name_of(s.commodity)
 		var record: Dictionary = records[s.destination_settlement_id]
 		record["trade_in"][name] = record["trade_in"].get(name, 0.0) + s.quantity
+		_shipments_delivered_total[s.destination_settlement_id] = _shipments_delivered_total.get(s.destination_settlement_id, 0) + 1
 		arrived.append(shipment_id)
 	for shipment_id in arrived:
 		shipments.erase(shipment_id)
 
-## Step 6 (weekly): a simple trader -- for each edge and commodity, ship from
-## whichever end is cheaper to whichever end is pricier, if the price gap
-## clears transport cost (toll + a flat per-trip risk cost) by a minimum
-## margin. Not a full market; deliberately legible over optimal.
+## Step 6 (weekly): a simple trader. Capacity is a property of the edge
+## itself (the road/river, not any one commodity), so it's shared across
+## every commodity AND both directions for that edge this period -- ranked
+## by net price gap (richest trade first), not handed out independently per
+## commodity. Not a full market; deliberately legible over optimal.
+## (Future: commodities could consume capacity at different rates -- a
+## cattle drive isn't a sack of grain. Not implemented yet.)
 func _run_trade(records: Dictionary) -> void:
 	for edge_id in transport_edges.keys():
 		var edge: TransportEdge = transport_edges[edge_id]
+		var opportunities: Array = []
 		for c in Commodity.ALL:
-			var price_a := _price_for(settlements[edge.settlement_a_id], c)
-			var price_b := _price_for(settlements[edge.settlement_b_id], c)
-			var source_id := edge.settlement_a_id if price_a < price_b else edge.settlement_b_id
-			var dest_id := edge.other_end(source_id)
-			var gap: float = abs(price_a - price_b)
-			var transport_cost := edge.toll + edge.risk * 2.0
-			if gap - transport_cost < TRADE_MIN_PROFITABLE_PRICE_GAP:
+			var price_a: float = _price_for(settlements[edge.settlement_a_id], c)
+			var price_b: float = _price_for(settlements[edge.settlement_b_id], c)
+			var source_id: int = edge.settlement_a_id if price_a < price_b else edge.settlement_b_id
+			var dest_id: int = edge.other_end(source_id)
+			var net_gap: float = abs(price_a - price_b) - (edge.toll + edge.risk * 2.0)
+			if net_gap < TRADE_MIN_PROFITABLE_PRICE_GAP:
 				continue
 
 			var source: Settlement = settlements[source_id]
 			var reserve: float = REFERENCE_STOCK[c] * TRADE_RESERVE_FRACTION_OF_REFERENCE
-			var exportable: float = max(0.0, source.stock(c) - reserve)
-			var quantity: float = min(exportable * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS, edge.capacity)
+			var exportable: float = max(0.0, source.stock(c) - reserve) * TRADE_MAX_SHIPMENT_FRACTION_OF_SURPLUS
+			if exportable <= 0.01:
+				continue
+
+			opportunities.append({"commodity": c, "source_id": source_id, "dest_id": dest_id, "exportable": exportable, "net_gap": net_gap})
+
+		opportunities.sort_custom(func(a, b): return a["net_gap"] > b["net_gap"])
+
+		var remaining_capacity: float = edge.capacity
+		for opportunity in opportunities:
+			if remaining_capacity <= 0.01:
+				break
+			var quantity: float = min(opportunity["exportable"], remaining_capacity)
 			if quantity <= 0.01:
 				continue
 
+			var c: Commodity.Type = opportunity["commodity"]
+			var source_id: int = opportunity["source_id"]
+			var dest_id: int = opportunity["dest_id"]
+			var source: Settlement = settlements[source_id]
 			source.consume(c, quantity)
 			var name := Commodity.name_of(c)
 			var record: Dictionary = records[source_id]
@@ -527,6 +559,8 @@ func _run_trade(records: Dictionary) -> void:
 			var shipment := Shipment.new(_next_shipment_id, c, quantity, source_id, dest_id, edge.id, day, day + ceili(travel_days))
 			shipments[shipment.id] = shipment
 			_next_shipment_id += 1
+
+			remaining_capacity -= quantity
 
 func _finalize_daily_records(records: Dictionary) -> void:
 	for settlement_id in settlements.keys():
