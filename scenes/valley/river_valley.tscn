@@ -2,11 +2,12 @@
 
 [ext_resource type="Script" path="res://scripts/valley/river_valley.gd" id="1_valley"]
 [ext_resource type="Script" path="res://scripts/camera/rts_camera.gd" id="2_camera"]
+[ext_resource type="Script" path="res://scripts/valley/valley_vegetation.gd" id="3_vegetation"]
 
 [sub_resource type="Environment" id="Environment_valley"]
 background_mode = 1
 background_color = Color(0.57, 0.70, 0.78, 1)
-ambient_light_source = 3
+ambient_light_source = 2
 ambient_light_color = Color(0.72, 0.79, 0.84, 1)
 ambient_light_energy = 0.85
 tonemap_mode = 2
@@ -28,7 +29,11 @@ shadow_enabled = true
 script = ExtResource("2_camera")
 pan_speed = 42.0
 zoom_min = 28.0
-zoom_max = 190.0
+zoom_max = 420.0
 tilt_min = 38.0
+pivot_height = 70.0
 
 [node name="Camera3D" type="Camera3D" parent="RTSCamera"]
+
+[node name="ValleyVegetation" type="Node3D" parent="."]
+script = ExtResource("3_vegetation")

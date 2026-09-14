@@ -5,6 +5,9 @@ extends Node3D
 @export var zoom_max: float = 40.0
 @export var tilt_sensitivity: float = 0.3  # degrees per pixel of vertical mouse movement
 @export var tilt_min: float = 20.0         # most angled allowed (degrees above horizon)
+@export var pivot_height: float = 20.0     # camera altitude above the rig's ground anchor;
+                                            # must clear the tallest terrain in the scene or
+                                            # the camera ends up inside/under the mesh
 
 @onready var _camera: Camera3D = $Camera3D
 
@@ -30,7 +33,7 @@ func _process(delta: float) -> void:
 # Pivots camera around the rig's ground point so the view centre stays anchored.
 func _apply_tilt() -> void:
 	var rad := deg_to_rad(_current_tilt)
-	_camera.position = Vector3(0, 20.0, 20.0 * cos(rad) / sin(rad))
+	_camera.position = Vector3(0, pivot_height, pivot_height * cos(rad) / sin(rad))
 	_camera.rotation_degrees = Vector3(-_current_tilt, 0, 0)
 
 func _unhandled_input(event: InputEvent) -> void:

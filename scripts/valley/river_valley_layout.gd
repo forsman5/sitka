@@ -7,31 +7,31 @@ extends RefCounted
 
 const SETTLEMENTS := {
 	1: {
-		"position": Vector3(0.0, 0.0, 6.0),
+		"position": Vector3(0.0, 0.0, -5.0),
 		"role": "Ford, mixed farms, and the clan hall",
 		"accent": Color("d6b45c"),
 		"district": "fields",
 	},
 	2: {
-		"position": Vector3(-70.0, 7.0, -42.0),
+		"position": Vector3(-118.0, 0.0, 72.0),
 		"role": "Upland pasture for sheep, cattle, and wool",
 		"accent": Color("a7c884"),
 		"district": "pasture",
 	},
 	3: {
-		"position": Vector3(-48.0, 1.0, 48.0),
+		"position": Vector3(-128.0, 0.0, -78.0),
 		"role": "Tributary woodland for timber and charcoal",
 		"accent": Color("547a45"),
 		"district": "woodland",
 	},
 	4: {
-		"position": Vector3(48.0, 1.0, 42.0),
+		"position": Vector3(110.0, 0.0, -70.0),
 		"role": "Ore bank and small bloomery",
 		"accent": Color("a66a4a"),
 		"district": "ore",
 	},
 	5: {
-		"position": Vector3(76.0, 0.0, -46.0),
+		"position": Vector3(92.0, 0.0, 94.0),
 		"role": "Downstream port, milling, and outside trade",
 		"accent": Color("739fc1"),
 		"district": "port",
@@ -58,15 +58,15 @@ static func role_for(settlement_id: int) -> String:
 
 static func main_river() -> PackedVector3Array:
 	return PackedVector3Array([
-		Vector3(-12.0, 0.08, 105.0), Vector3(-8.0, 0.08, 72.0),
-		Vector3(-2.0, 0.08, 37.0), Vector3(0.0, 0.08, 6.0),
-		Vector3(19.0, 0.08, -18.0), Vector3(48.0, 0.08, -32.0),
-		Vector3(76.0, 0.08, -46.0), Vector3(108.0, 0.08, -72.0),
+		Vector3(-22.0, 0.0, -120.0), Vector3(-13.0, 0.0, -90.0),
+		Vector3(-5.0, 0.0, -55.0), Vector3(0.0, 0.0, -5.0),
+		Vector3(25.0, 0.0, 25.0), Vector3(55.0, 0.0, 55.0),
+		Vector3(92.0, 0.0, 94.0), Vector3(130.0, 0.0, 120.0),
 	])
 
 static func tributary() -> PackedVector3Array:
 	return PackedVector3Array([
-		Vector3(-70.0, 0.12, 72.0), Vector3(-54.0, 0.12, 56.0),
-		Vector3(-35.0, 0.12, 42.0), Vector3(-18.0, 0.12, 24.0),
-		Vector3(0.0, 0.12, 6.0),
+		Vector3(-158.0, 0.0, -112.0), Vector3(-145.0, 0.0, -95.0),
+		Vector3(-128.0, 0.0, -78.0), Vector3(-80.0, 0.0, -50.0),
+		Vector3(-35.0, 0.0, -27.0), Vector3(0.0, 0.0, -5.0),
 	])

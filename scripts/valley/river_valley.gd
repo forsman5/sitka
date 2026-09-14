@@ -7,6 +7,7 @@ const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 const Layout = preload("res://scripts/valley/river_valley_layout.gd")
+const AuthoredValleyTerrain = preload("res://scripts/valley/authored_valley_terrain.gd")
 
 const GROUND_COLOR := Color("6e8d52")
 const ROAD_COLOR := Color("8c7657")
@@ -24,6 +25,7 @@ var _selection_workplaces: Label
 var _hint_label: Label
 var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
+var _terrain: AuthoredValleyTerrain
 
 func _ready() -> void:
 	_simulation = Simulation.new(12345)
@@ -34,8 +36,8 @@ func _ready() -> void:
 	_build_interface()
 
 func _configure_camera() -> void:
-	_camera.size = 160.0
-	$RTSCamera.center_on(Vector3(8.0, 0.0, 0.0))
+	_camera.size = 350.0
+	$RTSCamera.center_on(Vector3(0.0, 0.0, 0.0))
 
 func _process(_delta: float) -> void:
 	# At valley scale labels and route geometry dominate. At settlement scale
@@ -68,13 +70,12 @@ func _ground_point(screen_position: Vector2) -> Vector3:
 	return origin + direction * distance if distance >= 0.0 else Vector3.INF
 
 func _build_landscape() -> void:
-	_add_box("Ground", Vector3(0.0, -0.45, 0.0), Vector3(240.0, 0.8, 220.0), GROUND_COLOR)
-	_add_hill(Vector3(-76.0, 1.5, -40.0), Vector3(40.0, 10.0, 32.0), Color("79975a"))
-	_add_hill(Vector3(-85.0, 1.0, -10.0), Vector3(34.0, 7.0, 45.0), Color("789155"))
-	_add_hill(Vector3(-54.0, 0.7, 53.0), Vector3(42.0, 5.0, 32.0), Color("668849"))
+	_terrain = AuthoredValleyTerrain.new()
+	add_child(_terrain)
+	_terrain.build()
 
-	_add_polyline("MainRiver", Layout.main_river(), 15.0, RIVER_COLOR, 0.05)
-	_add_polyline("Tributary", Layout.tributary(), 7.0, Color("477fa8"), 0.09)
+	_add_polyline("MainRiver", Layout.main_river(), 18.0, RIVER_COLOR, 0.24)
+	_add_polyline("Tributary", Layout.tributary(), 10.0, Color("477fa8"), 0.25)
 
 	# Existing seed edges are the source of truth for the static route drawing.
 	for edge_id in Layout.EDGES:
@@ -86,12 +87,20 @@ func _build_landscape() -> void:
 
 	# The ford is intentionally weak and legible: a narrow pale crossing at
 	# Aldford, reserved for replacement by a bridge in Milestone 3.
-	_add_box("AldfordFord", Vector3(0.0, 0.21, 6.0), Vector3(8.0, 0.28, 2.4), Color("c9b58a"))
+	var ford_height := get_valley_ground_height(Vector2(0.0, -5.0))
+	_add_box("AldfordFord", Vector3(0.0, ford_height + 0.38, -5.0), Vector3(11.0, 0.28, 3.0), Color("c9b58a"))
+
+## The first valley remains deliberately simple, but this shared ground query
+## keeps decorative vegetation and future building placement aligned with its
+## existing hill geometry instead of floating on the base plane.
+func get_valley_ground_height(point: Vector2) -> float:
+	return _terrain.get_height(point.x, point.y) if _terrain != null else 0.0
 
 func _build_settlements() -> void:
 	for settlement_id in _simulation.get_settlement_ids():
 		var spec: Dictionary = Layout.SETTLEMENTS[settlement_id]
 		var center: Vector3 = spec["position"]
+		center.y = get_valley_ground_height(Vector2(center.x, center.z))
 		_add_resource_region(center, spec["district"], spec["accent"])
 		_add_settlement_cluster(settlement_id, center, spec["accent"])
 		_add_label(settlement_id, center + Vector3(0.0, 5.2, 0.0))
@@ -120,9 +129,7 @@ func _add_resource_region(center: Vector3, district: String, accent: Color) -> v
 			for x in [-15.0, -8.0, 8.0, 16.0]:
 				_add_cylinder("PastureMarker", center + Vector3(x, 0.15, 9.0), 1.0, 0.25, accent)
 		"woodland":
-			for x in range(-18, 19, 6):
-				for z in range(-13, 16, 7):
-					_add_tree(center + Vector3(x, 0.0, z))
+			pass # Detailed woodland is instantiated by ValleyVegetation.
 		"ore":
 			for offset in [Vector2(-12, 6), Vector2(-8, 10), Vector2(-5, 6), Vector2(-10, 2)]:
 				_add_cylinder("OreDeposit", center + Vector3(offset.x, 0.35, offset.y), 1.8, 0.7, accent)
@@ -194,14 +201,16 @@ func _select_settlement(settlement_id: int) -> void:
 	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
 
 func _add_route(edge_id: int, from_pos: Vector3, to_pos: Vector3, width: float, color: Color) -> void:
-	_add_segment("Route%d" % edge_id, from_pos + Vector3(0.0, 0.16, 0.0), to_pos + Vector3(0.0, 0.16, 0.0), width, color, 0.14)
+	from_pos.y = get_valley_ground_height(Vector2(from_pos.x, from_pos.z)) + 0.32
+	to_pos.y = get_valley_ground_height(Vector2(to_pos.x, to_pos.z)) + 0.32
+	_add_segment("Route%d" % edge_id, from_pos, to_pos, width, color, 0.14)
 
 func _add_polyline(prefix: String, points: PackedVector3Array, width: float, color: Color, y: float) -> void:
 	for i in range(points.size() - 1):
 		var from := points[i]
 		var to := points[i + 1]
-		from.y = y
-		to.y = y
+		from.y = get_valley_ground_height(Vector2(from.x, from.z)) + y
+		to.y = get_valley_ground_height(Vector2(to.x, to.z)) + y
 		_add_segment("%s%d" % [prefix, i], from, to, width, color, 0.10)
 
 func _add_segment(node_name: String, from: Vector3, to: Vector3, width: float, color: Color, height: float) -> void:
