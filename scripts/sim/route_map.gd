@@ -18,7 +18,10 @@ const STATUS_COLORS := {
 
 var simulation: Simulation
 var graph: Dictionary = {}
-var overlay: int = 0 # 0 routes, 1 weekly capacity, 2 cargo currently in transit
+var overlay: int = 0 # 0 routes, 1 weekly capacity, 2 cargo currently in transit, 3 commodity price
+var price_commodity: int = Commodity.Type.GRAIN
+var price_mean: float = 0.0
+var _prices: Dictionary = {}
 var selected_id: int = -1
 var tick_fraction: float = 0.0
 var _positions: Dictionary = {}
@@ -58,6 +61,7 @@ func refresh_snapshot() -> void:
 	for shipment in _shipments:
 		var eid: int = shipment["edge_id"]
 		_traffic[eid] = float(_traffic.get(eid, 0.0)) + float(shipment["quantity"])
+	refresh_prices()
 	if _positions.is_empty():
 		_build_layout()
 	queue_redraw()
@@ -151,7 +155,12 @@ func _get_tooltip(at_position: Vector2) -> String:
 	var sid: int = _hit_node(at_position)
 	if sid >= 0 and _summaries.has(sid):
 		var s: Dictionary = _summaries[sid]
-		return "%s\nPopulation %d | %s\n30-day food fulfillment %.0f%%\nClick to inspect" % [s["name"], s["population"], s["status"], s["grain_fulfillment_rolling_30d"] * 100]
+		var price_note := ""
+		if overlay == 3:
+			var price: float = _prices.get(sid, 0.0)
+			var deviation: float = (price / price_mean - 1.0) * 100.0 if price_mean > 0 else 0.0
+			price_note = "\n%s price %.2f | world mean %.2f | %+.1f%%" % [Commodity.name_of(price_commodity), price, price_mean, deviation]
+		return "%s\nPopulation %d | %s\n30-day food fulfillment %.0f%%\nClick to inspect" % [s["name"], s["population"], s["status"], s["grain_fulfillment_rolling_30d"] * 100] + price_note
 	for edge in _edges:
 		var a: Vector2 = _screen(edge["settlement_a_id"])
 		var b: Vector2 = _screen(edge["settlement_b_id"])
@@ -188,7 +197,8 @@ func _draw() -> void:
 		var radius: float = clampf(13 * _zoom, 5, 15)
 		if sid == selected_id:
 			draw_circle(pos, radius + 4, Color("ffffff"), false, 2, true)
-		draw_circle(pos, radius, STATUS_COLORS.get(summary["status"], Color.GRAY))
+		var node_color: Color = price_color(float(_prices.get(sid, price_mean)), price_mean) if overlay == 3 else STATUS_COLORS.get(summary["status"], Color.GRAY)
+		draw_circle(pos, radius, node_color)
 		if _zoom >= 0.55 or sid == selected_id:
 			var label: String = summary["name"] if graph.is_empty() else "#%d" % sid
 			draw_string(font, pos + Vector2(12, 5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("edf3f8"))
@@ -203,3 +213,25 @@ func _draw() -> void:
 		# Offset opposing traffic so both directions remain distinguishable.
 		pos += normal * 4
 		draw_colored_polygon(PackedVector2Array([pos + direction * 6, pos - direction * 4 + normal * 3, pos - direction * 4 - normal * 3]), Color("fff5d6"))
+
+func refresh_prices() -> void:
+	_prices.clear()
+	price_mean = 0.0
+	if simulation == null:
+		return
+	var name: String = Commodity.name_of(price_commodity)
+	for sid in simulation.get_settlement_ids():
+		var price: float = simulation.get_settlement_prices(sid)[name]
+		_prices[sid] = price
+		price_mean += price
+	if not _prices.is_empty():
+		price_mean /= _prices.size()
+	queue_redraw()
+
+static func price_color(price: float, mean_price: float) -> Color:
+	var neutral := Color("d7dce0")
+	if mean_price <= 0.0:
+		return neutral
+	var relative: float = price / mean_price - 1.0
+	# Fixed symmetric scale: full saturation at +/-100% of world mean.
+	return neutral.lerp(Color("dd5555") if relative > 0 else Color("43ba78"), clampf(absf(relative), 0.0, 1.0))

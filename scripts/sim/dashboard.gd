@@ -28,6 +28,9 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 var _game_over_shown := false
 
+var _bottom_tabs: TabContainer
+var _commodity_picker: OptionButton
+var _map_legend: Label
 var _time_label: Label
 var _game_over_label: Label
 var _route_map: RouteMap
@@ -123,12 +126,23 @@ func _build_ui() -> void:
 	fit.pressed.connect(func() -> void: _route_map.fit_graph())
 	map_tools.add_child(fit)
 	var overlay := OptionButton.new()
-	for title in ["Routes", "Weekly capacity", "Cargo in transit"]:
+	for title in ["Routes", "Weekly capacity", "Cargo in transit", "Commodity prices"]:
 		overlay.add_item(title)
 	overlay.item_selected.connect(func(index: int) -> void:
 		_route_map.overlay = index
+		_commodity_picker.visible = index == 3
+		_update_map_legend()
 		_route_map.queue_redraw())
 	map_tools.add_child(overlay)
+	_commodity_picker = OptionButton.new()
+	for c in Commodity.ALL:
+		_commodity_picker.add_item(Commodity.name_of(c), c)
+	_commodity_picker.visible = false
+	_commodity_picker.item_selected.connect(func(index: int) -> void:
+		_route_map.price_commodity = _commodity_picker.get_item_id(index)
+		_route_map.refresh_prices()
+		_update_map_legend())
+	map_tools.add_child(_commodity_picker)
 	_settlement_picker = OptionButton.new()
 	_settlement_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for sid in _simulation.get_settlement_ids():
@@ -137,13 +151,13 @@ func _build_ui() -> void:
 		_select_settlement(_settlement_picker.get_item_id(index)))
 	map_tools.add_child(_settlement_picker)
 	var help := Label.new()
-	help.text = "Wheel: zoom · Drag background: pan · Click node: inspect | Blue: river · Brown: road | Nodes: green stable, yellow shortage, orange shrinking, red collapsed"
+	help.text = "Wheel: zoom · Drag background: pan · Click node: inspect | Blue: river · Brown: road"
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(help)
-	var legend := Label.new()
-	legend.text = "Width shows selected overlay. Cargo in transit is not weekly utilization. Hover routes for quantities and directional travel times."
-	legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(legend)
+	_map_legend = Label.new()
+	_map_legend.text = "Width shows selected overlay. Cargo in transit is not weekly utilization. Hover routes for quantities and directional travel times."
+	_map_legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_map_legend)
 
 	_route_map = RouteMap.new()
 	_route_map.simulation = _simulation
@@ -154,9 +168,13 @@ func _build_ui() -> void:
 	_route_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_route_map)
 
+	_bottom_tabs = TabContainer.new()
+	_bottom_tabs.custom_minimum_size = Vector2(0, 220)
+	_bottom_tabs.size_flags_vertical = Control.SIZE_FILL
+	vbox.add_child(_bottom_tabs)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 210)
-	vbox.add_child(scroll)
+	scroll.name = "Valley"
+	_bottom_tabs.add_child(scroll)
 
 	_settlement_list = VBoxContainer.new()
 	_settlement_list.add_theme_constant_override("separation", 16)
@@ -167,14 +185,10 @@ func _build_ui() -> void:
 	_settlement_rows[_selected_id] = _build_settlement_panel(_settlement_list, _selected_id)
 	_route_map.selected_id = _selected_id
 
-	var shipments_header := Label.new()
-	shipments_header.text = "Active shipments — selected settlement"
-	shipments_header.add_theme_font_size_override("font_size", 16)
-	vbox.add_child(shipments_header)
-
 	var shipments_scroll := ScrollContainer.new()
-	shipments_scroll.custom_minimum_size = Vector2(0, 90)
-	vbox.add_child(shipments_scroll)
+	shipments_scroll.name = "Transactions"
+	_bottom_tabs.add_child(shipments_scroll)
+	shipments_scroll.tooltip_text = "Active shipments for the selected settlement"
 
 	_shipments_box = VBoxContainer.new()
 	_shipments_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -289,6 +303,7 @@ func _refresh() -> void:
 
 	_refresh_shipments()
 	_route_map.refresh_snapshot()
+	_update_map_legend()
 
 func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 	var workplaces_box: VBoxContainer = row["workplaces_box"]
@@ -364,3 +379,9 @@ func _select_settlement(settlement_id: int) -> void:
 	_settlement_rows.clear()
 	_settlement_rows[settlement_id] = _build_settlement_panel(_settlement_list, settlement_id)
 	_refresh()
+
+func _update_map_legend() -> void:
+	if _route_map.overlay == 3:
+		_map_legend.text = "%s prices · World mean %.2f (each settlement equally weighted) · Green: below mean · Neutral: mean · Red: above mean" % [Commodity.name_of(_route_map.price_commodity), _route_map.price_mean]
+	else:
+		_map_legend.text = "Nodes: green stable, yellow shortage, orange shrinking, red collapsed. Width: selected overlay; cargo in transit is not weekly utilization."

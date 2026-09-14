@@ -60,10 +60,28 @@ func _run() -> void:
 	middle.pressed = false
 	map._gui_input(middle)
 	map.fit_graph()
-	for mode in range(3):
+	for mode in range(4):
 		map.overlay = mode
 		map.queue_redraw()
 		await process_frame
+	check(dashboard._bottom_tabs.get_tab_count() == 2, "Bottom area must have two tabs")
+	for tab in range(2):
+		dashboard._bottom_tabs.current_tab = tab
+		await process_frame
+		check(dashboard._bottom_tabs.size.y <= 230, "Bottom tabs must remain compact")
+	for commodity in map.Commodity.ALL:
+		map.price_commodity = commodity
+		map.refresh_prices()
+		var total: float = 0.0
+		for sid in ids:
+			total += float(sim.get_settlement_prices(sid)[map.Commodity.name_of(commodity)])
+		check(is_equal_approx(map.price_mean, total / ids.size()), "Mean must include all nodes equally")
+		check(map._get_tooltip(map._screen(last_id)).contains("world mean"), "Price tooltip must show global comparison")
+	var mean_color: Color = map.price_color(2.0, 2.0)
+	var low_color: Color = map.price_color(1.0, 2.0)
+	var high_color: Color = map.price_color(3.0, 2.0)
+	check(low_color.g > low_color.r and high_color.r > high_color.g, "Price colors must be green below mean and red above")
+	check(mean_color == map.price_color(0.0, 0.0), "Equal and zero means must remain neutral")
 	check(before == JSON.stringify(sim.get_clock_summary()) + JSON.stringify(sim.get_settlement_summary(ids[0])), "View actions must not change economics or time")
 	sim.advance_ticks(7)
 	dashboard._refresh()

@@ -54,7 +54,8 @@ days. Omit `--graph` to inspect the original five-settlement scenario.
   zoom in, avoiding 100 overlapping labels at the overview scale.
 - **Inspect:** click a node or choose its name from the settlement picker. The
   existing inventory, prices, food security, population and workplace dashboard
-  shows that settlement. The shipment list is filtered to its incoming/outgoing
+  shows that settlement in the compact bottom **Valley** tab. Switch to
+  **Transactions** in that same area for active shipments. The list is filtered to its incoming/outgoing
   cargo. Only one detailed panel is built at a time.
 - **Routes:** blue river connections and brown overland connections. Hover an
   edge for shared weekly capacity, cargo in transit, and directional travel times.
@@ -62,6 +63,12 @@ days. Omit `--graph` to inspect the original five-settlement scenario.
 - **Cargo in transit overlay:** gold line width represents cargo currently on the
   edge, summed across both directions and all commodities. This is **not capacity
   utilization**: cargo can remain in transit across multiple weekly dispatches.
+- **Commodity prices overlay:** choose a commodity to color nodes relative to its
+  arithmetic mean across all settlements (each node has equal weight). Green is
+  below the mean, neutral is equal, and red is above. Color intensity increases
+  with percentage deviation, reaching full saturation at 100% deviation. The
+  legend shows the current mean; node tooltips show local price and percentage
+  difference. Means update as the simulation advances or commodity changes.
 - **Shipment markers:** directional moving triangles derived from shipment
   snapshots, interpolated between ticks. Opposing directions are slightly offset.
 - **Settlement colors:** green stable, yellow food insecure, orange contracting,
