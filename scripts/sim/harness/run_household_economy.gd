@@ -3,7 +3,10 @@ extends SceneTree
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
+const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const Recipe = preload("res://scripts/sim/records/recipe.gd")
 
 ## H1 labor-market acceptance check. Run with:
 ##   godot --headless --script res://scripts/sim/harness/run_household_economy.gd
@@ -19,6 +22,8 @@ func _init() -> void:
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_emigration_actually_happens()
 	_check_life_cycle_births_and_aging()
+	_check_old_age_deaths_actually_happen()
+	_check_old_age_orphans_get_adopted()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -209,6 +214,10 @@ func _check_demographic_invariants(sim: HESimulation) -> void:
 		_assert(ages.size() == h["dependents"], "Household %d: dependent_ages has %d entries but dependents=%d" % [household_id, ages.size(), h["dependents"]])
 		_assert(h["dependents"] >= 0, "Household %d has negative dependents: %d" % [household_id, h["dependents"]])
 		_assert(h["worker_capacity"] >= 0, "Household %d has negative worker_capacity: %d" % [household_id, h["worker_capacity"]])
+		var worker_ages: Array = h["worker_ages"]
+		_assert(worker_ages.size() == h["worker_capacity"], "Household %d: worker_ages has %d entries but worker_capacity=%d" % [household_id, worker_ages.size(), h["worker_capacity"]])
+		_assert(not (h["worker_capacity"] == 0 and h["dependents"] > 0),
+			"Household %d has %d dependents but 0 workers -- should have been dissolved and adopted (see _adopt_orphaned_dependents), not left stuck" % [household_id, h["dependents"]])
 
 ## Life cycle: a reasonably healthy, evenly-staffed economy run for several
 ## years should show real births and real aging-into-worker promotions --
@@ -243,6 +252,89 @@ func _check_life_cycle_births_and_aging() -> void:
 	_assert(max_pending <= HEHousehold.MAX_PENDING_DEPENDENTS, "No household should exceed MAX_PENDING_DEPENDENTS pending dependents, saw %d" % max_pending)
 	_assert(max_worker_capacity <= HEScenarioSeeds.WORKER_CAPACITY, "No household's worker_capacity should ever exceed what it was seeded with -- aged-up workers must split off, not join the parent's job, saw %d" % max_worker_capacity)
 	_check_demographic_invariants(sim)
+
+## Old age is a slow signal -- LIFESPAN_DAYS is 20 "years" (see
+## he_household.gd) -- so this needs a much longer run than the other life-
+## cycle checks to actually observe a death rather than just a promise of
+## one someday. A healthy economy (same balanced scenario as the life-cycle
+## check above) should still show real old-age deaths well within that
+## horizon, on top of continuing births/promotions/emigrations, without the
+## population collapsing to zero.
+func _check_old_age_deaths_actually_happen() -> void:
+	print("\n=== Old age: workers actually die of old age on a healthy, long-running economy ===")
+	var sim := _new_sim("build_three_business_economy")
+	var years := 15
+	sim.advance_ticks(years * 360)
+	var city := sim.get_city_summary()
+
+	print("  over %d years: old_age_deaths_total=%d, emigrations_total=%d, births_total=%d, population=%d" % [
+		years, city["old_age_deaths_total"], city["emigrations_total"], city["births_total"], city["population"]])
+
+	_assert(city["old_age_deaths_total"] > 0, "A healthy economy run long enough should show at least one real old-age death, got 0")
+	_assert(city["population"] > 0, "Old age should thin the population, not wipe it out entirely, got 0")
+	_check_demographic_invariants(sim)
+
+## Regression test for the "a household orphaned by old age gets stuck
+## forever, its dependents slowly lost to starvation instead of aging up"
+## bug: in a healthy, normally-seeded economy this path is too rare to
+## reliably exercise (dependents almost always promote and split off long
+## before a household's ORIGINAL workers ever reach LIFESPAN_DAYS -- see
+## _check_old_age_deaths_actually_happen above, which sees 0 adoptions over
+## 15 years despite plenty of old-age deaths). So it's forced directly
+## here via a hand-built two-household world: household 1 has exactly one
+## worker a single day from dying of old age, holding a freshly-born
+## dependent; household 2 is a second, healthy one-worker household and
+## the only possible adopter. Confirms household 1 is dissolved (not left
+## orphaned), household 2 gains its dependent with age preserved, and that
+## dependent keeps aging normally afterward -- eventually promoting into
+## its own new household, exactly like any other dependent.
+func _check_old_age_orphans_get_adopted() -> void:
+	print("\n=== Old age: a household orphaned by its last worker's death is dissolved and adopted, not stuck ===")
+	var sim := HESimulation.new(SEED, Callable(self, "_build_orphan_world"), true)
+
+	sim.advance_ticks(30)
+	var ids := sim.get_household_ids()
+	_assert(not ids.has(1), "Household 1 (orphaned by its only worker's old-age death) should have been dissolved, still exists")
+	_assert(ids.has(2), "Household 2 (the adopter) should still exist")
+	if ids.has(2):
+		var h2 := sim.get_household_summary(2)
+		_assert(h2["dependents"] == 1, "Adopting household should have gained the orphan's 1 dependent, has %d" % h2["dependents"])
+
+	var adopted_events := 0
+	for e in sim.get_event_log(-1):
+		if e["type"] == "adopted":
+			adopted_events += 1
+	_assert(adopted_events == 1, "Expected exactly one 'adopted' event, saw %d" % adopted_events)
+
+	sim.advance_ticks(360)
+	var city := sim.get_city_summary()
+	print("  adopted dependent's fate a year later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
+	_assert(city["worker_promotions_total"] >= 1, "Adopted dependent should keep aging normally and eventually promote to worker, got 0 promotions")
+	_check_demographic_invariants(sim)
+
+func _build_orphan_world(_rng: RandomNumberGenerator) -> Dictionary:
+	var settlement := HESettlement.new(1, "Testholm")
+	var farm_recipe := Recipe.new("farm", {}, {Commodity.Type.GRAIN: 1.6})
+	var businesses: Dictionary[int, HEBusiness] = {1: HEBusiness.new(1, "Farm", farm_recipe, 50, 2)}
+	settlement.business_ids.append(1)
+
+	var h1 := HEHousehold.new(1, 1, 1, 100.0)
+	h1.seed_worker_ages([HEHousehold.LIFESPAN_DAYS - 1])
+	h1.seed_dependent_ages([0])
+	h1.add_stock(Commodity.Type.GRAIN, 100.0)
+	h1.add_stock(Commodity.Type.TIMBER, 100.0)
+	h1.employer_business_id = 1
+
+	var h2 := HEHousehold.new(2, 1, 0, 100.0)
+	h2.seed_worker_ages([HEHousehold.AGING_THRESHOLD_DAYS])
+	h2.add_stock(Commodity.Type.GRAIN, 100.0)
+	h2.add_stock(Commodity.Type.TIMBER, 100.0)
+	h2.employer_business_id = 1
+
+	var households: Dictionary[int, HEHousehold] = {1: h1, 2: h2}
+	settlement.household_ids.append(1)
+	settlement.household_ids.append(2)
+	return {"settlement": settlement, "households": households, "businesses": businesses}
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

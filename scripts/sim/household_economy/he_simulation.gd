@@ -17,8 +17,11 @@ extends RefCounted
 ## placeholder label for now, not an actual migration model -- there's
 ## nowhere else in this single-settlement scenario to go; see
 ## remove_member_for_emigration()'s note for why it's still an improvement
-## over calling it "death". Advanced only through advance_ticks(); nothing
-## here reads or writes the scene tree.
+## over calling it "death". Workers also exit the workforce naturally via
+## old age (see he_household.gd's evaluate_old_age_death()) -- unlike
+## emigration this isn't a hardship signal, so it's tracked and reported
+## separately. Advanced only through advance_ticks(); nothing here reads or
+## writes the scene tree.
 ##
 ## API boundary, same discipline as the pooled Simulation: callers use these
 ## query methods only, never the households/businesses Dictionaries
@@ -117,6 +120,11 @@ var price_adjustment_enabled: bool = true
 ## to go. The mechanic underneath is unchanged for now: this is a cosmetic
 ## rename, not a new migration model.
 var _emigrations_total := 0
+## Separate counter from _emigrations_total -- old age isn't a hardship
+## signal (see he_household.gd's evaluate_old_age_death() doc comment), so
+## it's worth being able to tell the two apart in city/dashboard reporting
+## rather than lumping every population loss under one number.
+var _old_age_deaths_total := 0
 var _money_written_off_total := 0.0
 var _goods_written_off_total: Dictionary[Commodity.Type, float] = {}
 var _births_total := 0
@@ -200,6 +208,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
 		"dependent_ages": h.dependent_ages(),
+		"worker_ages": h.worker_ages(),
 		"demand_today": demand,
 		"consumed_today": consumed,
 		"unmet_scarcity_today": unmet_scarcity,
@@ -300,6 +309,7 @@ func get_city_summary() -> Dictionary:
 		"households_short_of_goods": households_short_of_goods,
 		"households_short_of_funds": households_short_of_funds,
 		"emigrations_total": _emigrations_total,
+		"old_age_deaths_total": _old_age_deaths_total,
 		"money_written_off_total": _money_written_off_total,
 		"births_total": _births_total,
 		"worker_promotions_total": _worker_promotions_total,
@@ -316,12 +326,13 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
-## Up to the last `limit` blotter entries (births, emigrations, splits,
-## hirings, coming-of-age), oldest first -- same convention as
-## get_daily_history. Pass -1 (default) for everything currently retained
-## (bounded by EVENT_LOG_MAX regardless). Each entry has at least "day" and
-## "type" ("birth"/"emigrate"/"split"/"job"/"coming_of_age"); see
-## _log_event()'s call sites for the type-specific fields.
+## Up to the last `limit` blotter entries (births, emigrations, old-age
+## deaths, adoptions, splits, hirings, coming-of-age), oldest first -- same
+## convention as get_daily_history. Pass -1 (default) for everything
+## currently retained (bounded by EVENT_LOG_MAX regardless). Each entry has
+## at least "day" and "type" ("birth"/"emigrate"/"old_age"/"adopted"/
+## "split"/"job"/"coming_of_age"); see _log_event()'s call sites for the
+## type-specific fields.
 func get_event_log(limit: int = -1) -> Array:
 	var start: int = 0 if limit < 0 else max(0, _event_log.size() - limit)
 	var out: Array = []
@@ -332,8 +343,9 @@ func get_event_log(limit: int = -1) -> Array:
 # ---------------------------------------------------------------------------
 # Daily tick: pay wages (from yesterday's settled revenue) -> produce ->
 # clear the market (sets today's revenue for TOMORROW's wages) -> consume ->
-# stress/migration-pressure (weekly) -> emigration (monthly, ACTS this time)
-# -> business capacity self-tuning + labor reallocation (weekly) -> publish.
+# stress/migration-pressure (weekly) -> emigration, old age, then aging/
+# births (all monthly, and all ACT) -> business capacity self-tuning +
+# labor reallocation (weekly) -> publish.
 # ---------------------------------------------------------------------------
 
 func _daily_tick() -> void:
@@ -348,6 +360,7 @@ func _daily_tick() -> void:
 		_evaluate_migration_pressure()
 	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_emigration(record)
+		_evaluate_old_age(record)
 		_evaluate_life_cycle(record)
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
@@ -376,6 +389,7 @@ func _new_daily_record() -> Dictionary:
 		"export_revenue": 0.0,
 		"wages_paid": {},
 		"emigrations": 0,
+		"old_age_deaths": 0,
 		"money_written_off": 0.0,
 		"goods_written_off": {},
 		"births": 0,
@@ -519,9 +533,118 @@ func _evaluate_emigration(record: Dictionary) -> void:
 		if household_ended:
 			to_remove.append(household_id)
 
+	var written_off := _write_off_and_remove_households(to_remove)
+	_emigrations_total += emigrations
+	record["emigrations"] = emigrations
+	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + float(written_off["money"])
+	_merge_goods_written_off(record, written_off["goods"])
+
+## Monthly, right after emigration: a worker whose age has crossed
+## LIFESPAN_DAYS leaves the workforce (see he_household.gd's
+## evaluate_old_age_death()). This is NOT a hardship signal like emigration
+## -- it happens to healthy, well-fed households too -- so it gets its own
+## counter/event type rather than being folded into emigrations_total.
+## A household left with zero workers but still-living dependents has no
+## realistic way to keep feeding them -- rather than let it linger and lose
+## those dependents one at a time to starvation-emigration (which from the
+## outside just looks like "dependents never age up"), it's dissolved
+## immediately and its dependents adopted into another working household
+## (see _adopt_orphaned_dependents()) so they keep aging normally under a
+## family that can actually support them. A household left with neither
+## workers nor dependents (or an orphaned one nobody could adopt -- see
+## that function's note) is written off and removed exactly like an
+## emptied-by-emigration household.
+func _evaluate_old_age(record: Dictionary) -> void:
+	var deaths := 0
+	var to_remove: Array[int] = []
+	var orphaned: Array[int] = []
+	for household_id in households.keys():
+		var h: HEHousehold = households[household_id]
+		var died := h.evaluate_old_age_death()
+		if died == 0:
+			continue
+		deaths += died
+		_log_event("old_age", {"household_id": household_id, "count": died})
+		if h.worker_capacity() <= 0:
+			h.employer_business_id = -1
+			if h.demographics.dependents > 0:
+				orphaned.append(household_id)
+			else:
+				to_remove.append(household_id)
+
+	for household_id in orphaned:
+		if not _adopt_orphaned_dependents(household_id):
+			to_remove.append(household_id)
+
+	var written_off := _write_off_and_remove_households(to_remove)
+	_old_age_deaths_total += deaths
+	record["old_age_deaths"] = deaths
+	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + float(written_off["money"])
+	_merge_goods_written_off(record, written_off["goods"])
+
+## Dissolves `household_id` (already confirmed to have zero workers and at
+## least one dependent) into another still-working household, transferring
+## its dependents -- individual ages preserved, not reset -- plus its
+## residual balance/inventory wholesale. Nothing here is written off: it
+## isn't lost, just relocated to a household that can actually feed it,
+## same spirit as _split_off_new_household's proportional transfer the
+## other direction. The adopter is whichever eligible household (worker_
+## capacity > 0, not itself orphaned this same tick) currently has the
+## FEWEST dependents, lowest ID breaking ties -- spreading adoptions out
+## rather than always dumping onto the same lowest-ID household, which
+## would otherwise grow one household without bound and undercut the
+## whole "more, smaller households" design this economy relies on (see
+## he_household.gd's AGING_THRESHOLD_DAYS doc comment). Returns false if
+## no eligible adopter exists at all (every household in the city has zero
+## workers -- total collapse), leaving the caller to write this household
+## off like any other dead end instead.
+func _adopt_orphaned_dependents(household_id: int) -> bool:
+	var orphan: HEHousehold = households[household_id]
+	var adopter_id := -1
+	var adopter_dependents := -1
+	for candidate_id in households.keys():
+		if candidate_id == household_id:
+			continue
+		var candidate: HEHousehold = households[candidate_id]
+		if candidate.worker_capacity() <= 0:
+			continue
+		var candidate_dependents := candidate.demographics.dependents
+		if adopter_id == -1 or candidate_dependents < adopter_dependents \
+				or (candidate_dependents == adopter_dependents and candidate_id < adopter_id):
+			adopter_id = candidate_id
+			adopter_dependents = candidate_dependents
+	if adopter_id == -1:
+		return false
+
+	var adopter: HEHousehold = households[adopter_id]
+	for age in orphan.dependent_ages():
+		adopter.add_dependent(age)
+	adopter.balance += orphan.balance
+	for c in SUBSISTENCE_COMMODITIES:
+		var amount := orphan.stock(c)
+		if amount > 0.0:
+			adopter.add_stock(c, amount)
+
+	_log_event("adopted", {
+		"household_id": household_id, "adopting_household_id": adopter_id,
+		"dependents": orphan.demographics.dependents,
+	})
+	settlement.household_ids.erase(household_id)
+	households.erase(household_id)
+	return true
+
+## Shared by _evaluate_emigration and _evaluate_old_age: each `household_ids`
+## entry has already been confirmed empty (is_empty()) by its caller and has
+## nothing left to represent -- write off whatever balance/stock it still
+## held (not redistributed, not inherited -- see get_city_summary's
+## money_written_off_total) and remove it from settlement/households.
+## Returns {"money": float, "goods": Dictionary[Commodity.Type, float]} so
+## each caller can fold the totals into ITS OWN daily-record fields under
+## its own cause, rather than this helper guessing which one it's for.
+func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
 	var money_written_off := 0.0
 	var goods_written_off: Dictionary[Commodity.Type, float] = {}
-	for household_id in to_remove:
+	for household_id in household_ids:
 		var h: HEHousehold = households[household_id]
 		money_written_off += h.balance
 		for c in SUBSISTENCE_COMMODITIES:
@@ -531,21 +654,27 @@ func _evaluate_emigration(record: Dictionary) -> void:
 		settlement.household_ids.erase(household_id)
 		households.erase(household_id)
 
-	_emigrations_total += emigrations
 	_money_written_off_total += money_written_off
 	for c in goods_written_off.keys():
 		_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + goods_written_off[c]
+	return {"money": money_written_off, "goods": goods_written_off}
 
-	record["emigrations"] = emigrations
-	record["money_written_off"] = money_written_off
-	record["goods_written_off"] = goods_written_off
+## Folds a write-off's goods into `record["goods_written_off"]`, accumulating
+## rather than overwriting -- emigration and old age can both write off
+## goods on the same monthly tick, and each must add to the day's total
+## instead of clobbering the other's contribution.
+func _merge_goods_written_off(record: Dictionary, goods: Dictionary) -> void:
+	var record_goods: Dictionary = record.get("goods_written_off", {})
+	for c in goods.keys():
+		record_goods[c] = record_goods.get(c, 0.0) + goods[c]
+	record["goods_written_off"] = record_goods
 
-## Monthly, right after emigration so a household that just lost a member
-## evaluates aging/births from its post-emigration state, not a stale one.
-## Aging runs first: a dependent promoted this same period immediately
+## Monthly, right after emigration and old age so a household that just lost
+## a member evaluates aging/births from its post-loss state, not a stale
+## one. Aging runs first: a dependent promoted this same period immediately
 ## frees a pipeline slot a birth could use. Households removed by
-## emigration this same call are gone from `households` already, so
-## they're simply skipped -- no explicit guard needed. New households
+## emigration or old age this same tick are gone from `households` already,
+## so they're simply skipped -- no explicit guard needed. New households
 ## created by splitting are collected separately and only added to
 ## `households`/`settlement` once this pass is done iterating, so a split
 ## created this same tick is never itself re-evaluated for aging/birth
