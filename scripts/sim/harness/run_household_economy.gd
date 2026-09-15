@@ -178,26 +178,32 @@ func _check_demographic_invariants(sim: HESimulation) -> void:
 ## brake actually holds: no household should ever have more dependents
 ## waiting in the pipeline than that cap allows.
 func _check_life_cycle_births_and_aging() -> void:
-	print("\n=== Life cycle: births and aging actually happen ===")
+	print("\n=== Life cycle: births and aging actually happen, via splitting not ballooning ===")
 	var sim := _new_sim("build_two_business_economy")
+	var starting_household_count: int = sim.get_household_ids().size()
 	var starting_workforce := _total_worker_capacity(sim)
 	sim.advance_ticks(4 * 360)
 	var city := sim.get_city_summary()
+	var ending_household_count: int = sim.get_household_ids().size()
 	var ending_workforce := _total_worker_capacity(sim)
 
-	print("  over 4 years: births_total=%d worker_promotions_total=%d, total worker_capacity %d -> %d, population=%d" % [
-		city["births_total"], city["worker_promotions_total"], starting_workforce, ending_workforce, city["population"]])
+	print("  over 4 years: births_total=%d worker_promotions_total=%d, households %d -> %d, total worker_capacity %d -> %d, population=%d" % [
+		city["births_total"], city["worker_promotions_total"], starting_household_count, ending_household_count, starting_workforce, ending_workforce, city["population"]])
 
 	_assert(city["births_total"] > 0, "A healthy multi-year economy should show at least one real birth, got 0")
-	_assert(city["worker_promotions_total"] > 0, "A healthy multi-year economy should show at least one dependent aging into a worker, got 0")
-	_assert(ending_workforce > starting_workforce, "Total worker capacity should grow from aging promotions, got %d -> %d" % [starting_workforce, ending_workforce])
+	_assert(city["worker_promotions_total"] > 0, "A healthy multi-year economy should show at least one dependent aging into adulthood, got 0")
+	_assert(ending_household_count > starting_household_count, "Aging up should create MORE households (splitting), not just bigger ones, got %d -> %d" % [starting_household_count, ending_household_count])
+	_assert(ending_workforce > starting_workforce, "Total city-wide worker capacity should grow from aging, got %d -> %d" % [starting_workforce, ending_workforce])
 
 	var max_pending := 0
+	var max_worker_capacity := 0
 	for household_id in sim.get_household_ids():
-		var ages: Array = sim.get_household_summary(household_id)["dependent_ages"]
-		max_pending = max(max_pending, ages.size())
-	print("  most dependents ever pending in one household's pipeline: %d (cap is %d)" % [max_pending, HEHousehold.MAX_PENDING_DEPENDENTS])
+		var h := sim.get_household_summary(household_id)
+		max_pending = max(max_pending, (h["dependent_ages"] as Array).size())
+		max_worker_capacity = max(max_worker_capacity, h["worker_capacity"])
+	print("  most dependents ever pending in one household's pipeline: %d (cap is %d); largest surviving worker_capacity: %d" % [max_pending, HEHousehold.MAX_PENDING_DEPENDENTS, max_worker_capacity])
 	_assert(max_pending <= HEHousehold.MAX_PENDING_DEPENDENTS, "No household should exceed MAX_PENDING_DEPENDENTS pending dependents, saw %d" % max_pending)
+	_assert(max_worker_capacity <= HEScenarioSeeds.WORKER_CAPACITY, "No household's worker_capacity should ever exceed what it was seeded with -- aged-up workers must split off, not join the parent's job, saw %d" % max_worker_capacity)
 	_check_demographic_invariants(sim)
 
 func _total_worker_capacity(sim: HESimulation) -> int:

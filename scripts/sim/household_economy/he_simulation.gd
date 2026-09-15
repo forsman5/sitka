@@ -82,6 +82,10 @@ var _money_written_off_total := 0.0
 var _goods_written_off_total: Dictionary[Commodity.Type, float] = {}
 var _births_total := 0
 var _worker_promotions_total := 0
+## Next ID to assign a newly-split household -- initialized in _init() past
+## whatever the world-seed builder already used, so a split can never
+## collide with a seeded household's ID.
+var _next_household_id := 1
 
 var _history: Array[Dictionary] = []
 
@@ -94,6 +98,9 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	households = world["households"]
 	businesses = world["businesses"]
 	market = HEMarket.new(BASE_PRICE.duplicate())
+	_next_household_id = 1
+	for household_id in households.keys():
+		_next_household_id = maxi(_next_household_id, household_id + 1)
 
 func advance_ticks(days: int) -> void:
 	for i in days:
@@ -426,22 +433,61 @@ func _evaluate_starvation(record: Dictionary) -> void:
 
 ## Monthly, right after starvation so a household that just lost a member
 ## evaluates aging/births from its post-starvation state, not a stale one.
-## Aging runs first: a dependent promoted to a worker this same period
-## immediately frees a pipeline slot a birth could use. Households removed
-## by starvation this same call are gone from `households` already, so
-## they're simply skipped -- no explicit guard needed.
+## Aging runs first: a dependent promoted this same period immediately
+## frees a pipeline slot a birth could use. Households removed by
+## starvation this same call are gone from `households` already, so
+## they're simply skipped -- no explicit guard needed. New households
+## created by splitting are collected separately and only added to
+## `households`/`settlement` once this pass is done iterating, so a split
+## created this same tick is never itself re-evaluated for aging/birth
+## before it's even a day old.
 func _evaluate_life_cycle(record: Dictionary) -> void:
 	var births := 0
 	var promotions := 0
+	var new_households: Array[HEHousehold] = []
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
-		promotions += h.evaluate_aging()
+		var pre_split_headcount := h.headcount()
+		var promoted := h.evaluate_aging()
+		for i in promoted:
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i))
+		promotions += promoted
 		if h.evaluate_birth():
 			births += 1
+
+	for new_household in new_households:
+		households[new_household.id] = new_household
+		settlement.household_ids.append(new_household.id)
+
 	_births_total += births
 	_worker_promotions_total += promotions
 	record["births"] = births
 	record["worker_promotions"] = promotions
+
+## One newly-adult member leaves `parent` to found its own one-worker,
+## zero-dependent, unemployed household -- it has to find its own job
+## through the normal weekly hiring pool like anyone else (see
+## _reconcile_employment), not inherit the parent's. Takes a proportional
+## share of the parent's balance and goods with it (1 / headcount_before_
+## leaving, using the headcount as of just before THIS particular member
+## left, since evaluate_aging() may have promoted several at once this same
+## period) -- a plain transfer, not a gift from nowhere, so total city
+## money/goods are unaffected by a household splitting.
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int) -> HEHousehold:
+	var new_id := _next_household_id
+	_next_household_id += 1
+	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
+
+	var starting_balance: float = parent.balance * share
+	parent.balance -= starting_balance
+	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance)
+
+	for c in SUBSISTENCE_COMMODITIES:
+		var amount: float = parent.stock(c) * share
+		parent.consume(c, amount)
+		new_household.add_stock(c, amount)
+
+	return new_household
 
 ## Weekly self-tuning step 1: adjust each business's TARGET capacity from
 ## its own rolling-average wage vs. the going reference wage. This only

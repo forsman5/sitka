@@ -27,11 +27,14 @@ const GRAIN_ROLLING_WINDOW_DAYS := 30
 ## days (not just a headcount) so each can independently cross the aging
 ## threshold on its own day -- a household's dependents were not all born on
 ## the same day, even at world-seed time (see HEScenarioSeeds' staggered
-## starting ages). There is deliberately no household formation/splitting
-## here: an aged-up dependent becomes another worker in the SAME household,
-## which can grow without an upper bound on total size over a long enough
-## run. That's a real simplification, not an oversight -- splitting a
-## household when it gets large is a reasonable later cut, not this one.
+## starting ages). Jobs are sticky to the household that already holds
+## them, not freely inherited: when a dependent ages up, evaluate_aging()
+## below removes them from THIS household but does not add them to
+## worker_capacity -- HESimulation spins each one off into its own new,
+## unemployed household that has to find its own job (see
+## he_simulation.gd._split_off_new_household). That keeps this household's
+## own worker_capacity fixed for life; population growth becomes more,
+## smaller households instead of a few that grow without bound.
 const AGING_THRESHOLD_DAYS := 360
 ## A household needs this many CONSECUTIVE well-fed, low-stress days before
 ## a birth becomes eligible -- mirrors the same "sustained, not one good
@@ -186,10 +189,19 @@ func remove_member_for_starvation() -> void:
 	if removing_a_dependent and not _dependent_ages.is_empty():
 		_dependent_ages.pop_back()
 
-## Monthly: promotes every dependent whose age has crossed
-## AGING_THRESHOLD_DAYS into a worker (dependents -> worker_capacity, in the
-## SAME household -- see the class-level note on why there's no splitting).
-## Returns how many were promoted, for HESimulation's reporting.
+## Monthly: removes every dependent whose age has crossed
+## AGING_THRESHOLD_DAYS from THIS household and returns how many. Jobs are
+## sticky to whichever household already holds them -- a newly-adult member
+## doesn't inherit a parent's job for free, so this does NOT add them to
+## worker_capacity here. HESimulation is responsible for spinning each one
+## off into its own brand-new, unemployed, one-worker household (see
+## he_simulation.gd._evaluate_life_cycle/_split_off_new_household) that then
+## has to find its own job through the normal hiring pool like anyone else.
+## This is also what keeps a household's WORKER count fixed at whatever it
+## was seeded with for its whole life -- dependents (0..MAX_PENDING_
+## DEPENDENTS) are the only thing that fluctuates -- so there's no separate
+## household-size cap to author: growth becomes more, smaller households
+## instead of a few unboundedly large ones.
 func evaluate_aging() -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
@@ -202,7 +214,6 @@ func evaluate_aging() -> int:
 		return 0
 	_dependent_ages = remaining
 	demographics.dependents -= promoted
-	demographics.worker_capacity += promoted
 	return promoted
 
 ## Monthly, called after evaluate_aging so a just-freed pipeline slot counts
