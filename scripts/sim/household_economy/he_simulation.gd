@@ -80,6 +80,8 @@ var price_adjustment_enabled: bool = true
 var _starvation_deaths_total := 0
 var _money_written_off_total := 0.0
 var _goods_written_off_total: Dictionary[Commodity.Type, float] = {}
+var _births_total := 0
+var _worker_promotions_total := 0
 
 var _history: Array[Dictionary] = []
 
@@ -139,6 +141,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
+		"dependent_ages": h.dependent_ages(),
 		"demand_today": demand,
 		"consumed_today": consumed,
 		"unmet_scarcity_today": unmet_scarcity,
@@ -217,6 +220,8 @@ func get_city_summary() -> Dictionary:
 		"households_short_of_funds": households_short_of_funds,
 		"starvation_deaths_total": _starvation_deaths_total,
 		"money_written_off_total": _money_written_off_total,
+		"births_total": _births_total,
+		"worker_promotions_total": _worker_promotions_total,
 		"market": get_market_summary(),
 	}
 
@@ -247,6 +252,7 @@ func _daily_tick() -> void:
 		_evaluate_migration_pressure()
 	if (day + 1) % STARVATION_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_starvation(record)
+		_evaluate_life_cycle(record)
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
 		_reconcile_employment()
@@ -274,6 +280,8 @@ func _new_daily_record() -> Dictionary:
 		"starvation_deaths": 0,
 		"money_written_off": 0.0,
 		"goods_written_off": {},
+		"births": 0,
+		"worker_promotions": 0,
 	}
 
 func _finalize_daily_record(record: Dictionary) -> void:
@@ -365,6 +373,7 @@ func _run_consumption(record: Dictionary) -> void:
 				var rolling_is_low := rolling < Household.MIGRATION_PRESSURE_FULFILLMENT_THRESHOLD
 				var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
 				h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
+				h.advance_day_for_lifecycle(rolling)
 
 ## Reporting only, exactly like the pooled model's migration pressure --
 ## does NOT move or remove anyone.
@@ -389,7 +398,7 @@ func _evaluate_starvation(record: Dictionary) -> void:
 		var h: HEHousehold = households[household_id]
 		if not h.demographics.is_starvation_candidate():
 			continue
-		h.demographics.remove_member()
+		h.remove_member_for_starvation()
 		deaths += 1
 		if h.demographics.is_empty():
 			to_remove.append(household_id)
@@ -414,6 +423,25 @@ func _evaluate_starvation(record: Dictionary) -> void:
 	record["starvation_deaths"] = deaths
 	record["money_written_off"] = money_written_off
 	record["goods_written_off"] = goods_written_off
+
+## Monthly, right after starvation so a household that just lost a member
+## evaluates aging/births from its post-starvation state, not a stale one.
+## Aging runs first: a dependent promoted to a worker this same period
+## immediately frees a pipeline slot a birth could use. Households removed
+## by starvation this same call are gone from `households` already, so
+## they're simply skipped -- no explicit guard needed.
+func _evaluate_life_cycle(record: Dictionary) -> void:
+	var births := 0
+	var promotions := 0
+	for household_id in households.keys():
+		var h: HEHousehold = households[household_id]
+		promotions += h.evaluate_aging()
+		if h.evaluate_birth():
+			births += 1
+	_births_total += births
+	_worker_promotions_total += promotions
+	record["births"] = births
+	record["worker_promotions"] = promotions
 
 ## Weekly self-tuning step 1: adjust each business's TARGET capacity from
 ## its own rolling-average wage vs. the going reference wage. This only

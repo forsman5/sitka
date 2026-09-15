@@ -2,6 +2,7 @@ extends SceneTree
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 ## H1 labor-market acceptance check. Run with:
@@ -17,6 +18,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_starvation_actually_happens()
+	_check_life_cycle_births_and_aging()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -153,3 +155,53 @@ func _check_starvation_actually_happens() -> void:
 
 	_assert(city["starvation_deaths_total"] > 0, "Sustained unemployment with no escape route should eventually cause real starvation deaths")
 	_assert(city["population"] < starting_population, "Population should actually shrink from starvation, not just report stress")
+	_check_demographic_invariants(sim)
+
+## Every LIVE household's dependent_ages array should always have exactly
+## as many entries as demographics.dependents says, and neither dependents
+## nor worker_capacity should ever go negative. This exact invariant broke
+## once already (starvation's remove_member() decremented dependents
+## without popping the matching age entry) and produced a household that
+## silently never triggered is_empty() -- see he_household.gd's
+## remove_member_for_starvation().
+func _check_demographic_invariants(sim: HESimulation) -> void:
+	for household_id in sim.get_household_ids():
+		var h := sim.get_household_summary(household_id)
+		var ages: Array = h["dependent_ages"]
+		_assert(ages.size() == h["dependents"], "Household %d: dependent_ages has %d entries but dependents=%d" % [household_id, ages.size(), h["dependents"]])
+		_assert(h["dependents"] >= 0, "Household %d has negative dependents: %d" % [household_id, h["dependents"]])
+		_assert(h["worker_capacity"] >= 0, "Household %d has negative worker_capacity: %d" % [household_id, h["worker_capacity"]])
+
+## Life cycle: a reasonably healthy, evenly-staffed economy run for several
+## years should show real births and real aging-into-worker promotions --
+## not just reported prosperity. Also checks the MAX_PENDING_DEPENDENTS
+## brake actually holds: no household should ever have more dependents
+## waiting in the pipeline than that cap allows.
+func _check_life_cycle_births_and_aging() -> void:
+	print("\n=== Life cycle: births and aging actually happen ===")
+	var sim := _new_sim("build_two_business_economy")
+	var starting_workforce := _total_worker_capacity(sim)
+	sim.advance_ticks(4 * 360)
+	var city := sim.get_city_summary()
+	var ending_workforce := _total_worker_capacity(sim)
+
+	print("  over 4 years: births_total=%d worker_promotions_total=%d, total worker_capacity %d -> %d, population=%d" % [
+		city["births_total"], city["worker_promotions_total"], starting_workforce, ending_workforce, city["population"]])
+
+	_assert(city["births_total"] > 0, "A healthy multi-year economy should show at least one real birth, got 0")
+	_assert(city["worker_promotions_total"] > 0, "A healthy multi-year economy should show at least one dependent aging into a worker, got 0")
+	_assert(ending_workforce > starting_workforce, "Total worker capacity should grow from aging promotions, got %d -> %d" % [starting_workforce, ending_workforce])
+
+	var max_pending := 0
+	for household_id in sim.get_household_ids():
+		var ages: Array = sim.get_household_summary(household_id)["dependent_ages"]
+		max_pending = max(max_pending, ages.size())
+	print("  most dependents ever pending in one household's pipeline: %d (cap is %d)" % [max_pending, HEHousehold.MAX_PENDING_DEPENDENTS])
+	_assert(max_pending <= HEHousehold.MAX_PENDING_DEPENDENTS, "No household should exceed MAX_PENDING_DEPENDENTS pending dependents, saw %d" % max_pending)
+	_check_demographic_invariants(sim)
+
+func _total_worker_capacity(sim: HESimulation) -> int:
+	var total := 0
+	for household_id in sim.get_household_ids():
+		total += sim.get_household_summary(household_id)["worker_capacity"]
+	return total

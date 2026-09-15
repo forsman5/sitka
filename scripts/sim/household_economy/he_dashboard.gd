@@ -30,6 +30,7 @@ var _business_list: VBoxContainer
 var _business_rows: Dictionary = {} # business_id -> {row labels...}
 var _household_list: VBoxContainer
 var _household_rows: Dictionary = {} # household_id -> {row labels...}
+var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
 
 func _ready() -> void:
@@ -187,6 +188,7 @@ func _rebuild_business_rows() -> void:
 		_business_rows[business_id] = labels
 
 func _rebuild_household_rows() -> void:
+	_known_household_ids = _simulation.get_household_ids()
 	for child in _household_list.get_children():
 		_household_list.remove_child(child)
 		child.queue_free()
@@ -251,10 +253,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  starvation deaths (lifetime)=%d  money written off=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  starvation deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["starvation_deaths_total"], city["money_written_off_total"]]
+		city["starvation_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():
@@ -283,11 +285,20 @@ func _refresh() -> void:
 		(row["reference"] as Label).text = "%.3f" % reference
 		(row["stock"] as Label).text = "%.1f" % report["stock"]
 
+	var current_ids := _simulation.get_household_ids()
+	if current_ids != _known_household_ids:
+		# A household died (or, later, split) since the rows were built --
+		# rebuild the table to match exactly who's actually still alive,
+		# rather than leaving a dead household's row frozen forever on
+		# whatever it last displayed (which is how this previously made a
+		# starved-out city look like it still had all its original
+		# households, just stuck at 1/1).
+		_known_household_ids = current_ids
+		_rebuild_household_rows()
+
 	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
 	var timber_name := Commodity.name_of(Commodity.Type.TIMBER)
 	for household_id in _household_rows.keys():
-		if not _simulation.households.has(household_id):
-			continue # removed by starvation since the rows were built; row simply goes stale/blank below
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Label).text = str(household_id)

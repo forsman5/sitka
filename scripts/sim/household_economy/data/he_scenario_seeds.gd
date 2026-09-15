@@ -38,6 +38,18 @@ static func _farm_recipe() -> Recipe:
 static func _woodlot_recipe() -> Recipe:
 	return Recipe.new("woodlot", {}, {Commodity.Type.TIMBER: 1.0})
 
+## Deterministic but spread-out starting ages (in days) for each household's
+## DEPENDENTS seeded dependents, so the whole population doesn't age into
+## workers in one synchronized pulse AGING_THRESHOLD_DAYS from now. Not
+## meant to represent real household composition, just to avoid a seeding
+## artifact.
+static func _staggered_starting_ages(household_id: int) -> Array[int]:
+	var ages: Array[int] = []
+	for slot in DEPENDENTS:
+		var age := (household_id * 53 + slot * 137) % HEHousehold.AGING_THRESHOLD_DAYS
+		ages.append(age)
+	return ages
+
 ## `farm_capacity`/`woodlot_capacity` are both the business's STARTING
 ## capacity and how many workers are actually assigned there on day one
 ## (they should sum to HOUSEHOLD_COUNT * WORKER_CAPACITY so nobody starts
@@ -62,6 +74,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int) -> Dictionar
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE)
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
 		household.add_stock(Commodity.Type.TIMBER, timber_buffer)
+		household.seed_dependent_ages(_staggered_starting_ages(household_id))
 
 		if farm_workers_assigned < farm_capacity:
 			household.employer_business_id = FARM_BUSINESS_ID
