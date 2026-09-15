@@ -14,6 +14,9 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
+## Blotter shows a scrollable scan of recent history, not the full
+## HESimulation.EVENT_LOG_MAX -- older entries just aren't rendered.
+const BLOTTER_DISPLAY_LIMIT := 40
 
 const SCENARIOS := [
 	{"label": "Two businesses, evenly staffed", "builder": "build_two_business_economy"},
@@ -33,6 +36,7 @@ var _household_list: VBoxContainer
 var _household_rows: Dictionary = {} # household_id -> {row labels...}
 var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
+var _blotter_display: RichTextLabel
 
 func _ready() -> void:
 	_configure_tooltip_theme()
@@ -136,13 +140,45 @@ func _build_ui() -> void:
 	_business_list = VBoxContainer.new()
 	vbox.add_child(_business_list)
 
+	var lower_row := HBoxContainer.new()
+	lower_row.add_theme_constant_override("separation", 16)
+	lower_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(lower_row)
+
+	var household_column := VBoxContainer.new()
+	household_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	household_column.size_flags_stretch_ratio = 2.0
+	lower_row.add_child(household_column)
+
+	var household_header := Label.new()
+	household_header.text = "Households"
+	household_header.add_theme_font_size_override("font_size", 16)
+	household_column.add_child(household_header)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_child(scroll)
+	household_column.add_child(scroll)
 
 	_household_list = VBoxContainer.new()
 	_household_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_household_list)
+
+	var blotter_column := VBoxContainer.new()
+	blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	blotter_column.size_flags_stretch_ratio = 1.0
+	lower_row.add_child(blotter_column)
+
+	var blotter_header := Label.new()
+	blotter_header.text = "Blotter"
+	blotter_header.add_theme_font_size_override("font_size", 16)
+	blotter_column.add_child(blotter_header)
+
+	_blotter_display = RichTextLabel.new()
+	_blotter_display.bbcode_enabled = true
+	_blotter_display.scroll_following = false
+	_blotter_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_blotter_display.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	blotter_column.add_child(_blotter_display)
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
@@ -342,3 +378,30 @@ func _refresh() -> void:
 			unaffordable_total += v
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
+
+	_refresh_blotter()
+
+## Newest event first, since that's what a player checking in on the city
+## cares about seeing without scrolling.
+func _refresh_blotter() -> void:
+	var events := _simulation.get_event_log(BLOTTER_DISPLAY_LIMIT)
+	if events.is_empty():
+		_blotter_display.text = "[i]No events yet.[/i]"
+		return
+	var lines: Array[String] = []
+	for i in range(events.size() - 1, -1, -1):
+		lines.append(_format_event(events[i]))
+	_blotter_display.text = "\n".join(lines)
+
+func _format_event(event: Dictionary) -> String:
+	var day: int = event["day"]
+	match event["type"]:
+		"birth":
+			return "[color=#8fd98f]Day %d - Household %d: birth[/color]" % [day, event["household_id"]]
+		"death":
+			var suffix := " - household ended" if event["household_ended"] else ""
+			return "[color=#e08d8d]Day %d - Household %d: %s died (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
+		"split":
+			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+		_:
+			return "Day %d - %s" % [day, event["type"]]

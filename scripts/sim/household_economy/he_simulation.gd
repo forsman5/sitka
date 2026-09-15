@@ -22,7 +22,7 @@ extends RefCounted
 ## simulation state:
 ##   get_household_ids(), get_clock_summary(), get_household_summary(id),
 ##   get_business_reports(), get_market_summary(), get_city_summary(),
-##   get_daily_history(days)
+##   get_daily_history(days), get_event_log(limit)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
@@ -64,6 +64,10 @@ const CAPACITY_STEP_WORKERS := 4
 const WAGE_PROFIT_MARGIN := 0.1
 
 const HISTORY_MAX_DAYS := 360
+## The blotter (get_event_log) only needs enough recent history for a
+## player to scan -- unlike _history, nothing aggregates over it, so it's
+## kept far shorter.
+const EVENT_LOG_MAX := 200
 
 var settlement: HESettlement
 var households: Dictionary[int, HEHousehold] = {}
@@ -88,6 +92,9 @@ var _worker_promotions_total := 0
 var _next_household_id := 1
 
 var _history: Array[Dictionary] = []
+## Blotter: one entry per birth/death/split, newest appended last -- see
+## get_event_log() and _log_event().
+var _event_log: Array[Dictionary] = []
 
 func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true) -> void:
 	rng = RandomNumberGenerator.new()
@@ -239,6 +246,18 @@ func get_daily_history(days: int) -> Array:
 	var out: Array = []
 	for i in range(start, _history.size()):
 		out.append((_history[i] as Dictionary).duplicate(true))
+	return out
+
+## Up to the last `limit` blotter entries (births, deaths, splits), oldest
+## first -- same convention as get_daily_history. Pass -1 (default) for
+## everything currently retained (bounded by EVENT_LOG_MAX regardless).
+## Each entry has at least "day" and "type" ("birth"/"death"/"split"); see
+## _log_event()'s call sites for the type-specific fields.
+func get_event_log(limit: int = -1) -> Array:
+	var start: int = 0 if limit < 0 else max(0, _event_log.size() - limit)
+	var out: Array = []
+	for i in range(start, _event_log.size()):
+		out.append((_event_log[i] as Dictionary).duplicate(true))
 	return out
 
 # ---------------------------------------------------------------------------
@@ -405,9 +424,15 @@ func _evaluate_starvation(record: Dictionary) -> void:
 		var h: HEHousehold = households[household_id]
 		if not h.demographics.is_starvation_candidate():
 			continue
+		var member_type := "dependent" if h.demographics.dependents > 0 else "worker"
 		h.remove_member_for_starvation()
 		deaths += 1
-		if h.demographics.is_empty():
+		var household_ended := h.demographics.is_empty()
+		_log_event("death", {
+			"household_id": household_id, "member_type": member_type,
+			"cause": "starvation", "household_ended": household_ended,
+		})
+		if household_ended:
 			to_remove.append(household_id)
 
 	var money_written_off := 0.0
@@ -454,6 +479,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		promotions += promoted
 		if h.evaluate_birth():
 			births += 1
+			_log_event("birth", {"household_id": household_id})
 
 	for new_household in new_households:
 		households[new_household.id] = new_household
@@ -487,6 +513,10 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 		parent.consume(c, amount)
 		new_household.add_stock(c, amount)
 
+	_log_event("split", {
+		"parent_household_id": parent.id, "new_household_id": new_id,
+		"starting_balance": starting_balance,
+	})
 	return new_household
 
 ## Weekly self-tuning step 1: adjust each business's TARGET capacity from
@@ -658,6 +688,17 @@ func _adjust_price(commodity: Commodity.Type, total_offer: float, total_funded_r
 
 func _accumulate(dict: Dictionary, key, amount: float) -> void:
 	dict[key] = dict.get(key, 0.0) + amount
+
+## Appends one blotter row (see get_event_log()) tagged with the CURRENT
+## day, then trims from the front once past EVENT_LOG_MAX -- same
+## ring-buffer shape as _finalize_daily_record's _history trim.
+func _log_event(type: String, data: Dictionary) -> void:
+	var entry := {"day": day, "type": type}
+	for key in data.keys():
+		entry[key] = data[key]
+	_event_log.append(entry)
+	if _event_log.size() > EVENT_LOG_MAX:
+		_event_log.pop_front()
 
 func _business_selling(commodity: Commodity.Type) -> HEBusiness:
 	for business_id in businesses.keys():
