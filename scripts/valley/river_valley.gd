@@ -44,6 +44,11 @@ func _ready() -> void:
 
 func _configure_camera() -> void:
 	_camera.size = 350.0
+	# Keeps panning from ever revealing empty background past the terrain's
+	# edge -- the ground plane is a fixed WORLD_SIZE rectangle here, unlike
+	# world.tscn's open-ended procedural map (rts_camera.gd's default).
+	$RTSCamera.pan_limit = AuthoredValleyTerrain.WORLD_SIZE * 0.5
+	$RTSCamera.max_ground_height = AuthoredValleyTerrain.HEIGHT_MAX
 	$RTSCamera.center_on(Vector3(0.0, 0.0, 0.0))
 
 func _process(_delta: float) -> void:
