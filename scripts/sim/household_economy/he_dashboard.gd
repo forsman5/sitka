@@ -19,8 +19,8 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 const BLOTTER_DISPLAY_LIMIT := 40
 
 const SCENARIOS := [
-	{"label": "Two businesses, evenly staffed", "builder": "build_two_business_economy"},
-	{"label": "Two businesses, lopsided start", "builder": "build_lopsided_start"},
+	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
+	{"label": "Three businesses, lopsided start", "builder": "build_lopsided_start"},
 ]
 
 var _simulation: HESimulation
@@ -222,9 +222,9 @@ func _rebuild_business_rows() -> void:
 	_business_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 8
+	grid.columns = 12
 	_business_list.add_child(grid)
-	for col_label in ["Name", "Capacity", "Max", "Employed", "Output", "Wage (7d avg)", "Reference wage", "Stock"]:
+	for col_label in ["Name", "Capacity", "Max", "Employed", "Output", "Wage (7d avg)", "Reference wage", "Stock", "Cash", "Revenue", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
 		if col_label == "Wage (7d avg)":
@@ -237,7 +237,7 @@ func _rebuild_business_rows() -> void:
 	for report in _simulation.get_business_reports():
 		var business_id: int = report["business_id"]
 		var labels := {}
-		for key in ["name", "capacity", "max_capacity", "employed", "output", "wage", "reference", "stock"]:
+		for key in ["name", "capacity", "max_capacity", "employed", "output", "wage", "reference", "stock", "balance", "revenue", "wages", "cash_change"]:
 			var label := Label.new()
 			label.custom_minimum_size = Vector2(90, 0)
 			if key == "wage":
@@ -321,10 +321,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["emigrations_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"]]
+		city["emigrations_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():
@@ -352,6 +352,13 @@ func _refresh() -> void:
 		wage_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if wage > reference else Color(0.9, 0.5, 0.5))
 		(row["reference"] as Label).text = "%.3f" % reference
 		(row["stock"] as Label).text = "%.1f" % report["stock"]
+		(row["balance"] as Label).text = "%.1f" % report["balance"]
+		(row["revenue"] as Label).text = "%.1f" % report["last_revenue"]
+		(row["wages"] as Label).text = "%.1f" % report["last_wages_paid"]
+		var cash_change: float = report["last_cash_change"]
+		var cash_change_label := row["cash_change"] as Label
+		cash_change_label.text = "%+.1f" % cash_change
+		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
 
 	var current_ids := _simulation.get_household_ids()
 	if current_ids != _known_household_ids:

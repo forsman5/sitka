@@ -36,8 +36,8 @@ func _assert(condition: bool, message: String) -> void:
 
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
-	var a := _new_sim("build_two_business_economy")
-	var b := _new_sim("build_two_business_economy")
+	var a := _new_sim("build_three_business_economy")
+	var b := _new_sim("build_three_business_economy")
 	a.advance_ticks(120)
 	b.advance_ticks(120)
 	var mismatch := false
@@ -50,16 +50,18 @@ func _check_determinism() -> void:
 	if not mismatch:
 		print("  two same-seed 120-day runs produced identical household, business, and city summaries")
 
-## Goods and money reconcile as opening + produced - consumed (goods) /
-## opening - written_off (money), across BOTH households and businesses;
-## wages and market trades are transfers that net to zero; nothing goes
-## negative. An emigration is the one place value legitimately leaves
-## the closed system, and it's explicitly logged (money_written_off/
-## goods_written_off) rather than just silently not adding up -- so the
-## reconciliation formula accounts for it instead of ignoring it.
+## Goods and money reconcile as opening + produced - consumed - exported
+## (goods) / opening - written_off + export_revenue (money), across BOTH
+## households and businesses; wages and market trades are transfers that
+## net to zero; nothing goes negative. An emigration is the one place
+## value legitimately leaves the closed system, and the Trader's exports
+## are the one place NEW money legitimately enters it (see
+## he_simulation.gd's _export_revenue_total doc comment) -- both are
+## explicitly logged rather than just silently not adding up, so the
+## reconciliation formula accounts for them instead of ignoring them.
 func _check_conservation() -> void:
-	print("\n=== Conservation: goods and money reconcile (write-offs accounted), nothing negative ===")
-	var sim := _new_sim("build_two_business_economy")
+	print("\n=== Conservation: goods and money reconcile (write-offs/exports accounted), nothing negative ===")
+	var sim := _new_sim("build_three_business_economy")
 	sim.advance_ticks(365)
 	var history := sim.get_daily_history(365)
 
@@ -71,11 +73,12 @@ func _check_conservation() -> void:
 			var opening: float = record["opening_stock"][name]
 			var produced: float = record["produced"].get(name, 0.0)
 			var consumed: float = record["consumed"].get(name, 0.0)
+			var exported: float = (record["exported"] as Dictionary).get(name, 0.0)
 			var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
 			var closing: float = record["closing_stock"][name]
-			var expected: float = opening + produced - consumed - written_off
+			var expected: float = opening + produced - consumed - exported - written_off
 			worst_stock_gap = max(worst_stock_gap, abs(closing - expected))
-		var expected_money: float = record["opening_money"] - float(record["money_written_off"])
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"])
 		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
 
 	print("  worst stock reconciliation gap over 365 days: %.4f" % worst_stock_gap)
@@ -102,27 +105,62 @@ func _check_conservation() -> void:
 ## paying the better wage should gain capacity/employment over time and the
 ## worse-paying one should lose it, with NO manual retuning of either
 ## recipe's output rate.
+##
+## With the Trader in the mix, Woodlot's structural timber oversupply is no
+## longer a permanent wage penalty -- trade relieves it, and Woodlot's own
+## wage recovers past Farm's well before day 300. So this no longer asserts
+## a fixed final Farm-vs-Woodlot wage ranking (that was really a proxy for
+## "Woodlot's oversupply never gets fixed," which is exactly what the
+## Trader exists to fix); it only checks that employment actually moved in
+## response to the ORIGINAL mis-staffing, which is the thing this scenario
+## is actually testing. It separately checks that the Trader itself -- the
+## one business whose entire job is being that outlet -- is still alive
+## and earning a real wage this far out, a direct regression check for the
+## "permanently dies and stops trading" bug fixed alongside this test
+## (dead-forever looks like employed_workers==0 and wage stuck at exactly
+## 0.0; a healthy business can still dip below the reference wage on any
+## single snapshot day without being dead, so that's not asserted here).
+##
+## Checks Farm/Woodlot's SHARE of total city employment rather than raw
+## employed_workers counts: with life cycle now growing the total workforce
+## over time (births/aging), Woodlot's raw headcount can rise even while it
+## keeps losing ground relative to Farm, simply because population growth
+## adds more workers than reallocation moves away -- shares stay correct
+## regardless of how big the city grows in the meantime.
 func _check_labor_self_tunes_toward_profitable_business() -> void:
 	print("\n=== Labor self-tunes toward the more profitable business ===")
 	var sim := _new_sim("build_lopsided_start")
 	var early := _business_snapshot(sim, 14)
+	var early_total_workers := _total_worker_capacity(sim)
 	var late := _business_snapshot(sim, 300)
+	var late_total_workers := _total_worker_capacity(sim)
 
-	print("  day 14:  Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
+	print("  day 14:  Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f | total workers=%d" % [
 		early["farm"]["capacity"], early["farm"]["employed_workers"], early["farm"]["rolling_average_wage"],
 		early["woodlot"]["capacity"], early["woodlot"]["employed_workers"], early["woodlot"]["rolling_average_wage"],
-		early["farm"]["reference_wage_per_worker"]])
-	print("  day 300: Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
+		early["trader"]["capacity"], early["trader"]["employed_workers"], early["trader"]["rolling_average_wage"],
+		early["farm"]["reference_wage_per_worker"], early_total_workers])
+	print("  day 300: Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f | total workers=%d" % [
 		late["farm"]["capacity"], late["farm"]["employed_workers"], late["farm"]["rolling_average_wage"],
 		late["woodlot"]["capacity"], late["woodlot"]["employed_workers"], late["woodlot"]["rolling_average_wage"],
-		late["farm"]["reference_wage_per_worker"]])
+		late["trader"]["capacity"], late["trader"]["employed_workers"], late["trader"]["rolling_average_wage"],
+		late["farm"]["reference_wage_per_worker"], late_total_workers])
 
-	_assert(late["farm"]["employed_workers"] > early["farm"]["employed_workers"],
-		"Farm should gain workers over time, went %d -> %d" % [early["farm"]["employed_workers"], late["farm"]["employed_workers"]])
-	_assert(late["woodlot"]["employed_workers"] < early["woodlot"]["employed_workers"],
-		"Woodlot should lose workers over time, went %d -> %d" % [early["woodlot"]["employed_workers"], late["woodlot"]["employed_workers"]])
-	_assert(late["farm"]["rolling_average_wage"] > late["woodlot"]["rolling_average_wage"],
-		"Farm's wage should end up above Woodlot's, got %.3f vs %.3f" % [late["farm"]["rolling_average_wage"], late["woodlot"]["rolling_average_wage"]])
+	var early_farm_share: float = float(early["farm"]["employed_workers"]) / float(early_total_workers)
+	var late_farm_share: float = float(late["farm"]["employed_workers"]) / float(late_total_workers)
+	var early_woodlot_share: float = float(early["woodlot"]["employed_workers"]) / float(early_total_workers)
+	var late_woodlot_share: float = float(late["woodlot"]["employed_workers"]) / float(late_total_workers)
+	print("  Farm share of workforce: %.1f%% -> %.1f%% | Woodlot share: %.1f%% -> %.1f%%" % [
+		early_farm_share * 100.0, late_farm_share * 100.0, early_woodlot_share * 100.0, late_woodlot_share * 100.0])
+
+	_assert(late_farm_share > early_farm_share,
+		"Farm's SHARE of total employment should grow over time, went %.1f%% -> %.1f%%" % [early_farm_share * 100.0, late_farm_share * 100.0])
+	_assert(late_woodlot_share < early_woodlot_share,
+		"Woodlot's SHARE of total employment should shrink over time, went %.1f%% -> %.1f%%" % [early_woodlot_share * 100.0, late_woodlot_share * 100.0])
+	_assert(late["trader"]["employed_workers"] > 0,
+		"Trader should still be trading by day 300, not permanently died out")
+	_assert(late["trader"]["rolling_average_wage"] > 0.0,
+		"Trader should be earning a real wage by day 300, not stuck at 0 like the permanently-dead-capacity bug this test guards against")
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)
@@ -179,7 +217,7 @@ func _check_demographic_invariants(sim: HESimulation) -> void:
 ## waiting in the pipeline than that cap allows.
 func _check_life_cycle_births_and_aging() -> void:
 	print("\n=== Life cycle: births and aging actually happen, via splitting not ballooning ===")
-	var sim := _new_sim("build_two_business_economy")
+	var sim := _new_sim("build_three_business_economy")
 	var starting_household_count: int = sim.get_household_ids().size()
 	var starting_workforce := _total_worker_capacity(sim)
 	sim.advance_ticks(4 * 360)

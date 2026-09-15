@@ -1,9 +1,9 @@
 class_name HEScenarioSeeds
 extends RefCounted
 
-## Authored H1 test worlds: one settlement, two city-owned businesses
-## (Farm, Woodlot), and a population of pure-labor households. Each returns
-## {settlement, households, businesses} so HESimulation.new(seed,
+## Authored H1 test worlds: one settlement, three city-owned businesses
+## (Farm, Woodlot, Trader), and a population of pure-labor households. Each
+## returns {settlement, households, businesses} so HESimulation.new(seed,
 ## Callable(HEScenarioSeeds, "...")) can run it directly.
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -20,10 +20,15 @@ const HOUSEHOLD_SIZE := WORKER_CAPACITY + DEPENDENTS
 
 const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
+const TRADER_BUSINESS_ID := 3
 
 const HOUSEHOLD_COUNT := 30
 const FARM_MAX_CAPACITY := 50
 const WOODLOT_MAX_CAPACITY := 50
+## Smaller ceiling than the production businesses -- the Trader is meant to
+## stay a release valve for surplus, not grow into the settlement's
+## dominant employer.
+const TRADER_MAX_CAPACITY := 20
 
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
@@ -50,18 +55,21 @@ static func _staggered_starting_ages(household_id: int) -> Array[int]:
 		ages.append(age)
 	return ages
 
-## `farm_capacity`/`woodlot_capacity` are both the business's STARTING
-## capacity and how many workers are actually assigned there on day one
-## (they should sum to HOUSEHOLD_COUNT * WORKER_CAPACITY so nobody starts
-## unemployed by construction, unless a scenario deliberately wants that).
-static func _build_world(farm_capacity: int, woodlot_capacity: int) -> Dictionary:
+## `farm_capacity`/`woodlot_capacity`/`trader_capacity` are each business's
+## STARTING capacity and how many workers are actually assigned there on
+## day one (they should sum to HOUSEHOLD_COUNT * WORKER_CAPACITY so nobody
+## starts unemployed by construction, unless a scenario deliberately wants
+## that).
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 	var businesses: Dictionary[int, HEBusiness] = {
 		FARM_BUSINESS_ID: HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), FARM_MAX_CAPACITY, farm_capacity),
 		WOODLOT_BUSINESS_ID: HEBusiness.new(WOODLOT_BUSINESS_ID, "Woodlot", _woodlot_recipe(), WOODLOT_MAX_CAPACITY, woodlot_capacity),
+		TRADER_BUSINESS_ID: HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, TRADER_MAX_CAPACITY, trader_capacity, HEBusiness.Kind.TRADER),
 	}
 	settlement.business_ids.append(FARM_BUSINESS_ID)
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
+	settlement.business_ids.append(TRADER_BUSINESS_ID)
 
 	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
@@ -69,6 +77,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int) -> Dictionar
 	var households: Dictionary[int, HEHousehold] = {}
 	var farm_workers_assigned := 0
 	var woodlot_workers_assigned := 0
+	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE)
@@ -82,7 +91,10 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int) -> Dictionar
 		elif woodlot_workers_assigned < woodlot_capacity:
 			household.employer_business_id = WOODLOT_BUSINESS_ID
 			woodlot_workers_assigned += WORKER_CAPACITY
-		# else: stays unemployed (-1) -- only happens if the two capacities
+		elif trader_workers_assigned < trader_capacity:
+			household.employer_business_id = TRADER_BUSINESS_ID
+			trader_workers_assigned += WORKER_CAPACITY
+		# else: stays unemployed (-1) -- only happens if the three capacities
 		# don't cover the whole population, which a scenario may want.
 
 		households[household_id] = household
@@ -91,18 +103,28 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int) -> Dictionar
 	return {"settlement": settlement, "households": households, "businesses": businesses}
 
 ## Evenly staffed on day one -- HOUSEHOLD_COUNT*WORKER_CAPACITY workers split
-## 50/50 between Farm and Woodlot. With the recipe rates above, Woodlot's
-## output is structurally oversupplied relative to Farm-household fuel
-## demand, so its wage should fall below the reference wage and its
-## capacity should contract over time, while Farm's grows -- the "let it
-## tune itself" scenario, rather than hand-balancing the recipe rates.
-static func build_two_business_economy(_rng: RandomNumberGenerator) -> Dictionary:
-	var half := (HOUSEHOLD_COUNT / 2) * WORKER_CAPACITY
-	return _build_world(half, half)
+## with a small slice going to the Trader and the rest split 50/50 between
+## Farm and Woodlot. With the recipe rates above, Woodlot's output is
+## structurally oversupplied relative to Farm-household fuel demand, so its
+## wage should fall below the reference wage and its capacity should
+## contract over time, while Farm's grows -- the "let it tune itself"
+## scenario, rather than hand-balancing the recipe rates. The Trader takes
+## some of the edge off that divergence (it exports Woodlot's surplus
+## timber for a bit of extra revenue) without erasing it, since it only
+## ever touches stock above a comfortable reserve.
+static func build_three_business_economy(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader)
 
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather
-## than waiting for the balanced scenario's slower drift.
+## than waiting for the balanced scenario's slower drift. The Trader starts
+## with a smaller slice still, since it's a release valve, not a primary
+## employer.
 static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
-	var total := HOUSEHOLD_COUNT * WORKER_CAPACITY
-	return _build_world(int(total * 0.2), int(total * 0.8))
+	var trader := 6
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
+	var farm := int(remainder * 0.2)
+	return _build_world(farm, remainder - farm, trader)
