@@ -28,6 +28,7 @@ const WAGE_ROLLING_WINDOW_DAYS := 7
 enum Kind { PRODUCTION, TRADER }
 
 var id: int
+var settlement_id: int
 var name: String
 var kind: Kind
 var recipe: Recipe # null for Kind.TRADER
@@ -61,8 +62,9 @@ var last_wage_per_worker: float = 0.0
 ## business.
 var last_exported: Dictionary[Commodity.Type, float] = {}
 
-func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_initial_capacity: int, p_kind: Kind = Kind.PRODUCTION) -> void:
+func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_initial_capacity: int, p_kind: Kind = Kind.PRODUCTION, p_settlement_id: int = 0) -> void:
 	id = p_id
+	settlement_id = p_settlement_id
 	name = p_name
 	recipe = p_recipe
 	max_capacity = p_max_capacity

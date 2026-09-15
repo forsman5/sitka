@@ -75,6 +75,7 @@ const MAX_PENDING_DEPENDENTS := 6
 var demographics: Household
 
 var id: int
+var settlement_id: int
 
 ## The business currently employing this household's ENTIRE worker_capacity,
 ## or -1 if unemployed. A household always works as one unit -- it doesn't
@@ -131,9 +132,10 @@ var last_unmet_scarcity: Dictionary[Commodity.Type, float] = {}
 ## afford the funded quantity at today's posted price.
 var last_unmet_unaffordable: Dictionary[Commodity.Type, float] = {}
 
-func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_balance: float = 0.0) -> void:
+func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_balance: float = 0.0, p_settlement_id: int = 0) -> void:
 	id = p_id
-	demographics = Household.new(p_id, 0, p_worker_capacity, p_dependents, 0.0)
+	settlement_id = p_settlement_id
+	demographics = Household.new(p_id, p_settlement_id, p_worker_capacity, p_dependents, 0.0)
 	balance = p_starting_balance
 	_worker_ages.resize(p_worker_capacity)
 	_worker_ages.fill(AGING_THRESHOLD_DAYS)

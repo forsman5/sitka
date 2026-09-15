@@ -18,6 +18,7 @@ var _ok := true
 
 func _init() -> void:
 	_check_determinism()
+	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_emigration_actually_happens()
@@ -54,6 +55,26 @@ func _check_determinism() -> void:
 	_assert(not mismatch, "Household summaries diverged between two same-seed runs")
 	if not mismatch:
 		print("  two same-seed 120-day runs produced identical household, business, and city summaries")
+
+func _check_multi_settlement_locality() -> void:
+	print("\n=== Multi-settlement identity and locality ===")
+	var sim := _new_sim("build_two_settlement_economy")
+	_assert(sim.get_settlement_ids() == [1, 2], "Settlement IDs should enumerate in stable order")
+	_assert(sim.get_household_ids(1) == [1001], "Northbank should expose only its own household")
+	_assert(sim.get_household_ids(2) == [2001], "Southbank should expose only its own household")
+	_assert(sim.get_business_reports(1).size() == 1 and sim.get_business_reports(1)[0]["business_id"] == 101,
+		"Northbank should expose only its own business")
+	_assert(sim.get_business_reports(2).size() == 1 and sim.get_business_reports(2)[0]["business_id"] == 201,
+		"Southbank should expose only its own business")
+	sim.advance_ticks(14)
+	var north := sim.get_settlement_summary(1)
+	var south := sim.get_settlement_summary(2)
+	_assert(north["population"] == 4 and south["population"] == 4, "Each settlement summary should derive its own population")
+	_assert(north["market"]["Grain"]["price"] != south["market"]["Grain"]["price"],
+		"Disconnected settlements with different supply should develop independent prices")
+	_assert(sim.get_household_summary(1001)["settlement_id"] == 1 and sim.get_household_summary(2001)["settlement_id"] == 2,
+		"Every household summary should retain authoritative settlement identity")
+	print("  two settlements enumerate, hire, clear markets, and report independently")
 
 ## Goods and money reconcile as opening + produced - consumed - exported
 ## (goods) / opening - written_off + export_revenue (money), across BOTH

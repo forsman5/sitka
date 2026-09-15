@@ -1,10 +1,9 @@
 class_name HEScenarioSeeds
 extends RefCounted
 
-## Authored H1 test worlds: one settlement, three city-owned businesses
-## (Farm, Woodlot, Trader), and a population of pure-labor households. Each
-## returns {settlement, households, businesses} so HESimulation.new(seed,
-## Callable(HEScenarioSeeds, "...")) can run it directly.
+## Authored H1 test worlds. Builders return settlement-indexed world data so
+## the same HESimulation construction path supports both the original
+## one-city scenarios and multi-settlement locality checks.
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
@@ -77,9 +76,9 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 	var businesses: Dictionary[int, HEBusiness] = {
-		FARM_BUSINESS_ID: HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), FARM_MAX_CAPACITY, farm_capacity),
-		WOODLOT_BUSINESS_ID: HEBusiness.new(WOODLOT_BUSINESS_ID, "Woodlot", _woodlot_recipe(), WOODLOT_MAX_CAPACITY, woodlot_capacity),
-		TRADER_BUSINESS_ID: HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, TRADER_MAX_CAPACITY, trader_capacity, HEBusiness.Kind.TRADER),
+		FARM_BUSINESS_ID: HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), FARM_MAX_CAPACITY, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID),
+		WOODLOT_BUSINESS_ID: HEBusiness.new(WOODLOT_BUSINESS_ID, "Woodlot", _woodlot_recipe(), WOODLOT_MAX_CAPACITY, woodlot_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID),
+		TRADER_BUSINESS_ID: HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, TRADER_MAX_CAPACITY, trader_capacity, HEBusiness.Kind.TRADER, SETTLEMENT_ID),
 	}
 	settlement.business_ids.append(FARM_BUSINESS_ID)
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
@@ -94,7 +93,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
-		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE)
+		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE, SETTLEMENT_ID)
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
 		household.add_stock(Commodity.Type.TIMBER, timber_buffer)
 		household.seed_dependent_ages(_staggered_starting_ages(household_id))
@@ -115,7 +114,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		households[household_id] = household
 		settlement.household_ids.append(household_id)
 
-	return {"settlement": settlement, "households": households, "businesses": businesses}
+	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses}
 
 ## Evenly staffed on day one -- HOUSEHOLD_COUNT*WORKER_CAPACITY workers split
 ## with a small slice going to the Trader and the rest split 50/50 between
@@ -143,3 +142,30 @@ static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
 	var farm := int(remainder * 0.2)
 	return _build_world(farm, remainder - farm, trader)
+
+## Small disconnected pair used to prove that settlement-local markets,
+## employment pools, and summaries do not leak into one another.
+static func build_two_settlement_economy(_rng: RandomNumberGenerator) -> Dictionary:
+	var north := HESettlement.new(1, "Northbank")
+	var south := HESettlement.new(2, "Southbank")
+	var north_farm := HEBusiness.new(101, "North Farm", Recipe.new("north_farm", {}, {Commodity.Type.GRAIN: 4.0}), 8, 2, HEBusiness.Kind.PRODUCTION, 1)
+	var south_farm := HEBusiness.new(201, "South Farm", Recipe.new("south_farm", {}, {Commodity.Type.GRAIN: 0.1}), 8, 2, HEBusiness.Kind.PRODUCTION, 2)
+	var businesses: Dictionary[int, HEBusiness] = {101: north_farm, 201: south_farm}
+	var households: Dictionary[int, HEHousehold] = {}
+	var north_household := HEHousehold.new(1001, 2, 2, 20.0, 1)
+	var south_household := HEHousehold.new(2001, 2, 2, 20.0, 2)
+	north_household.employer_business_id = 101
+	south_household.employer_business_id = 201
+	for h in [north_household, south_household]:
+		h.add_stock(Commodity.Type.GRAIN, 1.0)
+		h.add_stock(Commodity.Type.TIMBER, 10.0)
+		households[h.id] = h
+	north.household_ids.append(1001)
+	north.business_ids.append(101)
+	south.household_ids.append(2001)
+	south.business_ids.append(201)
+	return {
+		"settlements": {1: north, 2: south},
+		"households": households,
+		"businesses": businesses,
+	}

@@ -1,9 +1,10 @@
 class_name HESimulation
 extends RefCounted
 
-## H1, labor-market cut: deterministic, tick-based household economy inside
-## one settlement. Opt-in and separate from Simulation (scripts/sim/
-## simulation.gd)'s pooled valley model. Businesses (Farm, Woodlot, and the
+## H1, labor-market cut: deterministic, tick-based household economies with
+## settlement-local markets and labor pools. Opt-in and separate from
+## Simulation (scripts/sim/simulation.gd)'s pooled valley model. Businesses
+## (Farm, Woodlot, and the
 ## Trader -- see he_business.gd) are city-owned productive sites that hire
 ## households as labor, sell on the market, and pay wages; households own no
 ## production themselves -- they supply labor, earn wages, and buy grain/
@@ -15,7 +16,7 @@ extends RefCounted
 ## owner-operator cut): a household on the brink of starvation loses
 ## members to emigration and can cease to exist. "Emigrate" is a
 ## placeholder label for now, not an actual migration model -- there's
-## nowhere else in this single-settlement scenario to go; see
+## no inter-settlement migration exists yet; see
 ## remove_member_for_emigration()'s note for why it's still an improvement
 ## over calling it "death". Workers also exit the workforce naturally via
 ## old age (see he_household.gd's evaluate_old_age_death()) -- unlike
@@ -27,8 +28,10 @@ extends RefCounted
 ## query methods only, never the households/businesses Dictionaries
 ## directly. Returned dictionaries/arrays are snapshots and cannot mutate
 ## simulation state:
-##   get_household_ids(), get_clock_summary(), get_household_summary(id),
-##   get_business_reports(), get_market_summary(), get_city_summary(),
+##   get_settlement_ids(), get_household_ids(settlement_id),
+##   get_clock_summary(), get_household_summary(id),
+##   get_settlement_summary(id), get_business_reports(settlement_id),
+##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
 ##   get_daily_history(days), get_event_log(limit)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -102,10 +105,10 @@ const HISTORY_MAX_DAYS := 360
 ## kept far shorter.
 const EVENT_LOG_MAX := 200
 
-var settlement: HESettlement
+var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
-var market: HEMarket
+var markets: Dictionary[int, HEMarket] = {}
 
 var rng: RandomNumberGenerator
 var day: int = 0
@@ -153,10 +156,32 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	rng.seed = seed
 	price_adjustment_enabled = p_price_adjustment_enabled
 	var world: Dictionary = builder.call(rng)
-	settlement = world["settlement"]
+	if world.has("settlements"):
+		settlements.assign(world["settlements"])
+	else:
+		var legacy_settlement: HESettlement = world["settlement"]
+		settlements[legacy_settlement.id] = legacy_settlement
 	households = world["households"]
 	businesses = world["businesses"]
-	market = HEMarket.new(BASE_PRICE.duplicate())
+	for settlement_id in settlements.keys():
+		markets[settlement_id] = HEMarket.new(BASE_PRICE.duplicate())
+	# Normalize business locality first so the household pass can reject any
+	# pre-seeded cross-settlement employer reference, including legacy records
+	# whose constructor left settlement_id at zero.
+	for settlement_id in settlements.keys():
+		var business_settlement: HESettlement = settlements[settlement_id]
+		for business_id in business_settlement.business_ids:
+			(businesses[business_id] as HEBusiness).settlement_id = settlement_id
+	for settlement_id in settlements.keys():
+		var household_settlement: HESettlement = settlements[settlement_id]
+		for household_id in household_settlement.household_ids:
+			var h: HEHousehold = households[household_id]
+			h.settlement_id = settlement_id
+			h.demographics.settlement_id = settlement_id
+			if h.employer_business_id != -1:
+				var employer: HEBusiness = businesses[h.employer_business_id]
+				if employer.settlement_id != settlement_id:
+					h.employer_business_id = -1
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
@@ -170,9 +195,18 @@ func advance_ticks(days: int) -> void:
 # Public query contract
 # ---------------------------------------------------------------------------
 
-func get_household_ids() -> Array[int]:
+func get_settlement_ids() -> Array[int]:
 	var ids: Array[int] = []
-	ids.assign(households.keys())
+	ids.assign(settlements.keys())
+	ids.sort()
+	return ids
+
+func get_household_ids(settlement_id: int = -1) -> Array[int]:
+	var ids: Array[int] = []
+	if settlement_id == -1:
+		ids.assign(households.keys())
+	elif settlements.has(settlement_id):
+		ids.assign((settlements[settlement_id] as HESettlement).household_ids)
 	ids.sort()
 	return ids
 
@@ -196,6 +230,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 
 	return {
 		"id": h.id,
+		"settlement_id": h.settlement_id,
 		"worker_capacity": h.worker_capacity(),
 		"dependents": h.demographics.dependents,
 		"headcount": h.headcount(),
@@ -215,15 +250,18 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"unmet_unaffordable_today": unmet_unaffordable,
 	}
 
-func get_business_reports() -> Array:
+func get_business_reports(settlement_id: int = -1) -> Array:
 	var out: Array = []
 	var ids := businesses.keys()
 	ids.sort()
-	var reference_wage := _reference_wage_per_worker()
 	for business_id in ids:
 		var b: HEBusiness = businesses[business_id]
+		if settlement_id != -1 and b.settlement_id != settlement_id:
+			continue
+		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		var report := {
 			"business_id": b.id,
+			"settlement_id": b.settlement_id,
 			"name": b.name,
 			"kind": "trader" if b.kind == HEBusiness.Kind.TRADER else "production",
 			"capacity": b.capacity,
@@ -264,25 +302,37 @@ func _trade_summary(b: HEBusiness) -> String:
 		names.append(Commodity.name_of(c))
 	return "Export (%s)" % ", ".join(names)
 
-func get_market_summary() -> Dictionary:
+func get_market_summary(settlement_id: int = -1) -> Dictionary:
+	settlement_id = _resolve_settlement_id(settlement_id)
+	var local_market: HEMarket = markets[settlement_id]
 	var out := {}
 	for c in SUBSISTENCE_COMMODITIES:
 		out[Commodity.name_of(c)] = {
-			"price": market.price[c],
-			"last_clearing": (market.last_clearing.get(c, {}) as Dictionary).duplicate(),
+			"price": local_market.price[c],
+			"last_clearing": (local_market.last_clearing.get(c, {}) as Dictionary).duplicate(true),
 		}
 	return out
 
+func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
+	var local_market: HEMarket = markets[settlement_id]
+	return {
+		"settlement_id": settlement_id,
+		"commodity_id": commodity,
+		"price": local_market.price[commodity],
+		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
+	}
+
 ## City-wide totals AND distributions -- a healthy average must not hide a
 ## hungry or unfunded household.
-func get_city_summary() -> Dictionary:
-	var household_count := households.size()
+func get_settlement_summary(settlement_id: int) -> Dictionary:
+	var s: HESettlement = settlements[settlement_id]
+	var household_count := s.household_ids.size()
 	var households_short_of_goods := 0
 	var households_short_of_funds := 0
 	var unemployed_household_count := 0
 	var stress_total := 0.0
 
-	for household_id in households.keys():
+	for household_id in s.household_ids:
 		var h: HEHousehold = households[household_id]
 		var scarcity_total := 0.0
 		for v in h.last_unmet_scarcity.values():
@@ -299,12 +349,14 @@ func get_city_summary() -> Dictionary:
 		stress_total += h.demographics.food_stress
 
 	return {
+		"id": settlement_id,
+		"name": s.name,
 		"day": day,
 		"household_count": household_count,
-		"population": _total_population(),
+		"population": _total_population(settlement_id),
 		"unemployed_household_count": unemployed_household_count,
-		"total_stock": _total_stock_snapshot(),
-		"total_money": _total_money(),
+		"total_stock": _total_stock_snapshot(settlement_id),
+		"total_money": _total_money(settlement_id),
 		"avg_food_stress": (stress_total / household_count) if household_count > 0 else 0.0,
 		"households_short_of_goods": households_short_of_goods,
 		"households_short_of_funds": households_short_of_funds,
@@ -314,8 +366,19 @@ func get_city_summary() -> Dictionary:
 		"births_total": _births_total,
 		"worker_promotions_total": _worker_promotions_total,
 		"export_revenue_total": _export_revenue_total,
-		"market": get_market_summary(),
+		"market": get_market_summary(settlement_id),
 	}
+
+func get_city_summary() -> Dictionary:
+	return get_settlement_summary(_resolve_settlement_id(-1))
+
+func _resolve_settlement_id(settlement_id: int) -> int:
+	if settlement_id != -1:
+		assert(settlements.has(settlement_id), "Unknown settlement id %d" % settlement_id)
+		return settlement_id
+	var ids := get_settlement_ids()
+	assert(ids.size() == 1, "A settlement id is required when the simulation has multiple settlements")
+	return ids[0]
 
 ## Up to the last `days` daily records, oldest first. Each is deep-copied --
 ## mutating the returned data cannot affect the simulation.
@@ -606,6 +669,8 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 		if candidate_id == household_id:
 			continue
 		var candidate: HEHousehold = households[candidate_id]
+		if candidate.settlement_id != orphan.settlement_id:
+			continue
 		if candidate.worker_capacity() <= 0:
 			continue
 		var candidate_dependents := candidate.demographics.dependents
@@ -629,7 +694,7 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 		"household_id": household_id, "adopting_household_id": adopter_id,
 		"dependents": orphan.demographics.dependents,
 	})
-	settlement.household_ids.erase(household_id)
+	(settlements[orphan.settlement_id] as HESettlement).household_ids.erase(household_id)
 	households.erase(household_id)
 	return true
 
@@ -651,7 +716,7 @@ func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
 			var amount := h.stock(c)
 			if amount > 0.0:
 				goods_written_off[c] = goods_written_off.get(c, 0.0) + amount
-		settlement.household_ids.erase(household_id)
+		(settlements[h.settlement_id] as HESettlement).household_ids.erase(household_id)
 		households.erase(household_id)
 
 	_money_written_off_total += money_written_off
@@ -697,7 +762,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 
 	for new_household in new_households:
 		households[new_household.id] = new_household
-		settlement.household_ids.append(new_household.id)
+		(settlements[new_household.settlement_id] as HESettlement).household_ids.append(new_household.id)
 
 	_births_total += births
 	_worker_promotions_total += promotions
@@ -720,7 +785,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 
 	var starting_balance: float = parent.balance * share
 	parent.balance -= starting_balance
-	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance)
+	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance, parent.settlement_id)
 
 	for c in SUBSISTENCE_COMMODITIES:
 		var amount: float = parent.stock(c) * share
@@ -738,9 +803,11 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 ## sets the target; _reconcile_employment (called right after) is what
 ## actually moves households between employers to approach it.
 func _evaluate_business_capacity(record: Dictionary) -> void:
-	var reference_wage := _reference_wage_per_worker()
+	var reference_wages := {}
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
+		var reference_wage := _reference_wage_per_worker(b.settlement_id)
+		reference_wages[b.settlement_id] = reference_wage
 		if b.capacity == 0:
 			# A business at zero capacity has had no employed workers, so
 			# rolling_average_wage() reads a flat 0 -- indistinguishable
@@ -758,7 +825,9 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			b.capacity = mini(b.capacity + CAPACITY_STEP_WORKERS, b.max_capacity)
 		elif avg_wage < reference_wage * (1.0 - WAGE_PROFIT_MARGIN):
 			b.capacity = maxi(b.capacity - CAPACITY_STEP_WORKERS, 0)
-	record["reference_wage"] = reference_wage
+	record["reference_wage_by_settlement"] = reference_wages
+	if reference_wages.size() == 1:
+		record["reference_wage"] = reference_wages.values()[0]
 
 ## Weekly self-tuning step 2: lay off whole households (highest household ID
 ## first, an arbitrary but deterministic tie-break) from any business now
@@ -789,25 +858,27 @@ func _reconcile_employment() -> void:
 			h.employer_business_id = -1
 			i -= 1
 
-	var available: Array[int] = []
-	for household_id in households.keys():
-		if (households[household_id] as HEHousehold).employer_business_id == -1:
-			available.append(household_id)
-	available.sort()
-
-	var pool_index := 0
-	for business_id in business_ids:
-		var b: HEBusiness = businesses[business_id]
-		var employed_workers := _business_employed_worker_count(business_id)
-		while employed_workers < b.capacity and pool_index < available.size():
-			var household_id: int = available[pool_index]
-			pool_index += 1
-			var h: HEHousehold = households[household_id]
-			if h.worker_capacity() <= 0:
-				continue
-			h.employer_business_id = business_id
-			employed_workers += h.worker_capacity()
-			_log_event("job", {"household_id": household_id, "business_id": business_id})
+	for settlement_id in get_settlement_ids():
+		var available: Array[int] = []
+		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+			if (households[household_id] as HEHousehold).employer_business_id == -1:
+				available.append(household_id)
+		available.sort()
+		var pool_index := 0
+		var local_business_ids := (settlements[settlement_id] as HESettlement).business_ids.duplicate()
+		local_business_ids.sort()
+		for business_id in local_business_ids:
+			var b: HEBusiness = businesses[business_id]
+			var employed_workers := _business_employed_worker_count(business_id)
+			while employed_workers < b.capacity and pool_index < available.size():
+				var household_id: int = available[pool_index]
+				pool_index += 1
+				var h: HEHousehold = households[household_id]
+				if h.worker_capacity() <= 0:
+					continue
+				h.employer_business_id = business_id
+				employed_workers += h.worker_capacity()
+				_log_event("job", {"household_id": household_id, "business_id": business_id, "settlement_id": settlement_id})
 
 ## Step: prepare and clear local offers/requests, one commodity at a time.
 ## Snapshots every household's balance ONCE before either commodity clears
@@ -817,13 +888,13 @@ func _reconcile_employment() -> void:
 ## double-spend the same money twice just because it's requesting two goods
 ## in the same pass.
 func _run_market(record: Dictionary) -> void:
-	var starting_balance: Dictionary = {}
-	for household_id in households.keys():
-		starting_balance[household_id] = (households[household_id] as HEHousehold).balance
-	var reserved_spend: Dictionary = {}
-
-	for commodity in SUBSISTENCE_COMMODITIES:
-		_clear_market_for(commodity, record, starting_balance, reserved_spend)
+	for settlement_id in get_settlement_ids():
+		var starting_balance: Dictionary = {}
+		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+			starting_balance[household_id] = (households[household_id] as HEHousehold).balance
+		var reserved_spend: Dictionary = {}
+		for commodity in SUBSISTENCE_COMMODITIES:
+			_clear_market_for(settlement_id, commodity, record, starting_balance, reserved_spend)
 
 ## One commodity's daily clearing. The seller side is now a single business
 ## (whichever one's recipe outputs this commodity, or none) offering its
@@ -837,15 +908,16 @@ func _run_market(record: Dictionary) -> void:
 ## ratio (quantity_traded / that side's total) -- pure proportional scaling
 ## over continuous float quantities, so there is no remainder to round and
 ## therefore no room for a lowest-household-ID-eats-first bias.
-func _clear_market_for(commodity: Commodity.Type, record: Dictionary, starting_balance: Dictionary, reserved_spend: Dictionary) -> void:
-	var price: float = market.price[commodity]
-	var seller: HEBusiness = _business_selling(commodity)
+func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Dictionary, starting_balance: Dictionary, reserved_spend: Dictionary) -> void:
+	var local_market: HEMarket = markets[settlement_id]
+	var price: float = local_market.price[commodity]
+	var seller: HEBusiness = _business_selling(settlement_id, commodity)
 	var total_offer: float = seller.stock(commodity) if seller != null else 0.0
 
 	var requests_funded: Dictionary = {}
 	var total_funded_request := 0.0
 
-	for household_id in households.keys():
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
 		var daily_need := _daily_need(h, commodity)
 		var target_stock := daily_need * TARGET_BUFFER_DAYS
@@ -888,7 +960,7 @@ func _clear_market_for(commodity: Commodity.Type, record: Dictionary, starting_b
 	elif seller != null:
 		seller.last_revenue = 0.0
 
-	market.last_clearing[commodity] = {
+	local_market.last_clearing[commodity] = {
 		"total_offered": total_offer,
 		"total_requested_funded": total_funded_request,
 		"quantity_traded": quantity_traded,
@@ -897,23 +969,24 @@ func _clear_market_for(commodity: Commodity.Type, record: Dictionary, starting_b
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + quantity_traded
 
 	if price_adjustment_enabled:
-		_adjust_price(commodity, total_offer, total_funded_request)
+		_adjust_price(settlement_id, commodity, total_offer, total_funded_request)
 
 ## Bounded, gradual next-day price drift from today's offered supply vs.
 ## affordable requested quantity -- frozen during today's clearing (this
 ## runs after, using totals already computed above, and mutates
 ## market.price for TOMORROW's _clear_market_for to read).
-func _adjust_price(commodity: Commodity.Type, total_offer: float, total_funded_request: float) -> void:
+func _adjust_price(settlement_id: int, commodity: Commodity.Type, total_offer: float, total_funded_request: float) -> void:
 	if total_offer <= 0.0 and total_funded_request <= 0.0:
 		return
 	var base: float = BASE_PRICE[commodity]
-	var current: float = market.price[commodity]
+	var local_market: HEMarket = markets[settlement_id]
+	var current: float = local_market.price[commodity]
 	var new_price := current
 	if total_funded_request > total_offer:
 		new_price = current * (1.0 + PRICE_ADJUST_STEP)
 	elif total_offer > total_funded_request:
 		new_price = current * (1.0 - PRICE_ADJUST_STEP)
-	market.price[commodity] = clamp(new_price, base * PRICE_MULTIPLIER_MIN, base * PRICE_MULTIPLIER_MAX)
+	local_market.price[commodity] = clamp(new_price, base * PRICE_MULTIPLIER_MIN, base * PRICE_MULTIPLIER_MAX)
 
 ## Runs after _run_market, so a Trader only ever sees stock local
 ## households already had first crack at buying that same day -- it never
@@ -941,16 +1014,16 @@ func _run_trade(record: Dictionary) -> void:
 		for commodity in SUBSISTENCE_COMMODITIES:
 			if remaining_capacity <= 0.0001:
 				break
-			var seller := _business_selling(commodity)
+			var seller := _business_selling(trader.settlement_id, commodity)
 			if seller == null:
 				continue
-			var reserve: float = _settlement_daily_demand(commodity) * TRADER_RESERVE_BUFFER_DAYS
+			var reserve: float = _settlement_daily_demand(trader.settlement_id, commodity) * TRADER_RESERVE_BUFFER_DAYS
 			var surplus: float = max(0.0, seller.stock(commodity) - reserve)
 			var quantity: float = min(surplus, remaining_capacity)
 			if quantity <= 0.0001:
 				continue
 
-			var local_price: float = market.price[commodity]
+			var local_price: float = (markets[trader.settlement_id] as HEMarket).price[commodity]
 			var pay_price: float = local_price * TRADER_BUY_PRICE_FRACTION
 			seller.consume(commodity, quantity)
 			# Adds to whatever seller.last_revenue the local market clearing
@@ -994,9 +1067,11 @@ func _log_event(type: String, data: Dictionary) -> void:
 	if _event_log.size() > EVENT_LOG_MAX:
 		_event_log.pop_front()
 
-func _business_selling(commodity: Commodity.Type) -> HEBusiness:
+func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id != settlement_id:
+			continue
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.output_commodity() == commodity:
@@ -1008,9 +1083,9 @@ func _business_selling(commodity: Commodity.Type) -> HEBusiness:
 ## this), so the reserve tracks the settlement's actual size/composition
 ## rather than being a fixed number that a shrinking or growing population
 ## would drift away from.
-func _settlement_daily_demand(commodity: Commodity.Type) -> float:
+func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> float:
 	var total := 0.0
-	for household_id in households.keys():
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		total += _daily_need(households[household_id] as HEHousehold, commodity)
 	return total
 
@@ -1040,41 +1115,52 @@ func _business_employed_household_count(business_id: int) -> int:
 ## grow); below it, it structurally can't sustain the households working
 ## there (unprofitable, should shrink), regardless of what its production
 ## recipe's rate happens to be.
-func _reference_wage_per_worker() -> float:
+func _reference_wage_per_worker(settlement_id: int) -> float:
 	var total_workers := 0
 	var total_population := 0
-	for household_id in households.keys():
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
 		total_workers += h.worker_capacity()
 		total_population += h.headcount()
 	if total_workers <= 0:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
-	var per_person_cost := market.price[Commodity.Type.GRAIN] * GRAIN_PER_PERSON_PER_DAY \
-		+ market.price[Commodity.Type.TIMBER] * FUEL_TIMBER_PER_PERSON_PER_DAY
+	var local_market: HEMarket = markets[settlement_id]
+	var per_person_cost := local_market.price[Commodity.Type.GRAIN] * GRAIN_PER_PERSON_PER_DAY \
+		+ local_market.price[Commodity.Type.TIMBER] * FUEL_TIMBER_PER_PERSON_PER_DAY
 	return dependency_ratio * per_person_cost
 
-func _total_stock_snapshot() -> Dictionary:
+func _total_stock_snapshot(settlement_id: int = -1) -> Dictionary:
 	var snap := {}
 	for c in SUBSISTENCE_COMMODITIES:
 		var total := 0.0
 		for household_id in households.keys():
-			total += (households[household_id] as HEHousehold).stock(c)
+			var h: HEHousehold = households[household_id]
+			if settlement_id == -1 or h.settlement_id == settlement_id:
+				total += h.stock(c)
 		for business_id in businesses.keys():
-			total += (businesses[business_id] as HEBusiness).stock(c)
+			var b: HEBusiness = businesses[business_id]
+			if settlement_id == -1 or b.settlement_id == settlement_id:
+				total += b.stock(c)
 		snap[Commodity.name_of(c)] = total
 	return snap
 
-func _total_money() -> float:
+func _total_money(settlement_id: int = -1) -> float:
 	var total := 0.0
 	for household_id in households.keys():
-		total += (households[household_id] as HEHousehold).balance
+		var h: HEHousehold = households[household_id]
+		if settlement_id == -1 or h.settlement_id == settlement_id:
+			total += h.balance
 	for business_id in businesses.keys():
-		total += (businesses[business_id] as HEBusiness).balance
+		var b: HEBusiness = businesses[business_id]
+		if settlement_id == -1 or b.settlement_id == settlement_id:
+			total += b.balance
 	return total
 
-func _total_population() -> int:
+func _total_population(settlement_id: int = -1) -> int:
 	var total := 0
 	for household_id in households.keys():
-		total += (households[household_id] as HEHousehold).headcount()
+		var h: HEHousehold = households[household_id]
+		if settlement_id == -1 or h.settlement_id == settlement_id:
+			total += h.headcount()
 	return total
