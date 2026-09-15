@@ -135,6 +135,14 @@ var _next_household_id := 1
 ## up.
 var _export_revenue_total := 0.0
 
+## Trailing per-commodity price history, oldest first, capped to the SAME
+## window a business's own wage is smoothed over
+## (HEBusiness.WAGE_ROLLING_WINDOW_DAYS, referenced directly rather than
+## re-authored here so the two windows can never drift apart) -- see
+## _reference_wage_per_worker for why the reference wage reads this average
+## instead of the live spot price.
+var _price_history: Dictionary[Commodity.Type, Array] = {}
+
 var _history: Array[Dictionary] = []
 ## Blotter: one entry per birth/death/split, newest appended last -- see
 ## get_event_log() and _log_event().
@@ -337,6 +345,7 @@ func get_event_log(limit: int = -1) -> Array:
 # ---------------------------------------------------------------------------
 
 func _daily_tick() -> void:
+	_record_price_history()
 	_reset_household_daily_records()
 	var record := _new_daily_record()
 	_pay_wages(record)
@@ -900,17 +909,54 @@ func _business_employed_household_count(business_id: int) -> int:
 			total += 1
 	return total
 
+## Appends today's opening price (this tick's actual clearing price, before
+## _adjust_price mutates it for tomorrow) to each commodity's trailing
+## history, capped at HEBusiness.WAGE_ROLLING_WINDOW_DAYS -- same ring-buffer
+## shape as HEBusiness.record_wage_day. Called first thing in _daily_tick,
+## before anything reads today's price.
+func _record_price_history() -> void:
+	for c in SUBSISTENCE_COMMODITIES:
+		var history: Array = _price_history.get(c, [])
+		history.append(market.price[c])
+		if history.size() > HEBusiness.WAGE_ROLLING_WINDOW_DAYS:
+			history.pop_front()
+		_price_history[c] = history
+
+## Falls back to the live price only when no history has been recorded yet
+## (day 0, before the first _daily_tick has run) -- from day 1 onward there
+## is always at least one entry.
+func _average_price_history(c: Commodity.Type) -> float:
+	var history: Array = _price_history.get(c, [])
+	if history.is_empty():
+		return market.price[c]
+	var total := 0.0
+	for p in history:
+		total += p
+	return total / history.size()
+
 ## The going rate a worker's wage needs to clear for that worker's WHOLE
 ## household to afford subsistence: (population / total workers) people
 ## depend on each worker's wage, on average, and each of those people needs
 ## GRAIN_PER_PERSON_PER_DAY worth of grain plus FUEL_TIMBER_PER_PERSON_PER_DAY
-## worth of timber at CURRENT market prices. This is the number
-## _evaluate_business_capacity compares each business's actual wage
-## against -- a business paying above it is generating more value per
-## worker than that worker's household needs to survive (profitable, should
-## grow); below it, it structurally can't sustain the households working
-## there (unprofitable, should shrink), regardless of what its production
-## recipe's rate happens to be.
+## worth of timber, priced at each commodity's trailing average
+## (_average_price_history) rather than today's live spot price. A
+## business's rolling_average_wage() is already smoothed over
+## HEBusiness.WAGE_ROLLING_WINDOW_DAYS; comparing that against a live price
+## would pit a slow-moving average against a fast one that the SAME
+## business's own output directly moves (selling more grain pushes
+## grain_price down, which lowers both sides of the comparison through the
+## same channel) -- a timescale mismatch that reads as a profitability
+## signal when it's really same-day noise. Smoothing both sides over the
+## same window fixes that without hiding a genuine, sustained price
+## trend -- it just takes as long to show up here as it does in the wage
+## average it's being judged against.
+##
+## This is the number _evaluate_business_capacity compares each business's
+## actual wage against -- a business paying above it is generating more
+## value per worker than that worker's household needs to survive
+## (profitable, should grow); below it, it structurally can't sustain the
+## households working there (unprofitable, should shrink), regardless of
+## what its production recipe's rate happens to be.
 func _reference_wage_per_worker() -> float:
 	var total_workers := 0
 	var total_population := 0
@@ -921,8 +967,8 @@ func _reference_wage_per_worker() -> float:
 	if total_workers <= 0:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
-	var per_person_cost := market.price[Commodity.Type.GRAIN] * GRAIN_PER_PERSON_PER_DAY \
-		+ market.price[Commodity.Type.TIMBER] * FUEL_TIMBER_PER_PERSON_PER_DAY
+	var per_person_cost := _average_price_history(Commodity.Type.GRAIN) * GRAIN_PER_PERSON_PER_DAY \
+		+ _average_price_history(Commodity.Type.TIMBER) * FUEL_TIMBER_PER_PERSON_PER_DAY
 	return dependency_ratio * per_person_cost
 
 func _total_stock_snapshot() -> Dictionary:
