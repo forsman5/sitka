@@ -10,11 +10,15 @@ extends RefCounted
 ## timber to survive. A business's employee-slot count self-tunes weekly:
 ## paying above the going subsistence-equivalent wage lets it grow, paying
 ## below shrinks it, so labor drifts from an unprofitable business to a
-## profitable one without anyone hand-tuning production rates. Starvation
-## is real here (unlike the earlier owner-operator cut): a household that
-## can't earn or afford enough to eat can lose members and cease to exist.
-## Advanced only through advance_ticks(); nothing here reads or writes the
-## scene tree.
+## profitable one without anyone hand-tuning production rates. Real
+## consequences for going hungry exist here (unlike the earlier
+## owner-operator cut): a household on the brink of starvation loses
+## members to emigration and can cease to exist. "Emigrate" is a
+## placeholder label for now, not an actual migration model -- there's
+## nowhere else in this single-settlement scenario to go; see
+## remove_member_for_emigration()'s note for why it's still an improvement
+## over calling it "death". Advanced only through advance_ticks(); nothing
+## here reads or writes the scene tree.
 ##
 ## API boundary, same discipline as the pooled Simulation: callers use these
 ## query methods only, never the households/businesses Dictionaries
@@ -52,7 +56,7 @@ const PRICE_MULTIPLIER_MIN := 0.25
 const PRICE_MULTIPLIER_MAX := 4.0
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
-const STARVATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
+const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
 
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows by
@@ -81,7 +85,12 @@ var day: int = 0
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
 
-var _starvation_deaths_total := 0
+## Named "emigrate" rather than "die" -- placeholder terminology until H1
+## actually connects to the wider valley (see docs/river-valley-vertical-
+## slice.md) and a household on the brink of starvation has somewhere real
+## to go. The mechanic underneath is unchanged for now: this is a cosmetic
+## rename, not a new migration model.
+var _emigrations_total := 0
 var _money_written_off_total := 0.0
 var _goods_written_off_total: Dictionary[Commodity.Type, float] = {}
 var _births_total := 0
@@ -232,7 +241,7 @@ func get_city_summary() -> Dictionary:
 		"avg_food_stress": (stress_total / household_count) if household_count > 0 else 0.0,
 		"households_short_of_goods": households_short_of_goods,
 		"households_short_of_funds": households_short_of_funds,
-		"starvation_deaths_total": _starvation_deaths_total,
+		"emigrations_total": _emigrations_total,
 		"money_written_off_total": _money_written_off_total,
 		"births_total": _births_total,
 		"worker_promotions_total": _worker_promotions_total,
@@ -248,12 +257,12 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
-## Up to the last `limit` blotter entries (births, deaths, splits, hirings,
-## coming-of-age), oldest first -- same convention as get_daily_history.
-## Pass -1 (default) for everything currently retained (bounded by
-## EVENT_LOG_MAX regardless). Each entry has at least "day" and "type"
-## ("birth"/"death"/"split"/"job"/"coming_of_age"); see _log_event()'s call
-## sites for the type-specific fields.
+## Up to the last `limit` blotter entries (births, emigrations, splits,
+## hirings, coming-of-age), oldest first -- same convention as
+## get_daily_history. Pass -1 (default) for everything currently retained
+## (bounded by EVENT_LOG_MAX regardless). Each entry has at least "day" and
+## "type" ("birth"/"emigrate"/"split"/"job"/"coming_of_age"); see
+## _log_event()'s call sites for the type-specific fields.
 func get_event_log(limit: int = -1) -> Array:
 	var start: int = 0 if limit < 0 else max(0, _event_log.size() - limit)
 	var out: Array = []
@@ -264,7 +273,7 @@ func get_event_log(limit: int = -1) -> Array:
 # ---------------------------------------------------------------------------
 # Daily tick: pay wages (from yesterday's settled revenue) -> produce ->
 # clear the market (sets today's revenue for TOMORROW's wages) -> consume ->
-# stress/migration-pressure (weekly) -> starvation (monthly, ACTS this time)
+# stress/migration-pressure (weekly) -> emigration (monthly, ACTS this time)
 # -> business capacity self-tuning + labor reallocation (weekly) -> publish.
 # ---------------------------------------------------------------------------
 
@@ -277,8 +286,8 @@ func _daily_tick() -> void:
 	_run_consumption(record)
 	if (day + 1) % MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_migration_pressure()
-	if (day + 1) % STARVATION_EVAL_INTERVAL_DAYS == 0:
-		_evaluate_starvation(record)
+	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
+		_evaluate_emigration(record)
 		_evaluate_life_cycle(record)
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
@@ -304,7 +313,7 @@ func _new_daily_record() -> Dictionary:
 		"unmet_unaffordable": {},
 		"traded_quantity": {},
 		"wages_paid": {},
-		"starvation_deaths": 0,
+		"emigrations": 0,
 		"money_written_off": 0.0,
 		"goods_written_off": {},
 		"births": 0,
@@ -409,27 +418,31 @@ func _evaluate_migration_pressure() -> void:
 		(households[household_id] as HEHousehold).demographics.update_migration_pressure()
 
 ## Unlike the earlier owner-operator cut, this ACTS: a household that's been
-## severely short of food for a sustained stretch loses a member, and a
-## household that runs out of members entirely is removed. Its employer (if
-## any) automatically has one fewer worker from that point on, since
-## employed-worker counts are always derived live from households, never
-## cached. Any residual balance/inventory a household still held at the
-## moment it winks out of existence is written off -- not redistributed,
-## not inherited -- and tracked explicitly (see get_city_summary's
-## money_written_off_total) so the closed-economy accounting stays honest
-## about where it went instead of just quietly not adding up.
-func _evaluate_starvation(record: Dictionary) -> void:
-	var deaths := 0
+## severely short of food for a sustained stretch loses a member to
+## emigration, and a household that runs out of members entirely is
+## removed. Its employer (if any) automatically has one fewer worker from
+## that point on, since employed-worker counts are always derived live from
+## households, never cached. Any residual balance/inventory a household
+## still held at the moment it winks out of existence is written off --
+## not redistributed, not inherited -- and tracked explicitly (see
+## get_city_summary's money_written_off_total) so the closed-economy
+## accounting stays honest about where it went instead of just quietly not
+## adding up.
+##
+## "Emigrate" rather than "die" is a placeholder label, not a real
+## migration model yet -- see remove_member_for_emigration()'s note.
+func _evaluate_emigration(record: Dictionary) -> void:
+	var emigrations := 0
 	var to_remove: Array[int] = []
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		if not h.demographics.is_starvation_candidate():
 			continue
 		var member_type := "dependent" if h.demographics.dependents > 0 else "worker"
-		h.remove_member_for_starvation()
-		deaths += 1
+		h.remove_member_for_emigration()
+		emigrations += 1
 		var household_ended := h.demographics.is_empty()
-		_log_event("death", {
+		_log_event("emigrate", {
 			"household_id": household_id, "member_type": member_type,
 			"cause": "starvation", "household_ended": household_ended,
 		})
@@ -448,20 +461,20 @@ func _evaluate_starvation(record: Dictionary) -> void:
 		settlement.household_ids.erase(household_id)
 		households.erase(household_id)
 
-	_starvation_deaths_total += deaths
+	_emigrations_total += emigrations
 	_money_written_off_total += money_written_off
 	for c in goods_written_off.keys():
 		_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + goods_written_off[c]
 
-	record["starvation_deaths"] = deaths
+	record["emigrations"] = emigrations
 	record["money_written_off"] = money_written_off
 	record["goods_written_off"] = goods_written_off
 
-## Monthly, right after starvation so a household that just lost a member
-## evaluates aging/births from its post-starvation state, not a stale one.
+## Monthly, right after emigration so a household that just lost a member
+## evaluates aging/births from its post-emigration state, not a stale one.
 ## Aging runs first: a dependent promoted this same period immediately
 ## frees a pipeline slot a birth could use. Households removed by
-## starvation this same call are gone from `households` already, so
+## emigration this same call are gone from `households` already, so
 ## they're simply skipped -- no explicit guard needed. New households
 ## created by splitting are collected separately and only added to
 ## `households`/`settlement` once this pass is done iterating, so a split

@@ -13,9 +13,10 @@ extends RefCounted
 ## starvation-candidacy logic verbatim, driven by THIS household's own
 ## rolling grain fulfillment instead of a settlement-wide one. Unlike the
 ## earlier owner-operator cut, starvation candidacy here is ACTED on (see
-## he_simulation.gd._evaluate_starvation) -- a household that can't earn or
-## afford enough to eat can actually lose members and, eventually, cease to
-## exist, freeing its worker(s) back into (or entirely out of) the labor
+## he_simulation.gd._evaluate_emigration) -- a household that can't earn or
+## afford enough to eat actually loses members (labeled "emigrate" rather
+## than "die" -- see remove_member_for_emigration()) and, eventually, ceases
+## to exist, freeing its worker(s) back into (or entirely out of) the labor
 ## pool.
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -175,7 +176,7 @@ func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 		and demographics.food_stress <= BIRTH_STRESS_THRESHOLD
 	_consecutive_prosperous_days = (_consecutive_prosperous_days + 1) if prosperous else 0
 
-## Wraps demographics.remove_member() for starvation so _dependent_ages
+## Wraps demographics.remove_member() for emigration so _dependent_ages
 ## stays in sync: that pooled method decrements dependents directly with no
 ## idea this household is also tracking individual ages, so removing a
 ## dependent here must also pop one age entry -- otherwise _dependent_ages
@@ -183,7 +184,14 @@ func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 ## evaluate_aging() below can later drive dependents negative promoting from
 ## that phantom surplus (which headcount()/is_empty() would then silently
 ## miscount, since nothing re-checks emptiness after aging).
-func remove_member_for_starvation() -> void:
+##
+## "Emigration" is a cosmetic label for now, not a real destination -- H1
+## is still one isolated settlement. The mechanic is identical to what was
+## previously called dying: one member leaves the household (dependents
+## first, then workers), same as before. Rename this (and the "cause":
+## "starvation" tag on its event-log entry) once H1 actually connects to
+## the wider valley and a household on the brink has somewhere real to go.
+func remove_member_for_emigration() -> void:
 	var removing_a_dependent := demographics.dependents > 0
 	demographics.remove_member()
 	if removing_a_dependent and not _dependent_ages.is_empty():

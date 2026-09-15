@@ -17,7 +17,7 @@ func _init() -> void:
 	_check_determinism()
 	_check_conservation()
 	_check_labor_self_tunes_toward_profitable_business()
-	_check_starvation_actually_happens()
+	_check_emigration_actually_happens()
 	_check_life_cycle_births_and_aging()
 
 	if _ok:
@@ -53,7 +53,7 @@ func _check_determinism() -> void:
 ## Goods and money reconcile as opening + produced - consumed (goods) /
 ## opening - written_off (money), across BOTH households and businesses;
 ## wages and market trades are transfers that net to zero; nothing goes
-## negative. A starvation death is the one place value legitimately leaves
+## negative. An emigration is the one place value legitimately leaves
 ## the closed system, and it's explicitly logged (money_written_off/
 ## goods_written_off) rather than just silently not adding up -- so the
 ## reconciliation formula accounts for it instead of ignoring it.
@@ -137,8 +137,8 @@ func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 ## Force this by capping BOTH businesses' max_capacity well below the
 ## population's total labor supply, guaranteeing sustained unemployment
 ## with no possible reallocation escape route.
-func _check_starvation_actually_happens() -> void:
-	print("\n=== Starvation is real: sustained unemployment costs population ===")
+func _check_emigration_actually_happens() -> void:
+	print("\n=== Emigration is real: sustained unemployment costs population ===")
 	var sim := _new_sim("build_lopsided_start")
 	for business_id in sim.businesses.keys():
 		var b = sim.businesses[business_id]
@@ -150,20 +150,20 @@ func _check_starvation_actually_happens() -> void:
 	sim.advance_ticks(720)
 	var city := sim.get_city_summary()
 
-	print("  population %d -> %d over 720 days, starvation_deaths_total=%d, money_written_off_total=%.1f, unemployed households=%d" % [
-		starting_population, city["population"], city["starvation_deaths_total"], city["money_written_off_total"], city["unemployed_household_count"]])
+	print("  population %d -> %d over 720 days, emigrations_total=%d, money_written_off_total=%.1f, unemployed households=%d" % [
+		starting_population, city["population"], city["emigrations_total"], city["money_written_off_total"], city["unemployed_household_count"]])
 
-	_assert(city["starvation_deaths_total"] > 0, "Sustained unemployment with no escape route should eventually cause real starvation deaths")
-	_assert(city["population"] < starting_population, "Population should actually shrink from starvation, not just report stress")
+	_assert(city["emigrations_total"] > 0, "Sustained unemployment with no escape route should eventually cause real emigration")
+	_assert(city["population"] < starting_population, "Population should actually shrink from emigration, not just report stress")
 	_check_demographic_invariants(sim)
 
 ## Every LIVE household's dependent_ages array should always have exactly
 ## as many entries as demographics.dependents says, and neither dependents
 ## nor worker_capacity should ever go negative. This exact invariant broke
-## once already (starvation's remove_member() decremented dependents
+## once already (emigration's remove_member() decremented dependents
 ## without popping the matching age entry) and produced a household that
 ## silently never triggered is_empty() -- see he_household.gd's
-## remove_member_for_starvation().
+## remove_member_for_emigration().
 func _check_demographic_invariants(sim: HESimulation) -> void:
 	for household_id in sim.get_household_ids():
 		var h := sim.get_household_summary(household_id)

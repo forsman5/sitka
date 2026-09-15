@@ -256,9 +256,9 @@ func _rebuild_household_rows() -> void:
 	_household_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 9
+	grid.columns = 10
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Grain", "Timber", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -274,8 +274,15 @@ func _rebuild_household_rows() -> void:
 		grid.add_child(employer_label)
 
 		var workers_label := Label.new()
-		workers_label.custom_minimum_size = Vector2(60, 0)
+		workers_label.custom_minimum_size = Vector2(50, 0)
+		workers_label.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
 		grid.add_child(workers_label)
+
+		var dependents_label := Label.new()
+		dependents_label.custom_minimum_size = Vector2(90, 0)
+		dependents_label.add_theme_color_override("font_color", Color(0.9, 0.85, 0.6))
+		dependents_label.tooltip_text = "Age (in days) of each dependent still in this household; the oldest is next to come of age and split off on its own."
+		grid.add_child(dependents_label)
 
 		var grain_label := Label.new()
 		grain_label.custom_minimum_size = Vector2(70, 0)
@@ -304,7 +311,7 @@ func _rebuild_household_rows() -> void:
 		grid.add_child(unaffordable_label)
 
 		_household_rows[household_id] = {
-			"id": id_label, "employer": employer_label, "workers": workers_label,
+			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
 			"grain": grain_label, "timber": timber_label, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
@@ -314,10 +321,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  starvation deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["starvation_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"]]
+		city["emigrations_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():
@@ -364,7 +371,15 @@ func _refresh() -> void:
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Label).text = str(household_id)
 		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
-		(row["workers"] as Label).text = "%d/%d" % [h["worker_capacity"], h["worker_capacity"] + h["dependents"]]
+		(row["workers"] as Label).text = str(h["worker_capacity"])
+
+		var dependent_ages: Array = h["dependent_ages"]
+		var dependents_label := row["dependents"] as Label
+		if dependent_ages.is_empty():
+			dependents_label.text = "0"
+		else:
+			var oldest: int = dependent_ages.max()
+			dependents_label.text = "%d (oldest: %dd)" % [dependent_ages.size(), oldest]
 		(row["grain"] as Label).text = "%.1f" % h["inventory"][grain_name]
 		(row["timber"] as Label).text = "%.1f" % h["inventory"][timber_name]
 		(row["balance"] as Label).text = "%.1f" % h["balance"]
@@ -398,9 +413,9 @@ func _format_event(event: Dictionary) -> String:
 	match event["type"]:
 		"birth":
 			return "[color=#8fd98f]Day %d - Household %d: birth[/color]" % [day, event["household_id"]]
-		"death":
+		"emigrate":
 			var suffix := " - household ended" if event["household_ended"] else ""
-			return "[color=#e08d8d]Day %d - Household %d: %s died (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
+			return "[color=#e08d8d]Day %d - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
 		"split":
 			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
 		"coming_of_age":
