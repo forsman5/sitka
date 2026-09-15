@@ -103,27 +103,46 @@ func _check_conservation() -> void:
 ## paying the better wage should gain capacity/employment over time and the
 ## worse-paying one should lose it, with NO manual retuning of either
 ## recipe's output rate.
+##
+## With the Trader in the mix, Woodlot's structural timber oversupply is no
+## longer a permanent wage penalty -- trade relieves it, and Woodlot's own
+## wage recovers past Farm's well before day 300. So this no longer asserts
+## a fixed final Farm-vs-Woodlot wage ranking (that was really a proxy for
+## "Woodlot's oversupply never gets fixed," which is exactly what the
+## Trader exists to fix); it only checks that employment actually moved in
+## response to the ORIGINAL mis-staffing, which is the thing this scenario
+## is actually testing. It separately checks that the Trader itself -- the
+## one business whose entire job is being that outlet -- is still alive
+## and earning a real wage this far out, a direct regression check for the
+## "permanently dies and stops trading" bug fixed alongside this test
+## (dead-forever looks like employed_workers==0 and wage stuck at exactly
+## 0.0; a healthy business can still dip below the reference wage on any
+## single snapshot day without being dead, so that's not asserted here).
 func _check_labor_self_tunes_toward_profitable_business() -> void:
 	print("\n=== Labor self-tunes toward the more profitable business ===")
 	var sim := _new_sim("build_lopsided_start")
 	var early := _business_snapshot(sim, 14)
 	var late := _business_snapshot(sim, 300)
 
-	print("  day 14:  Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
+	print("  day 14:  Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
 		early["farm"]["capacity"], early["farm"]["employed_workers"], early["farm"]["rolling_average_wage"],
 		early["woodlot"]["capacity"], early["woodlot"]["employed_workers"], early["woodlot"]["rolling_average_wage"],
+		early["trader"]["capacity"], early["trader"]["employed_workers"], early["trader"]["rolling_average_wage"],
 		early["farm"]["reference_wage_per_worker"]])
-	print("  day 300: Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
+	print("  day 300: Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f" % [
 		late["farm"]["capacity"], late["farm"]["employed_workers"], late["farm"]["rolling_average_wage"],
 		late["woodlot"]["capacity"], late["woodlot"]["employed_workers"], late["woodlot"]["rolling_average_wage"],
+		late["trader"]["capacity"], late["trader"]["employed_workers"], late["trader"]["rolling_average_wage"],
 		late["farm"]["reference_wage_per_worker"]])
 
 	_assert(late["farm"]["employed_workers"] > early["farm"]["employed_workers"],
 		"Farm should gain workers over time, went %d -> %d" % [early["farm"]["employed_workers"], late["farm"]["employed_workers"]])
 	_assert(late["woodlot"]["employed_workers"] < early["woodlot"]["employed_workers"],
 		"Woodlot should lose workers over time, went %d -> %d" % [early["woodlot"]["employed_workers"], late["woodlot"]["employed_workers"]])
-	_assert(late["farm"]["rolling_average_wage"] > late["woodlot"]["rolling_average_wage"],
-		"Farm's wage should end up above Woodlot's, got %.3f vs %.3f" % [late["farm"]["rolling_average_wage"], late["woodlot"]["rolling_average_wage"]])
+	_assert(late["trader"]["employed_workers"] > 0,
+		"Trader should still be trading by day 300, not permanently died out")
+	_assert(late["trader"]["rolling_average_wage"] > 0.0,
+		"Trader should be earning a real wage by day 300, not stuck at 0 like the permanently-dead-capacity bug this test guards against")
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)
