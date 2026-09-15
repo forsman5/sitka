@@ -13,6 +13,7 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
+const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 
 const SCENARIOS := [
 	{"label": "Two businesses, evenly staffed", "builder": "build_two_business_economy"},
@@ -34,9 +35,31 @@ var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
 
 func _ready() -> void:
+	_configure_tooltip_theme()
 	_load_scenario(0)
 	_build_ui()
 	_refresh()
+
+func _configure_tooltip_theme() -> void:
+	var tooltip_theme := Theme.new()
+	var tooltip_panel := StyleBoxFlat.new()
+	tooltip_panel.bg_color = Color(0.025, 0.025, 0.04, 0.98)
+	tooltip_panel.border_width_left = 1
+	tooltip_panel.border_width_top = 1
+	tooltip_panel.border_width_right = 1
+	tooltip_panel.border_width_bottom = 1
+	tooltip_panel.border_color = Color(0.32, 0.32, 0.42, 1.0)
+	tooltip_panel.corner_radius_top_left = 4
+	tooltip_panel.corner_radius_top_right = 4
+	tooltip_panel.corner_radius_bottom_left = 4
+	tooltip_panel.corner_radius_bottom_right = 4
+	tooltip_panel.content_margin_left = 10.0
+	tooltip_panel.content_margin_top = 7.0
+	tooltip_panel.content_margin_right = 10.0
+	tooltip_panel.content_margin_bottom = 7.0
+	tooltip_theme.set_stylebox("panel", "TooltipPanel", tooltip_panel)
+	tooltip_theme.set_color("font_color", "TooltipLabel", Color(0.92, 0.92, 0.96))
+	theme = tooltip_theme
 
 func _process(delta: float) -> void:
 	if _simulation == null or _speed_multiplier <= 0.0:
@@ -113,12 +136,6 @@ func _build_ui() -> void:
 	_business_list = VBoxContainer.new()
 	vbox.add_child(_business_list)
 
-	var help := Label.new()
-	help.text = "A business paying above the reference wage grows (green); one paying below shrinks (red) -- self-tuning, not hand-balanced recipe rates. Household rows below can go hungry even while the city average looks fine."
-	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
-	vbox.add_child(help)
-
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(scroll)
@@ -174,6 +191,10 @@ func _rebuild_business_rows() -> void:
 	for col_label in ["Name", "Capacity", "Max", "Employed", "Output", "Wage (7d avg)", "Reference wage", "Stock"]:
 		var header := Label.new()
 		header.text = col_label
+		if col_label == "Wage (7d avg)":
+			header.mouse_filter = Control.MOUSE_FILTER_STOP
+			header.mouse_default_cursor_shape = Control.CURSOR_HELP
+			header.tooltip_text = WAGE_TOOLTIP
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(header)
 
@@ -183,6 +204,10 @@ func _rebuild_business_rows() -> void:
 		for key in ["name", "capacity", "max_capacity", "employed", "output", "wage", "reference", "stock"]:
 			var label := Label.new()
 			label.custom_minimum_size = Vector2(90, 0)
+			if key == "wage":
+				label.mouse_filter = Control.MOUSE_FILTER_STOP
+				label.mouse_default_cursor_shape = Control.CURSOR_HELP
+				label.tooltip_text = WAGE_TOOLTIP
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels

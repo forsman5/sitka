@@ -23,6 +23,9 @@ func _on_load_pressed() -> void:
 func _on_single_valley_sim_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/sim/dashboard.tscn")
 
+func _on_household_economy_sim_pressed() -> void:
+	get_tree().change_scene_to_file("res://scenes/sim/he_dashboard.tscn")
+
 func _on_large_valleys_sim_pressed() -> void:
 	Dashboard.pending_graph_path = LARGE_VALLEYS_GRAPH
 	get_tree().change_scene_to_file("res://scenes/sim/dashboard.tscn")
