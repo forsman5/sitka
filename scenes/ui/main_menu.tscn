@@ -30,9 +30,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -170.0
-offset_top = -210.0
+offset_top = -235.0
 offset_right = 170.0
-offset_bottom = 210.0
+offset_bottom = 235.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
 [node name="VBox" type="VBoxContainer" parent="Panel"]
@@ -60,6 +60,9 @@ text = "Load Game"
 [node name="SingleValleySimButton" type="Button" parent="Panel/VBox"]
 text = "Single Valley Simulation"
 
+[node name="HouseholdEconomySimButton" type="Button" parent="Panel/VBox"]
+text = "Household Economy Simulation"
+
 [node name="LargeValleysSimButton" type="Button" parent="Panel/VBox"]
 text = "Large Valleys Simulation"
 
@@ -75,5 +78,6 @@ modulate = Color(0.65, 0.65, 0.75, 1)
 [connection signal="pressed" from="Panel/VBox/StartButton" to="." method="_on_start_pressed"]
 [connection signal="pressed" from="Panel/VBox/LoadButton" to="." method="_on_load_pressed"]
 [connection signal="pressed" from="Panel/VBox/SingleValleySimButton" to="." method="_on_single_valley_sim_pressed"]
+[connection signal="pressed" from="Panel/VBox/HouseholdEconomySimButton" to="." method="_on_household_economy_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/LargeValleysSimButton" to="." method="_on_large_valleys_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/RiverValleyViewButton" to="." method="_on_river_valley_view_pressed"]
