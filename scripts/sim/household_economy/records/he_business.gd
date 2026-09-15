@@ -43,6 +43,8 @@ var balance: float = 0.0
 ## not a live one" discipline the household market's same-day balance
 ## snapshot uses to avoid circularity.
 var last_revenue: float = 0.0
+var last_wages_paid: float = 0.0
+var last_cash_change: float = 0.0
 
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See

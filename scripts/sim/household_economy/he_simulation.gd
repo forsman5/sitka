@@ -196,6 +196,9 @@ func get_business_reports() -> Array:
 			"employed_workers": _business_employed_worker_count(business_id),
 			"employed_household_count": _business_employed_household_count(business_id),
 			"balance": b.balance,
+			"last_revenue": b.last_revenue,
+			"last_wages_paid": b.last_wages_paid,
+			"last_cash_change": b.last_cash_change,
 			"last_actual_units": b.last_actual_units,
 			"last_wage_per_worker": b.last_wage_per_worker,
 			"rolling_average_wage": b.rolling_average_wage(),
@@ -352,6 +355,8 @@ func _finalize_daily_record(record: Dictionary) -> void:
 func _pay_wages(record: Dictionary) -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
+		b.last_wages_paid = 0.0
+		b.last_cash_change = 0.0
 		var employed := _business_employed_worker_count(business_id)
 		var wage_per_worker: float = (b.last_revenue / employed) if employed > 0 else 0.0
 		b.last_wage_per_worker = wage_per_worker
@@ -368,6 +373,8 @@ func _pay_wages(record: Dictionary) -> void:
 			h.balance += pay
 			total_paid += pay
 		b.balance -= total_paid
+		b.last_wages_paid = total_paid
+		b.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
 
 ## Each PRODUCTION business produces its one recipe output using however
@@ -625,8 +632,10 @@ func _clear_market_for(commodity: Commodity.Type, record: Dictionary, starting_b
 
 		if seller != null:
 			seller.consume(commodity, quantity_traded)
-			seller.balance += quantity_traded * price
-			seller.last_revenue = quantity_traded * price
+			var revenue := quantity_traded * price
+			seller.balance += revenue
+			seller.last_revenue = revenue
+			seller.last_cash_change += revenue
 	elif seller != null:
 		seller.last_revenue = 0.0
 
