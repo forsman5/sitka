@@ -15,8 +15,8 @@ const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 
 const SCENARIOS := [
-	{"label": "Two businesses, evenly staffed", "builder": "build_two_business_economy"},
-	{"label": "Two businesses, lopsided start", "builder": "build_lopsided_start"},
+	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
+	{"label": "Three businesses, lopsided start", "builder": "build_lopsided_start"},
 ]
 
 var _simulation: HESimulation
@@ -251,10 +251,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  starvation deaths (lifetime)=%d  money written off=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  starvation deaths (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["starvation_deaths_total"], city["money_written_off_total"]]
+		city["starvation_deaths_total"], city["money_written_off_total"], city["export_revenue_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():

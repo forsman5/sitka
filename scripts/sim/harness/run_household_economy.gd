@@ -34,8 +34,8 @@ func _assert(condition: bool, message: String) -> void:
 
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
-	var a := _new_sim("build_two_business_economy")
-	var b := _new_sim("build_two_business_economy")
+	var a := _new_sim("build_three_business_economy")
+	var b := _new_sim("build_three_business_economy")
 	a.advance_ticks(120)
 	b.advance_ticks(120)
 	var mismatch := false
@@ -48,16 +48,18 @@ func _check_determinism() -> void:
 	if not mismatch:
 		print("  two same-seed 120-day runs produced identical household, business, and city summaries")
 
-## Goods and money reconcile as opening + produced - consumed (goods) /
-## opening - written_off (money), across BOTH households and businesses;
-## wages and market trades are transfers that net to zero; nothing goes
-## negative. A starvation death is the one place value legitimately leaves
-## the closed system, and it's explicitly logged (money_written_off/
-## goods_written_off) rather than just silently not adding up -- so the
-## reconciliation formula accounts for it instead of ignoring it.
+## Goods and money reconcile as opening + produced - consumed - exported
+## (goods) / opening - written_off + export_revenue (money), across BOTH
+## households and businesses; wages and market trades are transfers that
+## net to zero; nothing goes negative. A starvation death is the one place
+## value legitimately leaves the closed system, and the Trader's exports
+## are the one place NEW money legitimately enters it (see
+## he_simulation.gd's _export_revenue_total doc comment) -- both are
+## explicitly logged rather than just silently not adding up, so the
+## reconciliation formula accounts for them instead of ignoring them.
 func _check_conservation() -> void:
-	print("\n=== Conservation: goods and money reconcile (write-offs accounted), nothing negative ===")
-	var sim := _new_sim("build_two_business_economy")
+	print("\n=== Conservation: goods and money reconcile (write-offs/exports accounted), nothing negative ===")
+	var sim := _new_sim("build_three_business_economy")
 	sim.advance_ticks(365)
 	var history := sim.get_daily_history(365)
 
@@ -69,11 +71,12 @@ func _check_conservation() -> void:
 			var opening: float = record["opening_stock"][name]
 			var produced: float = record["produced"].get(name, 0.0)
 			var consumed: float = record["consumed"].get(name, 0.0)
+			var exported: float = (record["exported"] as Dictionary).get(name, 0.0)
 			var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
 			var closing: float = record["closing_stock"][name]
-			var expected: float = opening + produced - consumed - written_off
+			var expected: float = opening + produced - consumed - exported - written_off
 			worst_stock_gap = max(worst_stock_gap, abs(closing - expected))
-		var expected_money: float = record["opening_money"] - float(record["money_written_off"])
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"])
 		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
 
 	print("  worst stock reconciliation gap over 365 days: %.4f" % worst_stock_gap)
