@@ -10,6 +10,11 @@ const BIOME_MASK_PATH := "res://assets/river_valley_biomes.exr"
 const WORLD_SIZE := Vector2(320.0, 240.0)
 const HEIGHT_MIN := 2.602
 const HEIGHT_MAX := 40.710
+## A visual-only continuation beyond the hand-authored playable valley.  The
+## overview camera is intentionally allowed to show the wider region, so this
+## avoids treating the heightmap's export boundary as the edge of the world.
+const SURROUND_SIZE := Vector2(960.0, 960.0)
+const SURROUND_GRID := 24
 
 var _width := 0
 var _depth := 0
@@ -34,6 +39,7 @@ func build() -> void:
 			var source_z := _depth - 1 - z
 			_heights[z * _width + x] = lerpf(HEIGHT_MIN, HEIGHT_MAX, image.get_pixel(x, source_z).r)
 
+	_build_surrounding_landscape()
 	_build_visual_mesh(biome_texture)
 	_build_collision()
 
@@ -100,6 +106,64 @@ func _build_visual_mesh(biome_texture: Texture2D) -> void:
 	visual.mesh = mesh
 	visual.material_override = _terrain_material(biome_texture)
 	add_child(visual)
+
+## The Blender heightmap contains the playable, detailed valley.  This wider
+## mesh continues the heights at its edges and gently settles into low rolling
+## ground, giving the overview camera a believable region beyond the authored
+## border without making that outer area selectable or buildable yet.
+func _build_surrounding_landscape() -> void:
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var indices := PackedInt32Array()
+	var grid_width := SURROUND_GRID + 1
+	vertices.resize(grid_width * grid_width)
+	normals.resize(grid_width * grid_width)
+	for z in range(grid_width):
+		for x in range(grid_width):
+			var index := z * grid_width + x
+			var point := Vector2(
+				( float(x) / float(SURROUND_GRID) - 0.5) * SURROUND_SIZE.x,
+				( float(z) / float(SURROUND_GRID) - 0.5) * SURROUND_SIZE.y,
+			)
+			vertices[index] = Vector3(point.x, _surround_height(point), point.y)
+			normals[index] = Vector3.UP
+	for z in range(SURROUND_GRID):
+		for x in range(SURROUND_GRID):
+			var a := z * grid_width + x
+			var b := a + grid_width
+			# The detailed heightmap already occupies this centre rectangle.
+			# Leaving it empty prevents z-fighting with its visual mesh.
+			var centre := (Vector2(vertices[a].x, vertices[a].z) + Vector2(vertices[b + 1].x, vertices[b + 1].z)) * 0.5
+			if absf(centre.x) < WORLD_SIZE.x * 0.5 and absf(centre.y) < WORLD_SIZE.y * 0.5:
+				continue
+			indices.append_array([a, b, a + 1, a + 1, b, b + 1])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var surround := MeshInstance3D.new()
+	surround.name = "ValleySurround"
+	surround.mesh = mesh
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color("4a6b30")
+	material.roughness = 1.0
+	surround.material_override = material
+	add_child(surround)
+
+func _surround_height(point: Vector2) -> float:
+	var valley_half := WORLD_SIZE * 0.5
+	var edge_point := Vector2(
+		clampf(point.x, -valley_half.x, valley_half.x),
+		clampf(point.y, -valley_half.y, valley_half.y),
+	)
+	var beyond_edge := maxf(absf(point.x) - valley_half.x, absf(point.y) - valley_half.y)
+	var fade := smoothstep(0.0, 260.0, maxf(beyond_edge, 0.0))
+	var edge_height := get_height(edge_point.x, edge_point.y)
+	var distant_height := 5.0 + sin(point.x * 0.018) * 1.6 + cos(point.y * 0.021) * 1.2
+	return lerpf(edge_height, distant_height, fade)
 
 func _build_collision() -> void:
 	var shape := HeightMapShape3D.new()
