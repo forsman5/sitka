@@ -69,7 +69,16 @@ const STARVATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
 ## nothing trade-specific there.
 const TRADER_RESERVE_BUFFER_DAYS := 3.0 # matches TARGET_BUFFER_DAYS by choice, not necessity
 const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
-const TRADER_CAPACITY_PER_WORKER := 2.0 # authored placeholder, not yet tuned
+## Fully utilized, a Trader's margin per worker is
+## TRADER_CAPACITY_PER_WORKER * price * (1 - TRADER_BUY_PRICE_FRACTION) --
+## i.e. just `price` at the 0.5 fraction above. That has to clear the
+## reference wage with real room to spare even once oversupply has pushed
+## price all the way down to its floor, or the Trader never grows past a
+## knife-edge break-even (and a bad week tips it into capacity 0, see
+## _evaluate_business_capacity's zero-capacity trial hire). A trader moving
+## goods should scale per worker far better than a farmhand growing food by
+## hand, hence the large jump from the first authored guess of 2.0.
+const TRADER_CAPACITY_PER_WORKER := 8.0
 
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows by
@@ -477,6 +486,18 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wage := _reference_wage_per_worker()
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
+		if b.capacity == 0:
+			# A business at zero capacity has had no employed workers, so
+			# rolling_average_wage() reads a flat 0 -- indistinguishable
+			# from "genuinely unprofitable" even once whatever shut it down
+			# (no surplus to trade, a bad price, anything) has long since
+			# passed. Left alone this is a one-way trap: nobody ever gets
+			# hired back in to generate a real wage to re-evaluate. Give it
+			# a small trial crew instead so next week's wage is actual
+			# evidence, not silence -- worst case it's genuinely still
+			# unprofitable and shrinks right back to 0 next week.
+			b.capacity = mini(CAPACITY_STEP_WORKERS, b.max_capacity)
+			continue
 		var avg_wage := b.rolling_average_wage()
 		if avg_wage > reference_wage * (1.0 + WAGE_PROFIT_MARGIN):
 			b.capacity = mini(b.capacity + CAPACITY_STEP_WORKERS, b.max_capacity)
