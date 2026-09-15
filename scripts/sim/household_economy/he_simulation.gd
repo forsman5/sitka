@@ -248,11 +248,12 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
-## Up to the last `limit` blotter entries (births, deaths, splits), oldest
-## first -- same convention as get_daily_history. Pass -1 (default) for
-## everything currently retained (bounded by EVENT_LOG_MAX regardless).
-## Each entry has at least "day" and "type" ("birth"/"death"/"split"); see
-## _log_event()'s call sites for the type-specific fields.
+## Up to the last `limit` blotter entries (births, deaths, splits, hirings,
+## coming-of-age), oldest first -- same convention as get_daily_history.
+## Pass -1 (default) for everything currently retained (bounded by
+## EVENT_LOG_MAX regardless). Each entry has at least "day" and "type"
+## ("birth"/"death"/"split"/"job"/"coming_of_age"); see _log_event()'s call
+## sites for the type-specific fields.
 func get_event_log(limit: int = -1) -> Array:
 	var start: int = 0 if limit < 0 else max(0, _event_log.size() - limit)
 	var out: Array = []
@@ -475,6 +476,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		var pre_split_headcount := h.headcount()
 		var promoted := h.evaluate_aging()
 		for i in promoted:
+			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i))
 		promotions += promoted
 		if h.evaluate_birth():
@@ -581,6 +583,7 @@ func _reconcile_employment() -> void:
 				continue
 			h.employer_business_id = business_id
 			employed_workers += h.worker_capacity()
+			_log_event("job", {"household_id": household_id, "business_id": business_id})
 
 ## Step: prepare and clear local offers/requests, one commodity at a time.
 ## Snapshots every household's balance ONCE before either commodity clears

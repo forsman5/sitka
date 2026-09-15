@@ -403,5 +403,10 @@ func _format_event(event: Dictionary) -> String:
 			return "[color=#e08d8d]Day %d - Household %d: %s died (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
 		"split":
 			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+		"coming_of_age":
+			return "[color=#d9c98f]Day %d - Household %d: member came of age[/color]" % [day, event["household_id"]]
+		"job":
+			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
 		_:
 			return "Day %d - %s" % [day, event["type"]]
