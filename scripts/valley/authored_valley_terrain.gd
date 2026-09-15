@@ -186,17 +186,32 @@ func _terrain_material(biome_texture: Texture2D) -> ShaderMaterial:
 shader_type spatial;
 render_mode diffuse_lambert, specular_schlick_ggx, cull_disabled;
 uniform sampler2D biome_mask;
+float hash21(vec2 point) {
+	point = fract(point * vec2(123.34, 345.45));
+	point += dot(point, point + 34.345);
+	return fract(point.x * point.y);
+}
+float value_noise(vec2 point) {
+	vec2 cell = floor(point);
+	vec2 local = fract(point);
+	local = local * local * (3.0 - 2.0 * local);
+	return mix(mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), local.x), mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0)), local.x), local.y);
+}
 void fragment() {
 	vec4 mask = texture(biome_mask, UV);
-	vec3 grass = vec3(0.29, 0.42, 0.19);
-	vec3 field = vec3(0.56, 0.51, 0.22);
-	vec3 woodland = vec3(0.12, 0.28, 0.12);
-	vec3 pasture = vec3(0.40, 0.49, 0.22);
-	vec3 wet_bank = vec3(0.19, 0.29, 0.14);
+	float broad_patch = value_noise(UV * vec2(17.0, 13.0));
+	float fine_grain = value_noise(UV * vec2(71.0, 53.0));
+	vec3 grass = vec3(0.27, 0.38, 0.18);
+	vec3 field = vec3(0.52, 0.46, 0.20);
+	vec3 woodland = vec3(0.105, 0.235, 0.105);
+	vec3 pasture = vec3(0.36, 0.43, 0.20);
+	vec3 wet_bank = vec3(0.18, 0.25, 0.13);
 	vec3 color = mix(grass, woodland, mask.r * 0.78);
 	color = mix(color, pasture, mask.g * 0.64);
 	color = mix(color, field, mask.b * 0.64);
 	color = mix(color, wet_bank, mask.a * 0.72);
+	color *= mix(0.92, 1.06, broad_patch);
+	color *= mix(0.975, 1.025, fine_grain);
 	ALBEDO = color;
 	ROUGHNESS = 0.96;
 }

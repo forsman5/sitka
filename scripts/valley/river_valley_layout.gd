@@ -70,3 +70,22 @@ static func tributary() -> PackedVector3Array:
 		Vector3(-128.0, 0.0, -78.0), Vector3(-80.0, 0.0, -50.0),
 		Vector3(-35.0, 0.0, -27.0), Vector3(0.0, 0.0, -5.0),
 	])
+
+static func track_path(edge_id: int, from_pos: Vector3, to_pos: Vector3) -> PackedVector3Array:
+	# The Oakmere road deliberately follows the tributary bank instead of
+	# occupying the water centerline. Both Aldford approaches bend into the
+	# settlement so the landing/ford reads as a connected place, not a hub of
+	# ruler-straight ribbons.
+	match edge_id:
+		1:
+			return PackedVector3Array([
+				from_pos, Vector3(-84.0, 0.0, 55.0), Vector3(-48.0, 0.0, 29.0),
+				Vector3(-18.0, 0.0, 7.0), Vector3(-5.5, 0.0, -2.0),
+			])
+		2:
+			return PackedVector3Array([
+				from_pos, Vector3(-102.0, 0.0, -65.0), Vector3(-69.0, 0.0, -47.0),
+				Vector3(-37.0, 0.0, -30.0), Vector3(-8.0, 0.0, -11.0),
+			])
+		_:
+			return PackedVector3Array([from_pos, to_pos])

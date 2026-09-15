@@ -8,11 +8,14 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 const Layout = preload("res://scripts/valley/river_valley_layout.gd")
 const AuthoredValleyTerrain = preload("res://scripts/valley/authored_valley_terrain.gd")
+const TerrainRibbonBuilder = preload("res://scripts/valley/terrain_ribbon_builder.gd")
 
 const GROUND_COLOR := Color("6e8d52")
 const ROAD_COLOR := Color("8c7657")
 const RIVER_COLOR := Color("356f9b")
 const TRACK_WIDTH := 2.1
+const RIVER_BANK_COLOR := Color("5f6244")
+const ROAD_SHOULDER_COLOR := Color("76684e")
 
 var _simulation: Simulation
 var _camera: Camera3D
@@ -67,7 +70,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		var nearest_id := -1
 		var nearest_distance := 8.0
 		for settlement_id in Layout.SETTLEMENTS:
-			var distance := Vector2(point.x, point.z).distance_to(Vector2(Layout.settlement_position(settlement_id).x, Layout.settlement_position(settlement_id).z))
+			var visual_position: Vector2 = settlement_cluster_positions.get(
+				settlement_id,
+				Vector2(Layout.settlement_position(settlement_id).x, Layout.settlement_position(settlement_id).z),
+			)
+			var distance := Vector2(point.x, point.z).distance_to(visual_position)
 			if distance < nearest_distance:
 				nearest_distance = distance
 				nearest_id = settlement_id
@@ -87,8 +94,10 @@ func _build_landscape() -> void:
 	add_child(_terrain)
 	_terrain.build()
 
-	_add_polyline("MainRiver", Layout.main_river(), 18.0, RIVER_COLOR, 0.24)
-	_add_polyline("Tributary", Layout.tributary(), 10.0, Color("477fa8"), 0.25)
+	_add_watercourse("MainRiver", Layout.main_river(), 18.0, RIVER_COLOR)
+	_add_watercourse("Tributary", Layout.tributary(), 10.0, Color("477fa8"))
+	var confluence := TerrainRibbonBuilder.build_disc("AldfordConfluence", Vector2(0.0, -5.0), 10.5, Callable(self, "get_valley_ground_height"), 0.30, _water_material(RIVER_COLOR), 48)
+	add_child(confluence)
 
 	# Existing seed edges are the source of truth for the static route drawing.
 	for edge_id in Layout.EDGES:
@@ -96,12 +105,11 @@ func _build_landscape() -> void:
 		var from_pos := Layout.settlement_position(edge["settlement_a_id"])
 		var to_pos := Layout.settlement_position(edge["settlement_b_id"])
 		if Layout.EDGES[edge_id]["kind"] == "track":
-			_add_route(edge_id, from_pos, to_pos, TRACK_WIDTH, ROAD_COLOR)
+			_add_route(edge_id, Layout.track_path(edge_id, from_pos, to_pos), TRACK_WIDTH, ROAD_COLOR)
 
 	# The ford is intentionally weak and legible: a narrow pale crossing at
 	# Aldford, reserved for replacement by a bridge in Milestone 3.
-	var ford_height := get_valley_ground_height(Vector2(0.0, -5.0))
-	_add_box("AldfordFord", Vector3(0.0, ford_height + 0.38, -5.0), Vector3(11.0, 0.28, 3.0), Color("c9b58a"))
+	_add_ribbon("AldfordFord", PackedVector3Array([Vector3(-8.0, 0.0, -5.0), Vector3(1.0, 0.0, -5.0), Vector3(12.0, 0.0, -5.0)]), 3.2, 0.72, _ground_material(Color("c9b58a")), 1.0, 0.12, 41, true)
 
 ## The first valley remains deliberately simple, but this shared ground query
 ## keeps decorative vegetation and future building placement aligned with its
@@ -161,7 +169,9 @@ func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color)
 		# CLUSTER_OFFSETS), but a landing or quay still needs to sit at the
 		# river itself.
 		var river_edge := _river_edge_anchor(ValleySeed.ALDFORD)
-		_add_box("AldfordLanding", river_edge + Vector3(5.0, 0.28, -4.0), Vector3(3.5, 0.35, 7.0), Color("7d6044"))
+		var landing_point := Vector2(river_edge.x + 8.5, river_edge.z - 5.0)
+		var landing_height := get_valley_ground_height(landing_point)
+		_add_box("AldfordLanding", Vector3(landing_point.x, landing_height + 0.28, landing_point.y), Vector3(3.5, 0.35, 7.0), Color("7d6044"))
 	elif settlement_id == ValleySeed.STAITHE:
 		var river_edge := _river_edge_anchor(ValleySeed.STAITHE)
 		_add_box("StaitheQuay", river_edge + Vector3(-4.0, 0.32, 5.0), Vector3(4.0, 0.42, 13.0), Color("76573e"))
@@ -250,84 +260,24 @@ func _select_settlement(settlement_id: int) -> void:
 		report_parts.append(str(report["recipe_id"]).capitalize())
 	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
 
-func _add_route(edge_id: int, from_pos: Vector3, to_pos: Vector3, width: float, color: Color) -> void:
-	_add_ribbon("Route%d" % edge_id, PackedVector3Array([from_pos, to_pos]), width, color, 0.14)
+func _add_route(edge_id: int, points: PackedVector3Array, width: float, color: Color) -> void:
+	# A darker, wider shoulder settles the path into the grass. The narrower
+	# worn strip has low-amplitude deterministic width changes rather than a
+	# perfectly constant silhouette.
+	_add_ribbon("RouteShoulder%d" % edge_id, points, width + 1.45, 0.10, _ground_material(ROAD_SHOULDER_COLOR), 2.8, 0.20, edge_id * 17)
+	_add_ribbon("Route%d" % edge_id, points, width, 0.14, _ground_material(color), 2.8, 0.28, edge_id * 17 + 5)
 
-func _add_polyline(prefix: String, points: PackedVector3Array, width: float, color: Color, y: float) -> void:
-	_add_ribbon(prefix, points, width, color, y)
+func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, color: Color) -> void:
+	# Banks are one continuous terrain-following strip beneath a separate calm
+	# water surface. Each water cross-section shares one sampled center height,
+	# avoiding the pitched/floating joins produced by horizontal boxes.
+	_add_ribbon("%sBank" % prefix, points, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 2.4)
+	_add_ribbon(prefix, points, width, 0.22, _water_material(color), 2.4, 0.0, 0, true)
 
-## A single mesh strip following the ground under every point of `points`,
-## instead of one rigid straight segment per pair -- a straight segment only
-## samples terrain height at its two endpoints, so anywhere the authored
-## heightmap rises or dips between them (routinely tens of units over the
-## length of a route or river reach) the geometry either floats above the
-## hillside or clips through it, and adjoining segments land at unrelated
-## heights and visibly separate at the joint. Densifying first and sharing
-## vertices between neighboring quads keeps the ribbon glued to the ground
-## and seamless along its whole length.
-const RIBBON_STEP := 5.0
-
-func _add_ribbon(node_name: String, points: PackedVector3Array, width: float, color: Color, y_offset: float) -> void:
-	var dense := _densify(points, RIBBON_STEP)
-	if dense.size() < 2:
-		return
-	for i in range(dense.size()):
-		var p: Vector3 = dense[i]
-		p.y = get_valley_ground_height(Vector2(p.x, p.z)) + y_offset
-		dense[i] = p
-
-	var vertices := PackedVector3Array()
-	var normals := PackedVector3Array()
-	for i in range(dense.size()):
-		var p: Vector3 = dense[i]
-		var prev: Vector3 = dense[i - 1] if i > 0 else p
-		var next: Vector3 = dense[i + 1] if i < dense.size() - 1 else p
-		var direction := next - prev
-		direction.y = 0.0
-		if direction.length() < 0.0001:
-			direction = Vector3.FORWARD
-		var side := direction.normalized().cross(Vector3.UP) * (width * 0.5)
-		vertices.append(p - side)
-		vertices.append(p + side)
-		normals.append(Vector3.UP)
-		normals.append(Vector3.UP)
-
-	var indices := PackedInt32Array()
-	for i in range(dense.size() - 1):
-		var a := i * 2
-		indices.append_array([a, a + 1, a + 2, a + 1, a + 3, a + 2])
-
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var instance := MeshInstance3D.new()
-	instance.name = node_name
-	instance.mesh = mesh
-	var material := _material(color)
-	# These quads come out back-facing to the top-down camera; disabling
-	# backface culling is simpler than chasing the winding order, and costs
-	# nothing visible for a thin single-layer strip like a road or river.
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	instance.material_override = material
-	add_child(instance)
-
-## Resamples a polyline to points no more than `step` apart (measured in the
-## ground plane), preserving every original vertex so authored bends stay put.
-func _densify(points: PackedVector3Array, step: float) -> PackedVector3Array:
-	var out := PackedVector3Array()
-	for i in range(points.size() - 1):
-		var a: Vector3 = points[i]
-		var b: Vector3 = points[i + 1]
-		var length := Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z))
-		var subdivisions: int = max(1, int(ceil(length / step)))
-		for k in range(subdivisions):
-			out.append(a.lerp(b, float(k) / float(subdivisions)))
-	out.append(points[points.size() - 1])
-	return out
+func _add_ribbon(node_name: String, points: PackedVector3Array, width: float, y_offset: float, material: Material, sample_spacing: float, width_variation: float = 0.0, variation_seed: int = 0, flat_cross_section: bool = false) -> MeshInstance3D:
+	var ribbon := TerrainRibbonBuilder.build(node_name, points, Callable(self, "get_valley_ground_height"), width, y_offset, material, sample_spacing, width_variation, variation_seed, flat_cross_section)
+	add_child(ribbon)
+	return ribbon
 
 func _add_house(position: Vector3, size: Vector3, color: Color) -> void:
 	_add_box("House", position, size, color)
@@ -394,4 +344,15 @@ func _material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = color
 	material.roughness = 0.92
+	return material
+
+func _ground_material(color: Color) -> StandardMaterial3D:
+	var material := _material(color)
+	material.roughness = 1.0
+	return material
+
+func _water_material(color: Color) -> StandardMaterial3D:
+	var material := _material(color)
+	material.roughness = 0.30
+	material.metallic = 0.08
 	return material
