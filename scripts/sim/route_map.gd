@@ -147,9 +147,18 @@ func _gui_input(event: InputEvent) -> void:
 			if mouse.pressed and mouse.button_index == MOUSE_BUTTON_LEFT:
 				var sid: int = _hit_node(mouse.position)
 				if sid >= 0:
-					selected_id = sid
+					if sid == selected_id:
+						# Clicking the highlighted node again clears the
+						# highlight so the plain river/road edge colors are
+						# visible again -- otherwise there was no way to
+						# leave the "one node highlighted" view.
+						selected_id = -1
+					else:
+						selected_id = sid
+						settlement_selected.emit(sid)
 					_dragging = false
-					settlement_selected.emit(sid)
+				else:
+					selected_id = -1
 			accept_event()
 	elif event is InputEventMouseMotion and _dragging:
 		_pan += (event as InputEventMouseMotion).relative
@@ -197,6 +206,19 @@ func _draw() -> void:
 			var cargo: float = _traffic.get(edge["id"], 0.0)
 			color = Color("ffd17a") if cargo > 0 else Color("344453")
 			width = clampf(sqrt(cargo) * 0.3, 1.0, 9.0)
+		# A selected node's straight-line edges can visually pass right through
+		# an unrelated node placed on the same grid line (see route_map layout),
+		# making it look like a two-hop path through a node that isn't actually
+		# connected. Overriding to bright/thick for the selected node's real
+		# edges and near-background gray for everything else removes that
+		# ambiguity regardless of how many connections the node has.
+		if selected_id != -1:
+			if edge["settlement_a_id"] == selected_id or edge["settlement_b_id"] == selected_id:
+				color = Color("fff4c2")
+				width = 2.0
+			else:
+				color = Color("1c2731")
+				width = 1.0
 		draw_line(_screen(edge["settlement_a_id"]), _screen(edge["settlement_b_id"]), color, width, true)
 	for sid in _positions:
 		var pos: Vector2 = _screen(sid)
@@ -220,7 +242,12 @@ func _draw() -> void:
 		draw_circle(pos, radius, node_color)
 		if _zoom >= 0.55 or sid == selected_id:
 			var label: String = summary["name"] if graph.is_empty() else "#%d" % sid
-			draw_string(font, pos + Vector2(12, 5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("edf3f8"))
+			var label_pos: Vector2 = pos + Vector2(12, 5)
+			# Dark halo so the name stays legible over a highlighted edge
+			# passing right by the node, regardless of edge color/width.
+			for offset in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+				draw_string(font, label_pos + offset, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("0b1219"))
+			draw_string(font, label_pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("edf3f8"))
 	for shipment in _shipments:
 		var duration: float = maxf(1.0, float(shipment["arrival_day"] - shipment["departure_day"]))
 		var progress: float = clampf(float(shipment["progress_fraction"]) + tick_fraction / duration, 0, 1)
