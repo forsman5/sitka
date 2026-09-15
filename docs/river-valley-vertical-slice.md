@@ -1,7 +1,7 @@
 # Sitka: Five-Settlement River Valley Vertical Slice
 
 **Status:** Living prototype specification; simulation implementation underway  
-**Scope:** Five-settlement vertical slice; Milestone 2 display iteration and the next simulation milestone proceed in parallel  
+**Scope:** Five-settlement vertical slice; next simulation cut is household economics inside one settlement, with display work continuing independently  
 **Setting:** Northern Britain, approximately AD 600–800 for the prototype  
 **Primary question:** Can a physically grounded transport economy make settlement growth and regional specialization feel legible, consequential, and fun?
 
@@ -19,7 +19,7 @@ The game should make macro outcomes traceable to physical causes. A town becomes
 
 1. **Geography is economic structure.** Rivers, crossings, roads, pasture, woodland, and deposits determine what can prosper where.
 2. **Goods move through the world.** Settlements do not share a global inventory. Transport time, capacity, and cost create meaningful local scarcity.
-3. **Households are the atomic social unit.** The simulation tracks families or household groups, not individual hunger meters and daily walking schedules.
+3. **Households are the base social and economic actors.** Families own or access goods, commit labor, produce, exchange, and experience their own shortages. Settlements aggregate these outcomes and provide shared infrastructure; they are not a single household, wallet, inventory owner, or decision-maker. Individual walking schedules are not required for this depth.
 4. **Growth is an outcome, not a placement puzzle alone.** Infrastructure and opportunity attract households and production; the player creates conditions for settlement growth.
 5. **One world, multiple lenses.** Close and regional views describe the same underlying economy. Zoom changes presentation and available tools, not simulation truth.
 6. **History accumulates.** Early choices remain visible: an old hall, road, ford, or landing can become the center—or neglected edge—of a later town.
@@ -28,7 +28,7 @@ The game should make macro outcomes traceable to physical causes. A town becomes
 
 | Reference | Relevant lesson |
 | --- | --- |
-| *Manor Lords* | A settlement should feel physically credible, inhabited, and shaped by terrain. |
+| *Manor Lords* | Borrow the aspiration of a settlement made of working households, plots, and productive places, as well as physically credible terrain. This is a design inspiration, not a requirement to reproduce its internal systems. |
 | *Hegemony Gold / III* | Tactical geography and regional logistics can share one continuous map and camera. |
 | *Anno* | Production chains are readable, satisfying, and capable of driving specialization. |
 | *Victoria 3* | Prices, labor, and political power can emerge from connected economic conditions. |
@@ -118,20 +118,33 @@ The prototype should allow fast restart and comparison of strategies. A complete
 
 ### Simulation units
 
-A **household** represents a family or dependent group with members summarized by worker capacity and dependents. It owns or accesses a home, an occupation, modest inventory, livestock where relevant, wealth, and clan/settlement affiliation. Individual people may be rendered, but they are not authoritative simulation objects.
+A **household** is the persistent base actor: worker capacity, dependents, residence, work assignment, owned inventory, and household-specific needs, fulfillment, stress, and resources. It can retain its own production, offer surplus, and acquire goods from other owners. Two households in the same settlement can have different food security and opportunities.
 
-A **workplace** uses labor to provide production or a service. Each settlement's trade center is a workplace staffed from the same pooled labor supply as farms and workshops. A **settlement** supplies a local market, storage, labor pool, and service capacity. A **shipment** reserves a quantity of goods and moves it along a route between inventories. A **transport edge** connects nodes and specifies mode, capacity, travel time, seasonal modifier, toll, and risk.
+A **workplace or plot** is a productive location with capacity, recipes, and explicit worker assignments. The initial household prototype uses one owner/operator household per workplace; communal sites, hired labor, and independent establishments can follow. A worker-day cannot be assigned twice.
 
-The first economic model should favor legibility over realism:
+A **settlement** is a location and collection of households, workplaces, infrastructure, and market institutions. Its inventory and population displays are derived summaries. Physical storage location and ownership are separate: goods stored in a shared granary still need an owner or a named communal account. Availability for sale is not the same as total goods present.
 
-- Settlements clear simple local markets on a regular discrete tick.
-- Households supply labor and consume food and basic goods.
-- Workplaces choose production from recent expected input and output prices.
-- Each staffed trade center proposes exports from its home settlement to directly connected settlements when price differences exceed transport cost and risk. Edge capacity arbitrates competing offers.
-- Household movement responds slowly to food security, work, housing, kin ties, and relative prosperity.
-- Herds are inventories with seasonal reproduction, fodder needs, and self-propelled transport along eligible routes.
+A **local market** matches voluntary offers and requests within the settlement. It does not own all local goods or invent purchasing power. Subsistence consumption, transfers, and market purchases are distinct flows. A **trade establishment** will eventually acquire cargo from explicit owners before exporting it; its present access to pooled city surplus is a prototype shortcut.
 
-Prices must be explainable. The UI should be able to answer “Why are tools expensive in High Fell?” with a short causal chain such as: low stock → Ironbank output reduced → charcoal shipment delayed → Oakmere road saturated.
+A **shipment** holds explicit cargo between locations; future ownership must remain traceable while it travels. A **transport edge** describes movement constraints, not an economic actor.
+
+### Current prototype versus target model
+
+The running valley is a useful aggregate baseline: household demographic records feed pooled labor, production enters settlement inventories, and food allocation largely derives from settlement-wide fulfillment. Household wealth is not yet a functioning purchasing account. Recent rescue relocation is implemented, but does not establish household-level ownership or local markets.
+
+Preserve that baseline while building the small [single-settlement household cut](household-economy-next-cut.md). Do not silently reinterpret old saved inventories as both communal and household property. An explicit seed conversion and reconciliation gate must precede integration.
+
+The target causal chain is:
+
+> Household labor and access to productive places → owned output → subsistence or exchange → household needs met or unmet → changed household choices and condition → settlement-level outcomes.
+
+City summaries should show totals **and distributions**: food fulfillment, households below subsistence, work assignments, goods held versus goods offered, and purchasing constraints. A healthy average cannot hide hungry households. Prices summarize actual local offers and demand; the current intercity scarcity scores remain distinct from transaction prices until integrated.
+
+### Scope and scale
+
+Start with one settlement and a few dozen households, then integrate into the five-settlement valley. The 100-settlement graph remains a scale probe. All locations retain household truth independent of camera distance; rendering may simplify or hide scenery. Optimize measured simulation costs before considering explicit, validated aggregation schemes.
+
+The player shapes land use, productive capacity, services, and infrastructure, with coarse household work assignments where useful. Do not require micromanaging individual people or every purchase. Occupation choice, migration, and institutions can deepen after the household economy explains itself.
 
 ### Time model
 
@@ -227,6 +240,14 @@ Consider porting the simulation core only after all three are true:
 Rust remains the likely long-term home for a large deterministic simulation, batch scenario testing, save validation, and performance-sensitive routing or market logic. It is not a prerequisite for proving the game.
 
 ## 5. Milestones and acceptance criteria
+
+**Revised simulation priority:** household ownership and subsistence → local exchange within one settlement → integrate the five-settlement economy and local trade establishments → infrastructure choices → broader growth. Milestone 2 visual work continues independently. Existing milestone numbers remain for continuity; the next cut is **H1**, described below. Earlier aggregate milestones are baseline experiments, not the final economic architecture.
+
+### Next cut H1: Household economy inside one settlement
+
+Implement a small opt-in scenario with explicit household inventories, work assignments, production ownership, self-consumption, and local exchange. Begin with a few dozen households and two complementary goods. Settlement summaries must reconcile to underlying owners and report unequal outcomes. Use [the short implementation brief](household-economy-next-cut.md) for scope, proposed exchange semantics, and acceptance.
+
+This advances household economic depth ahead of infrastructure expansion. Keep the current five- and 100-settlement modes running as comparison fixtures; do not attach pooled intercity exports to private inventories until ownership and payment are defined.
 
 ### Milestone 0: Paper model and data skeleton
 
@@ -461,9 +482,9 @@ Render the five settlements, river, tributary, crossings, roads, terrain/resourc
 
 **Accept when:** a player can identify each settlement's likely economic role without reading this document.
 
-### Milestone 3: Player infrastructure and local trade response
+### Milestone 3: Player infrastructure and local trade response — prior proposal, deferred
 
-**Next simulation milestone; Milestone 2 display iteration continues in parallel.** The goal is the first consequential player decision: invest scarce materials and labor in a connection, then explain how independently acting local trade centers change the valley's flows.
+**Planning history, not the next implementation instruction.** H1 now precedes this work. The detailed proposal below assumes pooled settlement goods and is retained for its transport tests and infrastructure goals. Before resuming it, replace pooled export reserves, construction charges, and labor allocation with explicit owner/institution accounts and household commitments. Its deferral of monetary ownership does not apply to the H1 local-exchange experiment. Milestone 2 display iteration continues in parallel. The goal is the first consequential player decision: invest scarce materials and labor in a connection, then explain how independently acting local trade centers change the valley's flows.
 
 Implement this in two passes: **3A, demand and bottleneck accounting**, followed by **3B, one funded infrastructure choice**. Complete 3A before tuning project benefits. Neither pass depends on finished terrain, camera work, or a new UI layout; headless commands and immutable snapshots are sufficient.
 
@@ -582,9 +603,9 @@ Compare directional commodity flow, edge utilization and rejection, Aldford arri
 
 The intended player conclusion is: “The landing alone did little because the feeder track was full; improving the track let local traders supply the ironworks.” Migration-driven growth belongs to Milestone 4, and full scenario victory belongs to Milestone 5.
 
-### Milestone 4: Households and growth
+### Milestone 4: Household growth and institutions
 
-Add labor allocation, consumption, housing capacity, prosperity, and slow migration.
+Build on H1's household ownership, work, and consumption. Add housing constraints, richer occupation choices, household formation, prosperity, migration beyond the existing rescue rule, and shared institutions. Household economics is no longer deferred wholesale to this milestone.
 
 **Accept when:** successful trade attracts households but can also generate food, housing, or labor pressure.
 
@@ -602,7 +623,7 @@ Add the success condition, soft failures, onboarding, economic explanations, bal
 - Dynasty, succession, marriage, or named-character simulation
 - Religion, monasteries as institutions, or conversion
 - Detailed political factions or kingdom diplomacy
-- Procedural world generation
+- Procedural terrain/world generation as a playable feature (generated graphs remain engineering fixtures)
 - Full construction logistics and individual builders
 - Weather beyond simple seasonal route/harvest modifiers
 - Individually authoritative people, animals, carts, or boats
