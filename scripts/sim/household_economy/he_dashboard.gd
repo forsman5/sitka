@@ -321,10 +321,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["emigrations_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"]]
+		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():
@@ -378,7 +378,13 @@ func _refresh() -> void:
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Label).text = str(household_id)
 		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
-		(row["workers"] as Label).text = str(h["worker_capacity"])
+		var worker_ages: Array = h["worker_ages"]
+		var workers_label := row["workers"] as Label
+		if worker_ages.is_empty():
+			workers_label.text = "0"
+		else:
+			var oldest_worker: int = worker_ages.max()
+			workers_label.text = "%d (oldest: %dd)" % [worker_ages.size(), oldest_worker]
 
 		var dependent_ages: Array = h["dependent_ages"]
 		var dependents_label := row["dependents"] as Label
@@ -423,6 +429,14 @@ func _format_event(event: Dictionary) -> String:
 		"emigrate":
 			var suffix := " - household ended" if event["household_ended"] else ""
 			return "[color=#e08d8d]Day %d - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
+		"old_age":
+			var count: int = event["count"]
+			var plural := "s" if count != 1 else ""
+			return "[color=#a0a0a0]Day %d - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
+		"adopted":
+			var dep_count: int = event["dependents"]
+			var dep_plural := "s" if dep_count != 1 else ""
+			return "[color=#a0a0a0]Day %d - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
 			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
 		"coming_of_age":

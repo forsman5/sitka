@@ -17,7 +17,11 @@ extends RefCounted
 ## afford enough to eat actually loses members (labeled "emigrate" rather
 ## than "die" -- see remove_member_for_emigration()) and, eventually, ceases
 ## to exist, freeing its worker(s) back into (or entirely out of) the labor
-## pool.
+## pool. Old age is a second, separate exit from the workforce (see
+## evaluate_old_age_death()) -- unlike emigration it isn't a hardship signal
+## and isn't labeled around avoiding the word "die": there's no relocation
+## story to preserve for a worker who simply reached the end of a natural
+## lifespan.
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
@@ -37,6 +41,17 @@ const GRAIN_ROLLING_WINDOW_DAYS := 30
 ## own worker_capacity fixed for life; population growth becomes more,
 ## smaller households instead of a few that grow without bound.
 const AGING_THRESHOLD_DAYS := 360
+## A worker's total lifespan from birth, in days -- same compressed
+## calendar convention as AGING_THRESHOLD_DAYS (not meant to be
+## biologically literal, just internally consistent with it): a dependent
+## becomes a worker at 1 "year" old and works for roughly 9 more "years"
+## before dying of old age. 10x AGING_THRESHOLD_DAYS rather than the first
+## authored guess of 20x -- a 1:20 childhood-to-lifespan ratio read as
+## barely-grown-up-then-immortal when actually watching it play out; 1:10
+## keeps old age a real, regularly observable turnover event instead of a
+## rare one a household's workforce will likely outlive several times over
+## via births/promotions before ever seeing.
+const LIFESPAN_DAYS := 10 * AGING_THRESHOLD_DAYS
 ## A household needs this many CONSECUTIVE well-fed, low-stress days before
 ## a birth becomes eligible -- mirrors the same "sustained, not one good
 ## week" philosophy as migration-pressure/starvation's consecutive-day
@@ -85,6 +100,18 @@ var _grain_history: Array[Dictionary] = []
 ## how starting households get a staggered spread instead of every
 ## dependent aging up on the exact same day.
 var _dependent_ages: Array[int] = []
+## One entry per CURRENT worker, in days -- same rationale as
+## _dependent_ages, so each worker independently crosses LIFESPAN_DAYS on
+## its own day (see evaluate_old_age_death()) rather than a household's
+## whole workforce aging out at once. Defaults to AGING_THRESHOLD_DAYS per
+## worker in _init() -- exactly the age a dependent has when it's promoted
+## into a worker -- so a newly split-off one-worker household (see
+## he_simulation.gd._split_off_new_household) is correctly seeded as a
+## just-turned-adult without an explicit seeding call. World-seed builders
+## that want an already-mature starting population (workers at all stages
+## of their working life, not all freshly of age) override this via
+## seed_worker_ages() instead, mirroring seed_dependent_ages().
+var _worker_ages: Array[int] = []
 var _consecutive_prosperous_days: int = 0
 ## Starts already at the cooldown ceiling so a household prosperous from
 ## day one isn't artificially blocked from its FIRST birth.
@@ -108,6 +135,8 @@ func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_bala
 	id = p_id
 	demographics = Household.new(p_id, 0, p_worker_capacity, p_dependents, 0.0)
 	balance = p_starting_balance
+	_worker_ages.resize(p_worker_capacity)
+	_worker_ages.fill(AGING_THRESHOLD_DAYS)
 
 func worker_capacity() -> int:
 	return demographics.worker_capacity
@@ -164,6 +193,17 @@ func seed_dependent_ages(ages: Array[int]) -> void:
 func dependent_ages() -> Array[int]:
 	return _dependent_ages.duplicate()
 
+## World-seed only: sets this household's WORKERS' starting ages directly
+## (must match worker_capacity in count) -- overrides the AGING_THRESHOLD_
+## DAYS default every worker starts with from _init(). Lets a world-seed
+## builder distribute a starting population across its whole working
+## lifespan instead of every seeded worker being freshly of age.
+func seed_worker_ages(ages: Array[int]) -> void:
+	_worker_ages = ages.duplicate()
+
+func worker_ages() -> Array[int]:
+	return _worker_ages.duplicate()
+
 ## Called once per day by HESimulation, after today's grain consumption/
 ## stress update -- ages every current dependent by one day and extends or
 ## resets this household's prosperity streak from TODAY's rolling grain
@@ -171,6 +211,8 @@ func dependent_ages() -> Array[int]:
 func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 	for i in _dependent_ages.size():
 		_dependent_ages[i] += 1
+	for i in _worker_ages.size():
+		_worker_ages[i] += 1
 	_days_since_last_birth += 1
 	var prosperous := rolling_grain_fulfillment_today >= BIRTH_FULFILLMENT_THRESHOLD \
 		and demographics.food_stress <= BIRTH_STRESS_THRESHOLD
@@ -224,6 +266,35 @@ func evaluate_aging() -> int:
 	demographics.dependents -= promoted
 	return promoted
 
+## Monthly, alongside evaluate_aging: removes every worker whose age has
+## crossed LIFESPAN_DAYS from THIS household and returns how many. Unlike a
+## promoted dependent, a worker who dies of old age does not found a new
+## household -- there's nowhere for them to go and nothing for them to take
+## with them -- they simply leave the workforce. If this leaves the
+## household with zero workers but still-living dependents, HESimulation
+## dissolves it and adopts those dependents into another working household
+## (see he_simulation.gd._adopt_orphaned_dependents()) rather than leaving
+## them to age in an earner-less household -- one with no income has no
+## realistic path to feed anyone long enough for a dependent to actually
+## reach AGING_THRESHOLD_DAYS; it would instead starve and lose them to
+## emigration one at a time, which reads as "dependents never age up" from
+## the outside. A household left with neither workers nor dependents is
+## removed entirely -- same write-off treatment as an emigration that
+## empties a household.
+func evaluate_old_age_death() -> int:
+	var died := 0
+	var remaining: Array[int] = []
+	for age in _worker_ages:
+		if age >= LIFESPAN_DAYS:
+			died += 1
+		else:
+			remaining.append(age)
+	if died == 0:
+		return 0
+	_worker_ages = remaining
+	demographics.worker_capacity -= died
+	return died
+
 ## Monthly, called after evaluate_aging so a just-freed pipeline slot counts
 ## this same period: a household that's been prosperous for at least
 ## BIRTH_ELIGIBLE_DAYS, isn't within BIRTH_COOLDOWN_DAYS of its last birth,
@@ -241,3 +312,14 @@ func evaluate_birth() -> bool:
 	demographics.dependents += 1
 	_days_since_last_birth = 0
 	return true
+
+## Adds one dependent at a SPECIFIC age (unlike evaluate_birth()'s always-0)
+## -- used by he_simulation.gd._adopt_orphaned_dependents() when an
+## old-age-orphaned household is dissolved and its already-aging dependents
+## are folded into this one. Deliberately bypasses MAX_PENDING_DEPENDENTS/
+## BIRTH_* gating: those exist to brake ORGANIC birth-driven growth, not to
+## turn away a dependent who already exists and just needs a new household
+## to keep aging in.
+func add_dependent(age: int) -> void:
+	_dependent_ages.append(age)
+	demographics.dependents += 1

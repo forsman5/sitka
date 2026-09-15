@@ -55,6 +55,20 @@ static func _staggered_starting_ages(household_id: int) -> Array[int]:
 		ages.append(age)
 	return ages
 
+## Same staggering idea as _staggered_starting_ages, but for WORKERS: spread
+## across a worker's whole working lifespan (AGING_THRESHOLD_DAYS..
+## LIFESPAN_DAYS) instead of every seeded worker starting freshly of age --
+## a settled starting population should already have members at every stage
+## of life, old-age death included, not just brand-new adults who all die
+## in a synchronized pulse LIFESPAN_DAYS from world-seed time.
+static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
+	var span := HEHousehold.LIFESPAN_DAYS - HEHousehold.AGING_THRESHOLD_DAYS
+	var ages: Array[int] = []
+	for slot in WORKER_CAPACITY:
+		var age := HEHousehold.AGING_THRESHOLD_DAYS + (household_id * 89 + slot * 211) % span
+		ages.append(age)
+	return ages
+
 ## `farm_capacity`/`woodlot_capacity`/`trader_capacity` are each business's
 ## STARTING capacity and how many workers are actually assigned there on
 ## day one (they should sum to HOUSEHOLD_COUNT * WORKER_CAPACITY so nobody
@@ -84,6 +98,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
 		household.add_stock(Commodity.Type.TIMBER, timber_buffer)
 		household.seed_dependent_ages(_staggered_starting_ages(household_id))
+		household.seed_worker_ages(_staggered_starting_worker_ages(household_id))
 
 		if farm_workers_assigned < farm_capacity:
 			household.employer_business_id = FARM_BUSINESS_ID
