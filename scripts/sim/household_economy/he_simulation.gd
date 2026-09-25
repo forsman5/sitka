@@ -91,13 +91,31 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 const TRADER_CAPACITY_PER_WORKER := 8.0
 
 ## Weekly self-tuning: a business earning (rolling-average) more than
-## WAGE_PROFIT_MARGIN above the going reference wage grows by
-## CAPACITY_STEP_WORKERS (capped at max_capacity); one earning that much
-## below shrinks by the same step (floored at 0). The margin is a dead-band
-## so a business hovering near break-even doesn't thrash every week.
+## WAGE_PROFIT_MARGIN above the going reference wage grows; one earning that
+## much below shrinks. The margin is a dead-band so a business hovering near
+## break-even doesn't thrash every week. Outside the dead-band, the MOVE
+## size is proportional to how far off the wage is, not a flat step -- see
+## _evaluate_business_capacity's doc comment for why a fixed-size step
+## regardless of error magnitude was itself a driver of the boom-bust cycles
+## seen in long (4000+ day) runs. CAPACITY_STEP_MAX_WORKERS is the ceiling on
+## that proportional move (reached once the wage is WAGE_RATIO_CLAMP-or-more
+## away from reference, so a single unusually noisy week can't cause an
+## unbounded lurch); CAPACITY_TRIAL_HIRE_WORKERS is a separate, same-valued-
+## today-but-conceptually-distinct constant for the zero-capacity recovery
+## case below, which has no wage signal to be proportional to at all.
 const CAPACITY_EVAL_INTERVAL_DAYS := 7
-const CAPACITY_STEP_WORKERS := 4
+const CAPACITY_STEP_MAX_WORKERS := 4
+const CAPACITY_TRIAL_HIRE_WORKERS := 4
 const WAGE_PROFIT_MARGIN := 0.1
+## How far avg_wage can be from reference_wage, as a fraction of
+## reference_wage, before the proportional step maxes out at
+## CAPACITY_STEP_MAX_WORKERS -- 1.0 means "wage at double reference (or at
+## zero)" already gets the full move; anything further off doesn't move
+## capacity any faster. Keeps one wildly noisy week (e.g. a business with
+## only a handful of employed workers, where a single day's revenue swing
+## can spike the wage 5-10x) from producing a bigger single-week swing than
+## a business that's merely somewhat off.
+const WAGE_RATIO_CLAMP := 1.0
 
 const HISTORY_MAX_DAYS := 360
 ## The blotter (get_event_log) only needs enough recent history for a
@@ -145,6 +163,14 @@ var _next_household_id := 1
 ## stays honest about where money entered rather than silently not adding
 ## up.
 var _export_revenue_total := 0.0
+
+## Trailing per-settlement, per-commodity price history, oldest first, capped to the SAME
+## window a business's own wage is smoothed over
+## (HEBusiness.WAGE_ROLLING_WINDOW_DAYS, referenced directly rather than
+## re-authored here so the two windows can never drift apart) -- see
+## _reference_wage_per_worker for why the reference wage reads this average
+## instead of the live spot price.
+var _price_history: Dictionary[int, Dictionary] = {} # settlement_id -> {Commodity.Type -> Array[float]}
 
 var _history: Array[Dictionary] = []
 ## Blotter: one entry per birth/death/split, newest appended last -- see
@@ -412,6 +438,7 @@ func get_event_log(limit: int = -1) -> Array:
 # ---------------------------------------------------------------------------
 
 func _daily_tick() -> void:
+	_record_price_history()
 	_reset_household_daily_records()
 	var record := _new_daily_record()
 	_pay_wages(record)
@@ -802,6 +829,18 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 ## its own rolling-average wage vs. the going reference wage. This only
 ## sets the target; _reconcile_employment (called right after) is what
 ## actually moves households between employers to approach it.
+##
+## Outside the WAGE_PROFIT_MARGIN dead-band, the move is proportional to how
+## far the wage is from the reference (as a fraction of the reference,
+## clamped at WAGE_RATIO_CLAMP), not a flat CAPACITY_STEP_MAX_WORKERS
+## regardless of magnitude. A business 11% over the line and one 300% over
+## it used to get the identical +4 nudge -- a bang-bang response to error
+## magnitude is exactly the kind of high-gain control that turns a real but
+## modest mismatch into overshoot, which is what a fixed step size was
+## doing on top of the wage/price system's own lag. The worst case (a wage
+## at or beyond the clamp) still moves by exactly CAPACITY_STEP_MAX_WORKERS,
+## same as every move used to -- this only makes moderate mismatches gentler,
+## it never makes an extreme one bigger than before.
 func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
@@ -817,14 +856,21 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# hired back in to generate a real wage to re-evaluate. Give it
 			# a small trial crew instead so next week's wage is actual
 			# evidence, not silence -- worst case it's genuinely still
-			# unprofitable and shrinks right back to 0 next week.
-			b.capacity = mini(CAPACITY_STEP_WORKERS, b.max_capacity)
+			# unprofitable and shrinks right back to 0 next week. There's no
+			# wage signal at all here (rolling_average_wage() is flat 0), so
+			# this can't be made proportional the way the branch below is --
+			# it's a fixed-size probe by necessity, not a control response.
+			b.capacity = mini(CAPACITY_TRIAL_HIRE_WORKERS, b.max_capacity)
+			continue
+		if reference_wage <= 0.0:
 			continue
 		var avg_wage := b.rolling_average_wage()
-		if avg_wage > reference_wage * (1.0 + WAGE_PROFIT_MARGIN):
-			b.capacity = mini(b.capacity + CAPACITY_STEP_WORKERS, b.max_capacity)
-		elif avg_wage < reference_wage * (1.0 - WAGE_PROFIT_MARGIN):
-			b.capacity = maxi(b.capacity - CAPACITY_STEP_WORKERS, 0)
+		var ratio_error := (avg_wage - reference_wage) / reference_wage
+		if absf(ratio_error) <= WAGE_PROFIT_MARGIN:
+			continue
+		var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
+		var delta := roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
+		b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
 	record["reference_wage_by_settlement"] = reference_wages
 	if reference_wages.size() == 1:
 		record["reference_wage"] = reference_wages.values()[0]
@@ -1104,17 +1150,59 @@ func _business_employed_household_count(business_id: int) -> int:
 			total += 1
 	return total
 
+## Appends today's opening price (this tick's actual clearing price, before
+## _adjust_price mutates it for tomorrow) to each commodity's trailing
+## history, capped at HEBusiness.WAGE_ROLLING_WINDOW_DAYS -- same ring-buffer
+## shape as HEBusiness.record_wage_day. Called first thing in _daily_tick,
+## before anything reads today's price.
+func _record_price_history() -> void:
+	for settlement_id in markets.keys():
+		var local_market: HEMarket = markets[settlement_id]
+		var by_commodity: Dictionary = _price_history.get(settlement_id, {})
+		for c in SUBSISTENCE_COMMODITIES:
+			var history: Array = by_commodity.get(c, [])
+			history.append(local_market.price[c])
+			if history.size() > HEBusiness.WAGE_ROLLING_WINDOW_DAYS:
+				history.pop_front()
+			by_commodity[c] = history
+		_price_history[settlement_id] = by_commodity
+
+## Falls back to the live price only when no history has been recorded yet
+## (day 0, before the first _daily_tick has run) -- from day 1 onward there
+## is always at least one entry.
+func _average_price_history(settlement_id: int, c: Commodity.Type) -> float:
+	var history: Array = (_price_history.get(settlement_id, {}) as Dictionary).get(c, [])
+	if history.is_empty():
+		return (markets[settlement_id] as HEMarket).price[c]
+	var total := 0.0
+	for p in history:
+		total += p
+	return total / history.size()
+
 ## The going rate a worker's wage needs to clear for that worker's WHOLE
 ## household to afford subsistence: (population / total workers) people
 ## depend on each worker's wage, on average, and each of those people needs
 ## GRAIN_PER_PERSON_PER_DAY worth of grain plus FUEL_TIMBER_PER_PERSON_PER_DAY
-## worth of timber at CURRENT market prices. This is the number
-## _evaluate_business_capacity compares each business's actual wage
-## against -- a business paying above it is generating more value per
-## worker than that worker's household needs to survive (profitable, should
-## grow); below it, it structurally can't sustain the households working
-## there (unprofitable, should shrink), regardless of what its production
-## recipe's rate happens to be.
+## worth of timber, priced at each commodity's trailing average
+## (_average_price_history) in THIS settlement's market rather than today's
+## live spot price. A
+## business's rolling_average_wage() is already smoothed over
+## HEBusiness.WAGE_ROLLING_WINDOW_DAYS; comparing that against a live price
+## would pit a slow-moving average against a fast one that the SAME
+## business's own output directly moves (selling more grain pushes
+## grain_price down, which lowers both sides of the comparison through the
+## same channel) -- a timescale mismatch that reads as a profitability
+## signal when it's really same-day noise. Smoothing both sides over the
+## same window fixes that without hiding a genuine, sustained price
+## trend -- it just takes as long to show up here as it does in the wage
+## average it's being judged against.
+##
+## This is the number _evaluate_business_capacity compares each business's
+## actual wage against -- a business paying above it is generating more
+## value per worker than that worker's household needs to survive
+## (profitable, should grow); below it, it structurally can't sustain the
+## households working there (unprofitable, should shrink), regardless of
+## what its production recipe's rate happens to be.
 func _reference_wage_per_worker(settlement_id: int) -> float:
 	var total_workers := 0
 	var total_population := 0
@@ -1125,9 +1213,7 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	if total_workers <= 0:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
-	var local_market: HEMarket = markets[settlement_id]
-	var per_person_cost := local_market.price[Commodity.Type.GRAIN] * GRAIN_PER_PERSON_PER_DAY \
-		+ local_market.price[Commodity.Type.TIMBER] * FUEL_TIMBER_PER_PERSON_PER_DAY
+	var per_person_cost := _average_price_history(settlement_id, Commodity.Type.GRAIN) * GRAIN_PER_PERSON_PER_DAY 		+ _average_price_history(settlement_id, Commodity.Type.TIMBER) * FUEL_TIMBER_PER_PERSON_PER_DAY
 	return dependency_ratio * per_person_cost
 
 func _total_stock_snapshot(settlement_id: int = -1) -> Dictionary:
