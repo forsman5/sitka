@@ -16,6 +16,13 @@ func _run() -> void:
 	var map := Layout.create_map()
 	check(map.validate_geometry().is_empty(), "Default geography: %s" % map.validate_geometry())
 	var simulation := Simulation.new(12345)
+	var ironbank_road := map.road_path("aldford_approach")
+	check(ironbank_road[0] == map.settlements[1]["site"], "Ford road does not start at Aldford")
+	check(ironbank_road[-1] == map.settlements[4]["site"], "Ford road does not reach Ironbank")
+	var moved_ironbank := Layout.create_map()
+	moved_ironbank.settlements[4]["site"] += Vector3(3, 0, 2)
+	check(moved_ironbank.road_path("aldford_approach")[-1] == moved_ironbank.settlements[4]["site"], "Ford road did not follow Ironbank")
+	check(moved_ironbank.road_path("aldford_approach")[-2] == moved_ironbank.settlements[4]["site"] + Vector3(-19, 0, 12), "Ironbank approach did not follow its site")
 	for id in map.roads:
 		var edge_id: int = map.roads[id]["simulation_edge"]
 		if edge_id == 0:

@@ -31,7 +31,9 @@ static func create_map() -> MapDefinition:
 		"high_fell_aldford": {"simulation_edge": 1, "width": 2.1, "seed": 17, "points": [{"settlement": 2}, Vector3(-84, 0, 55), Vector3(-48, 0, 29), {"settlement": 1, "offset": Vector3(-2, 0, 0)}, {"settlement": 1}]},
 		"oakmere_aldford": {"simulation_edge": 2, "width": 2.1, "seed": 34, "points": [{"settlement": 3}, Vector3(-116, 0, -56), Vector3(-94, 0, -43), Vector3(-72, 0, -33), Vector3(-50, 0, -22), Vector3(-29, 0, -9), {"settlement": 1}]},
 		"oakmere_ironbank": {"simulation_edge": 3, "width": 2.1, "seed": 51, "points": [{"settlement": 3}, {"crossing": "oakmere", "offset": Vector3(-8, 0, 10)}, {"crossing": "oakmere"}, {"crossing": "oakmere", "offset": Vector3(8, 0, -10)}, Vector3(-110, 0, -90), Vector3(-80, 0, -76.3866), Vector3(-40, 0, -75.042), {"crossing": "upstream"}, Vector3(0, 0, -73.6975), {"settlement": 4}]},
-		"aldford_approach": {"simulation_edge": 0, "width": 2.4, "seed": 41, "points": [{"settlement": 1, "offset": Vector3(-2, 0, 0)}, {"crossing": "aldford", "offset": Vector3(-13, 0, 3)}, {"crossing": "aldford"}, {"crossing": "aldford", "offset": Vector3(14, 0, -3)}, Vector3(22, 0, -8), Vector3(28, 0, -15)]},
+		# The ford approach continues along the east bank to Ironbank. This is
+		# visual geography, not a replacement for the simulation's barge edge.
+		"aldford_approach": {"simulation_edge": 0, "width": 2.4, "seed": 41, "points": [{"settlement": 1}, {"crossing": "aldford", "offset": Vector3(-13, 0, 3)}, {"crossing": "aldford"}, {"crossing": "aldford", "offset": Vector3(14, 0, -3)}, Vector3(22, 0, -8), Vector3(28, 0, -15), Vector3(43, 0, -31), Vector3(65, 0, -45), {"settlement": 4, "offset": Vector3(-19, 0, 12)}, {"settlement": 4}]},
 	}
 	map.vegetation = {
 		"oakmere_woodland": {"center": {"settlement": 3, "offset": Vector3(9, 0, -14)}, "radii": Vector2(46, 34), "count": 210, "seed": 5103, "clearance": 14.0},
