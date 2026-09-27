@@ -26,6 +26,18 @@ func _capture() -> void:
 		if view == "confluence-angled":
 			camera_rig.set("_current_tilt", 50.0)
 			camera_rig.call("_apply_tilt")
+	elif view == "oakmere" or view == "oakmere-angled":
+		camera.size = 85.0
+		camera_rig.call("center_on", Vector3(-122.0, 0.0, -69.0))
+		if view == "oakmere-angled":
+			camera_rig.set("_current_tilt", 50.0)
+			camera_rig.call("_apply_tilt")
+	elif view == "upstream" or view == "upstream-angled":
+		camera.size = 64.0
+		camera_rig.call("center_on", Vector3(-9.0, 0.0, -74.0))
+		if view == "upstream-angled":
+			camera_rig.set("_current_tilt", 50.0)
+			camera_rig.call("_apply_tilt")
 	else:
 		camera.size = 350.0
 		camera_rig.call("center_on", Vector3.ZERO)

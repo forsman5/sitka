@@ -53,6 +53,15 @@ const EDGES := {
 static func settlement_position(settlement_id: int) -> Vector3:
 	return SETTLEMENTS[settlement_id]["position"]
 
+const CLUSTER_OFFSETS := {
+	1: Vector3(-16, 0, 12),
+	3: Vector3(-9, 0, 14),
+	5: Vector3(-11, 0, 14),
+}
+
+static func settlement_cluster_position(settlement_id: int) -> Vector3:
+	return settlement_position(settlement_id) + CLUSTER_OFFSETS.get(settlement_id, Vector3.ZERO)
+
 static func role_for(settlement_id: int) -> String:
 	return SETTLEMENTS[settlement_id]["role"]
 
@@ -84,8 +93,18 @@ static func track_path(edge_id: int, from_pos: Vector3, to_pos: Vector3) -> Pack
 			])
 		2:
 			return PackedVector3Array([
-				from_pos, Vector3(-102.0, 0.0, -65.0), Vector3(-69.0, 0.0, -47.0),
-				Vector3(-37.0, 0.0, -30.0), Vector3(-8.0, 0.0, -11.0),
+				from_pos, Vector3(-116, 0, -56), Vector3(-94, 0, -43),
+				Vector3(-72, 0, -33), Vector3(-50, 0, -22),
+				Vector3(-29, 0, -9), to_pos,
+			])
+		3:
+			# Cross the tributary deliberately north-east of Oakmere, then
+			# rejoin the existing approach to the upstream main-river ford.
+			return PackedVector3Array([
+				from_pos, Vector3(-134, 0, -68), Vector3(-126, 0, -78),
+				Vector3(-118, 0, -88), Vector3(-110, 0, -90),
+				Vector3(-80, 0, -76.3866), Vector3(-40, 0, -75.042),
+				Vector3(0, 0, -73.6975), to_pos,
 			])
 		_:
 			return PackedVector3Array([from_pos, to_pos])

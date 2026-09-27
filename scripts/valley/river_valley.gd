@@ -30,6 +30,8 @@ var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
 var _terrain: AuthoredValleyTerrain
 var _confluence_cutout := PackedVector2Array()
+var _river_outline := PackedVector2Array()
+var _transport_clearance: Array[PackedVector2Array] = []
 
 ## settlement_id -> ground-plane (x,z) of its (possibly CLUSTER_OFFSETS-shifted)
 ## building cluster, populated by _build_settlements(). ValleyVegetation reads
@@ -96,8 +98,11 @@ func _build_landscape() -> void:
 	_terrain.build()
 
 	var main_outline := TerrainRibbonBuilder.footprint(Layout.main_river(), 18.0)
+	_transport_clearance.append(TerrainRibbonBuilder.footprint(Layout.main_river(), 22.0))
+	_transport_clearance.append(TerrainRibbonBuilder.footprint(Layout.tributary(), 14.0))
 	var tributary_outline := TerrainRibbonBuilder.footprint(Layout.tributary(), 10.0)
 	var river_outline: PackedVector2Array = Geometry2D.merge_polygons(main_outline, tributary_outline)[0]
+	_river_outline = river_outline
 	var junction_bounds := PackedVector2Array([Vector2(-22, -27), Vector2(22, -27), Vector2(22, 17), Vector2(-22, 17)])
 	_confluence_cutout = Geometry2D.intersect_polygons(river_outline, junction_bounds)[0]
 	_add_watercourse("MainRiver", Layout.main_river(), 18.0, tributary_outline)
@@ -106,12 +111,75 @@ func _build_landscape() -> void:
 	# Existing seed edges are the source of truth for the static route drawing.
 	for edge_id in Layout.EDGES:
 		var edge := _simulation.get_transport_edge_summary(edge_id)
-		var from_pos := Layout.settlement_position(edge["settlement_a_id"])
-		var to_pos := Layout.settlement_position(edge["settlement_b_id"])
+		var from_pos := Layout.settlement_cluster_position(edge["settlement_a_id"])
+		var to_pos := Layout.settlement_cluster_position(edge["settlement_b_id"])
 		if Layout.EDGES[edge_id]["kind"] == "track":
 			_add_route(edge_id, Layout.track_path(edge_id, from_pos, to_pos), TRACK_WIDTH, ROAD_COLOR)
 
 	_build_ford()
+	var ironbank_track := Layout.track_path(3, Layout.settlement_cluster_position(ValleySeed.OAKMERE), Layout.settlement_cluster_position(ValleySeed.IRONBANK))
+	_build_channel_ford("Upstream", main_outline, $MainRiver, ironbank_track)
+	_build_channel_ford("Oakmere", tributary_outline, $Tributary, ironbank_track)
+
+func _build_channel_ford(prefix: String, outline: PackedVector2Array, water: MeshInstance3D, route: PackedVector3Array) -> void:
+	# Find bank intersections along the same sampled curve used by the road.
+	var samples := TerrainRibbonBuilder._sample_catmull_rom(route, 0.6)
+	var banks: Array[Vector2] = []
+	for segment in range(samples.size() - 1):
+		var start := Vector2(samples[segment].x, samples[segment].z)
+		var finish := Vector2(samples[segment + 1].x, samples[segment + 1].z)
+		for i in outline.size():
+			var hit: Variant = Geometry2D.segment_intersects_segment(start, finish, outline[i], outline[(i + 1) % outline.size()])
+			if hit != null and (banks.is_empty() or banks.back().distance_to(hit) > 0.01):
+				banks.append(hit)
+	if banks.size() != 2:
+		push_error("%s ford requires two riverbank intersections; found %d" % [prefix, banks.size()])
+		return
+	var center := (banks[0] + banks[1]) * 0.5
+	# Sample the rendered water triangles, not the riverbed: upstream water is
+	# level across each section and can sit above the underlying heightmap.
+	var faces: PackedVector3Array = water.mesh.get_faces()
+	var nearby_faces: Array[PackedVector3Array] = []
+	var reach := banks[0].distance_to(banks[1]) * 0.5 + 4.0
+	for i in range(0, faces.size(), 3):
+		var triangle := PackedVector3Array([faces[i], faces[i + 1], faces[i + 2]])
+		if minf(triangle[0].z, minf(triangle[1].z, triangle[2].z)) <= center.y + reach and maxf(triangle[0].z, maxf(triangle[1].z, triangle[2].z)) >= center.y - reach:
+			nearby_faces.append(triangle)
+	var surface_height := Callable(self, "_channel_ford_height").bind(nearby_faces)
+	var crossing := PackedVector3Array([Vector3(banks[0].x, 0, banks[0].y), Vector3(center.x, 0, center.y), Vector3(banks[1].x, 0, banks[1].y)])
+	var material := ShaderMaterial.new()
+	material.shader = preload("res://shaders/ford_shallows.gdshader")
+	add_child(TerrainRibbonBuilder.build("%sFordShallows" % prefix, crossing, Callable(self, "get_valley_ground_height"), 3.8, 0.0, material, 0.35, 0.12, 83, false, PackedVector2Array(), surface_height, 16))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8307
+	var direction := (banks[1] - banks[0]).normalized()
+	var side := Vector2(-direction.y, direction.x)
+	for i in 28:
+		var point := banks[0].lerp(banks[1], (float(i) + 0.5) / 28.0) + side * rng.randf_range(-1.15, 1.15)
+		var mesh := SphereMesh.new()
+		mesh.radius = rng.randf_range(0.16, 0.32)
+		mesh.height = mesh.radius * 0.65
+		mesh.radial_segments = 8
+		mesh.rings = 4
+		var stone := MeshInstance3D.new()
+		stone.name = "%sFordStone%d" % [prefix, i]
+		stone.mesh = mesh
+		stone.material_override = _ground_material(Color("798078"))
+		stone.position = Vector3(point.x, surface_height.call(point, 0), point.y)
+		add_child(stone)
+	for i in 2:
+		var point := banks[i] + direction * (-2.0 if i == 0 else 2.0) + side * 2.2
+		_add_cylinder("%sFordMarker" % prefix, Vector3(point.x, get_valley_ground_height(point) + 0.7, point.y), 0.14, 1.4, Color("65513b"))
+
+func _channel_ford_height(point: Vector2, _original: float, faces: Array[PackedVector3Array]) -> float:
+	for triangle in faces:
+		var a := triangle[0]
+		var b := triangle[1]
+		var c := triangle[2]
+		if Geometry2D.is_point_in_polygon(point, PackedVector2Array([Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z)])):
+			var normal := (b - a).cross(c - a)
+			return a.y - (normal.x * (point.x - a.x) + normal.z * (point.y - a.z)) / normal.y + 0.07
+	return get_valley_ground_height(point) + 0.28
 
 func _build_ford() -> void:
 	# A bank-to-bank gravel shallows, slightly downstream of the landing.
@@ -162,6 +230,12 @@ func _ford_surface_height(point: Vector2, _original_height: float) -> float:
 func get_valley_ground_height(point: Vector2) -> float:
 	return _terrain.get_height(point.x, point.y) if _terrain != null else 0.0
 
+func is_transport_clear(point: Vector2) -> bool:
+	for outline in _transport_clearance:
+		if Geometry2D.is_point_in_polygon(point, outline):
+			return false
+	return true
+
 ## Aldford, Oakmere, and Staithe's authored positions double as vertices of
 ## the main river or tributary polyline (the river network was authored
 ## against the settlement layout, e.g. so Aldford sits at the ford), so their
@@ -170,11 +244,7 @@ func get_valley_ground_height(point: Vector2) -> float:
 ## at all and need no offset. Each offset was picked by measuring clearance
 ## against the actual river/tributary segments meeting at that settlement,
 ## not eyeballed.
-const CLUSTER_OFFSETS := {
-	ValleySeed.ALDFORD: Vector3(-16.0, 0.0, 12.0), # off the ford confluence
-	ValleySeed.OAKMERE: Vector3(-9.0, 0.0, 14.0),  # off the tributary bend
-	ValleySeed.STAITHE: Vector3(-11.0, 0.0, 14.0), # off the river bend
-}
+const CLUSTER_OFFSETS = Layout.CLUSTER_OFFSETS
 
 func _build_settlements() -> void:
 	for settlement_id in _simulation.get_settlement_ids():
@@ -306,16 +376,21 @@ func _select_settlement(settlement_id: int) -> void:
 	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
 
 func _add_route(edge_id: int, points: PackedVector3Array, width: float, color: Color) -> void:
+	_transport_clearance.append(TerrainRibbonBuilder.footprint(points, width + 4.5))
 	# A darker, wider shoulder settles the path into the grass. The narrower
 	# worn strip has low-amplitude deterministic width changes rather than a
 	# perfectly constant silhouette.
 	var ground := Callable(self, "get_valley_ground_height")
-	add_child(TerrainRibbonBuilder.build("RouteShoulder%d" % edge_id, points, ground, width + 1.45, 0.10, _ground_material(ROAD_SHOULDER_COLOR), 2.8, 0.20, edge_id * 17, false, _confluence_cutout))
-	add_child(TerrainRibbonBuilder.build("Route%d" % edge_id, points, ground, width, 0.14, _ground_material(color), 2.8, 0.28, edge_id * 17 + 5, false, _confluence_cutout))
+	var cutout := _river_outline if edge_id == 3 or edge_id == 2 else _confluence_cutout
+	var spacing := 0.6 if edge_id == 3 or edge_id == 2 else 2.8
+	var shoulder_height := 0.26 if edge_id == 3 or edge_id == 2 else 0.10
+	var track_height := 0.30 if edge_id == 3 or edge_id == 2 else 0.14
+	add_child(TerrainRibbonBuilder.build("RouteShoulder%d" % edge_id, points, ground, width + 1.45, shoulder_height, _ground_material(ROAD_SHOULDER_COLOR), spacing, 0.20, edge_id * 17, false, cutout))
+	add_child(TerrainRibbonBuilder.build("Route%d" % edge_id, points, ground, width, track_height, _ground_material(color), spacing, 0.28, edge_id * 17 + 5, false, cutout))
 
 func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, bank_cutout: PackedVector2Array, water_cutout: PackedVector2Array = PackedVector2Array()) -> void:
 	var ground := Callable(self, "get_valley_ground_height")
-	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.22, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16))
+	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16))
 	add_child(TerrainRibbonBuilder.build(prefix, points, ground, width, 0.22, _water_material(RIVER_COLOR), 0.6, 0.0, 0, true, water_cutout, Callable(self, "_confluence_surface_height"), 16))
 
 func _confluence_surface_height(point: Vector2, original_height: float) -> float:
