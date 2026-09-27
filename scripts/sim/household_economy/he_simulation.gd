@@ -90,6 +90,77 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 ## hand, hence the large jump from the first authored guess of 2.0.
 const TRADER_CAPACITY_PER_WORKER := 8.0
 
+## Herds: two more workplace kinds (he_business.gd's HEBusiness.Kind.HERD),
+## a Cattle Ranch and a Sheep Farm, that grow/thin a live herd_size on their
+## own rather than employing anyone -- see _run_herds. Cadence matches the
+## pooled model's DAYS_PER_SEASON (simulation.gd) rather than HE's usual
+## weekly/monthly evaluation intervals, since reproduction/mortality are
+## seasonal-scale processes, not daily ones.
+const HERD_EVAL_INTERVAL_DAYS := 90
+
+## Both ranches graze the SAME finite pasture, shared per settlement --
+## cattle need far more of it per head than sheep (~6-7x, per husbandry
+## research: a mature cow's forage need scales with its much larger body
+## mass), so the same acreage supports far fewer cattle than sheep. This is
+## a deliberately early abstraction: a flat number, not yet tied to
+## authored terrain/acreage per settlement, and grazing-only -- a rancher
+## buying grain to make up for a shortfall in grazing land is a plausible
+## future mechanic (configurable land-vs-fodder tradeoff, priced against
+## the grain market) but explicitly not implemented here. For now a herd
+## that outgrows its share of the land simply stops growing at that land's
+## ceiling and takes the harsher "neglected" mortality rate below. Sized
+## for a small subsistence-valley settlement (HEScenarioSeeds.
+## HOUSEHOLD_COUNT households), not a commercial operation -- see
+## HERD_CULL_TARGET.
+const SETTLEMENT_GRAZING_LAND := 150.0
+const CATTLE_LAND_PER_HEAD := 1.0
+const SHEEP_LAND_PER_HEAD := 0.15
+
+## Reproduction, per HERD_EVAL_INTERVAL_DAYS: cattle bear a single calf on
+## a roughly annual cycle; sheep both lamb more prolifically per ewe (often
+## 1.4+ lambs/lambing) and more frequently, so sheep's realized reproduction
+## rate is set to roughly 2.5-3x cattle's.
+const HERD_GROWTH_RATE: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 0.035,
+	HEBusiness.Species.SHEEP: 0.10,
+}
+
+## Mortality, per HERD_EVAL_INTERVAL_DAYS. FED applies while herd_size fits
+## within this ranch's current share of SETTLEMENT_GRAZING_LAND; NEGLECTED
+## applies once it's grown past what the land can support (see
+## _run_herds). Sheep run a higher baseline AND a harsher neglected rate
+## than cattle -- flocks are individually more fragile despite working
+## marginal land cattle can't graze efficiently -- which offsets their
+## faster reproduction rather than letting sheep dominate by default.
+const HERD_LOSS_RATE_FED: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 0.015,
+	HEBusiness.Species.SHEEP: 0.03,
+}
+const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 0.12,
+	HEBusiness.Species.SHEEP: 0.20,
+}
+
+## Once herd_size crosses this, the ranch culls straight back down to it
+## every eval interval, moving the excess into its own inventory as
+## herd_commodity() units. Set close enough to HEScenarioSeeds' starting
+## herd sizes that a ranch actually reaches its first cull within a
+## normal game-length run (a handful of years at these growth rates), not
+## decades -- these are small-village herds, not commercial ones. Kept
+## well under either species' solo claim on SETTLEMENT_GRAZING_LAND so
+## the two ranches have real headroom to grow between culls even while
+## sharing the same pasture.
+const HERD_CULL_TARGET: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 45.0,
+	HEBusiness.Species.SHEEP: 200.0,
+}
+
+## Sheep only: a renewable trickle straight into inventory from live
+## herd_size every eval interval, independent of culling -- wool doesn't
+## require slaughtering the animal the way a cull does. Cattle have no
+## equivalent passive yield.
+const WOOL_PER_HEAD_PER_INTERVAL := 0.07
+
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows; one earning that
 ## much below shrinks. The margin is a dead-band so a business hovering near
@@ -289,7 +360,7 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"business_id": b.id,
 			"settlement_id": b.settlement_id,
 			"name": b.name,
-			"kind": "trader" if b.kind == HEBusiness.Kind.TRADER else "production",
+			"kind": _kind_name(b.kind),
 			"capacity": b.capacity,
 			"max_capacity": b.max_capacity,
 			"employed_workers": _business_employed_worker_count(business_id),
@@ -307,6 +378,15 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
 			report["stock"] = 0.0 # exports convert straight to money; the Trader never holds inventory
+		elif b.kind == HEBusiness.Kind.HERD:
+			var herd_commodity := b.herd_commodity()
+			report["recipe_id"] = "herd"
+			report["species"] = "Cattle" if b.species == HEBusiness.Species.CATTLE else "Sheep"
+			report["herd_size"] = b.herd_size
+			report["output_commodity"] = Commodity.name_of(herd_commodity)
+			report["stock"] = b.stock(herd_commodity)
+			report["wool_stock"] = b.stock(Commodity.Type.WOOL) if b.species == HEBusiness.Species.SHEEP else 0.0
+			report["last_wool_produced"] = b.last_wool_produced
 		else:
 			var output_commodity := b.output_commodity()
 			report["recipe_id"] = b.recipe.id
@@ -314,6 +394,12 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["stock"] = b.stock(output_commodity)
 		out.append(report)
 	return out
+
+func _kind_name(kind: HEBusiness.Kind) -> String:
+	match kind:
+		HEBusiness.Kind.TRADER: return "trader"
+		HEBusiness.Kind.HERD: return "herd"
+		_: return "production"
 
 ## "Export (Grain, Timber)" -- whichever commodities the Trader actually
 ## moved today, sorted for determinism (see run_household_economy.gd's
@@ -446,6 +532,8 @@ func _daily_tick() -> void:
 	_run_market(record)
 	_run_trade(record)
 	_run_consumption(record)
+	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
+		_run_herds(record)
 	if (day + 1) % MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_migration_pressure()
 	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
@@ -1098,6 +1186,56 @@ func _run_trade(record: Dictionary) -> void:
 		trader.last_revenue = trader_margin_today
 		trader.last_planned_units = capacity_limit
 		trader.last_actual_units = total_exported
+
+## Every HERD_EVAL_INTERVAL_DAYS: each ranch grazes, breeds/dies, and culls
+## on its own -- no employment, no wages, no market clearing (see
+## he_business.gd's Kind.HERD doc comment for why). Ranches within the same
+## settlement are processed in a fixed id order (same deterministic-bias
+## convention as _run_trade's edge order) so each one's land claim is
+## resolved against what settlements earlier in the order already took,
+## rather than all racing for the same pasture at once.
+func _run_herds(record: Dictionary) -> void:
+	var land_claimed: Dictionary = {} # settlement_id -> float
+	var herd_ids: Array[int] = []
+	for business_id in businesses.keys():
+		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.HERD:
+			herd_ids.append(business_id)
+	herd_ids.sort()
+
+	for business_id in herd_ids:
+		var b: HEBusiness = businesses[business_id]
+		var land_per_head: float = CATTLE_LAND_PER_HEAD if b.species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
+		var claimed_by_others: float = land_claimed.get(b.settlement_id, 0.0)
+		var available_land: float = max(0.0, SETTLEMENT_GRAZING_LAND - claimed_by_others)
+		var max_herd_by_land: float = (available_land / land_per_head) if land_per_head > 0.0 else b.herd_size
+
+		# Fed if the herd already fits the land available to it; a herd that
+		# has outgrown its share is neglected -- no grain is bought to make
+		# up the gap (see SETTLEMENT_GRAZING_LAND's doc comment).
+		var fed := b.herd_size <= max_herd_by_land
+		var loss_rate: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
+		b.herd_size = clampf(b.herd_size * (1.0 + HERD_GROWTH_RATE[b.species] - loss_rate), 0.0, max_herd_by_land)
+
+		b.last_wool_produced = 0.0
+		if b.species == HEBusiness.Species.SHEEP:
+			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL
+			b.add_stock(Commodity.Type.WOOL, wool)
+			b.last_wool_produced = wool
+			_accumulate(record["produced"], Commodity.name_of(Commodity.Type.WOOL), wool)
+
+		b.last_culled = {}
+		b.last_actual_units = 0.0
+		var target: float = HERD_CULL_TARGET[b.species]
+		if b.herd_size > target:
+			var excess: float = b.herd_size - target
+			b.herd_size = target
+			var commodity := b.herd_commodity()
+			b.add_stock(commodity, excess)
+			b.last_culled[commodity] = excess
+			b.last_actual_units = excess
+			_accumulate(record["produced"], Commodity.name_of(commodity), excess)
+
+		land_claimed[b.settlement_id] = claimed_by_others + b.herd_size * land_per_head
 
 func _accumulate(dict: Dictionary, key, amount: float) -> void:
 	dict[key] = dict.get(key, 0.0) + amount

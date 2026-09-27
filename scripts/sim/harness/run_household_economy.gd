@@ -25,6 +25,7 @@ func _init() -> void:
 	_check_life_cycle_births_and_aging()
 	_check_old_age_deaths_actually_happen()
 	_check_old_age_orphans_get_adopted()
+	_check_herds_grow_and_cull()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -356,6 +357,47 @@ func _build_orphan_world(_rng: RandomNumberGenerator) -> Dictionary:
 	settlement.household_ids.append(1)
 	settlement.household_ids.append(2)
 	return {"settlement": settlement, "households": households, "businesses": businesses}
+
+## Herds are production-only for now (no consumption/monetization wired
+## up -- see he_business.gd's Kind.HERD doc comment), so this just checks
+## the mechanics run sanely on their own: both ranches grow from their
+## seeded starting herd, cull back down once they cross their target
+## (proving culled stock actually reaches inventory), sheep accumulate a
+## wool trickle, and the two ranches never together claim more than the
+## shared settlement grazing pool.
+func _check_herds_grow_and_cull() -> void:
+	print("\n=== Herds: ranches grow, cull to inventory, and share a land cap ===")
+	var sim := _new_sim("build_three_business_economy")
+	var intervals := 24 # 24 * HERD_EVAL_INTERVAL_DAYS(90) = ~6 years
+	sim.advance_ticks(intervals * HESimulation.HERD_EVAL_INTERVAL_DAYS)
+
+	var cattle: Dictionary = {}
+	var sheep: Dictionary = {}
+	for report in sim.get_business_reports():
+		if report.get("species", "") == "Cattle":
+			cattle = report
+		elif report.get("species", "") == "Sheep":
+			sheep = report
+
+	_assert(not cattle.is_empty() and not sheep.is_empty(), "Expected both a Cattle Ranch and a Sheep Farm in business reports")
+	if cattle.is_empty() or sheep.is_empty():
+		return
+
+	print("  after %d years: cattle herd=%.1f (cull target %.0f) stock=%.1f | sheep herd=%.1f (cull target %.0f) stock=%.1f wool_stock=%.1f" % [
+		intervals * HESimulation.HERD_EVAL_INTERVAL_DAYS / 360, cattle["herd_size"], HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE], cattle["stock"],
+		sheep["herd_size"], HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP], sheep["stock"], sheep["wool_stock"]])
+
+	_assert(cattle["herd_size"] > HEScenarioSeeds.CATTLE_STARTING_HERD, "Cattle herd should have grown from its seeded starting size")
+	_assert(sheep["herd_size"] > HEScenarioSeeds.SHEEP_STARTING_HERD, "Sheep herd should have grown from its seeded starting size")
+	_assert(cattle["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE] + EPSILON, "Cattle herd should never exceed its cull target, got %.2f" % cattle["herd_size"])
+	_assert(sheep["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP] + EPSILON, "Sheep herd should never exceed its cull target, got %.2f" % sheep["herd_size"])
+	_assert(cattle["stock"] > 0.0, "Cattle Ranch should have culled at least once by now, stock is still 0")
+	_assert(sheep["stock"] > 0.0, "Sheep Farm should have culled at least once by now, stock is still 0")
+	_assert(sheep["wool_stock"] > 0.0, "Sheep Farm should have accumulated some wool by now")
+
+	var land_used: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD + sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
+	print("  shared grazing land used: %.1f / %.1f" % [land_used, HESimulation.SETTLEMENT_GRAZING_LAND])
+	_assert(land_used <= HESimulation.SETTLEMENT_GRAZING_LAND + EPSILON, "Cattle and sheep together should never claim more than SETTLEMENT_GRAZING_LAND, used %.2f" % land_used)
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

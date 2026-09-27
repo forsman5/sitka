@@ -20,6 +20,8 @@ const HOUSEHOLD_SIZE := WORKER_CAPACITY + DEPENDENTS
 const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
+const CATTLE_RANCH_BUSINESS_ID := 4
+const SHEEP_FARM_BUSINESS_ID := 5
 
 const HOUSEHOLD_COUNT := 30
 const FARM_MAX_CAPACITY := 50
@@ -28,6 +30,12 @@ const WOODLOT_MAX_CAPACITY := 50
 ## stay a release valve for surplus, not grow into the settlement's
 ## dominant employer.
 const TRADER_MAX_CAPACITY := 20
+
+## Starting herd sizes -- deliberately well under either species' cull
+## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
+## both visible within a normal scenario run, not just an instant no-op.
+const CATTLE_STARTING_HERD := 30.0
+const SHEEP_STARTING_HERD := 60.0
 
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
@@ -79,10 +87,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		FARM_BUSINESS_ID: HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), FARM_MAX_CAPACITY, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID),
 		WOODLOT_BUSINESS_ID: HEBusiness.new(WOODLOT_BUSINESS_ID, "Woodlot", _woodlot_recipe(), WOODLOT_MAX_CAPACITY, woodlot_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID),
 		TRADER_BUSINESS_ID: HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, TRADER_MAX_CAPACITY, trader_capacity, HEBusiness.Kind.TRADER, SETTLEMENT_ID),
+		CATTLE_RANCH_BUSINESS_ID: HEBusiness.new(CATTLE_RANCH_BUSINESS_ID, "Cattle Ranch", null, 0, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.CATTLE, CATTLE_STARTING_HERD),
+		SHEEP_FARM_BUSINESS_ID: HEBusiness.new(SHEEP_FARM_BUSINESS_ID, "Sheep Farm", null, 0, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.SHEEP, SHEEP_STARTING_HERD),
 	}
 	settlement.business_ids.append(FARM_BUSINESS_ID)
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
 	settlement.business_ids.append(TRADER_BUSINESS_ID)
+	settlement.business_ids.append(CATTLE_RANCH_BUSINESS_ID)
+	settlement.business_ids.append(SHEEP_FARM_BUSINESS_ID)
 
 	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS

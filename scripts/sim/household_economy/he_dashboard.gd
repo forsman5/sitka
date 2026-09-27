@@ -340,16 +340,31 @@ func _refresh() -> void:
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
 		if row.is_empty():
 			continue
-		(row["name"] as Label).text = report["name"]
+		var name_label := row["name"] as Label
+		if report.has("herd_size"):
+			name_label.text = "%s (herd: %.0f)" % [report["name"], report["herd_size"]]
+			name_label.tooltip_text = "Wool in stock: %.1f" % report["wool_stock"] if report.get("wool_stock", 0.0) > 0.0 else ""
+		else:
+			name_label.text = report["name"]
+			name_label.tooltip_text = ""
 		(row["capacity"] as Label).text = str(report["capacity"])
 		(row["max_capacity"] as Label).text = str(report["max_capacity"])
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
-		(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
+		if report.has("herd_size"):
+			(row["output"] as Label).text = "culled %.1f %s" % [report["last_actual_units"], report["output_commodity"]]
+		else:
+			(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
 		var wage: float = report["rolling_average_wage"]
 		var reference: float = report["reference_wage_per_worker"]
 		var wage_label := row["wage"] as Label
-		wage_label.text = "%.3f" % wage
-		wage_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if wage > reference else Color(0.9, 0.5, 0.5))
+		if report.has("herd_size"):
+			# Herds hire no one and earn no wage -- the red/green profitability
+			# cue below doesn't apply, so leave it at the neutral header color.
+			wage_label.text = "--"
+			wage_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		else:
+			wage_label.text = "%.3f" % wage
+			wage_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if wage > reference else Color(0.9, 0.5, 0.5))
 		(row["reference"] as Label).text = "%.3f" % reference
 		(row["stock"] as Label).text = "%.1f" % report["stock"]
 		(row["balance"] as Label).text = "%.1f" % report["balance"]
