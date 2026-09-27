@@ -129,11 +129,25 @@ const SHEEP_LAND_PER_HEAD := 0.15
 ## Reproduction, per HERD_EVAL_INTERVAL_DAYS: cattle bear a single calf on
 ## a roughly annual cycle; sheep both lamb more prolifically per ewe (often
 ## 1.4+ lambs/lambing) and more frequently, so sheep's realized reproduction
-## rate is set to roughly 2.5-3x cattle's.
+## rate is set to roughly 2.5-3x cattle's. These are the research-backed
+## rates -- tune overall PACE with HERD_GROWTH_RATE_MULTIPLIER below rather
+## than editing these directly, so the relative cattle-vs-sheep ratio (and
+## the doc comment above) stays meaningful.
 const HERD_GROWTH_RATE: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 0.035,
 	HEBusiness.Species.SHEEP: 0.10,
 }
+
+## Single knob for how fast herds grow overall, independent of the
+## realistic per-species rates above. At 1.0 (HERD_GROWTH_RATE as
+## authored), a ranch takes on the order of 2000+ days to reach its first
+## HERD_CULL_TARGET from its seeded starting size -- too slow to feel like
+## a lever the player is pulling in a short early-preview session. 1.6
+## instead lands both ranches' first cull around ~900 days, without
+## touching HERD_LOSS_RATE_FED/NEGLECTED (mortality stays at the
+## research-backed rate; only reproduction speeds up). Applied only to
+## HERD_GROWTH_RATE in _run_herds, never to the loss rates.
+const HERD_GROWTH_RATE_MULTIPLIER := 1.6
 
 ## Mortality, per HERD_EVAL_INTERVAL_DAYS. FED applies while herd_size fits
 ## within this ranch's current share of SETTLEMENT_GRAZING_LAND; NEGLECTED
@@ -1297,7 +1311,7 @@ func _run_herds(record: Dictionary) -> void:
 		# up the gap (see SETTLEMENT_GRAZING_LAND's doc comment).
 		var fed := b.herd_size <= max_herd_by_land
 		var loss_rate: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
-		b.herd_size = clampf(b.herd_size * (1.0 + HERD_GROWTH_RATE[b.species] - loss_rate), 0.0, max_herd_by_land)
+		b.herd_size = clampf(b.herd_size * (1.0 + HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER - loss_rate), 0.0, max_herd_by_land)
 
 		b.last_wool_produced = 0.0
 		if b.species == HEBusiness.Species.SHEEP:
