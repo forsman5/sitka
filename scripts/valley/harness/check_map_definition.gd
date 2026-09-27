@@ -47,6 +47,14 @@ func _run() -> void:
 	check(view.settlement_cluster_positions[3] == Vector2(site.x, site.z), "Rendered village did not follow site")
 	for crossing in map.crossings.values():
 		check(view.has_node(crossing["name"] + "FordShallows"), "Missing ford " + crossing["name"])
+	var half := preload("res://scripts/valley/authored_valley_terrain.gd").WORLD_SIZE * 0.5
+	for river in map.rivers.values():
+		for suffix in ["", "Bank"]:
+			var node_name: String = river["node_name"] + suffix
+			var ribbon: MeshInstance3D = view.get_node(node_name)
+			check(ribbon.mesh.get_surface_count() > 0, node_name + " has no geometry")
+			for vertex in ribbon.mesh.get_faces():
+				check(absf(vertex.x) <= half.x + 0.001 and absf(vertex.z) <= half.y + 0.001, node_name + " extends beyond terrain")
 	for tree in view.get_node("ValleyVegetation").get_children():
 		check(view.is_transport_clear(Vector2(tree.position.x, tree.position.z)), "Tree overlaps transport corridor")
 	view.free()

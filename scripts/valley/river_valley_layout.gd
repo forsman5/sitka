@@ -18,9 +18,11 @@ static func create_map() -> MapDefinition:
 	map.junctions = {
 		"aldford": {"position": Vector3(0, 0, -5), "inner_radius": 18.0, "outer_radius": 38.0},
 	}
+	# Boundary channels continue beyond the terrain so clipping cuts across
+	# their full width, never exposing an angled ribbon end cap inside the map.
 	map.rivers = {
-		"main": {"node_name": "MainRiver", "width": 18.0, "points": [Vector3(-22, 0, -120), Vector3(-13, 0, -90), Vector3(-5, 0, -55), {"junction": "aldford"}, Vector3(25, 0, 25), Vector3(55, 0, 55), {"waterfront": 5}, Vector3(130, 0, 120)]},
-		"tributary": {"node_name": "Tributary", "width": 10.0, "points": [Vector3(-158, 0, -112), Vector3(-145, 0, -95), Vector3(-128, 0, -78), Vector3(-80, 0, -50), Vector3(-35, 0, -27), {"junction": "aldford"}]},
+		"main": {"node_name": "MainRiver", "width": 18.0, "points": [Vector3(-31, 0, -150), Vector3(-22, 0, -120), Vector3(-13, 0, -90), Vector3(-5, 0, -55), {"junction": "aldford"}, Vector3(25, 0, 25), Vector3(55, 0, 55), {"waterfront": 5}, Vector3(130, 0, 120), Vector3(168, 0, 146)]},
+		"tributary": {"node_name": "Tributary", "width": 10.0, "points": [Vector3(-184, 0, -146), Vector3(-158, 0, -112), Vector3(-145, 0, -95), Vector3(-128, 0, -78), Vector3(-80, 0, -50), Vector3(-35, 0, -27), {"junction": "aldford"}]},
 	}
 	map.crossings = {
 		"aldford": {"kind": "ford", "name": "Aldford", "road": "aldford_approach", "river": "main", "position": Vector3(0, 0, -1), "radius": 20.0, "width": 4.2, "seed": 4107},

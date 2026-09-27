@@ -328,8 +328,12 @@ func _add_route(id: String) -> void:
 
 func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, bank_cutout: Array, water_cutout: Array) -> void:
 	var ground := Callable(self, "get_valley_ground_height")
-	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16))
-	add_child(TerrainRibbonBuilder.build(prefix, points, ground, width, 0.22, _water_material(RIVER_COLOR), 0.6, 0.0, 0, true, water_cutout, Callable(self, "_confluence_surface_height"), 16))
+	# Height queries clamp outside the heightmap; that does not constrain mesh
+	# vertices. Trim both water and banks against the actual terrain footprint.
+	var half := AuthoredValleyTerrain.WORLD_SIZE * 0.5
+	var boundary := PackedVector2Array([Vector2(-half.x, -half.y), Vector2(half.x, -half.y), Vector2(half.x, half.y), Vector2(-half.x, half.y)])
+	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16, boundary))
+	add_child(TerrainRibbonBuilder.build(prefix, points, ground, width, 0.22, _water_material(RIVER_COLOR), 0.6, 0.0, 0, true, water_cutout, Callable(self, "_confluence_surface_height"), 16, boundary))
 
 func _confluence_surface_height(point: Vector2, original_height: float) -> float:
 	# Both channels use the same terrain-following surface around the mouth.

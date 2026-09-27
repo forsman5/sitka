@@ -21,6 +21,7 @@ static func build(
 		exclude: Variant = PackedVector2Array(),
 		surface_height_at: Callable = Callable(),
 		cross_segments: int = CROSS_SEGMENTS,
+		clip_boundary: PackedVector2Array = PackedVector2Array(),
 	) -> MeshInstance3D:
 	var cross_vertices := cross_segments + 1
 	var centers := _sample_catmull_rom(control_points, sample_spacing)
@@ -72,7 +73,7 @@ static func build(
 
 	# Clip individual triangles so the surrounding strips retain their sampling
 	# density. In particular, a tributary bank must not cross the main channel.
-	if not exclude.is_empty():
+	if not exclude.is_empty() or not clip_boundary.is_empty():
 		var clipped_vertices := PackedVector3Array()
 		var clipped_indices := PackedInt32Array()
 		for triangle in range(0, indices.size(), 3):
@@ -82,7 +83,11 @@ static func build(
 			var footprint := PackedVector2Array([Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z)])
 			var exclusions: Array = exclude if exclude is Array else [exclude]
 			var pieces: Array[PackedVector2Array] = [footprint]
+			if not clip_boundary.is_empty():
+				pieces = Geometry2D.intersect_polygons(footprint, clip_boundary)
 			for exclusion in exclusions:
+				if exclusion.is_empty():
+					continue
 				var remaining: Array[PackedVector2Array] = []
 				for piece in pieces:
 					remaining.append_array(Geometry2D.clip_polygons(piece, exclusion))
