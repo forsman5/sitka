@@ -24,6 +24,7 @@ static var _night_assigned: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
+@onready var _anim: AnimationPlayer = $Model/AnimationPlayer
 var _terrain: Node = null
 var _mat_normal: Material
 var _mat_selected: StandardMaterial3D
@@ -37,16 +38,24 @@ func _ready() -> void:
 			_terrain = p.get_node_or_null("NavigationRegion3D/HeightmapTerrain")
 			break
 		p = p.get_parent()
-	_mat_normal = _mesh.get_surface_override_material(0)
+	if _mesh.visible:
+		_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
 	_nav_agent.velocity_computed.connect(_on_velocity_computed)
+	_anim.play("Armature|Idle")
 	_run_task_loop()
+
+func _update_animation(moving: bool) -> void:
+	var anim_name := "Armature|Walk" if moving else "Armature|Idle"
+	if _anim.current_animation != anim_name:
+		_anim.play(anim_name)
 
 func _physics_process(_delta: float) -> void:
 	if _nav_agent.is_navigation_finished():
 		velocity = Vector3.ZERO
 		move_and_slide()
+		_update_animation(false)
 		if _terrain != null:
 			global_position.y = _terrain.get_height(global_position.x, global_position.z)
 		return
@@ -61,6 +70,10 @@ func _on_velocity_computed(safe_vel: Vector3) -> void:
 	velocity = safe_vel
 	velocity.y = 0.0
 	move_and_slide()
+	var moving := velocity.length() > 0.05
+	_update_animation(moving)
+	if moving:
+		look_at(global_position + velocity.normalized(), Vector3.UP)
 	if _terrain != null:
 		global_position.y = _terrain.get_height(global_position.x, global_position.z)
 
@@ -80,7 +93,8 @@ func assign_barn(barn: Node3D) -> void:
 
 func set_selected(v: bool) -> void:
 	selected = v
-	_mesh.set_surface_override_material(0, _mat_selected if v else _mat_normal)
+	if _mesh.visible:
+		_mesh.set_surface_override_material(0, _mat_selected if v else _mat_normal)
 
 func objective_label() -> String:
 	if _sleeping:
