@@ -41,12 +41,21 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
 
-## H1's two complementary goods -- grain (food) and timber, standing in for
-## household fuel demand in this isolated experiment.
-const SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.GRAIN, Commodity.Type.TIMBER]
+## H1's local household goods -- grain (food) and timber (household fuel
+## demand) are survival-critical and drive food_stress/starvation; wool is a
+## third good with the same local demand/market/reference-wage treatment as
+## timber (real recurring cost, but does NOT feed the stress engine -- see
+## _run_consumption). Added once the Cattle Ranch/Sheep Farm (Kind.HERD)
+## started producing WOOL, mirroring the pooled model's own convention of
+## treating wool as an ordinary per-person consumption good (see
+## simulation.gd's WOOL_PER_PERSON_PER_DAY) while cattle/sheep themselves are
+## NOT -- see HERD_EXPORT_PRICE's doc comment for why those two stay
+## Trader-export-only instead of joining this list.
+const SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL]
 
 const GRAIN_PER_PERSON_PER_DAY := 0.4 # matches Simulation.GRAIN_PER_PERSON_PER_DAY
 const FUEL_TIMBER_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tuned
+const WOOL_PER_PERSON_PER_DAY := 0.01 # matches Simulation.WOOL_PER_PERSON_PER_DAY
 
 ## A household requests up to this many days' worth of buffer; there is no
 ## "protected" seller buffer any more -- businesses aren't consumers of
@@ -56,6 +65,7 @@ const TARGET_BUFFER_DAYS := 3.0
 const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 1.0,
 	Commodity.Type.TIMBER: 1.0,
+	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 }
 const PRICE_ADJUST_STEP := 0.05
 const PRICE_MULTIPLIER_MIN := 0.25
@@ -160,6 +170,31 @@ const HERD_CULL_TARGET: Dictionary[HEBusiness.Species, float] = {
 ## require slaughtering the animal the way a cull does. Cattle have no
 ## equivalent passive yield.
 const WOOL_PER_HEAD_PER_INTERVAL := 0.07
+
+## Monetization for culled herd stock (Commodity.Type.CATTLE/SHEEP -- the
+## whole animal, standing in for meat and hides bundled together, same
+## simplification the pooled model makes with its own CATTLE/SHEEP
+## commodities). Unlike grain/timber/wool, no household buys a live animal
+## at a per-person daily rate -- the pooled model treats cattle/sheep as
+## pure "herd capital... not consumed at a daily rate by anything this model
+## tracks" (see simulation.gd's REFERENCE_STOCK doc comment), so they never
+## join SUBSISTENCE_COMMODITIES and never run through the local clearing
+## market. Instead a ranch's culled stock is Trader-export-only, sold at
+## this flat reference price (matching Simulation.BASE_PRICE for the same
+## two commodities) rather than a live locally-drifting one -- there's no
+## local supply/demand signal to drift one against. See _run_trade's herd
+## export pass.
+const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 5.0,
+	HEBusiness.Species.SHEEP: 3.0,
+}
+
+## Culled herd stock -- never joins SUBSISTENCE_COMMODITIES (see
+## HERD_EXPORT_PRICE's doc comment), but still needs to be tracked in
+## _total_stock_snapshot() so opening/closing stock accounting (see
+## run_household_economy.gd's _check_conservation) covers it too, exactly
+## like any other commodity a business can hold and export.
+const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
 
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows; one earning that
@@ -634,14 +669,22 @@ func _run_production(record: Dictionary) -> void:
 		var name := Commodity.name_of(output_commodity)
 		record["produced"][name] = record["produced"].get(name, 0.0) + units
 
-func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
-	var headcount := float(h.headcount())
+## Shared by _daily_need (times a household's headcount) and
+## _reference_wage_per_worker (times a settlement's average price) -- the
+## one place a commodity's per-person daily rate is defined, so the two
+## can never drift apart.
+func _per_person_daily_rate(commodity: Commodity.Type) -> float:
 	match commodity:
 		Commodity.Type.GRAIN:
-			return headcount * GRAIN_PER_PERSON_PER_DAY
+			return GRAIN_PER_PERSON_PER_DAY
 		Commodity.Type.TIMBER:
-			return headcount * FUEL_TIMBER_PER_PERSON_PER_DAY
+			return FUEL_TIMBER_PER_PERSON_PER_DAY
+		Commodity.Type.WOOL:
+			return WOOL_PER_PERSON_PER_DAY
 	return 0.0
+
+func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
+	return float(h.headcount()) * _per_person_daily_rate(commodity)
 
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only grain drives food_stress/migration-
@@ -1126,10 +1169,15 @@ func _adjust_price(settlement_id: int, commodity: Commodity.Type, total_offer: f
 ## households already had first crack at buying that same day -- it never
 ## competes with a household for a good it needs, by construction. Each
 ## Kind.TRADER business independently draws down every PRODUCTION
-## business's surplus above its reserve for BOTH subsistence commodities,
-## capped by the trader's own labor-derived handling capacity, and pays a
-## deliberately low price (TRADER_BUY_PRICE_FRACTION of the going market
-## rate) for what it takes -- see the constants' doc comment above for why.
+## business's surplus above its reserve for BOTH subsistence commodities
+## (grain, timber, and now wool -- see SUBSISTENCE_COMMODITIES), capped by
+## the trader's own labor-derived handling capacity, and pays a deliberately
+## low price (TRADER_BUY_PRICE_FRACTION of the going market rate) for what
+## it takes -- see the constants' doc comment above for why. A second pass
+## right after does the same for each Kind.HERD business's culled animal
+## stock, sharing the same capacity_limit/remaining_capacity -- see
+## HERD_EXPORT_PRICE's doc comment for why that pass has no local reserve
+## and uses a flat price instead of a live one.
 func _run_trade(record: Dictionary) -> void:
 	var trader_ids: Array[int] = []
 	for business_id in businesses.keys():
@@ -1182,6 +1230,41 @@ func _run_trade(record: Dictionary) -> void:
 			var revenue: float = quantity * local_price
 			record["export_revenue"] += revenue
 			_export_revenue_total += revenue
+
+		for herd_id in _herd_business_ids(trader.settlement_id):
+			if remaining_capacity <= 0.0001:
+				break
+			var herd: HEBusiness = businesses[herd_id]
+			# A Cattle Ranch has no other channel touching last_revenue (unlike
+			# a Sheep Farm, whose WOOL already went through the subsistence
+			# loop above, which either set a real trade value or reset it to
+			# 0.0 -- see _clear_market_for) -- reset it here so a quiet day
+			# with nothing to export reports 0, not yesterday's stale figure.
+			if herd.species == HEBusiness.Species.CATTLE:
+				herd.last_revenue = 0.0
+			var herd_commodity := herd.herd_commodity()
+			var herd_quantity: float = min(herd.stock(herd_commodity), remaining_capacity)
+			if herd_quantity <= 0.0001:
+				continue
+
+			var reference_price: float = HERD_EXPORT_PRICE[herd.species]
+			var herd_pay_price: float = reference_price * TRADER_BUY_PRICE_FRACTION
+			herd.consume(herd_commodity, herd_quantity)
+			herd.balance += herd_quantity * herd_pay_price
+			herd.last_revenue += herd_quantity * herd_pay_price
+
+			var herd_margin: float = herd_quantity * (reference_price - herd_pay_price)
+			trader.balance += herd_margin
+			trader_margin_today += herd_margin
+			total_exported += herd_quantity
+			remaining_capacity -= herd_quantity
+
+			_accumulate(trader.last_exported, herd_commodity, herd_quantity)
+			var herd_name := Commodity.name_of(herd_commodity)
+			_accumulate(record["exported"], herd_name, herd_quantity)
+			var herd_revenue: float = herd_quantity * reference_price
+			record["export_revenue"] += herd_revenue
+			_export_revenue_total += herd_revenue
 
 		trader.last_revenue = trader_margin_today
 		trader.last_planned_units = capacity_limit
@@ -1251,16 +1334,33 @@ func _log_event(type: String, data: Dictionary) -> void:
 	if _event_log.size() > EVENT_LOG_MAX:
 		_event_log.pop_front()
 
+## Resolves whichever business sells `commodity` locally -- a PRODUCTION
+## business's one recipe output, or (WOOL only) whichever Sheep Farm holds
+## it. Cattle Ranches/Sheep Farms' herd_commodity() (the animal itself) is
+## deliberately NOT resolved here -- see HERD_EXPORT_PRICE's doc comment for
+## why that stays Trader-export-only with no local seller at all.
 func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		if b.settlement_id != settlement_id:
 			continue
-		if b.kind != HEBusiness.Kind.PRODUCTION:
-			continue
-		if b.output_commodity() == commodity:
+		if b.kind == HEBusiness.Kind.PRODUCTION and b.output_commodity() == commodity:
+			return b
+		if b.kind == HEBusiness.Kind.HERD and b.species == HEBusiness.Species.SHEEP and commodity == Commodity.Type.WOOL:
 			return b
 	return null
+
+## Sorted for the same deterministic-processing-order reason every other
+## per-settlement business list in this file is sorted -- see _run_trade's
+## herd export pass.
+func _herd_business_ids(settlement_id: int) -> Array[int]:
+	var ids: Array[int] = []
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.HERD and b.settlement_id == settlement_id:
+			ids.append(business_id)
+	ids.sort()
+	return ids
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
@@ -1351,12 +1451,16 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	if total_workers <= 0:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
-	var per_person_cost := _average_price_history(settlement_id, Commodity.Type.GRAIN) * GRAIN_PER_PERSON_PER_DAY 		+ _average_price_history(settlement_id, Commodity.Type.TIMBER) * FUEL_TIMBER_PER_PERSON_PER_DAY
+	var per_person_cost := 0.0
+	for c in SUBSISTENCE_COMMODITIES:
+		per_person_cost += _average_price_history(settlement_id, c) * _per_person_daily_rate(c)
 	return dependency_ratio * per_person_cost
 
 func _total_stock_snapshot(settlement_id: int = -1) -> Dictionary:
+	var commodities: Array[Commodity.Type] = SUBSISTENCE_COMMODITIES.duplicate()
+	commodities.append_array(HERD_COMMODITIES)
 	var snap := {}
-	for c in SUBSISTENCE_COMMODITIES:
+	for c in commodities:
 		var total := 0.0
 		for household_id in households.keys():
 			var h: HEHousehold = households[household_id]

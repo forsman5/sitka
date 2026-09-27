@@ -256,9 +256,9 @@ func _rebuild_household_rows() -> void:
 	_household_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 10
+	grid.columns = 11
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -292,6 +292,10 @@ func _rebuild_household_rows() -> void:
 		timber_label.custom_minimum_size = Vector2(70, 0)
 		grid.add_child(timber_label)
 
+		var wool_label := Label.new()
+		wool_label.custom_minimum_size = Vector2(70, 0)
+		grid.add_child(wool_label)
+
 		var balance_label := Label.new()
 		balance_label.custom_minimum_size = Vector2(70, 0)
 		grid.add_child(balance_label)
@@ -312,7 +316,7 @@ func _rebuild_household_rows() -> void:
 
 		_household_rows[household_id] = {
 			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
-			"grain": grain_label, "timber": timber_label, "balance": balance_label,
+			"grain": grain_label, "timber": timber_label, "wool": wool_label, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
@@ -351,7 +355,10 @@ func _refresh() -> void:
 		(row["max_capacity"] as Label).text = str(report["max_capacity"])
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
 		if report.has("herd_size"):
-			(row["output"] as Label).text = "culled %.1f %s" % [report["last_actual_units"], report["output_commodity"]]
+			var output_text := "culled %.1f %s" % [report["last_actual_units"], report["output_commodity"]]
+			if report.get("last_wool_produced", 0.0) > 0.0:
+				output_text += "  +%.2f wool" % report["last_wool_produced"]
+			(row["output"] as Label).text = output_text
 		else:
 			(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
 		var wage: float = report["rolling_average_wage"]
@@ -388,6 +395,7 @@ func _refresh() -> void:
 
 	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
 	var timber_name := Commodity.name_of(Commodity.Type.TIMBER)
+	var wool_name := Commodity.name_of(Commodity.Type.WOOL)
 	for household_id in _household_rows.keys():
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
@@ -410,6 +418,7 @@ func _refresh() -> void:
 			dependents_label.text = "%d (oldest: %dd)" % [dependent_ages.size(), oldest]
 		(row["grain"] as Label).text = "%.1f" % h["inventory"][grain_name]
 		(row["timber"] as Label).text = "%.1f" % h["inventory"][timber_name]
+		(row["wool"] as Label).text = "%.1f" % h["inventory"][wool_name]
 		(row["balance"] as Label).text = "%.1f" % h["balance"]
 		(row["stress"] as Label).text = "%.2f" % h["food_stress"]
 

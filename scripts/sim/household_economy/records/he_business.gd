@@ -32,9 +32,15 @@ extends RefCounted
 ## cull target. `species` distinguishes CATTLE from SHEEP, which differ in
 ## reproduction rate, land use, and mortality -- see he_simulation.gd's
 ## HERD_* constants. Sheep additionally throw off a small WOOL trickle from
-## live herd size every interval, independent of culling. What happens to
-## the resulting inventory (local demand, a market, monetization) is
-## deliberately out of scope here.
+## live herd size every interval, independent of culling. WOOL is an
+## ordinary local household good (see he_simulation.gd's
+## SUBSISTENCE_COMMODITIES and _business_selling) sold through the same
+## local market Farm/Woodlot use; the culled animal itself (herd_commodity())
+## has no local buyer and is Trader-export-only at a flat reference price
+## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
+## pass). Either way, nothing here hires anyone or pays wages -- the revenue
+## just accumulates in `balance` for now (see this class's `capacity`/
+## `max_capacity` doc above).
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")

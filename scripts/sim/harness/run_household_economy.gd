@@ -26,6 +26,7 @@ func _init() -> void:
 	_check_old_age_deaths_actually_happen()
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
+	_check_herd_monetization()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -92,10 +93,19 @@ func _check_conservation() -> void:
 	sim.advance_ticks(365)
 	var history := sim.get_daily_history(365)
 
+	## Herds' culled animal stock (CATTLE/SHEEP) is produced (culling) and
+	## exported (the Trader) exactly like a subsistence commodity, just with
+	## no local consumption or write-off channel -- see he_simulation.gd's
+	## HERD_EXPORT_PRICE doc comment for why it never joins
+	## SUBSISTENCE_COMMODITIES itself. Checked here too so the new Trader
+	## export pass is held to the same reconciliation bar as everything else.
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+
 	var worst_stock_gap := 0.0
 	var worst_money_gap := 0.0
 	for record in history:
-		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+		for c in reconciled_commodities:
 			var name := Commodity.name_of(c)
 			var opening: float = record["opening_stock"][name]
 			var produced: float = record["produced"].get(name, 0.0)
@@ -358,13 +368,12 @@ func _build_orphan_world(_rng: RandomNumberGenerator) -> Dictionary:
 	settlement.household_ids.append(2)
 	return {"settlement": settlement, "households": households, "businesses": businesses}
 
-## Herds are production-only for now (no consumption/monetization wired
-## up -- see he_business.gd's Kind.HERD doc comment), so this just checks
-## the mechanics run sanely on their own: both ranches grow from their
-## seeded starting herd, cull back down once they cross their target
-## (proving culled stock actually reaches inventory), sheep accumulate a
-## wool trickle, and the two ranches never together claim more than the
-## shared settlement grazing pool.
+## Checks the herd MECHANICS run sanely on their own, independent of
+## monetization (see _check_herd_monetization for that): both ranches grow
+## from their seeded starting herd, cull back down once they cross their
+## target (proving culled stock actually reaches inventory), sheep
+## accumulate a wool trickle, and the two ranches never together claim more
+## than the shared settlement grazing pool.
 func _check_herds_grow_and_cull() -> void:
 	print("\n=== Herds: ranches grow, cull to inventory, and share a land cap ===")
 	var sim := _new_sim("build_three_business_economy")
@@ -398,6 +407,46 @@ func _check_herds_grow_and_cull() -> void:
 	var land_used: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD + sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
 	print("  shared grazing land used: %.1f / %.1f" % [land_used, HESimulation.SETTLEMENT_GRAZING_LAND])
 	_assert(land_used <= HESimulation.SETTLEMENT_GRAZING_LAND + EPSILON, "Cattle and sheep together should never claim more than SETTLEMENT_GRAZING_LAND, used %.2f" % land_used)
+
+## Wool sells to local households through the same market Farm/Woodlot use
+## (proving _business_selling's new Kind.HERD/Species.SHEEP branch actually
+## resolves a seller and clears real trades, not just a phantom demand that
+## never funds), and culled Cattle/Sheep stock earns real money through the
+## Trader's export pass even though neither ranch employs or pays anyone.
+func _check_herd_monetization() -> void:
+	print("\n=== Herds monetize: wool sells locally, culled stock exports through the Trader ===")
+	var sim := _new_sim("build_three_business_economy")
+	var intervals := 24 # same horizon as _check_herds_grow_and_cull
+	sim.advance_ticks(intervals * HESimulation.HERD_EVAL_INTERVAL_DAYS)
+
+	var cattle: Dictionary = {}
+	var sheep: Dictionary = {}
+	for report in sim.get_business_reports():
+		if report.get("species", "") == "Cattle":
+			cattle = report
+		elif report.get("species", "") == "Sheep":
+			sheep = report
+	_assert(not cattle.is_empty() and not sheep.is_empty(), "Expected both a Cattle Ranch and a Sheep Farm in business reports")
+	if cattle.is_empty() or sheep.is_empty():
+		return
+
+	print("  Cattle Ranch balance=%.1f  Sheep Farm balance=%.1f  city export_revenue_total=%.1f" % [
+		cattle["balance"], sheep["balance"], sim.get_city_summary()["export_revenue_total"]])
+	_assert(cattle["balance"] > 0.0, "Cattle Ranch should have earned real money from the Trader exporting its culled stock, balance is still 0")
+	_assert(sheep["balance"] > 0.0, "Sheep Farm should have earned real money (wool sold locally and/or its own stock exported), balance is still 0")
+
+	var market := sim.get_market_summary()
+	_assert(market.has("Wool"), "Wool should now be a market commodity alongside Grain/Timber")
+	_assert(market["Wool"]["price"] > 0.0, "Wool should have a real market price")
+
+	var any_wool_traded := false
+	for record in sim.get_daily_history(360):
+		if (record["traded_quantity"] as Dictionary).get("Wool", 0.0) > 0.0001:
+			any_wool_traded = true
+			break
+	_assert(any_wool_traded, "Households should have actually bought wool from the Sheep Farm at least once in the run's final year")
+
+	_check_demographic_invariants(sim)
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

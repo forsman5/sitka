@@ -98,6 +98,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 
 	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
+	var wool_buffer := HOUSEHOLD_SIZE * HESimulation.WOOL_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 
 	var households: Dictionary[int, HEHousehold] = {}
 	var farm_workers_assigned := 0
@@ -108,6 +109,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE, SETTLEMENT_ID)
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
 		household.add_stock(Commodity.Type.TIMBER, timber_buffer)
+		household.add_stock(Commodity.Type.WOOL, wool_buffer)
 		household.seed_dependent_ages(_staggered_starting_ages(household_id))
 		household.seed_worker_ages(_staggered_starting_worker_ages(household_id))
 
