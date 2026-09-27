@@ -13,7 +13,9 @@ const TerrainRibbonBuilder = preload("res://scripts/valley/terrain_ribbon_builde
 const GROUND_COLOR := Color("6e8d52")
 const ROAD_COLOR := Color("8c7657")
 const RIVER_COLOR := Color("356f9b")
-const TRACK_WIDTH := 2.1
+const MapDefinition = preload("res://scripts/valley/valley_map_definition.gd")
+
+@export var map_definition: MapDefinition
 const RIVER_BANK_COLOR := Color("5f6244")
 const ROAD_SHOULDER_COLOR := Color("76684e")
 
@@ -29,18 +31,20 @@ var _hint_label: Label
 var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
 var _terrain: AuthoredValleyTerrain
-var _confluence_cutout := PackedVector2Array()
-var _river_outline := PackedVector2Array()
+var _river_outlines: Dictionary = {}
 var _transport_clearance: Array[PackedVector2Array] = []
 
-## settlement_id -> ground-plane (x,z) of its (possibly CLUSTER_OFFSETS-shifted)
-## building cluster, populated by _build_settlements(). ValleyVegetation reads
-## this so scattered scenery avoids the actual house positions, not just the
-## district's authored anchor point (which for Aldford/Oakmere/Staithe is the
-## riverbank, not where their houses ended up).
+## Rendered settlement sites, shared by selection and vegetation clearance.
 var settlement_cluster_positions: Dictionary = {}
 
 func _ready() -> void:
+	if map_definition == null:
+		map_definition = Layout.create_map()
+	var errors := map_definition.validate_geometry()
+	if not errors.is_empty():
+		push_error("Invalid valley map: %s" % "; ".join(errors))
+		set_process(false)
+		return
 	_simulation = Simulation.new(12345)
 	_camera = $RTSCamera/Camera3D
 	call_deferred("_configure_camera")
@@ -72,10 +76,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		var nearest_id := -1
 		var nearest_distance := 8.0
-		for settlement_id in Layout.SETTLEMENTS:
+		for settlement_id in map_definition.settlements:
 			var visual_position: Vector2 = settlement_cluster_positions.get(
 				settlement_id,
-				Vector2(Layout.settlement_position(settlement_id).x, Layout.settlement_position(settlement_id).z),
+				Vector2(map_definition.settlements[settlement_id]["site"].x, map_definition.settlements[settlement_id]["site"].z),
 			)
 			var distance := Vector2(point.x, point.z).distance_to(visual_position)
 			if distance < nearest_distance:
@@ -97,32 +101,31 @@ func _build_landscape() -> void:
 	add_child(_terrain)
 	_terrain.build()
 
-	var main_outline := TerrainRibbonBuilder.footprint(Layout.main_river(), 18.0)
-	_transport_clearance.append(TerrainRibbonBuilder.footprint(Layout.main_river(), 22.0))
-	_transport_clearance.append(TerrainRibbonBuilder.footprint(Layout.tributary(), 14.0))
-	var tributary_outline := TerrainRibbonBuilder.footprint(Layout.tributary(), 10.0)
-	var river_outline: PackedVector2Array = Geometry2D.merge_polygons(main_outline, tributary_outline)[0]
-	_river_outline = river_outline
-	var junction_bounds := PackedVector2Array([Vector2(-22, -27), Vector2(22, -27), Vector2(22, 17), Vector2(-22, 17)])
-	_confluence_cutout = Geometry2D.intersect_polygons(river_outline, junction_bounds)[0]
-	_add_watercourse("MainRiver", Layout.main_river(), 18.0, tributary_outline)
-	_add_watercourse("Tributary", Layout.tributary(), 10.0, main_outline, main_outline)
+	for id in map_definition.rivers:
+		var river: Dictionary = map_definition.rivers[id]
+		var path := map_definition.river_path(id)
+		_river_outlines[id] = TerrainRibbonBuilder.footprint(path, river["width"])
+		_transport_clearance.append(TerrainRibbonBuilder.footprint(path, river["width"] + 4.0))
+	var previous_water: Array = []
+	for id in map_definition.rivers:
+		var river: Dictionary = map_definition.rivers[id]
+		var other_banks: Array = []
+		for other_id in _river_outlines:
+			if other_id != id:
+				other_banks.append(_river_outlines[other_id])
+		_add_watercourse(river["node_name"], map_definition.river_path(id), river["width"], other_banks, previous_water)
+		previous_water.append(_river_outlines[id])
+	for id in map_definition.roads:
+		_add_route(id)
+	for id in map_definition.crossings:
+		var crossing: Dictionary = map_definition.crossings[id]
+		var river: Dictionary = map_definition.rivers[crossing["river"]]
+		_build_channel_ford(crossing, _river_outlines[crossing["river"]], get_node(river["node_name"]), map_definition.road_path(crossing["road"]))
 
-	# Existing seed edges are the source of truth for the static route drawing.
-	for edge_id in Layout.EDGES:
-		var edge := _simulation.get_transport_edge_summary(edge_id)
-		var from_pos := Layout.settlement_cluster_position(edge["settlement_a_id"])
-		var to_pos := Layout.settlement_cluster_position(edge["settlement_b_id"])
-		if Layout.EDGES[edge_id]["kind"] == "track":
-			_add_route(edge_id, Layout.track_path(edge_id, from_pos, to_pos), TRACK_WIDTH, ROAD_COLOR)
-
-	_build_ford()
-	var ironbank_track := Layout.track_path(3, Layout.settlement_cluster_position(ValleySeed.OAKMERE), Layout.settlement_cluster_position(ValleySeed.IRONBANK))
-	_build_channel_ford("Upstream", main_outline, $MainRiver, ironbank_track)
-	_build_channel_ford("Oakmere", tributary_outline, $Tributary, ironbank_track)
-
-func _build_channel_ford(prefix: String, outline: PackedVector2Array, water: MeshInstance3D, route: PackedVector3Array) -> void:
-	# Find bank intersections along the same sampled curve used by the road.
+func _build_channel_ford(spec: Dictionary, outline: PackedVector2Array, water: MeshInstance3D, route: PackedVector3Array) -> void:
+	var prefix: String = spec["name"]
+	var anchor: Vector3 = spec["position"]
+	# Select the bank pair near the explicitly authored crossing.
 	var samples := TerrainRibbonBuilder._sample_catmull_rom(route, 0.6)
 	var banks: Array[Vector2] = []
 	for segment in range(samples.size() - 1):
@@ -130,7 +133,7 @@ func _build_channel_ford(prefix: String, outline: PackedVector2Array, water: Mes
 		var finish := Vector2(samples[segment + 1].x, samples[segment + 1].z)
 		for i in outline.size():
 			var hit: Variant = Geometry2D.segment_intersects_segment(start, finish, outline[i], outline[(i + 1) % outline.size()])
-			if hit != null and (banks.is_empty() or banks.back().distance_to(hit) > 0.01):
+			if hit != null and hit.distance_to(Vector2(anchor.x, anchor.z)) <= spec["radius"] and (banks.is_empty() or banks.back().distance_to(hit) > 0.01):
 				banks.append(hit)
 	if banks.size() != 2:
 		push_error("%s ford requires two riverbank intersections; found %d" % [prefix, banks.size()])
@@ -149,9 +152,9 @@ func _build_channel_ford(prefix: String, outline: PackedVector2Array, water: Mes
 	var crossing := PackedVector3Array([Vector3(banks[0].x, 0, banks[0].y), Vector3(center.x, 0, center.y), Vector3(banks[1].x, 0, banks[1].y)])
 	var material := ShaderMaterial.new()
 	material.shader = preload("res://shaders/ford_shallows.gdshader")
-	add_child(TerrainRibbonBuilder.build("%sFordShallows" % prefix, crossing, Callable(self, "get_valley_ground_height"), 3.8, 0.0, material, 0.35, 0.12, 83, false, PackedVector2Array(), surface_height, 16))
+	add_child(TerrainRibbonBuilder.build("%sFordShallows" % prefix, crossing, Callable(self, "get_valley_ground_height"), spec["width"], 0.0, material, 0.35, 0.12, 83, false, PackedVector2Array(), surface_height, 16))
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 8307
+	rng.seed = spec["seed"]
 	var direction := (banks[1] - banks[0]).normalized()
 	var side := Vector2(-direction.y, direction.x)
 	for i in 28:
@@ -181,49 +184,6 @@ func _channel_ford_height(point: Vector2, _original: float, faces: Array[PackedV
 			return a.y - (normal.x * (point.x - a.x) + normal.z * (point.y - a.z)) / normal.y + 0.07
 	return get_valley_ground_height(point) + 0.28
 
-func _build_ford() -> void:
-	# A bank-to-bank gravel shallows, slightly downstream of the landing.
-	# Separate dry approaches make the crossing legible without a raised deck.
-	var crossing := PackedVector3Array([
-		Vector3(-9, 0, 0.95), Vector3(-7, 0, 0.5),
-		Vector3(0, 0, -1), Vector3(7, 0, -2.5), Vector3(12, 0, -3.6),
-	])
-	var approaches := PackedVector3Array([
-		Vector3(-18, 0, 7), Vector3(-13, 0, 2), Vector3(0, 0, -1),
-		Vector3(14, 0, -4), Vector3(22, 0, -8), Vector3(28, 0, -15),
-	])
-	var ground := Callable(self, "get_valley_ground_height")
-	add_child(TerrainRibbonBuilder.build("FordApproachShoulder", approaches, ground, 3.6, 0.24, _ground_material(ROAD_SHOULDER_COLOR), 0.4, 0.12, 41, false, _confluence_cutout, Callable(), 16))
-	add_child(TerrainRibbonBuilder.build("FordApproachTrack", approaches, ground, 2.4, 0.28, _ground_material(ROAD_COLOR), 0.4, 0.14, 42, false, _confluence_cutout, Callable(), 16))
-	var material := ShaderMaterial.new()
-	material.shader = preload("res://shaders/ford_shallows.gdshader")
-	add_child(TerrainRibbonBuilder.build("AldfordFordShallows", crossing, Callable(self, "get_valley_ground_height"), 4.2, 0.0, material, 0.4, 0.22, 41, false, PackedVector2Array(), Callable(self, "_ford_surface_height"), 16))
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 4107
-	for index in 32:
-		var x := lerpf(-9.0, 10.0, float(index) / 31.0)
-		var point := Vector2(x, -1.0 - x * 0.215 + rng.randf_range(-1.35, 1.35))
-		var stone := SphereMesh.new()
-		stone.radius = rng.randf_range(0.16, 0.34)
-		stone.height = stone.radius * 0.65
-		stone.radial_segments = 8
-		stone.rings = 4
-		var instance := MeshInstance3D.new()
-		instance.name = "FordStone%d" % index
-		instance.mesh = stone
-		instance.material_override = _ground_material(Color("798078").lightened(rng.randf_range(0.0, 0.12)))
-		instance.position = Vector3(point.x, _ford_surface_height(point, 0.0), point.y)
-		add_child(instance)
-	for point in [Vector2(-12, 4), Vector2(14, -2)]:
-		var marker_height := get_valley_ground_height(point)
-		_add_cylinder("FordWaymarker", Vector3(point.x, marker_height + 0.7, point.y), 0.14, 1.4, Color("65513b"))
-
-func _ford_surface_height(point: Vector2, _original_height: float) -> float:
-	var ground := get_valley_ground_height(point)
-	if Geometry2D.is_point_in_polygon(point, _confluence_cutout):
-		return _confluence_surface_height(point, ground + 0.22) + 0.07
-	return ground + 0.18
-
 ## The first valley remains deliberately simple, but this shared ground query
 ## keeps decorative vegetation and future building placement aligned with its
 ## existing hill geometry instead of floating on the base plane.
@@ -236,33 +196,19 @@ func is_transport_clear(point: Vector2) -> bool:
 			return false
 	return true
 
-## Aldford, Oakmere, and Staithe's authored positions double as vertices of
-## the main river or tributary polyline (the river network was authored
-## against the settlement layout, e.g. so Aldford sits at the ford), so their
-## houses and fields need to sit off to the side of the water instead of
-## literally on top of it. High Fell and Ironbank aren't on the river network
-## at all and need no offset. Each offset was picked by measuring clearance
-## against the actual river/tributary segments meeting at that settlement,
-## not eyeballed.
-const CLUSTER_OFFSETS = Layout.CLUSTER_OFFSETS
-
 func _build_settlements() -> void:
-	for settlement_id in _simulation.get_settlement_ids():
-		var spec: Dictionary = Layout.SETTLEMENTS[settlement_id]
-		var center: Vector3 = spec["position"]
-		center.y = get_valley_ground_height(Vector2(center.x, center.z))
-		var cluster_center: Vector3 = center + CLUSTER_OFFSETS.get(settlement_id, Vector3.ZERO)
+	for settlement_id in map_definition.settlements:
+		var spec: Dictionary = map_definition.settlements[settlement_id]
+		var cluster_center: Vector3 = spec["site"]
 		cluster_center.y = get_valley_ground_height(Vector2(cluster_center.x, cluster_center.z))
 		settlement_cluster_positions[settlement_id] = Vector2(cluster_center.x, cluster_center.z)
 		_add_resource_region(cluster_center, spec["district"], spec["accent"])
 		_add_settlement_cluster(settlement_id, cluster_center, spec["accent"])
 		_add_label(settlement_id, cluster_center + Vector3(0.0, 5.2, 0.0))
 
-## The settlement's authored (unoffset) position, ground-projected -- for the
-## small riverside structures that belong at the water regardless of where
-## CLUSTER_OFFSETS moved the settlement's houses.
+## Waterfront anchors are separate from inland settlement sites.
 func _river_edge_anchor(settlement_id: int) -> Vector3:
-	var anchor := Layout.settlement_position(settlement_id)
+	var anchor := map_definition.resolve_point({"waterfront": settlement_id})
 	anchor.y = get_valley_ground_height(Vector2(anchor.x, anchor.z))
 	return anchor
 
@@ -279,10 +225,7 @@ func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color)
 	_add_house(center + Vector3(0.0, 1.35, 0.0), Vector3(4.6, 2.7, 3.8), accent.darkened(0.38))
 
 	if settlement_id == ValleySeed.ALDFORD:
-		# Anchored to the actual ford/riverbank, not `center` -- these
-		# settlements' houses are offset away from the water (see
-		# CLUSTER_OFFSETS), but a landing or quay still needs to sit at the
-		# river itself.
+		# The landing follows the waterfront anchor independently of the houses.
 		var river_edge := _river_edge_anchor(ValleySeed.ALDFORD)
 		var landing_point := Vector2(river_edge.x + 8.5, river_edge.z - 5.0)
 		var landing_height := get_valley_ground_height(landing_point)
@@ -309,15 +252,13 @@ func _add_resource_region(center: Vector3, district: String, accent: Color) -> v
 			for offset in [Vector2(-13, 10), Vector2(-6, 12), Vector2(8, 10), Vector2(14, 13)]:
 				_add_box("Field", center + Vector3(offset.x, 0.08, offset.y), Vector3(5.5, 0.12, 4.5), Color("b8ad58"))
 		"port":
-			# Offset away from the river (Staithe's `center` here is already
-			# CLUSTER_OFFSETS-shifted off the water) so an 11x8 plaza doesn't
-			# reach back into it.
+			# Place the market inland of the settlement center.
 			_add_box("MarketGround", center + Vector3(7.0, 0.10, 7.0), Vector3(11.0, 0.12, 8.0), Color("b69762"))
 
 func _add_label(settlement_id: int, position: Vector3) -> void:
 	var label := Label3D.new()
 	var summary := _simulation.get_settlement_summary(settlement_id)
-	label.text = "%s\n%s" % [summary["name"], Layout.SETTLEMENTS[settlement_id]["role"].split(",")[0]]
+	label.text = "%s\n%s" % [summary["name"], map_definition.settlements[settlement_id]["role"].split(",")[0]]
 	label.name = "Label%d" % settlement_id
 	label.position = position
 	label.font_size = 52
@@ -363,7 +304,7 @@ func _select_settlement(settlement_id: int) -> void:
 	_selection_panel.visible = true
 	var summary := _simulation.get_settlement_summary(settlement_id)
 	_selection_title.text = "%s%s" % [summary["name"], "  •  Clan holding" if summary["is_player_holding"] else ""]
-	_selection_role.text = Layout.role_for(settlement_id)
+	_selection_role.text = map_definition.settlements[settlement_id]["role"]
 	_selection_stats.text = "Population: %d   Households: %d\nWorkers: %d available   Status: %s" % [summary["population"], summary["household_count"], summary["available_workers"], summary["status"]]
 	var stock_parts: Array[String] = []
 	for commodity in Commodity.ALL:
@@ -375,20 +316,17 @@ func _select_settlement(settlement_id: int) -> void:
 		report_parts.append(str(report["recipe_id"]).capitalize())
 	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
 
-func _add_route(edge_id: int, points: PackedVector3Array, width: float, color: Color) -> void:
+func _add_route(id: String) -> void:
+	var spec: Dictionary = map_definition.roads[id]
+	var points := map_definition.road_path(id)
+	var width: float = spec["width"]
+	var seed_value: int = spec["seed"]
 	_transport_clearance.append(TerrainRibbonBuilder.footprint(points, width + 4.5))
-	# A darker, wider shoulder settles the path into the grass. The narrower
-	# worn strip has low-amplitude deterministic width changes rather than a
-	# perfectly constant silhouette.
 	var ground := Callable(self, "get_valley_ground_height")
-	var cutout := _river_outline if edge_id == 3 or edge_id == 2 else _confluence_cutout
-	var spacing := 0.6 if edge_id == 3 or edge_id == 2 else 2.8
-	var shoulder_height := 0.26 if edge_id == 3 or edge_id == 2 else 0.10
-	var track_height := 0.30 if edge_id == 3 or edge_id == 2 else 0.14
-	add_child(TerrainRibbonBuilder.build("RouteShoulder%d" % edge_id, points, ground, width + 1.45, shoulder_height, _ground_material(ROAD_SHOULDER_COLOR), spacing, 0.20, edge_id * 17, false, cutout))
-	add_child(TerrainRibbonBuilder.build("Route%d" % edge_id, points, ground, width, track_height, _ground_material(color), spacing, 0.28, edge_id * 17 + 5, false, cutout))
+	add_child(TerrainRibbonBuilder.build("RouteShoulder_" + id, points, ground, width + 1.45, 0.26, _ground_material(ROAD_SHOULDER_COLOR), 0.4, 0.20, seed_value, false, _river_outlines.values(), Callable(), 16))
+	add_child(TerrainRibbonBuilder.build("Route_" + id, points, ground, width, 0.30, _ground_material(ROAD_COLOR), 0.4, 0.28, seed_value + 5, false, _river_outlines.values(), Callable(), 16))
 
-func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, bank_cutout: PackedVector2Array, water_cutout: PackedVector2Array = PackedVector2Array()) -> void:
+func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, bank_cutout: Array, water_cutout: Array) -> void:
 	var ground := Callable(self, "get_valley_ground_height")
 	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16))
 	add_child(TerrainRibbonBuilder.build(prefix, points, ground, width, 0.22, _water_material(RIVER_COLOR), 0.6, 0.0, 0, true, water_cutout, Callable(self, "_confluence_surface_height"), 16))
@@ -396,9 +334,13 @@ func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, 
 func _confluence_surface_height(point: Vector2, original_height: float) -> float:
 	# Both channels use the same terrain-following surface around the mouth.
 	# The smooth outer transition preserves the existing upstream cross-sections.
-	var distance := point.distance_to(Vector2(0.0, -5.0))
-	var blend := 1.0 - smoothstep(18.0, 38.0, distance)
-	return lerpf(original_height, get_valley_ground_height(point) + 0.45, blend)
+	var height := original_height
+	for junction in map_definition.junctions.values():
+		var center: Vector3 = junction["position"]
+		var distance := point.distance_to(Vector2(center.x, center.z))
+		var blend := 1.0 - smoothstep(junction["inner_radius"], junction["outer_radius"], distance)
+		height = lerpf(height, get_valley_ground_height(point) + 0.45, blend)
+	return height
 
 func _add_ribbon(node_name: String, points: PackedVector3Array, width: float, y_offset: float, material: Material, sample_spacing: float, width_variation: float = 0.0, variation_seed: int = 0, flat_cross_section: bool = false) -> MeshInstance3D:
 	var ribbon := TerrainRibbonBuilder.build(node_name, points, Callable(self, "get_valley_ground_height"), width, y_offset, material, sample_spacing, width_variation, variation_seed, flat_cross_section)

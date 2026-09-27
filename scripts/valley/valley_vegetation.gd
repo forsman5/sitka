@@ -23,10 +23,8 @@ const TREE_SCENES: Array[PackedScene] = [TreeA, TreeB]
 const MAP_EDGE_MARGIN := 4.0
 
 ## Keeps scenery off a settlement's actual house footprint. Checked against
-## settlement_cluster_positions (the parent's post-CLUSTER_OFFSETS positions)
-## rather than each ellipse's own authored center, since for Aldford, Oakmere,
-## and Staithe those two points differ -- the ellipse is still centered on the
-## district's riverside anchor, but the houses were moved off the water.
+## settlement_cluster_positions (resolved from the shared map's sites),
+## rather than each woodland ellipse's center, which can be offset from houses.
 const SETTLEMENT_CLEARANCE := 8.0
 
 func _ready() -> void:
@@ -34,16 +32,13 @@ func _ready() -> void:
 	call_deferred("_populate")
 
 func _populate() -> void:
-	# Oakmere is the dominant visual forest. It has enough density to read at
-	# valley scale, while the clear core leaves room for its timber camp.
-	_scatter_ellipse("oakmere_woodland", Vector2(-128.0, -78.0), Vector2(46.0, 34.0), 210, 5103, 14.0)
-	# Small, irregular riverside groups tie the transport corridor to the
-	# landscape without closing off fields or future construction space.
-	_scatter_ellipse("aldford_riverbank", Vector2(-15.0, 17.0), Vector2(24.0, 13.0), 26, 5104, 7.0)
-	_scatter_ellipse("staithe_riverbank", Vector2(77.0, 79.0), Vector2(27.0, 16.0), 32, 5105, 8.0)
-	# High Fell remains visibly open pasture; only a light fringe breaks its
-	# silhouette and preserves broad grazing/construction land.
-	_scatter_ellipse("high_fell_fringe", Vector2(-118.0, 72.0), Vector2(31.0, 18.0), 16, 5106, 10.0)
+	var map = get_parent().map_definition
+	if map == null or not map.validate().is_empty():
+		return
+	for id in map.vegetation:
+		var spec: Dictionary = map.vegetation[id]
+		var center: Vector3 = map.resolve_point(spec["center"])
+		_scatter_ellipse(id, Vector2(center.x, center.z), spec["radii"], spec["count"], spec["seed"], spec["clearance"])
 
 func _scatter_ellipse(region: String, center: Vector2, radii: Vector2, count: int, seed: int, center_clearance: float) -> void:
 	var rng := RandomNumberGenerator.new()

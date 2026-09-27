@@ -18,7 +18,7 @@ static func build(
 		width_variation: float = 0.0,
 		variation_seed: int = 0,
 		flat_cross_section: bool = false,
-		exclude: PackedVector2Array = PackedVector2Array(),
+		exclude: Variant = PackedVector2Array(),
 		surface_height_at: Callable = Callable(),
 		cross_segments: int = CROSS_SEGMENTS,
 	) -> MeshInstance3D:
@@ -80,7 +80,14 @@ static func build(
 			var b := vertices[indices[triangle + 1]]
 			var c := vertices[indices[triangle + 2]]
 			var footprint := PackedVector2Array([Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z)])
-			for polygon in Geometry2D.clip_polygons(footprint, exclude):
+			var exclusions: Array = exclude if exclude is Array else [exclude]
+			var pieces: Array[PackedVector2Array] = [footprint]
+			for exclusion in exclusions:
+				var remaining: Array[PackedVector2Array] = []
+				for piece in pieces:
+					remaining.append_array(Geometry2D.clip_polygons(piece, exclusion))
+				pieces = remaining
+			for polygon in pieces:
 				var triangles := Geometry2D.triangulate_polygon(polygon)
 				var base := clipped_vertices.size()
 				var plane_normal := (b - a).cross(c - a)
