@@ -29,6 +29,7 @@ var _hint_label: Label
 var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
 var _terrain: AuthoredValleyTerrain
+var _confluence_cutout := PackedVector2Array()
 
 ## settlement_id -> ground-plane (x,z) of its (possibly CLUSTER_OFFSETS-shifted)
 ## building cluster, populated by _build_settlements(). ValleyVegetation reads
@@ -94,10 +95,13 @@ func _build_landscape() -> void:
 	add_child(_terrain)
 	_terrain.build()
 
-	_add_watercourse("MainRiver", Layout.main_river(), 18.0, RIVER_COLOR)
-	_add_watercourse("Tributary", Layout.tributary(), 10.0, Color("477fa8"))
-	var confluence := TerrainRibbonBuilder.build_disc("AldfordConfluence", Vector2(0.0, -5.0), 10.5, Callable(self, "get_valley_ground_height"), 0.30, _water_material(RIVER_COLOR), 48)
-	add_child(confluence)
+	var main_outline := TerrainRibbonBuilder.footprint(Layout.main_river(), 18.0)
+	var tributary_outline := TerrainRibbonBuilder.footprint(Layout.tributary(), 10.0)
+	var river_outline: PackedVector2Array = Geometry2D.merge_polygons(main_outline, tributary_outline)[0]
+	var junction_bounds := PackedVector2Array([Vector2(-22, -27), Vector2(22, -27), Vector2(22, 17), Vector2(-22, 17)])
+	_confluence_cutout = Geometry2D.intersect_polygons(river_outline, junction_bounds)[0]
+	_add_watercourse("MainRiver", Layout.main_river(), 18.0, tributary_outline)
+	_add_watercourse("Tributary", Layout.tributary(), 10.0, main_outline, main_outline)
 
 	# Existing seed edges are the source of truth for the static route drawing.
 	for edge_id in Layout.EDGES:
@@ -107,9 +111,50 @@ func _build_landscape() -> void:
 		if Layout.EDGES[edge_id]["kind"] == "track":
 			_add_route(edge_id, Layout.track_path(edge_id, from_pos, to_pos), TRACK_WIDTH, ROAD_COLOR)
 
-	# The ford is intentionally weak and legible: a narrow pale crossing at
-	# Aldford, reserved for replacement by a bridge in Milestone 3.
-	_add_ribbon("AldfordFord", PackedVector3Array([Vector3(-8.0, 0.0, -5.0), Vector3(1.0, 0.0, -5.0), Vector3(12.0, 0.0, -5.0)]), 3.2, 0.72, _ground_material(Color("c9b58a")), 1.0, 0.12, 41, true)
+	_build_ford()
+
+func _build_ford() -> void:
+	# A bank-to-bank gravel shallows, slightly downstream of the landing.
+	# Separate dry approaches make the crossing legible without a raised deck.
+	var crossing := PackedVector3Array([
+		Vector3(-9, 0, 0.95), Vector3(-7, 0, 0.5),
+		Vector3(0, 0, -1), Vector3(7, 0, -2.5), Vector3(12, 0, -3.6),
+	])
+	var approaches := PackedVector3Array([
+		Vector3(-18, 0, 7), Vector3(-13, 0, 2), Vector3(0, 0, -1),
+		Vector3(14, 0, -4), Vector3(22, 0, -8), Vector3(28, 0, -15),
+	])
+	var ground := Callable(self, "get_valley_ground_height")
+	add_child(TerrainRibbonBuilder.build("FordApproachShoulder", approaches, ground, 3.6, 0.24, _ground_material(ROAD_SHOULDER_COLOR), 0.4, 0.12, 41, false, _confluence_cutout, Callable(), 16))
+	add_child(TerrainRibbonBuilder.build("FordApproachTrack", approaches, ground, 2.4, 0.28, _ground_material(ROAD_COLOR), 0.4, 0.14, 42, false, _confluence_cutout, Callable(), 16))
+	var material := ShaderMaterial.new()
+	material.shader = preload("res://shaders/ford_shallows.gdshader")
+	add_child(TerrainRibbonBuilder.build("AldfordFordShallows", crossing, Callable(self, "get_valley_ground_height"), 4.2, 0.0, material, 0.4, 0.22, 41, false, PackedVector2Array(), Callable(self, "_ford_surface_height"), 16))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4107
+	for index in 32:
+		var x := lerpf(-9.0, 10.0, float(index) / 31.0)
+		var point := Vector2(x, -1.0 - x * 0.215 + rng.randf_range(-1.35, 1.35))
+		var stone := SphereMesh.new()
+		stone.radius = rng.randf_range(0.16, 0.34)
+		stone.height = stone.radius * 0.65
+		stone.radial_segments = 8
+		stone.rings = 4
+		var instance := MeshInstance3D.new()
+		instance.name = "FordStone%d" % index
+		instance.mesh = stone
+		instance.material_override = _ground_material(Color("798078").lightened(rng.randf_range(0.0, 0.12)))
+		instance.position = Vector3(point.x, _ford_surface_height(point, 0.0), point.y)
+		add_child(instance)
+	for point in [Vector2(-12, 4), Vector2(14, -2)]:
+		var marker_height := get_valley_ground_height(point)
+		_add_cylinder("FordWaymarker", Vector3(point.x, marker_height + 0.7, point.y), 0.14, 1.4, Color("65513b"))
+
+func _ford_surface_height(point: Vector2, _original_height: float) -> float:
+	var ground := get_valley_ground_height(point)
+	if Geometry2D.is_point_in_polygon(point, _confluence_cutout):
+		return _confluence_surface_height(point, ground + 0.22) + 0.07
+	return ground + 0.18
 
 ## The first valley remains deliberately simple, but this shared ground query
 ## keeps decorative vegetation and future building placement aligned with its
@@ -264,15 +309,21 @@ func _add_route(edge_id: int, points: PackedVector3Array, width: float, color: C
 	# A darker, wider shoulder settles the path into the grass. The narrower
 	# worn strip has low-amplitude deterministic width changes rather than a
 	# perfectly constant silhouette.
-	_add_ribbon("RouteShoulder%d" % edge_id, points, width + 1.45, 0.10, _ground_material(ROAD_SHOULDER_COLOR), 2.8, 0.20, edge_id * 17)
-	_add_ribbon("Route%d" % edge_id, points, width, 0.14, _ground_material(color), 2.8, 0.28, edge_id * 17 + 5)
+	var ground := Callable(self, "get_valley_ground_height")
+	add_child(TerrainRibbonBuilder.build("RouteShoulder%d" % edge_id, points, ground, width + 1.45, 0.10, _ground_material(ROAD_SHOULDER_COLOR), 2.8, 0.20, edge_id * 17, false, _confluence_cutout))
+	add_child(TerrainRibbonBuilder.build("Route%d" % edge_id, points, ground, width, 0.14, _ground_material(color), 2.8, 0.28, edge_id * 17 + 5, false, _confluence_cutout))
 
-func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, color: Color) -> void:
-	# Banks are one continuous terrain-following strip beneath a separate calm
-	# water surface. Each water cross-section shares one sampled center height,
-	# avoiding the pitched/floating joins produced by horizontal boxes.
-	_add_ribbon("%sBank" % prefix, points, width + 3.6, 0.12, _ground_material(RIVER_BANK_COLOR), 2.4)
-	_add_ribbon(prefix, points, width, 0.22, _water_material(color), 2.4, 0.0, 0, true)
+func _add_watercourse(prefix: String, points: PackedVector3Array, width: float, bank_cutout: PackedVector2Array, water_cutout: PackedVector2Array = PackedVector2Array()) -> void:
+	var ground := Callable(self, "get_valley_ground_height")
+	add_child(TerrainRibbonBuilder.build("%sBank" % prefix, points, ground, width + 3.6, 0.22, _ground_material(RIVER_BANK_COLOR), 0.6, 0.0, 0, false, bank_cutout, Callable(), 16))
+	add_child(TerrainRibbonBuilder.build(prefix, points, ground, width, 0.22, _water_material(RIVER_COLOR), 0.6, 0.0, 0, true, water_cutout, Callable(self, "_confluence_surface_height"), 16))
+
+func _confluence_surface_height(point: Vector2, original_height: float) -> float:
+	# Both channels use the same terrain-following surface around the mouth.
+	# The smooth outer transition preserves the existing upstream cross-sections.
+	var distance := point.distance_to(Vector2(0.0, -5.0))
+	var blend := 1.0 - smoothstep(18.0, 38.0, distance)
+	return lerpf(original_height, get_valley_ground_height(point) + 0.45, blend)
 
 func _add_ribbon(node_name: String, points: PackedVector3Array, width: float, y_offset: float, material: Material, sample_spacing: float, width_variation: float = 0.0, variation_seed: int = 0, flat_cross_section: bool = false) -> MeshInstance3D:
 	var ribbon := TerrainRibbonBuilder.build(node_name, points, Callable(self, "get_valley_ground_height"), width, y_offset, material, sample_spacing, width_variation, variation_seed, flat_cross_section)

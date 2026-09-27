@@ -20,14 +20,18 @@ func _capture() -> void:
 	await process_frame
 	var camera_rig: Node3D = valley.get_node("RTSCamera")
 	var camera: Camera3D = valley.get_node("RTSCamera/Camera3D")
-	if view == "aldford":
+	if view == "aldford" or view == "confluence-angled":
 		camera.size = 72.0
 		camera_rig.call("center_on", Vector3(0.0, 0.0, -5.0))
+		if view == "confluence-angled":
+			camera_rig.set("_current_tilt", 50.0)
+			camera_rig.call("_apply_tilt")
 	else:
 		camera.size = 350.0
 		camera_rig.call("center_on", Vector3.ZERO)
 	await process_frame
 	await process_frame
+	await RenderingServer.frame_post_draw
 	var error := root.get_texture().get_image().save_png(output_path)
 	if error == OK:
 		print("Saved %s landscape view to %s" % [view, output_path])
