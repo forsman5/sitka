@@ -1,6 +1,7 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/entities/cow.gd" id="1_cow"]
+[ext_resource type="PackedScene" path="res://assets/models/animals/Cow.fbx" id="2_model"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 size = Vector3(0.8, 0.9, 1.4)
@@ -17,9 +18,14 @@ collision_mask = 0
 script = ExtResource("1_cow")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+visible = false
 position = Vector3(0, 0.45, 0)
 mesh = SubResource("BoxMesh_1")
 surface_material_override/0 = SubResource("CowMat_1")
+
+[node name="Model" parent="." instance=ExtResource("2_model")]
+rotation_degrees = Vector3(0, 180, 0)
+scale = Vector3(0.22, 0.22, 0.22)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 position = Vector3(0, 0.45, 0)
