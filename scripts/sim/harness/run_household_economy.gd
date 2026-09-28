@@ -20,6 +20,7 @@ func _init() -> void:
 	_check_determinism()
 	_check_multi_settlement_locality()
 	_check_conservation()
+	_check_field_model_dynamics()
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_emigration_actually_happens()
 	_check_life_cycle_births_and_aging()
@@ -137,26 +138,91 @@ func _check_conservation() -> void:
 	_assert(min_household_stock >= -EPSILON, "Some stock went negative: %.4f" % min_household_stock)
 	_assert(min_balance >= -EPSILON, "Some balance went negative: %.4f" % min_balance)
 
+## Field/harvest model regression checks, day by day over one Farm growth
+## cycle plus change: harvests are lumpy (stock only jumps on a harvest
+## day, and each business's own per-business stock/sale/export accounting
+## reconciles every single day, not just in aggregate -- see
+## _check_conservation for the city-wide version of this), a business never
+## earns revenue on a day nothing of its output actually sold locally or
+## exported, wages never draw a business's balance below its own
+## generous-but-real negative floor (see he_simulation.gd's WAGE_NEGATIVE_
+## BALANCE_FLOOR_DAYS), and neither Farm nor Woodlot ever employs past its
+## own land-derived max_capacity.
+func _check_field_model_dynamics() -> void:
+	print("\n=== Field model: lumpy harvests, no free revenue, wage floor, land cap ===")
+	var sim := _new_sim("build_three_business_economy")
+	var days := HEScenarioSeeds.FARM_GROWTH_DAYS + 30
+	var harvest_days := 0
+	var worst_stock_gap := 0.0
+	var worst_floor_breach := 0.0
+	var over_cap_by := 0
+	var free_revenue_days := 0
+	var previous_stock := {}
+	for report in sim.get_business_reports():
+		previous_stock[report["business_id"]] = report["stock"]
+
+	for i in days:
+		sim.advance_ticks(1)
+		var day_record: Dictionary = sim.get_daily_history(1)[0]
+		for report in sim.get_business_reports():
+			var business_id: int = report["business_id"]
+			if report["kind"] == "production":
+				var harvested: float = report["last_actual_units"]
+				if harvested > 0.0001:
+					harvest_days += 1
+				var traded: float = (day_record["traded_quantity"] as Dictionary).get(report["output_commodity"], 0.0)
+				var exported: float = (day_record["exported"] as Dictionary).get(report["output_commodity"], 0.0)
+				var expected_stock: float = float(previous_stock[business_id]) + harvested - traded - exported
+				worst_stock_gap = max(worst_stock_gap, abs(report["stock"] - expected_stock))
+				if traded <= 0.0001 and exported <= 0.0001 and report["last_revenue"] > 0.0001:
+					free_revenue_days += 1
+			previous_stock[business_id] = report["stock"]
+
+			var employed: int = report["employed_workers"]
+			if employed > report["max_capacity"]:
+				over_cap_by = max(over_cap_by, employed - report["max_capacity"])
+			var reference: float = report["reference_wage_per_worker"]
+			var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * reference * employed
+			if report["balance"] < floor - EPSILON:
+				worst_floor_breach = max(worst_floor_breach, floor - report["balance"])
+
+	print("  over %d days: Farm/Woodlot harvest-days=%d, worst per-business stock gap=%.4f, worst wage-floor breach=%.4f, worst over-land-cap=%d, days with revenue but no sale/export=%d" % [
+		days, harvest_days, worst_stock_gap, worst_floor_breach, over_cap_by, free_revenue_days])
+
+	_assert(harvest_days > 0, "Farm and/or Woodlot should have harvested at least once over %d days" % days)
+	_assert(worst_stock_gap < EPSILON, "A business's own stock should reconcile as previous + harvested - traded - exported every day, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_floor_breach < EPSILON, "A business's balance dropped below its own generous wage floor by %.4f" % worst_floor_breach)
+	_assert(over_cap_by == 0, "A business employed %d workers past its own land-derived max_capacity" % over_cap_by)
+	_assert(free_revenue_days == 0, "A business recorded revenue on a day it sold nothing locally and exported nothing")
+
 ## The core "let it tune itself" claim: starting from a deliberately
 ## mis-staffed split (Woodlot overstaffed, Farm understaffed), the business
-## paying the better wage should gain capacity/employment over time and the
-## worse-paying one should lose it, with NO manual retuning of either
-## recipe's output rate.
+## earning the better sales-revenue-per-worker should gain capacity/
+## employment over time and the worse-earning one should lose it, with NO
+## manual retuning of either recipe's output rate. rolling_average_revenue_
+## per_worker, not rolling_average_wage, is the profitability signal now
+## that wages are always paid at the going reference rate out of cash on
+## hand (see he_business.gd's rolling_average_revenue_per_worker doc
+## comment and he_simulation.gd's _pay_wages/_evaluate_business_capacity) --
+## a solvent business's OWN wage is nearly always just the reference wage
+## by construction, so comparing wage-to-reference the old way would show
+## nothing moving even while real profitability clearly diverges.
 ##
 ## With the Trader in the mix, Woodlot's structural timber oversupply is no
-## longer a permanent wage penalty -- trade relieves it, and Woodlot's own
-## wage recovers past Farm's well before day 300. So this no longer asserts
-## a fixed final Farm-vs-Woodlot wage ranking (that was really a proxy for
-## "Woodlot's oversupply never gets fixed," which is exactly what the
-## Trader exists to fix); it only checks that employment actually moved in
-## response to the ORIGINAL mis-staffing, which is the thing this scenario
-## is actually testing. It separately checks that the Trader itself -- the
-## one business whose entire job is being that outlet -- is still alive
-## and earning a real wage this far out, a direct regression check for the
-## "permanently dies and stops trading" bug fixed alongside this test
-## (dead-forever looks like employed_workers==0 and wage stuck at exactly
-## 0.0; a healthy business can still dip below the reference wage on any
-## single snapshot day without being dead, so that's not asserted here).
+## longer a permanent penalty -- trade relieves it, and Woodlot's own
+## revenue-per-worker recovers past Farm's well before day 300. So this no
+## longer asserts a fixed final Farm-vs-Woodlot ranking (that was really a
+## proxy for "Woodlot's oversupply never gets fixed," which is exactly what
+## the Trader exists to fix); it only checks that employment actually moved
+## in response to the ORIGINAL mis-staffing, which is the thing this
+## scenario is actually testing. It separately checks that the Trader
+## itself -- the one business whose entire job is being that outlet -- is
+## still alive and earning real revenue this far out, a direct regression
+## check for the "permanently dies and stops trading" bug fixed alongside
+## this test (dead-forever looks like employed_workers==0 and revenue stuck
+## at exactly 0.0; a healthy business can still dip below the reference
+## wage on any single snapshot day without being dead, so that's not
+## asserted here).
 ##
 ## Checks Farm/Woodlot's SHARE of total city employment rather than raw
 ## employed_workers counts: with life cycle now growing the total workforce
@@ -172,15 +238,15 @@ func _check_labor_self_tunes_toward_profitable_business() -> void:
 	var late := _business_snapshot(sim, 300)
 	var late_total_workers := _total_worker_capacity(sim)
 
-	print("  day 14:  Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f | total workers=%d" % [
-		early["farm"]["capacity"], early["farm"]["employed_workers"], early["farm"]["rolling_average_wage"],
-		early["woodlot"]["capacity"], early["woodlot"]["employed_workers"], early["woodlot"]["rolling_average_wage"],
-		early["trader"]["capacity"], early["trader"]["employed_workers"], early["trader"]["rolling_average_wage"],
+	print("  day 14:  Farm capacity=%d employed=%d revenue/worker=%.3f | Woodlot capacity=%d employed=%d revenue/worker=%.3f | Trader capacity=%d employed=%d revenue/worker=%.3f | reference=%.3f | total workers=%d" % [
+		early["farm"]["capacity"], early["farm"]["employed_workers"], early["farm"]["rolling_average_revenue_per_worker"],
+		early["woodlot"]["capacity"], early["woodlot"]["employed_workers"], early["woodlot"]["rolling_average_revenue_per_worker"],
+		early["trader"]["capacity"], early["trader"]["employed_workers"], early["trader"]["rolling_average_revenue_per_worker"],
 		early["farm"]["reference_wage_per_worker"], early_total_workers])
-	print("  day 300: Farm capacity=%d employed=%d wage=%.3f | Woodlot capacity=%d employed=%d wage=%.3f | Trader capacity=%d employed=%d wage=%.3f | reference=%.3f | total workers=%d" % [
-		late["farm"]["capacity"], late["farm"]["employed_workers"], late["farm"]["rolling_average_wage"],
-		late["woodlot"]["capacity"], late["woodlot"]["employed_workers"], late["woodlot"]["rolling_average_wage"],
-		late["trader"]["capacity"], late["trader"]["employed_workers"], late["trader"]["rolling_average_wage"],
+	print("  day 300: Farm capacity=%d employed=%d revenue/worker=%.3f | Woodlot capacity=%d employed=%d revenue/worker=%.3f | Trader capacity=%d employed=%d revenue/worker=%.3f | reference=%.3f | total workers=%d" % [
+		late["farm"]["capacity"], late["farm"]["employed_workers"], late["farm"]["rolling_average_revenue_per_worker"],
+		late["woodlot"]["capacity"], late["woodlot"]["employed_workers"], late["woodlot"]["rolling_average_revenue_per_worker"],
+		late["trader"]["capacity"], late["trader"]["employed_workers"], late["trader"]["rolling_average_revenue_per_worker"],
 		late["farm"]["reference_wage_per_worker"], late_total_workers])
 
 	var early_farm_share: float = float(early["farm"]["employed_workers"]) / float(early_total_workers)
@@ -196,8 +262,8 @@ func _check_labor_self_tunes_toward_profitable_business() -> void:
 		"Woodlot's SHARE of total employment should shrink over time, went %.1f%% -> %.1f%%" % [early_woodlot_share * 100.0, late_woodlot_share * 100.0])
 	_assert(late["trader"]["employed_workers"] > 0,
 		"Trader should still be trading by day 300, not permanently died out")
-	_assert(late["trader"]["rolling_average_wage"] > 0.0,
-		"Trader should be earning a real wage by day 300, not stuck at 0 like the permanently-dead-capacity bug this test guards against")
+	_assert(late["trader"]["rolling_average_revenue_per_worker"] > 0.0,
+		"Trader should be earning real revenue by day 300, not stuck at 0 like the permanently-dead-capacity bug this test guards against")
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)

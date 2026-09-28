@@ -221,13 +221,25 @@ func _rebuild_business_rows() -> void:
 		child.queue_free()
 	_business_rows.clear()
 
+	# The field-model columns (Land, Next harvest, Cash runway, Wage
+	# shortfall) push this grid's natural width well past the window --
+	# without a ScrollContainer a plain child forces the whole page (and
+	# everything else sharing its VBoxContainer, like the top bar's speed
+	# buttons) to stretch to match it, shoving them off screen instead of
+	# just scrolling this one row.
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_business_list.add_child(scroll)
+
 	var grid := GridContainer.new()
-	grid.columns = 12
-	_business_list.add_child(grid)
-	for col_label in ["Name", "Capacity", "Max", "Employed", "Output", "Wage (7d avg)", "Reference wage", "Stock", "Cash", "Revenue", "Wages", "Cash Δ"]:
+	grid.columns = 15
+	scroll.add_child(grid)
+	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Next harvest", "Output", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
-		if col_label == "Wage (7d avg)":
+		if col_label == "Revenue/worker (avg)":
 			header.mouse_filter = Control.MOUSE_FILTER_STOP
 			header.mouse_default_cursor_shape = Control.CURSOR_HELP
 			header.tooltip_text = WAGE_TOOLTIP
@@ -237,10 +249,10 @@ func _rebuild_business_rows() -> void:
 	for report in _simulation.get_business_reports():
 		var business_id: int = report["business_id"]
 		var labels := {}
-		for key in ["name", "capacity", "max_capacity", "employed", "output", "wage", "reference", "stock", "balance", "revenue", "wages", "cash_change"]:
+		for key in ["name", "capacity", "max_capacity", "employed", "land", "next_harvest", "output", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
 			var label := Label.new()
 			label.custom_minimum_size = Vector2(90, 0)
-			if key == "wage":
+			if key == "revenue_per_worker":
 				label.mouse_filter = Control.MOUSE_FILTER_STOP
 				label.mouse_default_cursor_shape = Control.CURSOR_HELP
 				label.tooltip_text = WAGE_TOOLTIP
@@ -354,6 +366,10 @@ func _refresh() -> void:
 		(row["capacity"] as Label).text = str(report["capacity"])
 		(row["max_capacity"] as Label).text = str(report["max_capacity"])
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
+		var land: float = report["land_area_acres"]
+		(row["land"] as Label).text = ("%.0f" % land) if land > 0.0 else "-"
+		var next_harvest: int = report["days_to_next_harvest"]
+		(row["next_harvest"] as Label).text = ("%dd" % next_harvest) if next_harvest >= 0 else "-"
 		if report.has("herd_size"):
 			var output_text := "culled %.1f %s" % [report["last_actual_units"], report["output_commodity"]]
 			if report.get("last_wool_produced", 0.0) > 0.0:
@@ -361,21 +377,25 @@ func _refresh() -> void:
 			(row["output"] as Label).text = output_text
 		else:
 			(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
-		var wage: float = report["rolling_average_wage"]
+		# Ranches now hire and earn revenue-per-worker exactly like Farm/
+		# Woodlot (see he_business.gd's has_long_cycle()), so they use the
+		# same column/coloring as every other business -- no herd-specific
+		# override needed here any more.
+		var revenue_per_worker: float = report["rolling_average_revenue_per_worker"]
 		var reference: float = report["reference_wage_per_worker"]
-		var wage_label := row["wage"] as Label
-		if report.has("herd_size"):
-			# Herds hire no one and earn no wage -- the red/green profitability
-			# cue below doesn't apply, so leave it at the neutral header color.
-			wage_label.text = "--"
-			wage_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-		else:
-			wage_label.text = "%.3f" % wage
-			wage_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if wage > reference else Color(0.9, 0.5, 0.5))
+		var revenue_label := row["revenue_per_worker"] as Label
+		revenue_label.text = "%.3f" % revenue_per_worker
+		revenue_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if revenue_per_worker > reference else Color(0.9, 0.5, 0.5))
 		(row["reference"] as Label).text = "%.3f" % reference
 		(row["stock"] as Label).text = "%.1f" % report["stock"]
 		(row["balance"] as Label).text = "%.1f" % report["balance"]
-		(row["revenue"] as Label).text = "%.1f" % report["last_revenue"]
+		var runway: float = report["cash_runway_days"]
+		var runway_label := row["runway"] as Label
+		runway_label.text = "inf" if is_inf(runway) else ("%.0fd" % runway)
+		runway_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.5) if runway < 0.0 else Color(0.75, 0.75, 0.8))
+		var shortfall: float = report["wage_shortfall"]
+		var shortfall_label := row["shortfall"] as Label
+		shortfall_label.text = ("%.1f" % shortfall) if shortfall > 0.01 else ""
 		(row["wages"] as Label).text = "%.1f" % report["last_wages_paid"]
 		var cash_change: float = report["last_cash_change"]
 		var cash_change_label := row["cash_change"] as Label

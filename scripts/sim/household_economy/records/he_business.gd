@@ -21,29 +21,31 @@ extends RefCounted
 ## identical to a PRODUCTION business.
 ##
 ## Kind.HERD (a "Cattle Ranch" or "Sheep Farm") is a second odd one out, in
-## the opposite direction: it has no recipe and hires no one (capacity/
-## max_capacity stay 0, so it never enters the wage/employment loops at all
-## -- see he_simulation.gd's _run_herds). It instead carries a live
-## `herd_size` that grows and thins on its own each HERD_EVAL_INTERVAL_DAYS,
-## grazing a shared, settlement-wide land pool rather than being fed
-## purchased grain (that's a possible future mechanic, not this one -- see
-## he_simulation.gd's HERD_EVAL_INTERVAL_DAYS doc comment), and sells off
-## excess head straight into its own inventory once herd_size crosses a
-## cull target. `species` distinguishes CATTLE from SHEEP, which differ in
-## reproduction rate, land use, and mortality -- see he_simulation.gd's
-## HERD_* constants. Sheep additionally throw off a small WOOL trickle from
-## live herd size every interval, independent of culling. WOOL is an
-## ordinary local household good (see he_simulation.gd's
+## the opposite direction from Kind.TRADER: it has no recipe and no fields.
+## It instead carries a live `herd_size` that grows and thins on its own
+## each HERD_EVAL_INTERVAL_DAYS, grazing a shared, settlement-wide land pool
+## rather than being fed purchased grain (that's a possible future
+## mechanic, not this one -- see he_simulation.gd's HERD_EVAL_INTERVAL_DAYS
+## doc comment), and sells off excess head straight into its own inventory
+## once herd_size crosses a cull target. `species` distinguishes CATTLE
+## from SHEEP, which differ in reproduction rate, land use, and mortality --
+## see he_simulation.gd's HERD_* constants. Sheep additionally throw off a
+## small WOOL trickle from live herd size every interval, independent of
+## culling. WOOL is an ordinary local household good (see he_simulation.gd's
 ## SUBSISTENCE_COMMODITIES and _business_selling) sold through the same
 ## local market Farm/Woodlot use; the culled animal itself (herd_commodity())
 ## has no local buyer and is Trader-export-only at a flat reference price
 ## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
-## pass). Either way, nothing here hires anyone or pays wages -- the revenue
-## just accumulates in `balance` for now (see this class's `capacity`/
-## `max_capacity` doc above).
+## pass). It DOES hire and pay wages like any other business -- `growth_days`
+## is set to HERD_EVAL_INTERVAL_DAYS (see he_scenario_seeds.gd) purely so it
+## gets the same cycle-aware treatment (has_long_cycle(), protected trial
+## hires, revenue smoothed over its own cycle rather than a flat week) a
+## field-model business gets, even though it has no `fields` of its own --
+## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 
 const WAGE_ROLLING_WINDOW_DAYS := 7
 
@@ -73,6 +75,22 @@ var last_culled: Dictionary[Commodity.Type, float] = {}
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
 
+## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
+## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for
+## any legacy PRODUCTION business that never had configure_land() called on
+## it, which keeps producing instantly from `recipe` every tick exactly as
+## before (see he_simulation.gd's _run_production).
+var land_area_acres: float = 0.0
+var fields: Array[HEField] = []
+## Days in one full production cycle -- set by configure_land() for a
+## field-model business, or directly for any other cyclical business that
+## has no literal fields (currently just Kind.HERD, to HERD_EVAL_INTERVAL_
+## DAYS -- see he_scenario_seeds.gd). 0 means "no cycle, instant output"
+## (Trader, a legacy flat-rate PRODUCTION business). See has_long_cycle().
+var growth_days: int = 0
+var yield_per_area: float = 0.0
+var labor_per_area_per_day: float = 0.0
+
 ## Yesterday's actual sales revenue for this business's output good --
 ## today's wage payment divides this by today's employed worker count (see
 ## he_simulation.gd._pay_wages), the same "use yesterday's settled number,
@@ -82,10 +100,31 @@ var last_revenue: float = 0.0
 var last_wages_paid: float = 0.0
 var last_cash_change: float = 0.0
 
+## How much of today's full reference-wage bill this business couldn't
+## cover out of its own cash (balance is allowed to run generously negative
+## before wages get rationed -- see he_simulation.gd's WAGE_NEGATIVE_
+## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
+var last_wage_shortfall: float = 0.0
+
+## Set whenever a zero-capacity business gets its trial crew back (see
+## he_simulation.gd's _evaluate_business_capacity) to the day that
+## protection should end -- until then, capacity evaluation leaves this
+## business alone entirely, growth and shrink signals both, regardless of
+## how its average revenue reads. -1 (the initial value) means "not
+## currently protected".
+var protected_until_day: int = -1
+
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See
 ## he_simulation.gd._evaluate_business_capacity.
 var _wage_history: Array[float] = []
+
+## Rolling sales-revenue-per-employed-worker-day history, oldest first,
+## capped at rolling_window_days() -- THIS, not the wage (which is now
+## simply set to the going reference wage every day, see _pay_wages), is
+## what _evaluate_business_capacity compares against the reference wage to
+## decide growth/shrink, per he_simulation.gd's doc comment there.
+var _revenue_per_worker_history: Array[float] = []
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
@@ -146,3 +185,76 @@ func rolling_average_wage() -> float:
 	for w in _wage_history:
 		total += w
 	return total / _wage_history.size()
+
+## Wires this PRODUCTION business up to the field/harvest model (see
+## he_field.gd and he_simulation.gd's _run_field_growth) instead of the
+## legacy instant-production-from-recipe path. Also RE-DERIVES max_capacity
+## from the land itself (area * labor_per_area_per_day), overriding whatever
+## flat number was passed to _init -- land, not an authored headcount, is
+## the hard ceiling for a field-model business.
+func configure_land(p_land_area_acres: float, p_fields: Array[HEField], p_growth_days: int, p_yield_per_area: float, p_labor_per_area_per_day: float) -> void:
+	land_area_acres = p_land_area_acres
+	fields = p_fields
+	growth_days = p_growth_days
+	yield_per_area = p_yield_per_area
+	labor_per_area_per_day = p_labor_per_area_per_day
+	max_capacity = int(p_land_area_acres * p_labor_per_area_per_day)
+
+## True only for a business with literal HEField plots (Farm, Woodlot) --
+## the one thing that specifically needs the field-growth production path
+## (he_simulation.gd's _run_field_growth). For "does this business run on a
+## multi-day cycle at all" (which also covers Kind.HERD), use
+## has_long_cycle() instead.
+func uses_field_model() -> bool:
+	return not fields.is_empty()
+
+## True for any business whose income arrives in a lump every growth_days
+## rather than continuously -- field-model Farm/Woodlot AND Kind.HERD
+## (which sets growth_days directly, with no fields of its own; see this
+## class's doc comment). False for Trader and any legacy flat-rate
+## PRODUCTION business, whose growth_days stays 0. This is the general
+## predicate _evaluate_business_capacity/rolling_window_days should gate
+## on -- uses_field_model() only where the code specifically needs actual
+## HEField objects.
+func has_long_cycle() -> bool:
+	return growth_days > 0
+
+## Smallest (fields - growth_days - days_growing) across every field --
+## i.e. how many days until the NEXT field to mature is harvested and adds
+## fresh stock. For a cyclical business with no literal fields (Kind.HERD),
+## there's no per-field countdown to read, so this conservatively returns
+## the FULL cycle length instead -- always at least as protective as the
+## true countdown would be, never less. -1 for a business with no cycle at
+## all (Trader, legacy).
+func days_until_next_harvest() -> int:
+	if not fields.is_empty():
+		var min_days := growth_days
+		for f in fields:
+			min_days = mini(min_days, growth_days - f.days_growing)
+		return min_days
+	return growth_days if has_long_cycle() else -1
+
+## rolling_average_wage()'s window is a flat 7 days regardless of business
+## kind. rolling_average_revenue_per_worker() instead uses this business's
+## own crop/herd cycle for any has_long_cycle() business (see
+## he_simulation.gd's _evaluate_business_capacity doc comment for why a
+## full cycle, not a fixed week, is the right smoothing window when income
+## arrives in lumps at harvest rather than daily) -- Trader and legacy
+## PRODUCTION businesses fall back to the same WAGE_ROLLING_WINDOW_DAYS as
+## the wage.
+func rolling_window_days() -> int:
+	return growth_days if has_long_cycle() else WAGE_ROLLING_WINDOW_DAYS
+
+func record_revenue_per_worker_day(value: float) -> void:
+	_revenue_per_worker_history.append(value)
+	var window := rolling_window_days()
+	while _revenue_per_worker_history.size() > window:
+		_revenue_per_worker_history.pop_front()
+
+func rolling_average_revenue_per_worker() -> float:
+	if _revenue_per_worker_history.is_empty():
+		return 0.0
+	var total := 0.0
+	for v in _revenue_per_worker_history:
+		total += v
+	return total / _revenue_per_worker_history.size()

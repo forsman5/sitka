@@ -237,6 +237,34 @@ const WAGE_PROFIT_MARGIN := 0.1
 ## a business that's merely somewhat off.
 const WAGE_RATIO_CLAMP := 1.0
 
+## Wages are always paid in full at the going reference wage (see
+## _pay_wages) -- there's no more "yesterday's revenue divided by headcount"
+## ceiling, so a business's balance is allowed to run negative to cover a
+## bad stretch rather than instantly rationing pay the moment cash runs out.
+## The allowance is deliberately generous (measured in DAYS of the
+## business's own current wage bill, so it scales with headcount) --
+## sustained insolvency is meant to be caught and corrected by the weekly
+## cash-runway guard in _evaluate_business_capacity (shrink the business),
+## not by rationing take-home pay day to day.
+const WAGE_NEGATIVE_BALANCE_FLOOR_DAYS := 60.0
+
+## Weekly cash-runway guard (see _evaluate_business_capacity): a business
+## whose balance plus its current stock's market value can't cover its own
+## daily wage bill for this many more days gets forced to shrink, on top of
+## (never instead of) whatever the revenue-vs-reference-wage signal already
+## decided. For a field-model business the REQUIRED runway is instead
+## "until its own next harvest" (see HEBusiness.days_until_next_harvest) --
+## relief is a known, dated event, not a guess -- so this fallback only
+## applies to Kind.TRADER and legacy non-field PRODUCTION businesses, which
+## have no such harvest date to aim for.
+const CASH_RUNWAY_DANGER_DAYS := 14.0
+
+## "Sell down evenly until the next harvest" (see _clear_market_for) offers
+## slightly MORE than a perfectly even pace every day, so a stock backlog
+## (built up on a day demand happened to be thin) actually drains rather
+## than being carried forward at the same fraction forever.
+const SELL_PACE_HEADROOM := 1.15
+
 const HISTORY_MAX_DAYS := 360
 ## The blotter (get_event_log) only needs enough recent history for a
 ## player to scan -- unlike _history, nothing aggregates over it, so it's
@@ -421,7 +449,13 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"last_actual_units": b.last_actual_units,
 			"last_wage_per_worker": b.last_wage_per_worker,
 			"rolling_average_wage": b.rolling_average_wage(),
+			"rolling_average_revenue_per_worker": b.rolling_average_revenue_per_worker(),
 			"reference_wage_per_worker": reference_wage,
+			"cash_runway_days": _business_cash_runway_days(b),
+			"wage_shortfall": b.last_wage_shortfall,
+			"land_area_acres": b.land_area_acres,
+			"days_to_next_harvest": b.days_until_next_harvest(),
+			"fields": _field_reports(b),
 		}
 		if b.kind == HEBusiness.Kind.TRADER:
 			report["recipe_id"] = "trade"
@@ -462,6 +496,14 @@ func _trade_summary(b: HEBusiness) -> String:
 	for c in commodity_ids:
 		names.append(Commodity.name_of(c))
 	return "Export (%s)" % ", ".join(names)
+
+## Per-field progress for a land-based business's report (empty for Trader/
+## legacy businesses with no fields at all) -- see get_business_reports.
+func _field_reports(b: HEBusiness) -> Array:
+	var out: Array = []
+	for f in b.fields:
+		out.append({"area": f.area, "days_growing": f.days_growing, "growth_days": b.growth_days})
+	return out
 
 func get_market_summary(settlement_id: int = -1) -> Dictionary:
 	settlement_id = _resolve_settlement_id(settlement_id)
@@ -580,6 +622,7 @@ func _daily_tick() -> void:
 	_run_production(record)
 	_run_market(record)
 	_run_trade(record)
+	_record_business_revenue_history()
 	_run_consumption(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
 		_run_herds(record)
@@ -632,23 +675,37 @@ func _finalize_daily_record(record: Dictionary) -> void:
 		_history.pop_front()
 
 ## Every business pays each currently-employed household a wage per worker
-## equal to YESTERDAY's settled revenue divided by TODAY's employed worker
-## count -- paid before today's market runs (so households can spend a
-## wage the same day they earn it; unlike the household-to-household market,
-## there's no same-day circularity here, since the wage is fixed from
-## yesterday's number before today's clearing even starts).
+## equal to the settlement's going reference wage (_reference_wage_per_worker)
+## -- not a share of what it happened to sell -- drawn from its own cash
+## reserve (see WAGE_NEGATIVE_BALANCE_FLOOR_DAYS: balance is allowed to run
+## deeply negative before pay actually gets rationed). Paid before today's
+## market runs, same as before, so households can spend a wage the same day
+## they earn it. Whether a business can actually AFFORD paying the going
+## wage long-term is no longer this function's problem -- it always pays as
+## much of the full bill as its (generous) cash allowance covers, and the
+## weekly cash-runway guard in _evaluate_business_capacity is what actually
+## shrinks a business that can't keep this up (see its doc comment).
 func _pay_wages(record: Dictionary) -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		b.last_wages_paid = 0.0
 		b.last_cash_change = 0.0
+		b.last_wage_shortfall = 0.0
 		var employed := _business_employed_worker_count(business_id)
-		var wage_per_worker: float = (b.last_revenue / employed) if employed > 0 else 0.0
-		b.last_wage_per_worker = wage_per_worker
-		b.record_wage_day(wage_per_worker)
-		if employed <= 0 or wage_per_worker <= 0.0:
+		if employed <= 0:
+			b.last_wage_per_worker = 0.0
 			record["wages_paid"][business_id] = 0.0
 			continue
+		var reference_wage := _reference_wage_per_worker(b.settlement_id)
+		var total_needed: float = reference_wage * employed
+		var floor: float = -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		var available: float = max(0.0, b.balance - floor)
+		var paid: float = clampf(total_needed, 0.0, available)
+		var shortfall: float = total_needed - paid
+		var wage_per_worker: float = paid / employed
+		b.last_wage_per_worker = wage_per_worker
+		b.record_wage_day(wage_per_worker)
+		b.last_wage_shortfall = shortfall
 		var total_paid := 0.0
 		for household_id in households.keys():
 			var h: HEHousehold = households[household_id]
@@ -664,13 +721,19 @@ func _pay_wages(record: Dictionary) -> void:
 
 ## Each PRODUCTION business produces its one recipe output using however
 ## many workers it currently has (derived live from household
-## employer_business_id, not cached) -- no input constraints in H1's two
-## recipes, so planned==actual. The Trader has no recipe; see _run_trade
-## for what it does instead.
+## employer_business_id, not cached). A field-model business (Farm,
+## Woodlot -- see HEBusiness.configure_land) grows toward a lumpy harvest
+## instead (see _run_field_growth); anything else keeps the original
+## instant-output-from-recipe behavior, so no input constraints means
+## planned==actual there. The Trader has no recipe; see _run_trade for what
+## it does instead.
 func _run_production(record: Dictionary) -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		if b.kind != HEBusiness.Kind.PRODUCTION:
+			continue
+		if b.uses_field_model():
+			_run_field_growth(b, record)
 			continue
 		var employed := _business_employed_worker_count(business_id)
 		var output_commodity := b.output_commodity()
@@ -682,6 +745,58 @@ func _run_production(record: Dictionary) -> void:
 		b.last_output_produced = {output_commodity: units}
 		var name := Commodity.name_of(output_commodity)
 		record["produced"][name] = record["produced"].get(name, 0.0) + units
+
+## One day of growth for every field of a land-based business: today's
+## employed workers are split across ALL of its fields proportional to
+## area (every field is always "growing" -- a harvested field is replanted
+## the same day, see below -- so there's never an idle field to exclude).
+## A field that reaches growth_days is harvested: its yield is area *
+## yield_per_area, scaled down by how much of the labor it actually needed
+## over the whole cycle (area * labor_per_area_per_day * growth_days) it
+## actually got -- understaffing a field for its whole cycle directly
+## shrinks that harvest, exactly like the old per-day rate did, just
+## resolved once per cycle instead of continuously. The field then
+## replants immediately (days_growing/labor_applied reset to 0) rather than
+## sitting idle, so total planted area is constant every day by
+## construction. last_planned_units/last_actual_units/last_output_produced
+## are 0.0 on every non-harvest day -- lumpy, not smoothed -- which is the
+## whole point of a harvest cycle over a flat daily rate.
+func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
+	var employed := _business_employed_worker_count(b.id)
+	var output_commodity := b.output_commodity()
+	var harvested := 0.0
+	for f in b.fields:
+		var share: float = float(employed) * (f.area / b.land_area_acres) if b.land_area_acres > 0.0 else 0.0
+		f.labor_applied += share
+		f.days_growing += 1
+		if f.days_growing < b.growth_days:
+			continue
+		var labor_required: float = f.area * b.labor_per_area_per_day * b.growth_days
+		var efficiency: float = clampf(f.labor_applied / labor_required, 0.0, 1.0) if labor_required > 0.0 else 0.0
+		harvested += f.area * b.yield_per_area * efficiency
+		f.days_growing = 0
+		f.labor_applied = 0.0
+	b.add_stock(output_commodity, harvested)
+	b.last_planned_units = float(employed)
+	b.last_actual_units = harvested
+	b.last_output_produced = {output_commodity: harvested}
+	var name := Commodity.name_of(output_commodity)
+	record["produced"][name] = record["produced"].get(name, 0.0) + harvested
+
+## Once per day, after both the local market and trade have settled today's
+## last_revenue for every business: append revenue-per-employed-worker to
+## each business's rolling history (see HEBusiness.record_revenue_per_worker_
+## day), the signal _evaluate_business_capacity compares against the
+## reference wage. Recorded every day regardless of whether anyone's
+## employed (0.0 in that case) so the rolling window always spans real
+## calendar days, which matters for a field-model business whose window is
+## its own multi-month crop cycle.
+func _record_business_revenue_history() -> void:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		var employed := _business_employed_worker_count(business_id)
+		var revenue_per_worker: float = (b.last_revenue / employed) if employed > 0 else 0.0
+		b.record_revenue_per_worker_day(revenue_per_worker)
 
 ## Shared by _daily_need (times a household's headcount) and
 ## _reference_wage_per_worker (times a settlement's average price) -- the
@@ -971,21 +1086,44 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 	return new_household
 
 ## Weekly self-tuning step 1: adjust each business's TARGET capacity from
-## its own rolling-average wage vs. the going reference wage. This only
-## sets the target; _reconcile_employment (called right after) is what
-## actually moves households between employers to approach it.
+## its own rolling-average sales-revenue-per-worker vs. the going reference
+## wage. This only sets the target; _reconcile_employment (called right
+## after) is what actually moves households between employers to approach
+## it.
+##
+## Revenue-per-worker, not the wage, is the profitability signal now: since
+## _pay_wages always pays the full reference wage whenever a business can
+## afford to (see WAGE_NEGATIVE_BALANCE_FLOOR_DAYS), a solvent business's
+## OWN wage is nearly always equal to the reference wage by construction --
+## comparing the two would tell us nothing about whether it can actually
+## sustain that. What it actually earned per worker (rolling_average_
+## revenue_per_worker, smoothed over its own crop cycle for a field-model
+## business -- see HEBusiness.rolling_window_days) is the real test.
 ##
 ## Outside the WAGE_PROFIT_MARGIN dead-band, the move is proportional to how
-## far the wage is from the reference (as a fraction of the reference,
+## far revenue is from the reference wage (as a fraction of the reference,
 ## clamped at WAGE_RATIO_CLAMP), not a flat CAPACITY_STEP_MAX_WORKERS
 ## regardless of magnitude. A business 11% over the line and one 300% over
 ## it used to get the identical +4 nudge -- a bang-bang response to error
 ## magnitude is exactly the kind of high-gain control that turns a real but
 ## modest mismatch into overshoot, which is what a fixed step size was
-## doing on top of the wage/price system's own lag. The worst case (a wage
+## doing on top of the wage/price system's own lag. The worst case (revenue
 ## at or beyond the clamp) still moves by exactly CAPACITY_STEP_MAX_WORKERS,
 ## same as every move used to -- this only makes moderate mismatches gentler,
 ## it never makes an extreme one bigger than before.
+##
+## Cash-runway guard, layered on top (never used to GROW, only to force a
+## bigger shrink than the revenue signal alone would): a business whose
+## balance plus its stock's market value can't cover its own wage bill for
+## CASH_RUNWAY_DANGER_DAYS more (or, for a field-model business, until its
+## own next harvest -- see _business_cash_runway_days) is treated as if it
+## needs at least one more full capacity step of shrinking this week,
+## regardless of what its revenue-per-worker happened to average out to --
+## a business can look profitable on average while still being about to run
+## out of cash before its next payday, and that's the case this guard
+## exists to catch. Per this task's brief, going negative itself is allowed
+## generously (see WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) -- only the FORECAST of
+## running out of runway forces a downsize, not the negative balance itself.
 func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
@@ -994,31 +1132,109 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 		reference_wages[b.settlement_id] = reference_wage
 		if b.capacity == 0:
 			# A business at zero capacity has had no employed workers, so
-			# rolling_average_wage() reads a flat 0 -- indistinguishable
-			# from "genuinely unprofitable" even once whatever shut it down
-			# (no surplus to trade, a bad price, anything) has long since
-			# passed. Left alone this is a one-way trap: nobody ever gets
-			# hired back in to generate a real wage to re-evaluate. Give it
-			# a small trial crew instead so next week's wage is actual
-			# evidence, not silence -- worst case it's genuinely still
-			# unprofitable and shrinks right back to 0 next week. There's no
-			# wage signal at all here (rolling_average_wage() is flat 0), so
-			# this can't be made proportional the way the branch below is --
-			# it's a fixed-size probe by necessity, not a control response.
+			# rolling_average_revenue_per_worker() reads a flat 0 --
+			# indistinguishable from "genuinely unprofitable" even once
+			# whatever shut it down (no surplus to trade, a bad price,
+			# anything) has long since passed. Left alone this is a
+			# one-way trap: nobody ever gets hired back in to generate real
+			# evidence to re-evaluate. Give it a small trial crew instead
+			# so next week's revenue is actual evidence, not silence --
+			# worst case it's genuinely still unprofitable and shrinks
+			# right back to 0 next week. There's no revenue signal at all
+			# here, so this can't be made proportional the way the branch
+			# below is -- it's a fixed-size probe by necessity, not a
+			# control response.
+			# A field-model trial crew has NO real evidence behind it until
+			# its nearest field's harvest actually lands -- which, for a
+			# multi-month growth cycle, can be far longer than one
+			# CAPACITY_EVAL_INTERVAL_DAYS week. Judging it before then (on
+			# either the revenue signal below or the cash guard, both of
+			# which would see nothing but a flat/near-flat 0.0 average and
+			# read that as failure) would revert the trial hire before it
+			# ever gets a chance to prove out -- a permanent trap. Protect
+			# it until the harvest date instead; the field keeps growing
+			# every day regardless of this protection (see
+			# _run_field_growth), so this costs nothing but time and
+			# (generously floored) wages while it waits. A non-field
+			# business has no such lag -- its output is instant -- so it
+			# only needs a couple of weeks' grace to accumulate a real
+			# revenue signal at all.
+			b.protected_until_day = day + (b.days_until_next_harvest() if b.has_long_cycle() else CASH_RUNWAY_DANGER_DAYS)
 			b.capacity = mini(CAPACITY_TRIAL_HIRE_WORKERS, b.max_capacity)
 			continue
-		if reference_wage <= 0.0:
+		if day < b.protected_until_day:
 			continue
-		var avg_wage := b.rolling_average_wage()
-		var ratio_error := (avg_wage - reference_wage) / reference_wage
-		if absf(ratio_error) <= WAGE_PROFIT_MARGIN:
+		if (day + 1) % _capacity_eval_interval_days(b) != 0:
+			# A field-model business's output doesn't respond to a capacity
+			# change for up to its own growth_days -- re-evaluating it every
+			# single CAPACITY_EVAL_INTERVAL_DAYS week regardless (like a
+			# business whose output is instant) means many step changes
+			# stack up before the first one's effect on revenue is even
+			# visible, a classic control-loop-period-shorter-than-plant-lag
+			# recipe for overshoot. See _capacity_eval_interval_days.
 			continue
-		var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
-		var delta := roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
-		b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
+		var delta := 0
+		if reference_wage > 0.0:
+			var avg_revenue := b.rolling_average_revenue_per_worker()
+			var ratio_error := (avg_revenue - reference_wage) / reference_wage
+			if absf(ratio_error) > WAGE_PROFIT_MARGIN:
+				var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
+				delta = roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
+		var required_runway: float = float(b.days_until_next_harvest()) if b.has_long_cycle() else CASH_RUNWAY_DANGER_DAYS
+		if _business_cash_runway_days(b) < required_runway:
+			delta = mini(delta, -CAPACITY_STEP_MAX_WORKERS)
+		if delta != 0:
+			b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
 	record["reference_wage_by_settlement"] = reference_wages
 	if reference_wages.size() == 1:
 		record["reference_wage"] = reference_wages.values()[0]
+
+## How often (in days, always a whole multiple of CAPACITY_EVAL_INTERVAL_
+## DAYS so it still only ever fires on one of the ticks the calling
+## _daily_tick has already gated on that cadence) a business's TARGET
+## capacity should actually be re-evaluated. A field-model business grows
+## its own re-evaluation cadence with its production lag (roughly a sixth
+## of its own growth cycle) instead of always using the flat weekly
+## default -- see _evaluate_business_capacity's doc comment for why judging
+## it that often would compound many step changes before the first one's
+## effect on revenue is even visible.
+func _capacity_eval_interval_days(b: HEBusiness) -> int:
+	if not b.has_long_cycle():
+		return CAPACITY_EVAL_INTERVAL_DAYS
+	var weeks: int = maxi(1, roundi(float(b.growth_days) / 6.0 / float(CAPACITY_EVAL_INTERVAL_DAYS)))
+	return weeks * CAPACITY_EVAL_INTERVAL_DAYS
+
+## Days until `b`'s balance plus its current stock's market value runs out
+## against its own FULL-SCALE daily wage bill (reference wage * max_capacity,
+## not the currently employed headcount) -- INF for a business with no wage
+## bill at all (max_capacity 0). Deliberately scale-invariant to the
+## business's CURRENT (possibly still-recovering) headcount: sizing the
+## bill off `employed` instead would shrink the denominator in lockstep with
+## a business already being wound down, making the ratio look more
+## catastrophic the smaller it gets and permanently locking a recovering
+## trial crew out regardless of how much its debt is actually being paid
+## down. Used only by _evaluate_business_capacity's cash-runway guard; never
+## mutates anything.
+func _business_cash_runway_days(b: HEBusiness) -> float:
+	var daily_wage_bill: float = _reference_wage_per_worker(b.settlement_id) * b.max_capacity
+	if daily_wage_bill <= 0.0:
+		return INF
+	var stock_value := 0.0
+	if b.kind == HEBusiness.Kind.PRODUCTION:
+		var oc := b.output_commodity()
+		stock_value = b.stock(oc) * (markets[b.settlement_id] as HEMarket).price[oc]
+	elif b.kind == HEBusiness.Kind.HERD:
+		# The culled animal itself has no local price (see HERD_EXPORT_PRICE's
+		# doc comment) -- value it at what the Trader would actually pay for
+		# it, not the undiscounted reference price, so this doesn't overstate
+		# what the ranch could really turn it into. Wool, unlike the animal,
+		# does clear locally, so it's valued at the real local price like any
+		# other PRODUCTION stock above.
+		var herd_commodity := b.herd_commodity()
+		stock_value = b.stock(herd_commodity) * HERD_EXPORT_PRICE[b.species] * TRADER_BUY_PRICE_FRACTION
+		if b.species == HEBusiness.Species.SHEEP:
+			stock_value += b.stock(Commodity.Type.WOOL) * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.WOOL]
+	return (b.balance + stock_value) / daily_wage_bill
 
 ## Weekly self-tuning step 2: lay off whole households (highest household ID
 ## first, an arbitrary but deterministic tie-break) from any business now
@@ -1088,12 +1304,16 @@ func _run_market(record: Dictionary) -> void:
 			_clear_market_for(settlement_id, commodity, record, starting_balance, reserved_spend)
 
 ## One commodity's daily clearing. The seller side is now a single business
-## (whichever one's recipe outputs this commodity, or none) offering its
-## ENTIRE current stock -- a business has no reason to hold back inventory
-## the way a subsistence household once did, since it doesn't consume its
-## own product. The buyer side is unchanged: household requests are sized
-## against subsistence need before affordability caps them, capped by what's
-## left of this household's snapshotted starting balance.
+## (whichever one's recipe outputs this commodity, or none). A legacy
+## (non-field) business still offers its ENTIRE current stock -- it has no
+## reason to hold any back, since it doesn't consume its own product. A
+## field-model business instead offers stock / days_until_next_harvest (with
+## a little SELL_PACE_HEADROOM) so a lump harvest sells down evenly over the
+## stretch until the next one, rather than dumping the whole thing on the
+## market the day it's picked (see he_business.gd's days_until_next_harvest).
+## The buyer side is unchanged: household requests are sized against
+## subsistence need before affordability caps them, capped by what's left of
+## this household's snapshotted starting balance.
 ##
 ## When one side outnumbers the other, both sides are scaled by a single
 ## ratio (quantity_traded / that side's total) -- pure proportional scaling
@@ -1103,7 +1323,14 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	var local_market: HEMarket = markets[settlement_id]
 	var price: float = local_market.price[commodity]
 	var seller: HEBusiness = _business_selling(settlement_id, commodity)
-	var total_offer: float = seller.stock(commodity) if seller != null else 0.0
+	var total_offer := 0.0
+	if seller != null:
+		var stock := seller.stock(commodity)
+		if seller.has_long_cycle():
+			var days_until: int = maxi(1, seller.days_until_next_harvest())
+			total_offer = minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
+		else:
+			total_offer = stock
 
 	var requests_funded: Dictionary = {}
 	var total_funded_request := 0.0
@@ -1213,7 +1440,13 @@ func _run_trade(record: Dictionary) -> void:
 			var seller := _business_selling(trader.settlement_id, commodity)
 			if seller == null:
 				continue
-			var reserve: float = _settlement_daily_demand(trader.settlement_id, commodity) * TRADER_RESERVE_BUFFER_DAYS
+			# A field-model seller's own next harvest is a known, dated
+			# relief -- the reserve only needs to cover local demand until
+			# THEN, not a flat buffer that ignores how close (or far) that
+			# day actually is. A legacy/non-field seller has no such date,
+			# so it keeps the original flat TRADER_RESERVE_BUFFER_DAYS.
+			var reserve_days: float = float(seller.days_until_next_harvest()) if seller.has_long_cycle() else TRADER_RESERVE_BUFFER_DAYS
+			var reserve: float = _settlement_daily_demand(trader.settlement_id, commodity) * reserve_days
 			var surplus: float = max(0.0, seller.stock(commodity) - reserve)
 			var quantity: float = min(surplus, remaining_capacity)
 			if quantity <= 0.0001:
