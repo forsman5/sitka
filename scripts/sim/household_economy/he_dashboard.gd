@@ -24,6 +24,7 @@ const SCENARIOS := [
 	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
 	{"label": "Three businesses, lopsided start", "builder": "build_lopsided_start"},
 	{"label": "Four businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
+	{"label": "Five businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
 ]
 
 var _simulation: HESimulation

@@ -22,6 +22,7 @@ const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
 const BLOOMERY_BUSINESS_ID := 4
+const IRON_MINE_BUSINESS_ID := 5
 
 const HOUSEHOLD_COUNT := 30
 
@@ -65,6 +66,10 @@ const TRADER_MAX_CAPACITY := 20
 ## not a whole settlement's dominant employer. Legacy (non-field) business,
 ## so this IS the hard ceiling, not a land-derived one.
 const BLOOMERY_MAX_CAPACITY := 20
+
+## Opt-in alongside the Bloomery. Like the workshop, this is a compact,
+## legacy (daily-output) production site rather than a land/field business.
+const IRON_MINE_MAX_CAPACITY := 20
 
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
@@ -112,6 +117,9 @@ static func _woodlot_recipe() -> Recipe:
 ## discount rather than mostly selling to local households at full price.
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
+
+static func _iron_mine_recipe() -> Recipe:
+	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
 
 ## A field's labor_applied is seeded as if it had been fully staffed for
 ## every day it's already grown before day 0 -- otherwise a field seeded
@@ -179,7 +187,7 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## HESimulation._evaluate_business_capacity's zero-capacity-protection
 ## mechanic, since there is no such business id in `businesses` for that to
 ## apply to.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0) -> Dictionary:
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
 	var farm := HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), 0, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
@@ -216,6 +224,13 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
 
+	var iron_mine: HEBusiness = null
+	if iron_mine_capacity > 0:
+		iron_mine = HEBusiness.new(IRON_MINE_BUSINESS_ID, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, iron_mine_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		iron_mine.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * iron_mine_capacity
+		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
+		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
+
 	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 
@@ -223,6 +238,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var farm_workers_assigned := 0
 	var woodlot_workers_assigned := 0
 	var bloomery_workers_assigned := 0
+	var iron_mine_workers_assigned := 0
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
@@ -241,6 +257,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		elif bloomery != null and bloomery_workers_assigned < bloomery_capacity:
 			household.employer_business_id = BLOOMERY_BUSINESS_ID
 			bloomery_workers_assigned += WORKER_CAPACITY
+		elif iron_mine != null and iron_mine_workers_assigned < iron_mine_capacity:
+			household.employer_business_id = IRON_MINE_BUSINESS_ID
+			iron_mine_workers_assigned += WORKER_CAPACITY
 		elif trader_workers_assigned < trader_capacity:
 			household.employer_business_id = TRADER_BUSINESS_ID
 			trader_workers_assigned += WORKER_CAPACITY
@@ -282,6 +301,18 @@ static func build_three_business_economy_with_bloomery(_rng: RandomNumberGenerat
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader, bloomery)
+
+## Local-ore variant: the Iron Mine puts ore into its business inventory,
+## where the Bloomery buys it on the following day before the Trader gets a
+## chance to export any remaining surplus. _run_input_purchasing also
+## prefers this local seller over the Trader's outside-import fallback.
+static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var bloomery := 8
+	var iron_mine := 8
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader, bloomery, iron_mine)
 
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather

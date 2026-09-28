@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
+	_check_local_iron_mine_supplies_bloomery_first()
 	_check_bloomery_stays_off_when_not_seeded()
 	_check_field_model_dynamics()
 	_check_labor_self_tunes_toward_profitable_business()
@@ -199,6 +200,33 @@ func _check_bloomery_smelting() -> void:
 			bloomery_report = report
 	_assert(not bloomery_report.is_empty(), "Bloomery should appear in business reports when the scenario includes it")
 	_assert(bloomery_report.get("capacity", 0) > 0, "Bloomery should still have staff after 200 days -- its recipe should clear the reference wage (see he_scenario_seeds.gd's _bloomery_recipe doc comment), not starve to zero")
+
+## The local mine must replace the Trader's ore-import fallback. Input
+## purchasing runs before surplus export each day, so the Bloomery gets its
+## claim on the mine's previous closing stock before the Trader can move it.
+func _check_local_iron_mine_supplies_bloomery_first() -> void:
+	print("\n=== Iron Mine: supplies the Bloomery before Trader export ===")
+	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	sim.advance_ticks(60)
+	var history := sim.get_daily_history(60)
+	var ore_produced := 0.0
+	var ore_imported := 0.0
+	var iron_produced := 0.0
+	for record in history:
+		ore_produced += (record["produced"] as Dictionary).get("Iron Ore", 0.0)
+		ore_imported += (record["imported"] as Dictionary).get("Iron Ore", 0.0)
+		iron_produced += (record["produced"] as Dictionary).get("Iron", 0.0)
+
+	var mine_present := false
+	for report in sim.get_business_reports():
+		if report["business_id"] == HEScenarioSeeds.IRON_MINE_BUSINESS_ID:
+			mine_present = true
+			break
+	print("  over 60 days: ore mined=%.1f, ore imported=%.1f, iron smelted=%.1f" % [ore_produced, ore_imported, iron_produced])
+	_assert(mine_present, "Iron Mine should appear in the local-ore scenario")
+	_assert(ore_produced > 0.0, "Iron Mine should produce ore")
+	_assert(iron_produced > 0.0, "Bloomery should smelt iron from locally mined ore")
+	_assert(ore_imported < EPSILON, "Trader should not import ore while a local Iron Mine supplies it, imported %.3f" % ore_imported)
 
 ## Building a scenario WITHOUT the Bloomery must never spawn one later --
 ## the opt-in toggle is which scenario builder gets picked (see
