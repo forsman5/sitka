@@ -21,6 +21,7 @@ const BLOTTER_DISPLAY_LIMIT := 40
 const SCENARIOS := [
 	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
 	{"label": "Three businesses, lopsided start", "builder": "build_lopsided_start"},
+	{"label": "Four businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
 ]
 
 var _simulation: HESimulation
@@ -198,7 +199,12 @@ func _build_market_grid() -> GridContainer:
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(header)
 
-	for c in HESimulation.SUBSISTENCE_COMMODITIES:
+	# BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES, so a
+	# business-to-business good like iron ore/iron gets a row too (see
+	# HESimulation.get_market_summary) -- it just reads all zeroes in a
+	# scenario with no Bloomery to trade it, since nothing ever populates
+	# its last_clearing entry there.
+	for c in HESimulation.BASE_PRICE.keys():
 		var name := Commodity.name_of(c)
 		var name_label := Label.new()
 		name_label.text = name
@@ -337,10 +343,10 @@ func _refresh() -> void:
 	_day_label.text = "Day %d" % clock["day"]
 
 	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f" % [
+	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f  import cost (lifetime)=%.1f" % [
 		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
 		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"]]
+		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"], city["import_cost_total"]]
 
 	var market := _simulation.get_market_summary()
 	for commodity_name in _market_labels.keys():

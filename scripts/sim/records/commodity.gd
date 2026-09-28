@@ -1,11 +1,11 @@
 class_name Commodity
 extends RefCounted
 
-enum Type { GRAIN, CATTLE, SHEEP, WOOL, TIMBER, CHARCOAL, IRON, TOOLS }
+enum Type { GRAIN, CATTLE, SHEEP, WOOL, TIMBER, CHARCOAL, IRON, TOOLS, IRON_ORE }
 
 const ALL: Array[Type] = [
 	Type.GRAIN, Type.CATTLE, Type.SHEEP, Type.WOOL,
-	Type.TIMBER, Type.CHARCOAL, Type.IRON, Type.TOOLS,
+	Type.TIMBER, Type.CHARCOAL, Type.IRON, Type.TOOLS, Type.IRON_ORE,
 ]
 
 static func name_of(t: Type) -> String:
@@ -18,4 +18,5 @@ static func name_of(t: Type) -> String:
 		Type.CHARCOAL: return "Charcoal"
 		Type.IRON: return "Iron"
 		Type.TOOLS: return "Tools"
+		Type.IRON_ORE: return "Iron Ore"
 	return "Unknown"
