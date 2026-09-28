@@ -221,9 +221,21 @@ func _rebuild_business_rows() -> void:
 		child.queue_free()
 	_business_rows.clear()
 
+	# The field-model columns (Land, Next harvest, Cash runway, Wage
+	# shortfall) push this grid's natural width well past the window --
+	# without a ScrollContainer a plain child forces the whole page (and
+	# everything else sharing its VBoxContainer, like the top bar's speed
+	# buttons) to stretch to match it, shoving them off screen instead of
+	# just scrolling this one row.
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_business_list.add_child(scroll)
+
 	var grid := GridContainer.new()
 	grid.columns = 15
-	_business_list.add_child(grid)
+	scroll.add_child(grid)
 	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Next harvest", "Output", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
