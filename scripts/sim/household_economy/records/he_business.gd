@@ -22,6 +22,7 @@ extends RefCounted
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 
 const WAGE_ROLLING_WINDOW_DAYS := 7
 
@@ -38,6 +39,17 @@ var capacity: int
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
 
+## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
+## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for
+## any legacy PRODUCTION business that never had configure_land() called on
+## it, which keeps producing instantly from `recipe` every tick exactly as
+## before (see he_simulation.gd's _run_production).
+var land_area_acres: float = 0.0
+var fields: Array[HEField] = []
+var growth_days: int = 0
+var yield_per_area: float = 0.0
+var labor_per_area_per_day: float = 0.0
+
 ## Yesterday's actual sales revenue for this business's output good --
 ## today's wage payment divides this by today's employed worker count (see
 ## he_simulation.gd._pay_wages), the same "use yesterday's settled number,
@@ -47,10 +59,31 @@ var last_revenue: float = 0.0
 var last_wages_paid: float = 0.0
 var last_cash_change: float = 0.0
 
+## How much of today's full reference-wage bill this business couldn't
+## cover out of its own cash (balance is allowed to run generously negative
+## before wages get rationed -- see he_simulation.gd's WAGE_NEGATIVE_
+## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
+var last_wage_shortfall: float = 0.0
+
+## Set whenever a zero-capacity business gets its trial crew back (see
+## he_simulation.gd's _evaluate_business_capacity) to the day that
+## protection should end -- until then, capacity evaluation leaves this
+## business alone entirely, growth and shrink signals both, regardless of
+## how its average revenue reads. -1 (the initial value) means "not
+## currently protected".
+var protected_until_day: int = -1
+
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See
 ## he_simulation.gd._evaluate_business_capacity.
 var _wage_history: Array[float] = []
+
+## Rolling sales-revenue-per-employed-worker-day history, oldest first,
+## capped at rolling_window_days() -- THIS, not the wage (which is now
+## simply set to the going reference wage every day, see _pay_wages), is
+## what _evaluate_business_capacity compares against the reference wage to
+## decide growth/shrink, per he_simulation.gd's doc comment there.
+var _revenue_per_worker_history: Array[float] = []
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
@@ -102,3 +135,55 @@ func rolling_average_wage() -> float:
 	for w in _wage_history:
 		total += w
 	return total / _wage_history.size()
+
+## Wires this PRODUCTION business up to the field/harvest model (see
+## he_field.gd and he_simulation.gd's _run_field_growth) instead of the
+## legacy instant-production-from-recipe path. Also RE-DERIVES max_capacity
+## from the land itself (area * labor_per_area_per_day), overriding whatever
+## flat number was passed to _init -- land, not an authored headcount, is
+## the hard ceiling for a field-model business.
+func configure_land(p_land_area_acres: float, p_fields: Array[HEField], p_growth_days: int, p_yield_per_area: float, p_labor_per_area_per_day: float) -> void:
+	land_area_acres = p_land_area_acres
+	fields = p_fields
+	growth_days = p_growth_days
+	yield_per_area = p_yield_per_area
+	labor_per_area_per_day = p_labor_per_area_per_day
+	max_capacity = int(p_land_area_acres * p_labor_per_area_per_day)
+
+func uses_field_model() -> bool:
+	return not fields.is_empty()
+
+## Smallest (fields - growth_days - days_growing) across every field --
+## i.e. how many days until the NEXT field to mature is harvested and adds
+## fresh stock. -1 for a business with no fields (Trader, legacy).
+func days_until_next_harvest() -> int:
+	if fields.is_empty():
+		return -1
+	var min_days := growth_days
+	for f in fields:
+		min_days = mini(min_days, growth_days - f.days_growing)
+	return min_days
+
+## rolling_average_wage()'s window is a flat 7 days regardless of business
+## kind. rolling_average_revenue_per_worker() instead uses this business's
+## own crop cycle for field-model businesses (see he_simulation.gd's
+## _evaluate_business_capacity doc comment for why a full cycle, not a
+## fixed week, is the right smoothing window when income arrives in
+## lumps at harvest rather than daily) -- Trader and legacy PRODUCTION
+## businesses fall back to the same WAGE_ROLLING_WINDOW_DAYS as the wage.
+func rolling_window_days() -> int:
+	return growth_days if uses_field_model() else WAGE_ROLLING_WINDOW_DAYS
+
+func record_revenue_per_worker_day(value: float) -> void:
+	_revenue_per_worker_history.append(value)
+	var window := rolling_window_days()
+	while _revenue_per_worker_history.size() > window:
+		_revenue_per_worker_history.pop_front()
+
+func rolling_average_revenue_per_worker() -> float:
+	if _revenue_per_worker_history.is_empty():
+		return 0.0
+	var total := 0.0
+	for v in _revenue_per_worker_history:
+		total += v
+	return total / _revenue_per_worker_history.size()
