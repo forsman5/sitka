@@ -21,11 +21,10 @@ extends RefCounted
 ## identical to a PRODUCTION business.
 ##
 ## A PRODUCTION business's `recipe.inputs` (e.g. the Bloomery: wood +
-## iron ore -> iron) are bought fresh every day, business-to-business, by
-## he_simulation.gd's _run_input_purchasing -- never stockpiled between
-## days. An input nothing local produces (iron ore) is supplied by the
-## settlement's Trader instead, importing it from outside the settlement on
-## the spot; see that function's doc comment for the full mechanism.
+## iron ore -> iron) are bought business-to-business and retained in its
+## inventory until production consumes them. An input nothing local
+## produces is supplied by the settlement's Trader, importing it from
+## outside the settlement; see he_simulation.gd's _run_input_purchasing.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")

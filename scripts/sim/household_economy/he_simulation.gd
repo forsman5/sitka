@@ -53,6 +53,13 @@ const FUEL_TIMBER_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tune
 ## their own output, so they always offer everything they have.
 const TARGET_BUFFER_DAYS := 3.0
 
+## A recipe-input business tries to carry this many days of inputs at its
+## current staffed production rate. The stock is real business inventory:
+## purchasing transfers it in, production consumes it later. This lets a
+## workshop bridge intermittent supplier availability instead of requiring
+## every input to be purchasable on every single production day.
+const PRODUCTION_INPUT_BUFFER_DAYS := 14.0
+
 ## Order matters here beyond readability: get_market_summary() and the
 ## dashboard's market grid both iterate BASE_PRICE.keys() directly to decide
 ## which commodities get a market row at all, so a commodity's column shows
@@ -396,6 +403,10 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["recipe_id"] = b.recipe.id
 			report["output_commodity"] = Commodity.name_of(output_commodity)
 			report["stock"] = b.stock(output_commodity)
+			var input_inventory := {}
+			for input_commodity in b.recipe.inputs.keys():
+				input_inventory[Commodity.name_of(input_commodity)] = b.stock(input_commodity)
+			report["input_inventory"] = input_inventory
 		out.append(report)
 	return out
 
@@ -560,9 +571,9 @@ func get_event_log(limit: int = -1) -> Array:
 	return out
 
 # ---------------------------------------------------------------------------
-# Daily tick: pay wages (from yesterday's settled revenue) -> buy recipe
-# inputs business-to-business off yesterday's closing stock (Bloomery buys
-# wood/imported ore) -> produce -> clear the market (sets today's revenue
+# Daily tick: pay wages (from yesterday's settled revenue) -> replenish
+# buffered recipe inputs business-to-business from yesterday's closing
+# stock -> produce from those inputs -> clear the market (sets today's revenue
 # for TOMORROW's wages) -> trade (export surplus, including today's iron) ->
 # consume -> stress/migration-pressure (weekly) -> emigration, old age, then
 # aging/births (all monthly, and all ACT) -> business capacity self-tuning +
@@ -707,6 +718,16 @@ func _run_production(record: Dictionary) -> void:
 		var rate: float = b.recipe.outputs[output_commodity]
 		var planned: float = float(employed) * rate
 		var units: float = planned * b.last_input_fulfillment_ratio
+		for input_commodity in b.recipe.inputs.keys():
+			var consumed: float = units * b.recipe.inputs[input_commodity]
+			b.consume(input_commodity, consumed)
+			var input_name := Commodity.name_of(input_commodity)
+			record["consumed"][input_name] = record["consumed"].get(input_name, 0.0) + consumed
+			# Capacity tuning should recognize input cost when the buffered
+			# good is USED, while cash changes when it is purchased. Charging
+			# a whole buffer refill against one day's revenue would make a
+			# sound business look catastrophically unprofitable that week.
+			b.last_revenue -= consumed * (markets[b.settlement_id] as HEMarket).price[input_commodity]
 		b.add_stock(output_commodity, units)
 		b.last_planned_units = planned
 		b.last_actual_units = units
@@ -1523,14 +1544,11 @@ func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commo
 	return max(0.0, seller.stock(commodity) - reserve)
 
 ## Runs first thing in the tick (right after _pay_wages, before
-## _run_production) so a PRODUCTION business with recipe.inputs (currently
-## only the Bloomery) buys today's inputs from what its suppliers had on
-## hand at the END of yesterday, not from stock today's own production
-## hasn't added yet -- the same "snapshot, don't chase a same-tick circular
-## number" discipline _pay_wages already relies on for revenue. A business
-## with empty recipe.inputs (Farm, Woodlot, and the Trader which has no
-## recipe at all) is untouched beyond having last_input_fulfillment_ratio
-## set to 1.0.
+## _run_production) so a PRODUCTION business with recipe.inputs buys toward
+## PRODUCTION_INPUT_BUFFER_DAYS of real input inventory from what suppliers
+## held at the END of yesterday. _run_production consumes that inventory
+## later in the tick. A business with empty recipe.inputs is untouched
+## beyond having last_input_fulfillment_ratio set to 1.0.
 ##
 ## Every input is bought business-to-business at today's posted local
 ## price, the same mechanism grain/timber use to sell to households, just
@@ -1549,11 +1567,10 @@ func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commo
 ## LEAVING the closed system -- see _import_cost_total -- the mirror image
 ## of _run_trade's export revenue entering it.
 ##
-## If a business can't fully afford/obtain every input it needs to run at
-## its full labor-implied output, every input is drawn down proportionally
-## to whichever one is scarcest (last_input_fulfillment_ratio) rather than
-## fully buying some inputs and none of another -- mirroring the field
-## model's single harvest-efficiency-number approach.
+## Buffer purchases are proportional across inputs: if the business can
+## fill only half of one desired refill, it fills half of every desired
+## refill. Production itself is then capped by whichever stored input is
+## scarcest, so no input can be consumed without its recipe partners.
 func _run_input_purchasing(record: Dictionary) -> void:
 	var trader_import_capacity: Dictionary = {} # trader business_id -> units still importable today
 	for business_id in businesses.keys():
@@ -1574,8 +1591,9 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 		var trader := _settlement_trader(buyer.settlement_id)
 		var local_market: HEMarket = markets[buyer.settlement_id]
-		var fulfillment_ratio := 1.0
+		var purchase_ratio := 1.0
 		var needed_by_commodity: Dictionary[Commodity.Type, float] = {}
+		var requested_by_commodity: Dictionary[Commodity.Type, float] = {}
 		var total_cost_if_fully_supplied := 0.0
 
 		# Pass 1: how much of EACH input is actually available (locally sold
@@ -1588,11 +1606,14 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		for commodity in buyer.recipe.inputs.keys():
 			var needed: float = planned_units * buyer.recipe.inputs[commodity]
 			needed_by_commodity[commodity] = needed
-			if needed <= 0.0001:
+			var target: float = needed * PRODUCTION_INPUT_BUFFER_DAYS
+			var requested: float = max(0.0, target - buyer.stock(commodity))
+			requested_by_commodity[commodity] = requested
+			if requested <= 0.0001:
 				continue
 
 			var price: float = local_market.price[commodity]
-			total_cost_if_fully_supplied += needed * price
+			total_cost_if_fully_supplied += requested * price
 			var seller := _business_selling(buyer.settlement_id, commodity)
 			var offer: float
 			if seller != null:
@@ -1604,35 +1625,24 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			else:
 				offer = 0.0
 
-			fulfillment_ratio = minf(fulfillment_ratio, min(needed, offer) / needed)
+			purchase_ratio = minf(purchase_ratio, min(requested, offer) / requested)
 
 		# Pass 1b: fold in the single shared cash constraint across every
 		# input at once.
 		if total_cost_if_fully_supplied > 0.0001:
 			var affordable_ratio: float = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
-			fulfillment_ratio = minf(fulfillment_ratio, affordable_ratio)
-
-		buyer.last_input_fulfillment_ratio = fulfillment_ratio
-		if fulfillment_ratio <= 0.0:
-			continue
+			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		for commodity in buyer.recipe.inputs.keys():
-			var needed: float = needed_by_commodity.get(commodity, 0.0)
-			if needed <= 0.0001:
+			var requested: float = requested_by_commodity.get(commodity, 0.0)
+			if requested <= 0.0001 or purchase_ratio <= 0.0:
 				continue
-			var bought: float = needed * fulfillment_ratio
+			var bought: float = requested * purchase_ratio
 			var price: float = local_market.price[commodity]
 			var cost: float = bought * price
 			buyer.balance -= cost
 			buyer.last_cash_change -= cost
-			# Input costs count against the BUYER's own last_revenue too
-			# (not just its cash), so _evaluate_business_capacity's weekly
-			# self-tuning judges it on revenue net of what it spent making
-			# that revenue -- exactly like the Trader's last_revenue is
-			# already its MARGIN, not its gross throughput -- rather than
-			# mistaking gross sales for profit and growing an input-hungry
-			# business that's actually losing money on every unit.
-			buyer.last_revenue -= cost
+			buyer.add_stock(commodity, bought)
 			var name := Commodity.name_of(commodity)
 			record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
 
@@ -1657,12 +1667,19 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 				local_market.last_clearing[commodity] = {
 					"total_offered": offer_before,
-					"total_requested_funded": needed,
+					"total_requested_funded": requested,
 					"quantity_traded": bought,
 					"price": price,
 				}
 				if price_adjustment_enabled:
-					_adjust_price(buyer.settlement_id, commodity, offer_before, needed)
+					_adjust_price(buyer.settlement_id, commodity, offer_before, requested)
+
+		var production_ratio := 1.0
+		for commodity in buyer.recipe.inputs.keys():
+			var needed: float = needed_by_commodity.get(commodity, 0.0)
+			if needed > 0.0001:
+				production_ratio = minf(production_ratio, minf(needed, buyer.stock(commodity)) / needed)
+		buyer.last_input_fulfillment_ratio = production_ratio
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of

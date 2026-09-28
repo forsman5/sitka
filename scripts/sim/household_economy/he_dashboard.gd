@@ -375,12 +375,7 @@ func _refresh_business_detail() -> void:
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
 		["Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
-		# A business only ever holds its own output good today (inputs are
-		# bought and consumed same-day -- see he_simulation.gd's
-		# _run_input_purchasing), so "Inventory" is just this one number for
-		# now; the label says Inventory rather than Stock so it reads right
-		# if that ever stops being true.
-		["Inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]],
+		["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]],
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
 		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
@@ -391,6 +386,11 @@ func _refresh_business_detail() -> void:
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
 	]
+	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
+		var input_parts: Array[String] = []
+		for commodity_name in (report["input_inventory"] as Dictionary).keys():
+			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
+		rows.insert(5, ["Input inventory", ", ".join(input_parts)])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
