@@ -21,6 +21,7 @@ const HOUSEHOLD_SIZE := WORKER_CAPACITY + DEPENDENTS
 const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
+const BLOOMERY_BUSINESS_ID := 4
 
 const HOUSEHOLD_COUNT := 30
 
@@ -59,6 +60,12 @@ const WOODLOT_FIELD_START_DAYS: Array[int] = [0, 45, 90, 135]
 ## dominant employer. Not land-based, so it keeps a flat authored ceiling.
 const TRADER_MAX_CAPACITY := 20
 
+## Opt-in only -- see build_three_business_economy_with_bloomery(). Smaller
+## than Farm/Woodlot's ceiling, similar in scale to the Trader: a workshop,
+## not a whole settlement's dominant employer. Legacy (non-field) business,
+## so this IS the hard ceiling, not a land-derived one.
+const BLOOMERY_MAX_CAPACITY := 20
+
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
 ## exercise the wage-driven labor market and starvation, not to prove a
@@ -85,6 +92,26 @@ static func _farm_recipe() -> Recipe:
 
 static func _woodlot_recipe() -> Recipe:
 	return Recipe.new("woodlot", {}, {Commodity.Type.TIMBER: 1.0})
+
+## Wood stands in for charcoal (no separate charcoal good in H1 yet -- see
+## he_simulation.gd's _run_input_purchasing doc comment). recipe.inputs is
+## an input:output RATIO (units consumed per unit of iron produced), unlike
+## recipe.outputs which is a per-worker-per-day rate -- 2 wood + 1 ore make
+## 1 iron here. At full BLOOMERY_MAX_CAPACITY staffing and unconstrained
+## inputs that's 20 workers * 0.5 = 10 iron/day, needing 20 wood/day (well
+## within a fully-staffed Woodlot's ~50/day) and 10 ore/day (well within a
+## Trader's import capacity at a handful of employed workers -- see
+## HESimulation.TRADER_CAPACITY_PER_WORKER).
+##
+## Per worker per day at full input supply: pays for 1 wood (1.0) + 0.5 ore
+## (2.0 each -- see HESimulation.BASE_PRICE) = 2.0 spent, and sells 0.5 iron
+## through the Trader's export at HALF its 15.0 base price = 3.75 earned --
+## net ~1.75/worker/day against a reference wage of roughly 1.0, chosen
+## deliberately high (see BASE_PRICE's Iron comment) since, unlike Farm/
+## Woodlot, EVERY unit the Bloomery sells goes through that same export
+## discount rather than mostly selling to local households at full price.
+static func _bloomery_recipe() -> Recipe:
+	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
 ## A field's labor_applied is seeded as if it had been fully staffed for
 ## every day it's already grown before day 0 -- otherwise a field seeded
@@ -139,12 +166,20 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 		ages.append(age)
 	return ages
 
-## `farm_capacity`/`woodlot_capacity`/`trader_capacity` are each business's
-## STARTING capacity and how many workers are actually assigned there on
-## day one (they should sum to HOUSEHOLD_COUNT * WORKER_CAPACITY so nobody
-## starts unemployed by construction, unless a scenario deliberately wants
-## that).
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int) -> Dictionary:
+## `farm_capacity`/`woodlot_capacity`/`trader_capacity`/`bloomery_capacity`
+## are each business's STARTING capacity and how many workers are actually
+## assigned there on day one (they should sum to HOUSEHOLD_COUNT *
+## WORKER_CAPACITY so nobody starts unemployed by construction, unless a
+## scenario deliberately wants that). `bloomery_capacity` defaults to 0,
+## meaning "no Bloomery at all" -- the toggle a caller wants IS which
+## scenario builder it picks (see he_dashboard.gd's SCENARIOS and
+## build_three_business_economy_with_bloomery below), not a capacity of
+## zero on a business that still exists: a Bloomery that was never
+## constructed here can never later get a trial hire from
+## HESimulation._evaluate_business_capacity's zero-capacity-protection
+## mechanic, since there is no such business id in `businesses` for that to
+## apply to.
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
 	var farm := HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), 0, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
@@ -174,12 +209,20 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
 	settlement.business_ids.append(TRADER_BUSINESS_ID)
 
+	var bloomery: HEBusiness = null
+	if bloomery_capacity > 0:
+		bloomery = HEBusiness.new(BLOOMERY_BUSINESS_ID, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, bloomery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
+		businesses[BLOOMERY_BUSINESS_ID] = bloomery
+		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
+
 	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
 
 	var households: Dictionary[int, HEHousehold] = {}
 	var farm_workers_assigned := 0
 	var woodlot_workers_assigned := 0
+	var bloomery_workers_assigned := 0
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
@@ -195,11 +238,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		elif woodlot_workers_assigned < woodlot_capacity:
 			household.employer_business_id = WOODLOT_BUSINESS_ID
 			woodlot_workers_assigned += WORKER_CAPACITY
+		elif bloomery != null and bloomery_workers_assigned < bloomery_capacity:
+			household.employer_business_id = BLOOMERY_BUSINESS_ID
+			bloomery_workers_assigned += WORKER_CAPACITY
 		elif trader_workers_assigned < trader_capacity:
 			household.employer_business_id = TRADER_BUSINESS_ID
 			trader_workers_assigned += WORKER_CAPACITY
-		# else: stays unemployed (-1) -- only happens if the three capacities
-		# don't cover the whole population, which a scenario may want.
+		# else: stays unemployed (-1) -- only happens if the capacities don't
+		# cover the whole population, which a scenario may want.
 
 		households[household_id] = household
 		settlement.household_ids.append(household_id)
@@ -221,6 +267,21 @@ static func build_three_business_economy(_rng: RandomNumberGenerator) -> Diction
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader)
+
+## Same as build_three_business_economy, plus a fourth, opt-in business: the
+## Bloomery, which buys wood from the Woodlot and iron ore imported by the
+## Trader to smelt iron, then relies on that same Trader to export every bit
+## of it (see he_simulation.gd's _run_input_purchasing/_run_trade -- no
+## household ever wants iron directly, so it all leaves the settlement).
+## This is the toggle: pick this builder (see he_dashboard.gd's SCENARIOS)
+## instead of build_three_business_economy to turn the Bloomery on for a new
+## sim, or the plain builder above to leave it out entirely.
+static func build_three_business_economy_with_bloomery(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var bloomery := 8
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader, bloomery)
 
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather

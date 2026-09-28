@@ -20,6 +20,8 @@ func _init() -> void:
 	_check_determinism()
 	_check_multi_settlement_locality()
 	_check_conservation()
+	_check_bloomery_smelting()
+	_check_bloomery_stays_off_when_not_seeded()
 	_check_field_model_dynamics()
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_emigration_actually_happens()
@@ -78,14 +80,19 @@ func _check_multi_settlement_locality() -> void:
 	print("  two settlements enumerate, hire, clear markets, and report independently")
 
 ## Goods and money reconcile as opening + produced - consumed - exported
-## (goods) / opening - written_off + export_revenue (money), across BOTH
-## households and businesses; wages and market trades are transfers that
-## net to zero; nothing goes negative. An emigration is the one place
-## value legitimately leaves the closed system, and the Trader's exports
-## are the one place NEW money legitimately enters it (see
-## he_simulation.gd's _export_revenue_total doc comment) -- both are
-## explicitly logged rather than just silently not adding up, so the
-## reconciliation formula accounts for them instead of ignoring them.
+## (goods) / opening - written_off + export_revenue - import_cost (money),
+## across BOTH households and businesses; wages and market trades (and a
+## Bloomery buying wood from the Woodlot -- still business-to-business) are
+## transfers that net to zero; nothing goes negative. An emigration is one
+## place value legitimately leaves the closed system, the Trader's exports
+## are one place NEW money legitimately enters it, and the Trader importing
+## a good like iron ore is the mirror-image place money legitimately LEAVES
+## it (see he_simulation.gd's _export_revenue_total/_import_cost_total doc
+## comments) -- all are explicitly logged rather than just silently not
+## adding up, so the reconciliation formula accounts for them instead of
+## ignoring them. This particular check's scenario has no Bloomery, so
+## import_cost is always 0 here -- see _check_bloomery_smelting for the
+## version of this same invariant with importing/smelting actually active.
 func _check_conservation() -> void:
 	print("\n=== Conservation: goods and money reconcile (write-offs/exports accounted), nothing negative ===")
 	var sim := _new_sim("build_three_business_economy")
@@ -105,7 +112,7 @@ func _check_conservation() -> void:
 			var closing: float = record["closing_stock"][name]
 			var expected: float = opening + produced - consumed - exported - written_off
 			worst_stock_gap = max(worst_stock_gap, abs(closing - expected))
-		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"])
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
 		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
 
 	print("  worst stock reconciliation gap over 365 days: %.4f" % worst_stock_gap)
@@ -135,6 +142,75 @@ func _check_conservation() -> void:
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
+
+## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
+## iron ore imported by the Trader smelt into iron, which that same Trader
+## then exports since no household ever wants iron directly (see
+## he_simulation.gd's _run_input_purchasing/_run_trade doc comments).
+## Reuses _check_conservation's exact money-reconciliation formula (this is
+## the scenario where import_cost actually moves) plus the same shape of
+## check for iron's own goods conservation (opening + produced - exported,
+## no consumed/written_off term since no household or emigration ever
+## touches iron).
+func _check_bloomery_smelting() -> void:
+	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	sim.advance_ticks(200)
+	var history := sim.get_daily_history(200)
+
+	var total_iron_produced := 0.0
+	var total_iron_exported := 0.0
+	var total_ore_imported := 0.0
+	var total_import_cost := 0.0
+	var worst_iron_gap := 0.0
+	var worst_money_gap := 0.0
+	for record in history:
+		total_iron_produced += (record["produced"] as Dictionary).get("Iron", 0.0)
+		total_iron_exported += (record["exported"] as Dictionary).get("Iron", 0.0)
+		total_ore_imported += (record["imported"] as Dictionary).get("Iron Ore", 0.0)
+		total_import_cost += float(record["import_cost"])
+
+		var opening: float = (record["opening_stock"] as Dictionary).get("Iron", 0.0)
+		var produced: float = (record["produced"] as Dictionary).get("Iron", 0.0)
+		var exported: float = (record["exported"] as Dictionary).get("Iron", 0.0)
+		var closing: float = (record["closing_stock"] as Dictionary).get("Iron", 0.0)
+		worst_iron_gap = max(worst_iron_gap, abs(closing - (opening + produced - exported)))
+
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
+
+	print("  over 200 days: iron produced=%.1f, iron exported=%.1f, ore imported=%.1f, import cost=%.1f" % [total_iron_produced, total_iron_exported, total_ore_imported, total_import_cost])
+	print("  worst iron stock reconciliation gap: %.4f" % worst_iron_gap)
+	print("  worst same-day money reconciliation gap: %.4f" % worst_money_gap)
+
+	_assert(total_iron_produced > 0.0, "Bloomery should have smelted at least some iron over 200 days")
+	_assert(total_ore_imported > 0.0, "Trader should have imported iron ore for the Bloomery over 200 days")
+	_assert(total_import_cost > 0.0, "Importing ore should cost the Trader money -- see _import_cost_total")
+	# No household ever wants iron, so it should all leave via export rather
+	# than piling up unsold in the Bloomery's own inventory.
+	_assert(absf(total_iron_produced - total_iron_exported) < total_iron_produced * 0.05 + EPSILON,
+		"Nearly all smelted iron should get exported, not stockpiled -- produced %.1f, exported %.1f" % [total_iron_produced, total_iron_exported])
+	_assert(worst_iron_gap < EPSILON, "Iron stock did not reconcile as opening + produced - exported, worst gap %.4f" % worst_iron_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with import_cost included, worst gap %.4f" % worst_money_gap)
+
+	var bloomery_report: Dictionary = {}
+	for report in sim.get_business_reports():
+		if report["business_id"] == HEScenarioSeeds.BLOOMERY_BUSINESS_ID:
+			bloomery_report = report
+	_assert(not bloomery_report.is_empty(), "Bloomery should appear in business reports when the scenario includes it")
+	_assert(bloomery_report.get("capacity", 0) > 0, "Bloomery should still have staff after 200 days -- its recipe should clear the reference wage (see he_scenario_seeds.gd's _bloomery_recipe doc comment), not starve to zero")
+
+## Building a scenario WITHOUT the Bloomery must never spawn one later --
+## the opt-in toggle is which scenario builder gets picked (see
+## he_scenario_seeds.gd's _build_world doc comment), not a runtime flag
+## that a self-tuning trial-hire could quietly flip on.
+func _check_bloomery_stays_off_when_not_seeded() -> void:
+	print("\n=== Bloomery: absent entirely from a scenario that never seeded it ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.advance_ticks(200)
+	for report in sim.get_business_reports():
+		_assert(report["business_id"] != HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "A Bloomery should never appear in a scenario that never constructed one")
+	print("  no Bloomery business exists after 200 days in a scenario that never seeded one")
 
 ## Field/harvest model regression checks, day by day over one Farm growth
 ## cycle plus change: harvests are lumpy (stock only jumps on a harvest

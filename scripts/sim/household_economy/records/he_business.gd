@@ -19,6 +19,13 @@ extends RefCounted
 ## money at a deliberately low price -- see he_simulation.gd's _run_trade.
 ## Everything else about it (hiring, wages, weekly capacity self-tuning) is
 ## identical to a PRODUCTION business.
+##
+## A PRODUCTION business's `recipe.inputs` (e.g. the Bloomery: wood +
+## iron ore -> iron) are bought fresh every day, business-to-business, by
+## he_simulation.gd's _run_input_purchasing -- never stockpiled between
+## days. An input nothing local produces (iron ore) is supplied by the
+## settlement's Trader instead, importing it from outside the settlement on
+## the spot; see that function's doc comment for the full mechanism.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -94,6 +101,23 @@ var last_wage_per_worker: float = 0.0
 ## -- see he_simulation.gd._run_trade. Always empty for a PRODUCTION
 ## business.
 var last_exported: Dictionary[Commodity.Type, float] = {}
+
+## Kind.TRADER only: units of each commodity imported (from outside the
+## settlement, on behalf of a local buyer) today, for reporting -- see
+## he_simulation.gd._run_input_purchasing. Always empty for a PRODUCTION
+## business.
+var last_imported: Dictionary[Commodity.Type, float] = {}
+
+## PRODUCTION only: how much of this business's labor-implied planned
+## output it actually got to make today, after recipe.inputs affordability/
+## availability capped it -- 1.0 (the default) for a business with no
+## inputs (Farm, Woodlot) or one that got everything it needed. Set by
+## he_simulation.gd._run_input_purchasing, read by _run_production to scale
+## planned_units down to last_actual_units. Every input is drawn down
+## proportionally to this SAME ratio rather than each hitting its own
+## independent cap, mirroring the field model's one-efficiency-number-
+## covers-the-whole-harvest approach.
+var last_input_fulfillment_ratio: float = 1.0
 
 func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_initial_capacity: int, p_kind: Kind = Kind.PRODUCTION, p_settlement_id: int = 0) -> void:
 	id = p_id

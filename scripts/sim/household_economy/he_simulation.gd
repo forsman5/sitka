@@ -53,13 +53,42 @@ const FUEL_TIMBER_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tune
 ## their own output, so they always offer everything they have.
 const TARGET_BUFFER_DAYS := 3.0
 
+## Order matters here beyond readability: get_market_summary() and the
+## dashboard's market grid both iterate BASE_PRICE.keys() directly to decide
+## which commodities get a market row at all, so a commodity's column shows
+## up in this order.
 const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 1.0,
 	Commodity.Type.TIMBER: 1.0,
+	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
+	## Priced high enough that the Bloomery clears the reference wage even
+	## though EVERY unit it sells goes through the Trader's discounted
+	## export channel (TRADER_BUY_PRICE_FRACTION) -- unlike Farm/Woodlot,
+	## which sell most of their output to local households at full price and
+	## only route surplus through that same discount. See he_scenario_
+	## seeds.gd's _bloomery_recipe doc comment for the worked-out numbers.
+	Commodity.Type.IRON: 15.0,
 }
 const PRICE_ADJUST_STEP := 0.05
 const PRICE_MULTIPLIER_MIN := 0.25
 const PRICE_MULTIPLIER_MAX := 4.0
+
+## Commodities a Trader can move OUT of the settlement -- a superset of
+## SUBSISTENCE_COMMODITIES (households never need iron, so _run_trade's
+## reserve calc for it naturally comes out to zero and it exports freely;
+## see _seller_surplus_above_reserve). IRON goes FIRST, ahead of GRAIN and
+## TIMBER, on purpose: Farm/Woodlot earn most of their revenue from local
+## household sales and only use export for supplemental income on top, so
+## losing a turn at a capacity-constrained Trader barely dents them, but
+## export is the BLOOMERY's entire revenue (no household ever buys iron
+## directly) -- and Farm/Woodlot's own seeded starting stock is oversized
+## enough (STARTING_STOCK_HEADROOM) that their early surplus alone can
+## fully consume the Trader's daily capacity for its first several weeks.
+## Putting iron last would starve the Bloomery of any revenue at all during
+## exactly that early window, well before its own weekly capacity
+## self-tuning gets a fair read -- see he_scenario_seeds.gd's
+## build_three_business_economy_with_bloomery.
+const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER]
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -89,6 +118,18 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 ## goods should scale per worker far better than a farmhand growing food by
 ## hand, hence the large jump from the first authored guess of 2.0.
 const TRADER_CAPACITY_PER_WORKER := 8.0
+
+## _run_input_purchasing reuses TRADER_CAPACITY_PER_WORKER and
+## TRADER_BUY_PRICE_FRACTION for the Trader's IMPORT side too (buy outside
+## at that same fraction of the local price, resell locally at full local
+## price -- the same margin shape as export, just run in reverse), but
+## tracks import capacity as its OWN pool for the day rather than sharing
+## _run_trade's export pool. An authored simplification -- not a claim that
+## hauling goods in and out wouldn't compete for the same wagons in
+## reality -- kept separate because import has to happen early in the tick
+## (before _run_production) while export happens late (after the local
+## market), so there's no single point in the day where one shared number
+## could be threaded through both.
 
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows; one earning that
@@ -191,6 +232,13 @@ var _next_household_id := 1
 ## stays honest about where money entered rather than silently not adding
 ## up.
 var _export_revenue_total := 0.0
+
+## The mirror-image sink to _export_revenue_total: whatever a Trader pays
+## to import a commodity nothing local produces (iron ore) from outside the
+## settlement, valued at import cost, leaves the closed system the same way
+## a starvation write-off does -- see _run_input_purchasing. Tracked
+## explicitly for the same "stays honest about where money went" reason.
+var _import_cost_total := 0.0
 
 ## Trailing per-settlement, per-commodity price history, oldest first, capped to the SAME
 ## window a business's own wage is smoothed over
@@ -349,18 +397,25 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 		out.append(report)
 	return out
 
-## "Export (Grain, Timber)" -- whichever commodities the Trader actually
-## moved today, sorted for determinism (see run_household_economy.gd's
-## same-seed determinism check, which compares whole report dictionaries).
+## "Export (Grain, Timber) / Import (Iron Ore)" -- whichever commodities the
+## Trader actually moved today in each direction, sorted for determinism
+## (see run_household_economy.gd's same-seed determinism check, which
+## compares whole report dictionaries). Either half is omitted entirely
+## when empty; a Trader with neither just reads "Trade".
 func _trade_summary(b: HEBusiness) -> String:
-	if b.last_exported.is_empty():
-		return "Export"
-	var commodity_ids := b.last_exported.keys()
+	var parts: Array[String] = []
+	if not b.last_exported.is_empty():
+		parts.append("Export (%s)" % ", ".join(_sorted_commodity_names(b.last_exported.keys())))
+	if not b.last_imported.is_empty():
+		parts.append("Import (%s)" % ", ".join(_sorted_commodity_names(b.last_imported.keys())))
+	return " / ".join(parts) if not parts.is_empty() else "Trade"
+
+func _sorted_commodity_names(commodity_ids: Array) -> Array[String]:
 	commodity_ids.sort()
 	var names: Array[String] = []
 	for c in commodity_ids:
 		names.append(Commodity.name_of(c))
-	return "Export (%s)" % ", ".join(names)
+	return names
 
 ## Per-field progress for a land-based business's report (empty for Trader/
 ## legacy businesses with no fields at all) -- see get_business_reports.
@@ -370,11 +425,15 @@ func _field_reports(b: HEBusiness) -> Array:
 		out.append({"area": f.area, "days_growing": f.days_growing, "growth_days": b.growth_days})
 	return out
 
+## Every commodity with a market at all -- BASE_PRICE.keys(), not just
+## SUBSISTENCE_COMMODITIES, so a business-to-business good like iron ore/
+## iron shows up here too (see _run_input_purchasing/_run_trade, the only
+## places that ever populate their last_clearing entries).
 func get_market_summary(settlement_id: int = -1) -> Dictionary:
 	settlement_id = _resolve_settlement_id(settlement_id)
 	var local_market: HEMarket = markets[settlement_id]
 	var out := {}
-	for c in SUBSISTENCE_COMMODITIES:
+	for c in BASE_PRICE.keys():
 		out[Commodity.name_of(c)] = {
 			"price": local_market.price[c],
 			"last_clearing": (local_market.last_clearing.get(c, {}) as Dictionary).duplicate(true),
@@ -434,6 +493,7 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"births_total": _births_total,
 		"worker_promotions_total": _worker_promotions_total,
 		"export_revenue_total": _export_revenue_total,
+		"import_cost_total": _import_cost_total,
 		"market": get_market_summary(settlement_id),
 	}
 
@@ -472,10 +532,12 @@ func get_event_log(limit: int = -1) -> Array:
 	return out
 
 # ---------------------------------------------------------------------------
-# Daily tick: pay wages (from yesterday's settled revenue) -> produce ->
-# clear the market (sets today's revenue for TOMORROW's wages) -> consume ->
-# stress/migration-pressure (weekly) -> emigration, old age, then aging/
-# births (all monthly, and all ACT) -> business capacity self-tuning +
+# Daily tick: pay wages (from yesterday's settled revenue) -> buy recipe
+# inputs business-to-business off yesterday's closing stock (Bloomery buys
+# wood/imported ore) -> produce -> clear the market (sets today's revenue
+# for TOMORROW's wages) -> trade (export surplus, including today's iron) ->
+# consume -> stress/migration-pressure (weekly) -> emigration, old age, then
+# aging/births (all monthly, and all ACT) -> business capacity self-tuning +
 # labor reallocation (weekly) -> publish.
 # ---------------------------------------------------------------------------
 
@@ -484,6 +546,7 @@ func _daily_tick() -> void:
 	_reset_household_daily_records()
 	var record := _new_daily_record()
 	_pay_wages(record)
+	_run_input_purchasing(record)
 	_run_production(record)
 	_run_market(record)
 	_run_trade(record)
@@ -520,6 +583,8 @@ func _new_daily_record() -> Dictionary:
 		"traded_quantity": {},
 		"exported": {},
 		"export_revenue": 0.0,
+		"imported": {},
+		"import_cost": 0.0,
 		"wages_paid": {},
 		"emigrations": 0,
 		"old_age_deaths": 0,
@@ -554,6 +619,15 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_wages_paid = 0.0
 		b.last_cash_change = 0.0
 		b.last_wage_shortfall = 0.0
+		# Single reset point for the day, since not every business's
+		# last_revenue gets overwritten later the same tick the way a
+		# SUBSISTENCE_COMMODITIES seller's does in _clear_market_for --
+		# a business selling a commodity nothing local consumes (the
+		# Bloomery's iron) is only ever touched by _run_input_purchasing/
+		# _run_trade below, both of which now ADD to this baseline rather
+		# than assign, so today's contributions from each never clobber
+		# each other.
+		b.last_revenue = 0.0
 		var employed := _business_employed_worker_count(business_id)
 		if employed <= 0:
 			b.last_wage_per_worker = 0.0
@@ -587,9 +661,11 @@ func _pay_wages(record: Dictionary) -> void:
 ## employer_business_id, not cached). A field-model business (Farm,
 ## Woodlot -- see HEBusiness.configure_land) grows toward a lumpy harvest
 ## instead (see _run_field_growth); anything else keeps the original
-## instant-output-from-recipe behavior, so no input constraints means
-## planned==actual there. The Trader has no recipe; see _run_trade for what
-## it does instead.
+## instant-output-from-recipe behavior, scaled by last_input_fulfillment_
+## ratio (1.0 -- i.e. no change at all -- for a business with empty
+## recipe.inputs like Farm/Woodlot; see _run_input_purchasing, which runs
+## earlier this same tick and sets that ratio). The Trader has no recipe;
+## see _run_trade for what it does instead.
 func _run_production(record: Dictionary) -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
@@ -601,9 +677,10 @@ func _run_production(record: Dictionary) -> void:
 		var employed := _business_employed_worker_count(business_id)
 		var output_commodity := b.output_commodity()
 		var rate: float = b.recipe.outputs[output_commodity]
-		var units: float = float(employed) * rate
+		var planned: float = float(employed) * rate
+		var units: float = planned * b.last_input_fulfillment_ratio
 		b.add_stock(output_commodity, units)
-		b.last_planned_units = units
+		b.last_planned_units = planned
 		b.last_actual_units = units
 		b.last_output_produced = {output_commodity: units}
 		var name := Commodity.name_of(output_commodity)
@@ -1240,10 +1317,13 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			seller.consume(commodity, quantity_traded)
 			var revenue := quantity_traded * price
 			seller.balance += revenue
-			seller.last_revenue = revenue
+			# += , not = -- _pay_wages already zeroed this at the top of the
+			# tick, and _run_input_purchasing may have already added this
+			# same seller's business-to-business sales today (e.g. Woodlot
+			# selling wood to the Bloomery before households ever got a
+			# chance to buy any).
+			seller.last_revenue += revenue
 			seller.last_cash_change += revenue
-	elif seller != null:
-		seller.last_revenue = 0.0
 
 	local_market.last_clearing[commodity] = {
 		"total_offered": total_offer,
@@ -1277,10 +1357,13 @@ func _adjust_price(settlement_id: int, commodity: Commodity.Type, total_offer: f
 ## households already had first crack at buying that same day -- it never
 ## competes with a household for a good it needs, by construction. Each
 ## Kind.TRADER business independently draws down every PRODUCTION
-## business's surplus above its reserve for BOTH subsistence commodities,
+## business's surplus above its reserve for every EXPORT_COMMODITIES good,
 ## capped by the trader's own labor-derived handling capacity, and pays a
 ## deliberately low price (TRADER_BUY_PRICE_FRACTION of the going market
 ## rate) for what it takes -- see the constants' doc comment above for why.
+## A good with no household demand at all (iron) has a reserve of zero (see
+## _seller_surplus_above_reserve/_settlement_daily_demand), so it exports
+## freely rather than needing a special case.
 func _run_trade(record: Dictionary) -> void:
 	var trader_ids: Array[int] = []
 	for business_id in businesses.keys():
@@ -1296,31 +1379,26 @@ func _run_trade(record: Dictionary) -> void:
 		var trader_margin_today := 0.0
 		var total_exported := 0.0
 
-		for commodity in SUBSISTENCE_COMMODITIES:
+		for commodity in EXPORT_COMMODITIES:
 			if remaining_capacity <= 0.0001:
 				break
 			var seller := _business_selling(trader.settlement_id, commodity)
 			if seller == null:
 				continue
-			# A field-model seller's own next harvest is a known, dated
-			# relief -- the reserve only needs to cover local demand until
-			# THEN, not a flat buffer that ignores how close (or far) that
-			# day actually is. A legacy/non-field seller has no such date,
-			# so it keeps the original flat TRADER_RESERVE_BUFFER_DAYS.
-			var reserve_days: float = float(seller.days_until_next_harvest()) if seller.uses_field_model() else TRADER_RESERVE_BUFFER_DAYS
-			var reserve: float = _settlement_daily_demand(trader.settlement_id, commodity) * reserve_days
-			var surplus: float = max(0.0, seller.stock(commodity) - reserve)
+			var surplus := _seller_surplus_above_reserve(seller, trader.settlement_id, commodity)
 			var quantity: float = min(surplus, remaining_capacity)
 			if quantity <= 0.0001:
 				continue
 
-			var local_price: float = (markets[trader.settlement_id] as HEMarket).price[commodity]
+			var local_market: HEMarket = markets[trader.settlement_id]
+			var local_price: float = local_market.price[commodity]
 			var pay_price: float = local_price * TRADER_BUY_PRICE_FRACTION
 			seller.consume(commodity, quantity)
-			# Adds to whatever seller.last_revenue the local market clearing
-			# already set this same tick -- tomorrow's wage for THIS
-			# business is funded by local sales AND trade together, exactly
-			# like a real producer benefiting from export demand on top of
+			# Adds to whatever seller.last_revenue this same tick's earlier
+			# steps (_run_input_purchasing, local market clearing) already
+			# contributed -- tomorrow's wage for THIS business is funded by
+			# every channel it sold through today together, exactly like a
+			# real producer benefiting from export demand on top of
 			# domestic demand.
 			seller.balance += quantity * pay_price
 			seller.last_revenue += quantity * pay_price
@@ -1340,7 +1418,22 @@ func _run_trade(record: Dictionary) -> void:
 			record["export_revenue"] += revenue
 			_export_revenue_total += revenue
 
-		trader.last_revenue = trader_margin_today
+			# SUBSISTENCE_COMMODITIES already get a full last_clearing entry
+			# from _clear_market_for's household-facing pass; a good like
+			# iron that households never buy has no other clearing source,
+			# so this is the only place its market grid row gets real
+			# offered/traded numbers and price drift.
+			if not SUBSISTENCE_COMMODITIES.has(commodity):
+				local_market.last_clearing[commodity] = {
+					"total_offered": surplus,
+					"total_requested_funded": quantity,
+					"quantity_traded": quantity,
+					"price": local_price,
+				}
+				if price_adjustment_enabled:
+					_adjust_price(trader.settlement_id, commodity, surplus, quantity)
+
+		trader.last_revenue += trader_margin_today
 		trader.last_planned_units = capacity_limit
 		trader.last_actual_units = total_exported
 
@@ -1368,6 +1461,176 @@ func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusin
 		if b.output_commodity() == commodity:
 			return b
 	return null
+
+## The settlement's Trader (lowest business_id if it somehow had more than
+## one), or null if it has none -- the supplier of last resort for a
+## recipe.inputs commodity nothing local produces. See
+## _run_input_purchasing.
+func _settlement_trader(settlement_id: int) -> HEBusiness:
+	var ids := businesses.keys()
+	ids.sort()
+	for business_id in ids:
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id == settlement_id and b.kind == HEBusiness.Kind.TRADER:
+			return b
+	return null
+
+## The stock a PRODUCTION business can sell to a buyer OTHER than its own
+## settlement's households right now, above the reserve that protects local
+## subsistence demand -- shared by _run_trade's export step and
+## _run_input_purchasing's business-to-business purchases, so neither an
+## exporting Trader nor an input-hungry business like the Bloomery can ever
+## outbid a household for a good it needs to survive, by construction. A
+## field-model seller's own next harvest is a known, dated relief -- the
+## reserve only needs to cover local demand until THEN, not a flat buffer
+## that ignores how close (or far) that day actually is. A legacy/non-field
+## seller has no such date, so it keeps a flat TRADER_RESERVE_BUFFER_DAYS.
+func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type) -> float:
+	var reserve_days: float = float(seller.days_until_next_harvest()) if seller.uses_field_model() else TRADER_RESERVE_BUFFER_DAYS
+	var reserve: float = _settlement_daily_demand(settlement_id, commodity) * reserve_days
+	return max(0.0, seller.stock(commodity) - reserve)
+
+## Runs first thing in the tick (right after _pay_wages, before
+## _run_production) so a PRODUCTION business with recipe.inputs (currently
+## only the Bloomery) buys today's inputs from what its suppliers had on
+## hand at the END of yesterday, not from stock today's own production
+## hasn't added yet -- the same "snapshot, don't chase a same-tick circular
+## number" discipline _pay_wages already relies on for revenue. A business
+## with empty recipe.inputs (Farm, Woodlot, and the Trader which has no
+## recipe at all) is untouched beyond having last_input_fulfillment_ratio
+## set to 1.0.
+##
+## Every input is bought business-to-business at today's posted local
+## price, the same mechanism grain/timber use to sell to households, just
+## with another business as the buyer. An input some local PRODUCTION
+## business already sells (wood, from the Woodlot) is bought straight from
+## its stock, respecting the same reserve a Trader export would
+## (_seller_surplus_above_reserve) so this can never outbid a household for
+## a good it needs to survive. An input nothing local produces (iron ore)
+## has no such seller; the settlement's Trader supplies it instead,
+## importing it from outside on the spot at TRADER_BUY_PRICE_FRACTION of
+## the local price and reselling it at that same local price -- it never
+## actually holds ore in its own inventory even for an instant, just
+## pockets the spread as margin (see TRADER_CAPACITY_PER_WORKER's doc
+## comment for why this is its own capacity pool rather than shared with
+## _run_trade's export side). What the Trader pays to import is new money
+## LEAVING the closed system -- see _import_cost_total -- the mirror image
+## of _run_trade's export revenue entering it.
+##
+## If a business can't fully afford/obtain every input it needs to run at
+## its full labor-implied output, every input is drawn down proportionally
+## to whichever one is scarcest (last_input_fulfillment_ratio) rather than
+## fully buying some inputs and none of another -- mirroring the field
+## model's single harvest-efficiency-number approach.
+func _run_input_purchasing(record: Dictionary) -> void:
+	var trader_import_capacity: Dictionary = {} # trader business_id -> units still importable today
+	for business_id in businesses.keys():
+		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER:
+			(businesses[business_id] as HEBusiness).last_imported = {}
+
+	for business_id in businesses.keys():
+		var buyer: HEBusiness = businesses[business_id]
+		buyer.last_input_fulfillment_ratio = 1.0
+		if buyer.kind != HEBusiness.Kind.PRODUCTION or buyer.recipe == null or buyer.recipe.inputs.is_empty():
+			continue
+
+		var employed := _business_employed_worker_count(business_id)
+		var output_commodity := buyer.output_commodity()
+		var planned_units: float = float(employed) * buyer.recipe.outputs[output_commodity]
+		if planned_units <= 0.0001:
+			continue
+
+		var trader := _settlement_trader(buyer.settlement_id)
+		var local_market: HEMarket = markets[buyer.settlement_id]
+		var fulfillment_ratio := 1.0
+		var needed_by_commodity: Dictionary[Commodity.Type, float] = {}
+		var total_cost_if_fully_supplied := 0.0
+
+		# Pass 1: how much of EACH input is actually available (locally sold
+		# stock above reserve, or the settlement's shared Trader-import
+		# capacity), independent of cash -- cash is a single pool shared
+		# across every input, so it's checked once below instead of
+		# per-input (checking it here too would let the same balance count
+		# toward affording wood AND ore independently, as if the business
+		# had that much cash for each).
+		for commodity in buyer.recipe.inputs.keys():
+			var needed: float = planned_units * buyer.recipe.inputs[commodity]
+			needed_by_commodity[commodity] = needed
+			if needed <= 0.0001:
+				continue
+
+			var price: float = local_market.price[commodity]
+			total_cost_if_fully_supplied += needed * price
+			var seller := _business_selling(buyer.settlement_id, commodity)
+			var offer: float
+			if seller != null:
+				offer = _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity)
+			elif trader != null:
+				if not trader_import_capacity.has(trader.id):
+					trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+				offer = trader_import_capacity[trader.id]
+			else:
+				offer = 0.0
+
+			fulfillment_ratio = minf(fulfillment_ratio, min(needed, offer) / needed)
+
+		# Pass 1b: fold in the single shared cash constraint across every
+		# input at once.
+		if total_cost_if_fully_supplied > 0.0001:
+			var affordable_ratio: float = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
+			fulfillment_ratio = minf(fulfillment_ratio, affordable_ratio)
+
+		buyer.last_input_fulfillment_ratio = fulfillment_ratio
+		if fulfillment_ratio <= 0.0:
+			continue
+
+		for commodity in buyer.recipe.inputs.keys():
+			var needed: float = needed_by_commodity.get(commodity, 0.0)
+			if needed <= 0.0001:
+				continue
+			var bought: float = needed * fulfillment_ratio
+			var price: float = local_market.price[commodity]
+			var cost: float = bought * price
+			buyer.balance -= cost
+			buyer.last_cash_change -= cost
+			# Input costs count against the BUYER's own last_revenue too
+			# (not just its cash), so _evaluate_business_capacity's weekly
+			# self-tuning judges it on revenue net of what it spent making
+			# that revenue -- exactly like the Trader's last_revenue is
+			# already its MARGIN, not its gross throughput -- rather than
+			# mistaking gross sales for profit and growing an input-hungry
+			# business that's actually losing money on every unit.
+			buyer.last_revenue -= cost
+			var name := Commodity.name_of(commodity)
+			record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
+
+			var seller := _business_selling(buyer.settlement_id, commodity)
+			if seller != null:
+				seller.consume(commodity, bought)
+				seller.balance += cost
+				seller.last_revenue += cost
+				seller.last_cash_change += cost
+			elif trader != null:
+				var offer_before: float = trader_import_capacity[trader.id]
+				trader_import_capacity[trader.id] -= bought
+				var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
+				var margin: float = cost - import_cost
+				trader.balance += margin
+				trader.last_revenue += margin
+				trader.last_cash_change += margin
+				trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
+				record["imported"][name] = record["imported"].get(name, 0.0) + bought
+				record["import_cost"] += import_cost
+				_import_cost_total += import_cost
+
+				local_market.last_clearing[commodity] = {
+					"total_offered": offer_before,
+					"total_requested_funded": needed,
+					"quantity_traded": bought,
+					"price": price,
+				}
+				if price_adjustment_enabled:
+					_adjust_price(buyer.settlement_id, commodity, offer_before, needed)
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
@@ -1461,9 +1724,14 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	var per_person_cost := _average_price_history(settlement_id, Commodity.Type.GRAIN) * GRAIN_PER_PERSON_PER_DAY 		+ _average_price_history(settlement_id, Commodity.Type.TIMBER) * FUEL_TIMBER_PER_PERSON_PER_DAY
 	return dependency_ratio * per_person_cost
 
+## BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES -- every commodity
+## that can actually sit in SOMEONE's inventory (a business's, in iron's
+## case; iron ore never does, see _run_input_purchasing, but costs nothing
+## to include). Using the same key list get_market_summary() does keeps the
+## two from silently drifting apart as a future commodity gets added.
 func _total_stock_snapshot(settlement_id: int = -1) -> Dictionary:
 	var snap := {}
-	for c in SUBSISTENCE_COMMODITIES:
+	for c in BASE_PRICE.keys():
 		var total := 0.0
 		for household_id in households.keys():
 			var h: HEHousehold = households[household_id]
