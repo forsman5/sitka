@@ -15,6 +15,12 @@ static func create_map() -> MapDefinition:
 		4: {"site": Vector3(110, 0, -70), "role": "Ore bank and small bloomery", "accent": Color("a66a4a"), "district": "ore"},
 		5: {"site": Vector3(81, 0, 108), "waterfront": Vector3(92, 0, 94), "role": "Downstream port, milling, and outside trade", "accent": Color("739fc1"), "district": "port"},
 	}
+	# Visual-only buildings, positioned relative to the settlement site.
+	map.settlements[1]["buildings"] = [
+		{"name": "AldfordHomeA", "model": "res://assets/models/buildings/building_home_A_blue.gltf", "offset": Vector2(-5, 7), "width": 3.6, "yaw": 0.0},
+		{"name": "AldfordHomeB", "model": "res://assets/models/buildings/building_home_B_blue.gltf", "offset": Vector2(6, 1), "width": 3.6, "yaw": 90.0},
+		{"name": "AldfordHall", "model": "res://assets/models/buildings/building_tavern_blue.gltf", "offset": Vector2(3, 8), "width": 5.0, "yaw": 0.0},
+	]
 	map.junctions = {
 		"aldford": {"position": Vector3(0, 0, -5), "inner_radius": 18.0, "outer_radius": 38.0},
 	}
