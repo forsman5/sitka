@@ -113,19 +113,28 @@ func _check_conservation() -> void:
 	_assert(worst_stock_gap < EPSILON, "Stock did not reconcile as opening + produced - consumed - written_off, worst gap %.4f" % worst_stock_gap)
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile as opening - written_off, worst gap %.4f" % worst_money_gap)
 
-	var min_household_stock := INF
-	var min_balance := INF
+	# Households never carry the businesses' overdraft allowance -- their
+	# balance must still never go negative. A business, though, is allowed
+	# to run down to its own WAGE_NEGATIVE_BALANCE_FLOOR_DAYS floor (see
+	# he_simulation.gd's _pay_wages) before wages get rationed, so its floor
+	# -- not zero -- is the right bound to check here, same formula
+	# _check_field_model_dynamics already uses.
+	var min_stock := INF
+	var min_household_balance := INF
+	var worst_business_floor_breach := 0.0
 	for household_id in sim.get_household_ids():
 		var h := sim.get_household_summary(household_id)
 		for name in h["inventory"].keys():
-			min_household_stock = min(min_household_stock, h["inventory"][name])
-		min_balance = min(min_balance, h["balance"])
+			min_stock = min(min_stock, h["inventory"][name])
+		min_household_balance = min(min_household_balance, h["balance"])
 	for report in sim.get_business_reports():
-		min_household_stock = min(min_household_stock, report["stock"])
-		min_balance = min(min_balance, report["balance"])
-	print("  minimum stock=%.3f, minimum balance=%.3f" % [min_household_stock, min_balance])
-	_assert(min_household_stock >= -EPSILON, "Some stock went negative: %.4f" % min_household_stock)
-	_assert(min_balance >= -EPSILON, "Some balance went negative: %.4f" % min_balance)
+		min_stock = min(min_stock, report["stock"])
+		var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * report["reference_wage_per_worker"] * report["employed_workers"]
+		worst_business_floor_breach = max(worst_business_floor_breach, floor - report["balance"])
+	print("  minimum stock=%.3f, minimum household balance=%.3f, worst business wage-floor breach=%.4f" % [min_stock, min_household_balance, worst_business_floor_breach])
+	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
+	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
+	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
 
 ## Field/harvest model regression checks, day by day over one Farm growth
 ## cycle plus change: harvests are lumpy (stock only jumps on a harvest

@@ -969,16 +969,31 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 ##
 ## Cash-runway guard, layered on top (never used to GROW, only to force a
 ## bigger shrink than the revenue signal alone would): a business whose
-## balance plus its stock's market value can't cover its own wage bill for
-## CASH_RUNWAY_DANGER_DAYS more (or, for a field-model business, until its
-## own next harvest -- see _business_cash_runway_days) is treated as if it
-## needs at least one more full capacity step of shrinking this week,
-## regardless of what its revenue-per-worker happened to average out to --
-## a business can look profitable on average while still being about to run
-## out of cash before its next payday, and that's the case this guard
-## exists to catch. Per this task's brief, going negative itself is allowed
-## generously (see WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) -- only the FORECAST of
-## running out of runway forces a downsize, not the negative balance itself.
+## balance plus its stock's market value can't cover its own ACTUAL current
+## wage bill for CASH_RUNWAY_DANGER_DAYS more (or, for a field-model
+## business, until its own next harvest -- see _business_cash_runway_days)
+## is treated as if it needs at least one more full capacity step of
+## shrinking this week, regardless of what its revenue-per-worker happened
+## to average out to -- a business can look profitable on average while
+## still being about to run out of cash before its next payday, and that's
+## the case this guard exists to catch. Per this task's brief, going
+## negative itself is allowed generously (see WAGE_NEGATIVE_BALANCE_FLOOR_
+## DAYS) -- only the FORECAST of running out of runway forces a downsize,
+## not the negative balance itself.
+##
+## Only fires above CAPACITY_TRIAL_HIRE_WORKERS: below that there's no
+## meaningful crew left to cut, so forcing MORE shrinkage doesn't fix
+## anything -- it just guarantees the debt that triggered it can never be
+## earned back. This is the same trap the zero-capacity protection above
+## exists for, one step earlier: a small crew carrying legacy debt from a
+## bad patch (e.g. a price spike inflating the reference wage it was paid
+## at) will have a tiny wage bill and therefore an alarming-looking runway
+## ratio for as long as that debt sits on the books, even once the spike
+## that caused it has long passed and the business is otherwise fine --
+## this guard would otherwise keep grinding it back down every week it
+## re-fires, and it has nowhere left to go but 0. Once genuinely at 0, the
+## ordinary trial-hire/protection cycle above is what gives it room to
+## actually earn that debt down instead.
 func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
@@ -1035,9 +1050,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			if absf(ratio_error) > WAGE_PROFIT_MARGIN:
 				var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
 				delta = roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
-		var required_runway: float = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
-		if _business_cash_runway_days(b) < required_runway:
-			delta = mini(delta, -CAPACITY_STEP_MAX_WORKERS)
+		if b.capacity > CAPACITY_TRIAL_HIRE_WORKERS:
+			var required_runway: float = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
+			if _business_cash_runway_days(b) < required_runway:
+				delta = mini(delta, -CAPACITY_STEP_MAX_WORKERS)
 		if delta != 0:
 			b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
 	record["reference_wage_by_settlement"] = reference_wages
@@ -1060,18 +1076,25 @@ func _capacity_eval_interval_days(b: HEBusiness) -> int:
 	return weeks * CAPACITY_EVAL_INTERVAL_DAYS
 
 ## Days until `b`'s balance plus its current stock's market value runs out
-## against its own FULL-SCALE daily wage bill (reference wage * max_capacity,
-## not the currently employed headcount) -- INF for a business with no wage
-## bill at all (max_capacity 0). Deliberately scale-invariant to the
-## business's CURRENT (possibly still-recovering) headcount: sizing the
-## bill off `employed` instead would shrink the denominator in lockstep with
-## a business already being wound down, making the ratio look more
-## catastrophic the smaller it gets and permanently locking a recovering
-## trial crew out regardless of how much its debt is actually being paid
-## down. Used only by _evaluate_business_capacity's cash-runway guard; never
-## mutates anything.
+## against its own ACTUAL current daily wage bill (reference wage *
+## currently employed workers, not max_capacity) -- INF for an unemployed
+## business (no bill to run out against). Sized off `employed` on purpose:
+## a business with unused land/headroom (high max_capacity, modest current
+## headcount) only has to cover what it's ACTUALLY paying today, not a
+## hypothetical full crew it doesn't have -- comparing against max_capacity
+## would force a perfectly solvent, merely-underutilized business to shrink
+## for no reason other than having land to spare. A recovering trial crew
+## isn't at risk from this despite its small `employed`: it's shielded from
+## this guard entirely until its own first harvest lands (see
+## _evaluate_business_capacity's protected_until_day check), so this
+## function is never even called for it during the window where a shrinking
+## `employed` used to spiral into a permanent trap. Used only by
+## _evaluate_business_capacity's cash-runway guard; never mutates anything.
 func _business_cash_runway_days(b: HEBusiness) -> float:
-	var daily_wage_bill: float = _reference_wage_per_worker(b.settlement_id) * b.max_capacity
+	var employed := _business_employed_worker_count(b.id)
+	if employed <= 0:
+		return INF
+	var daily_wage_bill: float = _reference_wage_per_worker(b.settlement_id) * employed
 	if daily_wage_bill <= 0.0:
 		return INF
 	var stock_value := 0.0
