@@ -33,6 +33,12 @@ const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd
 
 const WAGE_ROLLING_WINDOW_DAYS := 7
 
+## Independent of WAGE_ROLLING_WINDOW_DAYS -- this backs the dashboard's
+## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
+## which reads better over a longer stretch than the weekly self-tuning
+## signal needs.
+const BALANCE_HISTORY_WINDOW_DAYS := 90
+
 enum Kind { PRODUCTION, TRADER }
 
 var id: int
@@ -71,6 +77,11 @@ var last_cash_change: float = 0.0
 ## before wages get rationed -- see he_simulation.gd's WAGE_NEGATIVE_
 ## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
+
+## Rolling daily balance, oldest first, capped at BALANCE_HISTORY_WINDOW_
+## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
+## below), read by nothing that affects simulation outcomes.
+var _balance_history: Array[float] = []
 
 ## Set whenever a zero-capacity business gets its trial crew back (see
 ## he_simulation.gd's _evaluate_business_capacity) to the day that
@@ -146,6 +157,19 @@ func consume(commodity: Commodity.Type, amount: float) -> float:
 	var taken: float = min(available, amount)
 	inventory[commodity] = available - taken
 	return taken
+
+## Called once per business per day by he_simulation.gd's
+## _record_business_revenue_history() -- the existing once-a-day-per-
+## business bookkeeping pass, not a new one of its own.
+func record_balance_day() -> void:
+	_balance_history.append(balance)
+	if _balance_history.size() > BALANCE_HISTORY_WINDOW_DAYS:
+		_balance_history.pop_front()
+
+## Duplicated -- callers (see he_simulation.gd's get_business_reports()) may
+## not mutate simulation state through a query result.
+func balance_history() -> Array[float]:
+	return _balance_history.duplicate()
 
 func record_wage_day(wage_per_worker: float) -> void:
 	_wage_history.append(wage_per_worker)

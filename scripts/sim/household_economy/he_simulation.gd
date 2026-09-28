@@ -374,7 +374,9 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"last_revenue": b.last_revenue,
 			"last_wages_paid": b.last_wages_paid,
 			"last_cash_change": b.last_cash_change,
+			"last_planned_units": b.last_planned_units,
 			"last_actual_units": b.last_actual_units,
+			"balance_history": b.balance_history(),
 			"last_wage_per_worker": b.last_wage_per_worker,
 			"rolling_average_wage": b.rolling_average_wage(),
 			"rolling_average_revenue_per_worker": b.rolling_average_revenue_per_worker(),
@@ -756,13 +758,17 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 ## reference wage. Recorded every day regardless of whether anyone's
 ## employed (0.0 in that case) so the rolling window always spans real
 ## calendar days, which matters for a field-model business whose window is
-## its own multi-month crop cycle.
+## its own multi-month crop cycle. Also the once-a-day hook for
+## HEBusiness.record_balance_day() -- a pure reporting aid, unrelated to the
+## revenue-per-worker signal, that just rides along on this same per-
+## business daily pass rather than getting one of its own.
 func _record_business_revenue_history() -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		var employed := _business_employed_worker_count(business_id)
 		var revenue_per_worker: float = (b.last_revenue / employed) if employed > 0 else 0.0
 		b.record_revenue_per_worker_day(revenue_per_worker)
+		b.record_balance_day()
 
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var headcount := float(h.headcount())

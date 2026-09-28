@@ -9,6 +9,8 @@ extends Control
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 const SEED := 4242
@@ -40,6 +42,20 @@ var _household_rows: Dictionary = {} # household_id -> {row labels...}
 var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
 var _blotter_display: RichTextLabel
+var _blotter_column: VBoxContainer
+var _blotter_toggle_button: Button
+var _blotter_minimized: bool = false
+
+## -1 means no business is selected -- the household list fills the
+## content_area on its own. Any other value is a business_id whose detail
+## panel is stacked on top of (drawn after, in the same anchored area as)
+## the household list -- see _build_ui()'s content_area.
+var _selected_business_id: int = -1
+var _business_detail_panel: PanelContainer
+var _business_detail_title: Label
+var _business_detail_sparkline: HESparkline
+var _business_detail_grid: GridContainer
+var _business_detail_employee_grid: GridContainer
 
 func _ready() -> void:
 	_configure_tooltip_theme()
@@ -88,6 +104,12 @@ func _load_scenario(index: int) -> void:
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
 	_day_accumulator = 0.0
+	# A business_id selected in the PREVIOUS scenario has no meaning here --
+	# guarded null check because this runs once before _build_ui() ever
+	# creates the panel (see _ready()).
+	_selected_business_id = -1
+	if _business_detail_panel != null:
+		_business_detail_panel.visible = false
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -162,30 +184,120 @@ func _build_ui() -> void:
 	household_header.add_theme_font_size_override("font_size", 16)
 	household_column.add_child(household_header)
 
+	# Plain Control, not another box container -- both children below are
+	# anchored to fill it completely, so whichever one is .visible occupies
+	# the WHOLE area rather than the two sharing it top-to-bottom. That's
+	# what makes the business detail panel read as a window stacked on top
+	# of the household list (added second, so it draws over it) instead of
+	# squeezed in beside it.
+	var content_area := Control.new()
+	content_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	household_column.add_child(content_area)
+
 	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	household_column.add_child(scroll)
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	content_area.add_child(scroll)
 
 	_household_list = VBoxContainer.new()
 	_household_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_household_list)
 
-	var blotter_column := VBoxContainer.new()
-	blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	blotter_column.size_flags_stretch_ratio = 1.0
-	lower_row.add_child(blotter_column)
+	_business_detail_panel = PanelContainer.new()
+	_business_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_business_detail_panel.visible = false
+	# The default theme's panel style is translucent enough that the
+	# household list underneath shows through and muddies the text -- this
+	# needs to read as a solid window stacked ON TOP, not a tinted overlay.
+	var detail_panel_style := StyleBoxFlat.new()
+	detail_panel_style.bg_color = Color(0.08, 0.08, 0.11, 1.0)
+	detail_panel_style.border_width_left = 1
+	detail_panel_style.border_width_top = 1
+	detail_panel_style.border_width_right = 1
+	detail_panel_style.border_width_bottom = 1
+	detail_panel_style.border_color = Color(0.32, 0.32, 0.42, 1.0)
+	detail_panel_style.content_margin_left = 10.0
+	detail_panel_style.content_margin_top = 8.0
+	detail_panel_style.content_margin_right = 10.0
+	detail_panel_style.content_margin_bottom = 8.0
+	_business_detail_panel.add_theme_stylebox_override("panel", detail_panel_style)
+	content_area.add_child(_business_detail_panel)
 
-	var blotter_header := Label.new()
-	blotter_header.text = "Blotter"
-	blotter_header.add_theme_font_size_override("font_size", 16)
-	blotter_column.add_child(blotter_header)
+	var detail_vbox := VBoxContainer.new()
+	_business_detail_panel.add_child(detail_vbox)
+
+	var detail_title_bar := HBoxContainer.new()
+	detail_vbox.add_child(detail_title_bar)
+
+	_business_detail_title = Label.new()
+	_business_detail_title.add_theme_font_size_override("font_size", 16)
+	detail_title_bar.add_child(_business_detail_title)
+
+	var detail_title_spacer := Control.new()
+	detail_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_title_bar.add_child(detail_title_spacer)
+
+	var detail_close_button := Button.new()
+	detail_close_button.text = "X"
+	detail_close_button.tooltip_text = "Close (back to household list)"
+	detail_close_button.pressed.connect(_on_business_detail_close_pressed)
+	detail_title_bar.add_child(detail_close_button)
+
+	var detail_scroll := ScrollContainer.new()
+	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_vbox.add_child(detail_scroll)
+
+	# Everything below scrolls together as one column -- the sparkline, the
+	# key/value facts, and the employee list -- rather than each getting its
+	# own independent scroll region.
+	var detail_content := VBoxContainer.new()
+	detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_scroll.add_child(detail_content)
+
+	var cash_history_label := Label.new()
+	cash_history_label.text = "Cash (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	detail_content.add_child(cash_history_label)
+
+	_business_detail_sparkline = HESparkline.new()
+	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
+	detail_content.add_child(_business_detail_sparkline)
+
+	_business_detail_grid = GridContainer.new()
+	_business_detail_grid.columns = 2
+	detail_content.add_child(_business_detail_grid)
+
+	var employees_label := Label.new()
+	employees_label.text = "Employees"
+	employees_label.add_theme_font_size_override("font_size", 14)
+	detail_content.add_child(employees_label)
+
+	_business_detail_employee_grid = GridContainer.new()
+	_business_detail_employee_grid.columns = 5
+	detail_content.add_child(_business_detail_employee_grid)
+
+	_blotter_column = VBoxContainer.new()
+	lower_row.add_child(_blotter_column)
+
+	var blotter_header := HBoxContainer.new()
+	_blotter_column.add_child(blotter_header)
+
+	# Doubles as the header label AND the minimize/restore control -- see
+	# _set_blotter_minimized() -- rather than a separate label plus button,
+	# since a minimized blotter has almost no width to spare for both.
+	_blotter_toggle_button = Button.new()
+	_blotter_toggle_button.flat = true
+	_blotter_toggle_button.add_theme_font_size_override("font_size", 16)
+	_blotter_toggle_button.pressed.connect(_on_blotter_toggle_pressed)
+	blotter_header.add_child(_blotter_toggle_button)
 
 	_blotter_display = RichTextLabel.new()
 	_blotter_display.bbcode_enabled = true
 	_blotter_display.scroll_following = false
 	_blotter_display.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_blotter_display.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	blotter_column.add_child(_blotter_display)
+	_blotter_column.add_child(_blotter_display)
+	_set_blotter_minimized(false)
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
@@ -195,6 +307,151 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	btn.text = label
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
 	return btn
+
+func _on_blotter_toggle_pressed() -> void:
+	_set_blotter_minimized(not _blotter_minimized)
+
+## Minimized: the blotter shrinks to a thin strip docked at the right edge
+## (SIZE_SHRINK_END so it hugs that edge rather than floating wherever its
+## small minimum size happens to land) instead of sharing lower_row's width
+## with the household/business-detail column -- that column's own
+## SIZE_EXPAND_FILL then claims all the space this one gives up
+## automatically, no stretch-ratio bookkeeping needed on either side.
+func _set_blotter_minimized(minimized: bool) -> void:
+	_blotter_minimized = minimized
+	_blotter_display.visible = not minimized
+	if minimized:
+		_blotter_toggle_button.text = "◂"
+		_blotter_toggle_button.tooltip_text = "Restore the blotter"
+		_blotter_column.custom_minimum_size = Vector2(32, 0)
+		_blotter_column.size_flags_horizontal = Control.SIZE_SHRINK_END
+	else:
+		_blotter_toggle_button.text = "Blotter ▸"
+		_blotter_toggle_button.tooltip_text = "Minimize the blotter"
+		_blotter_column.custom_minimum_size = Vector2(0, 0)
+		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_blotter_column.size_flags_stretch_ratio = 1.0
+
+func _on_business_row_selected(business_id: int) -> void:
+	_selected_business_id = business_id
+	_business_detail_panel.visible = true
+	_refresh_business_detail()
+
+func _on_business_detail_close_pressed() -> void:
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+
+## Rebuilds (not just re-labels) the detail grid every call -- the row set
+## itself differs by business kind (a Trader has no land/fields, a
+## non-field PRODUCTION business has no harvest countdown), so there's no
+## single fixed schema to update labels in place against, unlike the
+## business/household list rows.
+func _refresh_business_detail() -> void:
+	if _selected_business_id == -1:
+		return
+	var report := {}
+	for r in _simulation.get_business_reports():
+		if r["business_id"] == _selected_business_id:
+			report = r
+			break
+	if report.is_empty():
+		# The selected business no longer exists -- e.g. a scenario reload.
+		_selected_business_id = -1
+		_business_detail_panel.visible = false
+		return
+
+	_business_detail_title.text = report["name"]
+	_business_detail_sparkline.set_data(report["balance_history"])
+
+	for child in _business_detail_grid.get_children():
+		_business_detail_grid.remove_child(child)
+		child.queue_free()
+
+	var runway: float = report["cash_runway_days"]
+	var runway_text := "inf" if is_inf(runway) else ("%.0fd" % runway)
+	var rows: Array = [
+		["Kind", (report["kind"] as String).capitalize()],
+		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
+		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
+		["Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
+		# A business only ever holds its own output good today (inputs are
+		# bought and consumed same-day -- see he_simulation.gd's
+		# _run_input_purchasing), so "Inventory" is just this one number for
+		# now; the label says Inventory rather than Stock so it reads right
+		# if that ever stops being true.
+		["Inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]],
+		["Cash", "%.1f" % report["balance"]],
+		["Cash runway", runway_text],
+		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
+		["Reference wage", "%.3f" % report["reference_wage_per_worker"]],
+		["Wage/worker (last)", "%.3f" % report["last_wage_per_worker"]],
+		["Wage shortfall", "%.3f" % report["wage_shortfall"]],
+		["Last revenue", "%.2f" % report["last_revenue"]],
+		["Last wages paid", "%.2f" % report["last_wages_paid"]],
+		["Last cash change", "%.2f" % report["last_cash_change"]],
+	]
+	if report["land_area_acres"] > 0.0:
+		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
+		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
+	for row in rows:
+		_add_detail_row(row[0], row[1])
+
+	var fields: Array = report["fields"]
+	for i in fields.size():
+		var f: Dictionary = fields[i]
+		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]])
+
+	_refresh_business_detail_employees()
+
+func _add_detail_row(label_text: String, value_text: String) -> void:
+	var label := Label.new()
+	label.text = label_text
+	label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_business_detail_grid.add_child(label)
+	var value := Label.new()
+	value.text = value_text
+	_business_detail_grid.add_child(value)
+
+## Every household currently employed at the selected business -- there's no
+## query on HESimulation for "who works here" specifically, so this filters
+## get_household_ids()/get_household_summary() by employer_business_id the
+## same way a caller outside this file would have to. Rebuilt (not
+## re-labeled) every call since who's employed here changes as households
+## are hired, die, split, or move on.
+func _refresh_business_detail_employees() -> void:
+	for child in _business_detail_employee_grid.get_children():
+		_business_detail_employee_grid.remove_child(child)
+		child.queue_free()
+
+	for col_label in ["Household", "Workers", "Dependents", "Balance", "Food stress"]:
+		var header := Label.new()
+		header.text = col_label
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		_business_detail_employee_grid.add_child(header)
+
+	var employee_count := 0
+	for household_id in _simulation.get_household_ids():
+		var h := _simulation.get_household_summary(household_id)
+		if h["employer_business_id"] != _selected_business_id:
+			continue
+		employee_count += 1
+		_add_employee_cell(str(household_id))
+		_add_employee_cell(str(h["worker_capacity"]))
+		_add_employee_cell(str(h["dependents"]))
+		_add_employee_cell("%.1f" % h["balance"])
+		_add_employee_cell("%.2f" % h["food_stress"])
+
+	if employee_count == 0:
+		var empty_label := Label.new()
+		empty_label.text = "No households currently employed here."
+		empty_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		_business_detail_employee_grid.add_child(empty_label)
+
+func _add_employee_cell(text: String) -> void:
+	var label := Label.new()
+	label.text = text
+	label.custom_minimum_size = Vector2(70, 0)
+	_business_detail_employee_grid.add_child(label)
 
 ## Rebuilt (not just re-labeled) whenever the ACTIVE commodity set changes
 ## -- see _refresh()'s _known_market_commodities check -- since
@@ -264,6 +521,18 @@ func _rebuild_business_rows() -> void:
 		var business_id: int = report["business_id"]
 		var labels := {}
 		for key in ["name", "capacity", "max_capacity", "employed", "land", "next_harvest", "output", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
+			if key == "name":
+				# The only clickable cell in the row -- opens this business's
+				# detail panel (see _on_business_row_selected). `flat` keeps
+				# it looking like the plain Label every other cell is.
+				var name_button := Button.new()
+				name_button.custom_minimum_size = Vector2(90, 0)
+				name_button.flat = true
+				name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+				name_button.pressed.connect(_on_business_row_selected.bind(business_id))
+				grid.add_child(name_button)
+				labels[key] = name_button
+				continue
 			var label := Label.new()
 			label.custom_minimum_size = Vector2(90, 0)
 			if key == "revenue_per_worker":
@@ -370,7 +639,7 @@ func _refresh() -> void:
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
 		if row.is_empty():
 			continue
-		(row["name"] as Label).text = report["name"]
+		(row["name"] as Button).text = report["name"]
 		(row["capacity"] as Label).text = str(report["capacity"])
 		(row["max_capacity"] as Label).text = str(report["max_capacity"])
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
@@ -399,6 +668,9 @@ func _refresh() -> void:
 		var cash_change_label := row["cash_change"] as Label
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
+
+	if _selected_business_id != -1:
+		_refresh_business_detail()
 
 	var current_ids := _simulation.get_household_ids()
 	if current_ids != _known_household_ids:
