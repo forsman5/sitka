@@ -317,7 +317,7 @@ func _build_interface() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
 	_hint_label = Label.new()
-	_hint_label.text = "River Valley — mouse wheel: zoom   |   middle drag / WASD: pan   |   Alt + drag: tilt   |   click a settlement"
+	_hint_label.text = "River Valley — wheel: zoom   |   middle drag / WASD: pan   |   Q/E: rotate   |   Alt + drag: tilt   |   click a settlement"
 	_hint_label.position = Vector2(18, 16)
 	_hint_label.add_theme_font_size_override("font_size", 15)
 	canvas.add_child(_hint_label)
