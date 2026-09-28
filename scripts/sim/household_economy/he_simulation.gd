@@ -425,20 +425,46 @@ func _field_reports(b: HEBusiness) -> Array:
 		out.append({"area": f.area, "days_growing": f.days_growing, "growth_days": b.growth_days})
 	return out
 
-## Every commodity with a market at all -- BASE_PRICE.keys(), not just
-## SUBSISTENCE_COMMODITIES, so a business-to-business good like iron ore/
-## iron shows up here too (see _run_input_purchasing/_run_trade, the only
-## places that ever populate their last_clearing entries).
+## Every commodity with a REAL presence in this settlement's market right
+## now -- BASE_PRICE.keys() (not just SUBSISTENCE_COMMODITIES, so a
+## business-to-business good like iron ore/iron is eligible at all -- see
+## _run_input_purchasing/_run_trade, the only places that ever populate
+## their last_clearing entries), filtered down to ones _commodity_active_in_
+## market says actually have a buyer or seller. A caller (the dashboard's
+## market grid) is expected to show only what this returns, not a fixed
+## list, so an inactive good's row disappears entirely rather than sitting
+## there reading all zeroes forever.
 func get_market_summary(settlement_id: int = -1) -> Dictionary:
 	settlement_id = _resolve_settlement_id(settlement_id)
 	var local_market: HEMarket = markets[settlement_id]
 	var out := {}
 	for c in BASE_PRICE.keys():
+		if not _commodity_active_in_market(settlement_id, c):
+			continue
 		out[Commodity.name_of(c)] = {
 			"price": local_market.price[c],
 			"last_clearing": (local_market.last_clearing.get(c, {}) as Dictionary).duplicate(true),
 		}
 	return out
+
+## Whether `commodity` has any real presence in `settlement_id`'s market --
+## a local PRODUCTION business sells it, OR some local PRODUCTION business
+## wants to BUY it as a recipe input (whether from that local seller or, for
+## something nothing local produces, via the settlement's Trader importing
+## it -- see _run_input_purchasing). Computed structurally from which
+## businesses exist rather than from today's last_clearing, so it's correct
+## from day 0 (before any tick has run) and doesn't flicker off on a single
+## quiet day.
+func _commodity_active_in_market(settlement_id: int, commodity: Commodity.Type) -> bool:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id != settlement_id or b.kind != HEBusiness.Kind.PRODUCTION:
+			continue
+		if b.output_commodity() == commodity:
+			return true
+		if b.recipe.inputs.has(commodity):
+			return true
+	return false
 
 func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
 	var local_market: HEMarket = markets[settlement_id]
@@ -1727,8 +1753,10 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 ## BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES -- every commodity
 ## that can actually sit in SOMEONE's inventory (a business's, in iron's
 ## case; iron ore never does, see _run_input_purchasing, but costs nothing
-## to include). Using the same key list get_market_summary() does keeps the
-## two from silently drifting apart as a future commodity gets added.
+## to include). Deliberately UNFILTERED, unlike get_market_summary()'s
+## active-commodity filter -- conservation accounting must still count
+## stock of a good that just went inactive (e.g. a Bloomery whose capacity
+## self-tuned to zero but still has unsold iron sitting in inventory).
 func _total_stock_snapshot(settlement_id: int = -1) -> Dictionary:
 	var snap := {}
 	for c in BASE_PRICE.keys():

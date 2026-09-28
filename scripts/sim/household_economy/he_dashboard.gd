@@ -30,7 +30,9 @@ var _day_accumulator: float = 0.0
 
 var _day_label: Label
 var _city_stats_label: Label
+var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
+var _known_market_commodities: Array = [] # rebuild trigger -- see _refresh()
 var _business_list: VBoxContainer
 var _business_rows: Dictionary = {} # business_id -> {row labels...}
 var _household_list: VBoxContainer
@@ -132,7 +134,11 @@ func _build_ui() -> void:
 	_city_stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
 	vbox.add_child(_city_stats_label)
 
-	vbox.add_child(_build_market_grid())
+	_market_grid = GridContainer.new()
+	_market_grid.columns = 5
+	vbox.add_child(_market_grid)
+	_rebuild_market_grid()
+	_known_market_commodities = _simulation.get_market_summary().keys()
 
 	var business_header := Label.new()
 	business_header.text = "Businesses"
@@ -190,36 +196,38 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
 	return btn
 
-func _build_market_grid() -> GridContainer:
-	var grid := GridContainer.new()
-	grid.columns = 5
+## Rebuilt (not just re-labeled) whenever the ACTIVE commodity set changes
+## -- see _refresh()'s _known_market_commodities check -- since
+## HESimulation.get_market_summary() now only returns commodities with a
+## real buyer or seller (a good like iron ore/iron simply isn't in the
+## dictionary at all in a scenario with no Bloomery to trade it, rather
+## than being present and reading all zeroes forever).
+func _rebuild_market_grid() -> void:
+	for child in _market_grid.get_children():
+		_market_grid.remove_child(child)
+		child.queue_free()
+	_market_labels.clear()
+
 	for col_label in ["Good", "Price", "Offered", "Funded request", "Traded"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-		grid.add_child(header)
+		_market_grid.add_child(header)
 
-	# BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES, so a
-	# business-to-business good like iron ore/iron gets a row too (see
-	# HESimulation.get_market_summary) -- it just reads all zeroes in a
-	# scenario with no Bloomery to trade it, since nothing ever populates
-	# its last_clearing entry there.
-	for c in HESimulation.BASE_PRICE.keys():
-		var name := Commodity.name_of(c)
+	for name in _simulation.get_market_summary().keys():
 		var name_label := Label.new()
 		name_label.text = name
 		name_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(name_label)
+		_market_grid.add_child(name_label)
 
 		var labels := {}
 		for key in ["price", "offered", "funded", "traded"]:
 			var value_label := Label.new()
 			value_label.custom_minimum_size = Vector2(110, 0)
 			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
-			grid.add_child(value_label)
+			_market_grid.add_child(value_label)
 			labels[key] = value_label
 		_market_labels[name] = labels
-	return grid
 
 func _rebuild_business_rows() -> void:
 	for child in _business_list.get_children():
@@ -345,6 +353,10 @@ func _refresh() -> void:
 		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"], city["import_cost_total"]]
 
 	var market := _simulation.get_market_summary()
+	var current_market_commodities := market.keys()
+	if current_market_commodities != _known_market_commodities:
+		_rebuild_market_grid()
+		_known_market_commodities = current_market_commodities
 	for commodity_name in _market_labels.keys():
 		var labels: Dictionary = _market_labels[commodity_name]
 		var entry: Dictionary = market[commodity_name]
