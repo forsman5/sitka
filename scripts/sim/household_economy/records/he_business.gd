@@ -74,6 +74,10 @@ var last_culled: Dictionary[Commodity.Type, float] = {}
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
+## Kind.HERD only, reporting: head sold off today via he_simulation.gd's
+## _hardship_butcher_if_needed to cover a wage shortfall the ranch's own
+## cash couldn't. 0.0 on any ordinary day.
+var last_hardship_butchered: float = 0.0
 
 ## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
 ## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for

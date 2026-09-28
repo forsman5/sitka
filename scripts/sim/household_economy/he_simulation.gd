@@ -210,6 +210,23 @@ const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
 ## like any other commodity a business can hold and export.
 const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
 
+## Hardship butchering (see _hardship_butcher_if_needed): a herd has no
+## guaranteed near-term payoff the way a field does -- its cull can be many
+## HERD_EVAL_INTERVAL_DAYS cycles away from a fresh or just-culled herd, far
+## longer than WAGE_NEGATIVE_BALANCE_FLOOR_DAYS' cushion covers. Rather than
+## let it borrow indefinitely against a payoff that may never arrive in
+## time, once that cushion runs out it sells some of its own live herd
+## straight to cash, at a real discount off HERD_EXPORT_PRICE (worse than
+## even the Trader's already-discounted TRADER_BUY_PRICE_FRACTION) so a
+## ranch never prefers this over patiently waiting for a normal export --
+## it's a last resort, not a revenue strategy. Never sells below this
+## floor, so there's always enough left to regrow from.
+const HARDSHIP_BUTCHER_PRICE_FRACTION := 0.25
+const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 10.0,
+	HEBusiness.Species.SHEEP: 20.0,
+}
+
 ## Weekly self-tuning: a business earning (rolling-average) more than
 ## WAGE_PROFIT_MARGIN above the going reference wage grows; one earning that
 ## much below shrinks. The margin is a dead-band so a business hovering near
@@ -470,6 +487,7 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["stock"] = b.stock(herd_commodity)
 			report["wool_stock"] = b.stock(Commodity.Type.WOOL) if b.species == HEBusiness.Species.SHEEP else 0.0
 			report["last_wool_produced"] = b.last_wool_produced
+			report["last_hardship_butchered"] = b.last_hardship_butchered
 		else:
 			var output_commodity := b.output_commodity()
 			report["recipe_id"] = b.recipe.id
@@ -699,6 +717,8 @@ func _pay_wages(record: Dictionary) -> void:
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		var total_needed: float = reference_wage * employed
 		var floor: float = -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		if b.kind == HEBusiness.Kind.HERD:
+			_hardship_butcher_if_needed(b, total_needed - max(0.0, b.balance - floor), record)
 		var available: float = max(0.0, b.balance - floor)
 		var paid: float = clampf(total_needed, 0.0, available)
 		var shortfall: float = total_needed - paid
@@ -718,6 +738,45 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_wages_paid = total_paid
 		b.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
+
+## Kind.HERD only, called from _pay_wages before its cash allowance is
+## computed: if this ranch can't cover today's wage bill even with its
+## generous negative-balance allowance, sell enough of its own live herd to
+## cover the gap -- see HARDSHIP_BUTCHER_PRICE_FRACTION/HARDSHIP_BUTCHER_
+## MIN_HERD's doc comment for why. Routed through the same exported/
+## export_revenue ledger _run_trade's Trader export pass uses, so this
+## doesn't create money run_household_economy.gd's conservation check can't
+## account for -- it's a real sale, just not through the Trader.
+func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: Dictionary) -> void:
+	b.last_hardship_butchered = 0.0
+	if cash_shortfall <= 0.0001:
+		return
+	if b.species == HEBusiness.Species.SHEEP:
+		# Sheep's ordinary income (wool) comes from a LIVE herd -- unlike
+		# cattle, whose only realization event ever was culling the herd
+		# either way, selling off sheep early to cover a temporary cash dip
+		# would cannibalize the very wool income that was already on track
+		# to recover it, a self-reinforcing spiral verified in testing (herd
+		# crashed toward its floor and never recovered). Sheep just rides
+		# out the dip on the normal WAGE_NEGATIVE_BALANCE_FLOOR_DAYS
+		# allowance instead, same as any non-herd business would.
+		return
+	var price: float = HERD_EXPORT_PRICE[b.species] * HARDSHIP_BUTCHER_PRICE_FRACTION
+	if price <= 0.0:
+		return
+	var available_head: float = max(0.0, b.herd_size - HARDSHIP_BUTCHER_MIN_HERD[b.species])
+	var butchered: float = min(available_head, cash_shortfall / price)
+	if butchered <= 0.0001:
+		return
+	b.herd_size -= butchered
+	var proceeds: float = butchered * price
+	b.balance += proceeds
+	b.last_hardship_butchered = butchered
+	var name := Commodity.name_of(b.herd_commodity())
+	_accumulate(record["exported"], name, butchered)
+	record["export_revenue"] += proceeds
+	_export_revenue_total += proceeds
+	_log_event("hardship_butcher", {"business_id": b.id, "head": butchered, "proceeds": proceeds})
 
 ## Each PRODUCTION business produces its one recipe output using however
 ## many workers it currently has (derived live from household
@@ -1159,7 +1218,16 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# business has no such lag -- its output is instant -- so it
 			# only needs a couple of weeks' grace to accumulate a real
 			# revenue signal at all.
-			b.protected_until_day = day + (b.days_until_next_harvest() if b.has_long_cycle() else CASH_RUNWAY_DANGER_DAYS)
+			# Deliberately uses_field_model(), not the broader has_long_cycle():
+			# a field is GUARANTEED to harvest something every growth_days, so
+			# trusting it that long is safe. A herd's cull is conditional on
+			# herd_size actually crossing HERD_CULL_TARGET, which (especially
+			# on a fresh or just-culled herd) can take many multiples of
+			# HERD_EVAL_INTERVAL_DAYS -- protecting it for a full cycle on that
+			# same trust was verified to let a ranch hire and bleed wages for
+			# 700+ days on zero revenue before ever being judged. A herd gets
+			# the same short, evidence-based leash as Trader/legacy instead.
+			b.protected_until_day = day + (b.days_until_next_harvest() if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS)
 			b.capacity = mini(CAPACITY_TRIAL_HIRE_WORKERS, b.max_capacity)
 			continue
 		if day < b.protected_until_day:
@@ -1180,7 +1248,11 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			if absf(ratio_error) > WAGE_PROFIT_MARGIN:
 				var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
 				delta = roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
-		var required_runway: float = float(b.days_until_next_harvest()) if b.has_long_cycle() else CASH_RUNWAY_DANGER_DAYS
+		# See protected_until_day's doc comment above for why this stays
+		# uses_field_model(), not has_long_cycle() -- same guaranteed-payoff
+		# reasoning applies to how long a shrink-worthy herd gets to prove
+		# itself before the runway guard forces a bigger cut.
+		var required_runway: float = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
 		if _business_cash_runway_days(b) < required_runway:
 			delta = mini(delta, -CAPACITY_STEP_MAX_WORKERS)
 		if delta != 0:
@@ -1199,7 +1271,9 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 ## it that often would compound many step changes before the first one's
 ## effect on revenue is even visible.
 func _capacity_eval_interval_days(b: HEBusiness) -> int:
-	if not b.has_long_cycle():
+	# uses_field_model(), not has_long_cycle() -- see protected_until_day's
+	# doc comment in _evaluate_business_capacity.
+	if not b.uses_field_model():
 		return CAPACITY_EVAL_INTERVAL_DAYS
 	var weeks: int = maxi(1, roundi(float(b.growth_days) / 6.0 / float(CAPACITY_EVAL_INTERVAL_DAYS)))
 	return weeks * CAPACITY_EVAL_INTERVAL_DAYS

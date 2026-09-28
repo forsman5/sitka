@@ -73,7 +73,18 @@ const SHEEP_STARTING_HERD := 60.0
 ## authored ceiling like the Trader rather than one derived from acreage.
 ## Smaller than Farm/Woodlot -- tending a herd that mostly grows/thins on
 ## its own needs fewer hands than working a field every day.
-const CATTLE_RANCH_MAX_CAPACITY := 6
+## Verified even WITH HESimulation._hardship_butcher_if_needed (a ranch
+## selling its own live herd for cash when it can't make payroll): at these
+## tuned constants, cattle ranching's net worth generation is too low
+## relative to reference wages to sustainably fund even ONE wage-earning
+## worker -- hardship butchering just pins the herd near its floor
+## indefinitely without ever letting it recover enough to reach a real
+## cull, while the business's balance drifts ever further negative. Left
+## at 0 until the underlying economics (export price, cull target/growth
+## rate, or the employment-retry loop itself -- see conversation/handoff
+## notes) are revisited on purpose. Sheep Farm has no such problem (wool
+## pays out every cycle) and is staffed for real below.
+const CATTLE_RANCH_MAX_CAPACITY := 0
 const SHEEP_FARM_MAX_CAPACITY := 10
 
 const STARTING_BALANCE := 20.0
@@ -175,10 +186,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	# Ranches aren't seeded with any day-one employees (unlike Farm/Woodlot/
 	# Trader above) -- they self-bootstrap through the same zero-capacity
 	# trial-hire path HESimulation._evaluate_business_capacity already gives
-	# every business, protected until their first herd cycle actually lands
-	# (see HEBusiness.has_long_cycle()/growth_days, set below to match
-	# HESimulation.HERD_EVAL_INTERVAL_DAYS so ranches get that same
-	# cycle-aware protection/eval-cadence treatment Farm/Woodlot's fields do).
+	# every business. Unlike a field, a herd's cull isn't a guaranteed,
+	# dated payoff (see HESimulation._hardship_butcher_if_needed's doc
+	# comment), so it deliberately does NOT get the full-cycle protection
+	# window a field-model business does -- only the short, evidence-based
+	# CASH_RUNWAY_DANGER_DAYS leash Trader/legacy businesses get. growth_days
+	# is still set to HESimulation.HERD_EVAL_INTERVAL_DAYS below, purely so
+	# rolling_average_revenue_per_worker() smooths over the ranch's own
+	# cycle length instead of a flat week (see HEBusiness.has_long_cycle()).
 	var cattle_ranch := HEBusiness.new(CATTLE_RANCH_BUSINESS_ID, "Cattle Ranch", null, CATTLE_RANCH_MAX_CAPACITY, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.CATTLE, CATTLE_STARTING_HERD)
 	cattle_ranch.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 	var sheep_farm := HEBusiness.new(SHEEP_FARM_BUSINESS_ID, "Sheep Farm", null, SHEEP_FARM_MAX_CAPACITY, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.SHEEP, SHEEP_STARTING_HERD)
