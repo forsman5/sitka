@@ -279,6 +279,7 @@ func _check_field_model_dynamics() -> void:
 	var worst_floor_breach := 0.0
 	var over_cap_by := 0
 	var free_revenue_days := 0
+	var invalid_harvest_projections := 0
 	var previous_stock := {}
 	for report in sim.get_business_reports():
 		previous_stock[report["business_id"]] = report["stock"]
@@ -298,6 +299,11 @@ func _check_field_model_dynamics() -> void:
 				worst_stock_gap = max(worst_stock_gap, abs(report["stock"] - expected_stock))
 				if traded <= 0.0001 and exported <= 0.0001 and report["last_revenue"] > 0.0001:
 					free_revenue_days += 1
+				if report["land_area_acres"] > 0.0:
+					var projected_yield: float = report["next_harvest_yield_fraction"]
+					var projected_units: float = report["next_harvest_expected_units"]
+					if projected_yield < 0.0 or projected_yield > 1.0 or projected_units < 0.0:
+						invalid_harvest_projections += 1
 			previous_stock[business_id] = report["stock"]
 
 			var employed: int = report["employed_workers"]
@@ -316,6 +322,7 @@ func _check_field_model_dynamics() -> void:
 	_assert(worst_floor_breach < EPSILON, "A business's balance dropped below its own generous wage floor by %.4f" % worst_floor_breach)
 	_assert(over_cap_by == 0, "A business employed %d workers past its own land-derived max_capacity" % over_cap_by)
 	_assert(free_revenue_days == 0, "A business recorded revenue on a day it sold nothing locally and exported nothing")
+	_assert(invalid_harvest_projections == 0, "A next-harvest projection reported invalid expected units or yield")
 
 ## The core "let it tune itself" claim: starting from a deliberately
 ## mis-staffed split (Woodlot overstaffed, Farm understaffed), the business

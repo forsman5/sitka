@@ -394,6 +394,10 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"days_to_next_harvest": b.days_until_next_harvest(),
 			"fields": _field_reports(b),
 		}
+		if b.uses_field_model():
+			var projection := _next_harvest_projection(b, int(report["employed_workers"]))
+			report["next_harvest_expected_units"] = projection["expected_units"]
+			report["next_harvest_yield_fraction"] = projection["yield_fraction"]
 		if b.kind == HEBusiness.Kind.TRADER:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
@@ -437,6 +441,29 @@ func _field_reports(b: HEBusiness) -> Array:
 	for f in b.fields:
 		out.append({"area": f.area, "days_growing": f.days_growing, "growth_days": b.growth_days})
 	return out
+
+## Forecast for the next field to mature, assuming today's crew stays at
+## its current size until that harvest. Yield uses actual accumulated
+## worker-days plus the work that current staffing would add over the
+## remaining growth days, against the same requirement used at harvest.
+func _next_harvest_projection(b: HEBusiness, employed: int) -> Dictionary:
+	if not b.uses_field_model():
+		return {"expected_units": 0.0, "yield_fraction": 0.0}
+	var next_field: HEField = b.fields[0]
+	var days_remaining := b.growth_days - next_field.days_growing
+	for f in b.fields:
+		var candidate_days: int = b.growth_days - f.days_growing
+		if candidate_days < days_remaining:
+			next_field = f
+			days_remaining = candidate_days
+	var daily_labor: float = float(employed) * (next_field.area / b.land_area_acres) if b.land_area_acres > 0.0 else 0.0
+	var projected_labor: float = next_field.labor_applied + daily_labor * maxi(0, days_remaining)
+	var required_labor: float = next_field.area * b.labor_per_area_per_day * b.growth_days
+	var yield_fraction: float = clampf(projected_labor / required_labor, 0.0, 1.0) if required_labor > 0.0 else 0.0
+	return {
+		"expected_units": next_field.area * b.yield_per_area * yield_fraction,
+		"yield_fraction": yield_fraction,
+	}
 
 ## Every commodity with a REAL presence in this settlement's market right
 ## now -- BASE_PRICE.keys() (not just SUBSISTENCE_COMMODITIES, so a

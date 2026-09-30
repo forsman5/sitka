@@ -19,6 +19,7 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## Blotter shows a scrollable scan of recent history, not the full
 ## HESimulation.EVENT_LOG_MAX -- older entries just aren't rendered.
 const BLOTTER_DISPLAY_LIMIT := 40
+const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 
 const SCENARIOS := [
 	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
@@ -374,8 +375,16 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
-		["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]],
+		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
+	]
+	if report["kind"] != "trader":
+		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
+	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
+		var input_parts: Array[String] = []
+		for commodity_name in (report["input_inventory"] as Dictionary).keys():
+			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
+		rows.append(["Input inventory", ", ".join(input_parts)])
+	rows.append_array([
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
 		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
@@ -385,12 +394,7 @@ func _refresh_business_detail() -> void:
 		["Last revenue", "%.2f" % report["last_revenue"]],
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
-	]
-	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
-		var input_parts: Array[String] = []
-		for commodity_name in (report["input_inventory"] as Dictionary).keys():
-			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
-		rows.insert(5, ["Input inventory", ", ".join(input_parts)])
+	])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
@@ -506,11 +510,14 @@ func _rebuild_business_rows() -> void:
 	_business_list.add_child(scroll)
 
 	var grid := GridContainer.new()
-	grid.columns = 15
+	grid.columns = 14
 	scroll.add_child(grid)
-	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Next harvest", "Output", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
+	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Status", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
+		if col_label == "Status":
+			header.custom_minimum_size = Vector2(BUSINESS_STATUS_COLUMN_WIDTH, 0)
+			header.clip_text = true
 		if col_label == "Revenue/worker (avg)":
 			header.mouse_filter = Control.MOUSE_FILTER_STOP
 			header.mouse_default_cursor_shape = Control.CURSOR_HELP
@@ -521,7 +528,7 @@ func _rebuild_business_rows() -> void:
 	for report in _simulation.get_business_reports():
 		var business_id: int = report["business_id"]
 		var labels := {}
-		for key in ["name", "capacity", "max_capacity", "employed", "land", "next_harvest", "output", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
+		for key in ["name", "capacity", "max_capacity", "employed", "land", "status", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
 			if key == "name":
 				# The only clickable cell in the row -- opens this business's
 				# detail panel (see _on_business_row_selected). `flat` keeps
@@ -535,7 +542,12 @@ func _rebuild_business_rows() -> void:
 				labels[key] = name_button
 				continue
 			var label := Label.new()
-			label.custom_minimum_size = Vector2(90, 0)
+			label.custom_minimum_size = Vector2(BUSINESS_STATUS_COLUMN_WIDTH if key == "status" else 90, 0)
+			if key == "status":
+				label.clip_text = true
+				label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				label.mouse_filter = Control.MOUSE_FILTER_STOP
+				label.mouse_default_cursor_shape = Control.CURSOR_HELP
 			if key == "revenue_per_worker":
 				label.mouse_filter = Control.MOUSE_FILTER_STOP
 				label.mouse_default_cursor_shape = Control.CURSOR_HELP
@@ -646,9 +658,20 @@ func _refresh() -> void:
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
 		var land: float = report["land_area_acres"]
 		(row["land"] as Label).text = ("%.0f" % land) if land > 0.0 else "-"
-		var next_harvest: int = report["days_to_next_harvest"]
-		(row["next_harvest"] as Label).text = ("%dd" % next_harvest) if next_harvest >= 0 else "-"
-		(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
+		var status_label := row["status"] as Label
+		if land > 0.0:
+			var next_harvest: int = report["days_to_next_harvest"]
+			var expected: float = report["next_harvest_expected_units"]
+			var yield_percent: float = report["next_harvest_yield_fraction"] * 100.0
+			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
+			status_label.text = status_text
+			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
+		elif report["kind"] == "trader":
+			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
+			status_label.tooltip_text = report["output_commodity"]
+		else:
+			status_label.text = "Producing %.1f / %.1f %s" % [report["last_actual_units"], report["last_planned_units"], report["output_commodity"]]
+			status_label.tooltip_text = "Actual output / labor-planned output for the current day."
 		var revenue_per_worker: float = report["rolling_average_revenue_per_worker"]
 		var reference: float = report["reference_wage_per_worker"]
 		var revenue_label := row["revenue_per_worker"] as Label
