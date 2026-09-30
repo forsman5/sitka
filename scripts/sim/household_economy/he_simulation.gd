@@ -148,10 +148,12 @@ const HERD_EVAL_INTERVAL_DAYS := 90
 ## the grain market) but explicitly not implemented here. For now a herd
 ## that outgrows its share of the land simply stops growing at that land's
 ## ceiling and takes the harsher "neglected" mortality rate below. Sized
-## for a small subsistence-valley settlement (HEScenarioSeeds.
-## HOUSEHOLD_COUNT households), not a commercial operation -- see
-## HERD_CULL_TARGET.
-const SETTLEMENT_GRAZING_LAND := 150.0
+## with real headroom above both species' HERD_CULL_TARGET at once, now
+## that culled stock/wool actually sell for real money (Trader export,
+## local wool market) -- see HERD_EXPORT_PRICE's doc comment for why
+## cattle's herd was originally kept small (nothing consumed it yet) and
+## no longer needs to be.
+const SETTLEMENT_GRAZING_LAND := 300.0
 const CATTLE_LAND_PER_HEAD := 1.0
 const SHEEP_LAND_PER_HEAD := 0.15
 
@@ -196,15 +198,16 @@ const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
 
 ## Once herd_size crosses this, the ranch culls straight back down to it
 ## every eval interval, moving the excess into its own inventory as
-## herd_commodity() units. Set close enough to HEScenarioSeeds' starting
-## herd sizes that a ranch actually reaches its first cull within a
-## normal game-length run (a handful of years at these growth rates), not
-## decades -- these are small-village herds, not commercial ones. Kept
-## well under either species' solo claim on SETTLEMENT_GRAZING_LAND so
-## the two ranches have real headroom to grow between culls even while
+## herd_commodity() units. Cattle's target keeps the SAME ratio to
+## HEScenarioSeeds.CATTLE_STARTING_HERD as before (1.5x) so the time to
+## first cull is unchanged (~900 days at HERD_GROWTH_RATE_MULTIPLIER) --
+## only the absolute scale moved up, now that a bigger herd has somewhere
+## real to go (HERD_EXPORT_PRICE, SETTLEMENT_GRAZING_LAND). Both targets
+## stay well under either species' solo claim on SETTLEMENT_GRAZING_LAND
+## so the two ranches have real headroom to grow between culls even while
 ## sharing the same pasture.
 const HERD_CULL_TARGET: Dictionary[HEBusiness.Species, float] = {
-	HEBusiness.Species.CATTLE: 45.0,
+	HEBusiness.Species.CATTLE: 150.0,
 	HEBusiness.Species.SHEEP: 200.0,
 }
 
@@ -223,12 +226,20 @@ const WOOL_PER_HEAD_PER_INTERVAL := 0.07
 ## tracks" (see simulation.gd's REFERENCE_STOCK doc comment), so they never
 ## join SUBSISTENCE_COMMODITIES and never run through the local clearing
 ## market. Instead a ranch's culled stock is Trader-export-only, sold at
-## this flat reference price (matching Simulation.BASE_PRICE for the same
-## two commodities) rather than a live locally-drifting one -- there's no
-## local supply/demand signal to drift one against. See _run_trade's herd
-## export pass.
+## this flat reference price rather than a live locally-drifting one --
+## there's no local supply/demand signal to drift one against.
+##
+## Cattle deliberately DIVERGES from Simulation.BASE_PRICE[CATTLE] (5.0) --
+## historically cattle were a genuinely high-value good (often the primary
+## store of wealth in a subsistence economy, arguably more so than grain),
+## and at the old parity price the ranch's entire steady-state cull volume
+## was worth pennies, nowhere near enough to fund even one wage-earning
+## worker (see he_scenario_seeds.gd's CATTLE_RANCH_MAX_CAPACITY history).
+## Raised until a fully-staffed ranch's export income can actually clear
+## the reference wage -- verified empirically, not just priced up
+## arbitrarily. See _run_trade's herd export pass.
 const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
-	HEBusiness.Species.CATTLE: 5.0,
+	HEBusiness.Species.CATTLE: 60.0,
 	HEBusiness.Species.SHEEP: 3.0,
 }
 
@@ -249,10 +260,13 @@ const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodit
 ## even the Trader's already-discounted TRADER_BUY_PRICE_FRACTION) so a
 ## ranch never prefers this over patiently waiting for a normal export --
 ## it's a last resort, not a revenue strategy. Never sells below this
-## floor, so there's always enough left to regrow from.
+## floor, so there's always enough left to regrow from. Cattle's floor
+## scales with its bigger HERD_CULL_TARGET (still ~20% of target, same
+## proportion as before) so a hardship sale can't gut just as large a
+## fraction of the now-bigger herd.
 const HARDSHIP_BUTCHER_PRICE_FRACTION := 0.25
 const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
-	HEBusiness.Species.CATTLE: 10.0,
+	HEBusiness.Species.CATTLE: 30.0,
 	HEBusiness.Species.SHEEP: 20.0,
 }
 
@@ -846,8 +860,16 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	var proceeds: float = butchered * price
 	b.balance += proceeds
 	b.last_hardship_butchered = butchered
-	var name := Commodity.name_of(b.herd_commodity())
-	_accumulate(record["exported"], name, butchered)
+	# Money-side only (export_revenue) -- NOT record["exported"]. A normal
+	# cull/export moves units OUT OF inventory (produced there by _run_herds,
+	# then subtracted here), so recording it as "exported" nets out exactly
+	# against that earlier "produced". A hardship sale converts herd_size
+	# straight to cash and never touches inventory at all -- it was never
+	# "produced" there in the first place, so subtracting it as an export
+	# would make run_household_economy.gd's stock reconciliation expect a
+	# drop in inventory that never happened (verified: this exact mismatch
+	# is what the check caught once hardship butchering actually started
+	# firing on a staffed Cattle Ranch).
 	record["export_revenue"] += proceeds
 	_export_revenue_total += proceeds
 	_log_event("hardship_butcher", {"business_id": b.id, "head": butchered, "proceeds": proceeds})

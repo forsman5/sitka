@@ -73,7 +73,10 @@ const BLOOMERY_MAX_CAPACITY := 20
 ## Starting herd sizes -- deliberately well under either species' cull
 ## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
 ## both visible within a normal scenario run, not just an instant no-op.
-const CATTLE_STARTING_HERD := 30.0
+## Cattle's target/start ratio (1.5x) matches what it always was, just at
+## a bigger absolute scale (see HESimulation.HERD_CULL_TARGET's doc
+## comment) -- keeps the ~900-day time-to-first-cull unchanged.
+const CATTLE_STARTING_HERD := 100.0
 const SHEEP_STARTING_HERD := 60.0
 
 ## Ranches aren't land-based the way Farm/Woodlot are (they share
@@ -82,18 +85,22 @@ const SHEEP_STARTING_HERD := 60.0
 ## authored ceiling like the Trader rather than one derived from acreage.
 ## Smaller than Farm/Woodlot -- tending a herd that mostly grows/thins on
 ## its own needs fewer hands than working a field every day.
-## Verified even WITH HESimulation._hardship_butcher_if_needed (a ranch
-## selling its own live herd for cash when it can't make payroll): at these
-## tuned constants, cattle ranching's net worth generation is too low
-## relative to reference wages to sustainably fund even ONE wage-earning
-## worker -- hardship butchering just pins the herd near its floor
-## indefinitely without ever letting it recover enough to reach a real
-## cull, while the business's balance drifts ever further negative. Left
-## at 0 until the underlying economics (export price, cull target/growth
-## rate, or the employment-retry loop itself -- see conversation/handoff
-## notes) are revisited on purpose. Sheep Farm has no such problem (wool
-## pays out every cycle) and is staffed for real below.
-const CATTLE_RANCH_MAX_CAPACITY := 0
+##
+## Cattle previously couldn't sustainably fund even one worker (its cull
+## revenue was worth pennies) and was left at 0 -- fixed not by tuning
+## employment directly but by raising what cattle are actually WORTH
+## (HESimulation.HERD_EXPORT_PRICE/HERD_CULL_TARGET), now that consumption
+## (Trader export, local wool market) is wired up and there's somewhere
+## real for a bigger, pricier herd to go. Verified at the new scale with a
+## standalone trace: 1 worker stabilizes cleanly by its first cull (~day
+## 1500) and compounds steadily afterward. A ceiling of 2 was tried first
+## and reverted -- it let the dynamic self-tuner oscillate 0/1/2 rather
+## than settling, which repeatedly hardship-butchered the still-growing
+## herd hard enough to delay its first cull well past the acceptance
+## harness's 6-year check window and (in the live scenario, not just the
+## isolated trace) tripped a real, if small, wage-floor breach. 1 is the
+## verified-sustainable number, not just a starting guess.
+const CATTLE_RANCH_MAX_CAPACITY := 1
 const SHEEP_FARM_MAX_CAPACITY := 10
 
 const STARTING_BALANCE := 20.0
