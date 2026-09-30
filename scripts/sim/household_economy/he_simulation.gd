@@ -32,7 +32,8 @@ extends RefCounted
 ##   get_clock_summary(), get_household_summary(id),
 ##   get_settlement_summary(id), get_business_reports(settlement_id),
 ##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
-##   get_daily_history(days), get_event_log(limit)
+##   get_daily_history(days), get_trader_transactions(business_id, days),
+##   get_event_log(limit)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
@@ -583,6 +584,22 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
+## This Trader's imports and exports from up to the last `days` daily
+## records, newest first. Each transaction is copied so callers cannot
+## mutate simulation history through the query result.
+func get_trader_transactions(business_id: int, days: int = 30) -> Array:
+	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
+	assert((businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER, "Business %d is not a Trader" % business_id)
+	var start: int = max(0, _history.size() - days)
+	var out: Array = []
+	for record_index in range(_history.size() - 1, start - 1, -1):
+		var record: Dictionary = _history[record_index]
+		for transaction_index in range((record["trader_transactions"] as Array).size() - 1, -1, -1):
+			var transaction: Dictionary = record["trader_transactions"][transaction_index]
+			if transaction["business_id"] == business_id:
+				out.append(transaction.duplicate(true))
+	return out
+
 ## Up to the last `limit` blotter entries (births, emigrations, old-age
 ## deaths, adoptions, splits, hirings, coming-of-age), oldest first -- same
 ## convention as get_daily_history. Pass -1 (default) for everything
@@ -651,6 +668,7 @@ func _new_daily_record() -> Dictionary:
 		"export_revenue": 0.0,
 		"imported": {},
 		"import_cost": 0.0,
+		"trader_transactions": [],
 		"wages_paid": {},
 		"emigrations": 0,
 		"old_age_deaths": 0,
@@ -1492,6 +1510,15 @@ func _run_trade(record: Dictionary) -> void:
 			trader.last_exported[commodity] = quantity
 			var name := Commodity.name_of(commodity)
 			record["exported"][name] = record["exported"].get(name, 0.0) + quantity
+			record["trader_transactions"].append({
+				"day": day + 1,
+				"business_id": trader.id,
+				"direction": "export",
+				"commodity": name,
+				"quantity": quantity,
+				"unit_price": local_price,
+				"local_value": quantity * local_price,
+			})
 			# New money entering the closed system, valued at market price
 			# -- see _export_revenue_total's doc comment.
 			var revenue: float = quantity * local_price
@@ -1689,6 +1716,15 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				trader.last_cash_change += margin
 				trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
 				record["imported"][name] = record["imported"].get(name, 0.0) + bought
+				record["trader_transactions"].append({
+					"day": day + 1,
+					"business_id": trader.id,
+					"direction": "import",
+					"commodity": name,
+					"quantity": bought,
+					"unit_price": price,
+					"local_value": cost,
+				})
 				record["import_cost"] += import_cost
 				_import_cost_total += import_cost
 

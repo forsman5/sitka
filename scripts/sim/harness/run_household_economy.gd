@@ -200,6 +200,14 @@ func _check_bloomery_smelting() -> void:
 			bloomery_report = report
 	_assert(not bloomery_report.is_empty(), "Bloomery should appear in business reports when the scenario includes it")
 	_assert(bloomery_report.get("capacity", 0) > 0, "Bloomery should still have staff after 200 days -- its recipe should clear the reference wage (see he_scenario_seeds.gd's _bloomery_recipe doc comment), not starve to zero")
+	var recent_transactions := sim.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30)
+	var saw_ore_import := false
+	var saw_iron_export := false
+	for transaction in recent_transactions:
+		saw_ore_import = saw_ore_import or (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore")
+		saw_iron_export = saw_iron_export or (transaction["direction"] == "export" and transaction["commodity"] == "Iron")
+	_assert(saw_ore_import, "Trader's last-30-day transaction history should include an Iron Ore import")
+	_assert(saw_iron_export, "Trader's last-30-day transaction history should include an Iron export")
 
 ## The local mine must replace the Trader's ore-import fallback. Input
 ## purchasing runs before surplus export each day, so the Bloomery gets its
@@ -245,6 +253,8 @@ func _check_local_iron_mine_supplies_bloomery_first() -> void:
 	_assert(ore_produced > 0.0, "Iron Mine should produce ore")
 	_assert(iron_produced > 0.0, "Bloomery should smelt iron from locally mined ore")
 	_assert(ore_imported < EPSILON, "Trader should not import ore while a local Iron Mine supplies it, imported %.3f" % ore_imported)
+	for transaction in sim.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30):
+		_assert(not (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore"), "Local-mine Trader history should not contain an Iron Ore import")
 	_assert(maximum_buffered_timber > 0.0 and maximum_buffered_ore > 0.0, "Bloomery should retain both recipe inputs between production days")
 	_assert(worst_input_stock_gap < EPSILON, "Buffered Timber/Iron Ore stock did not reconcile, worst gap %.4f" % worst_input_stock_gap)
 

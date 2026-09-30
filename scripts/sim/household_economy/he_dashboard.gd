@@ -20,6 +20,7 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## HESimulation.EVENT_LOG_MAX -- older entries just aren't rendered.
 const BLOTTER_DISPLAY_LIMIT := 40
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
+const TRADER_TRANSACTION_HISTORY_DAYS := 30
 
 const SCENARIOS := [
 	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
@@ -57,6 +58,10 @@ var _business_detail_panel: PanelContainer
 var _business_detail_title: Label
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
+var _business_detail_transaction_section: VBoxContainer
+var _business_detail_transaction_grid: GridContainer
+var _business_detail_transaction_empty: Label
+var _trader_transaction_filter := "both"
 var _business_detail_employee_grid: GridContainer
 
 func _ready() -> void:
@@ -269,6 +274,37 @@ func _build_ui() -> void:
 	_business_detail_grid.columns = 2
 	detail_content.add_child(_business_detail_grid)
 
+	_business_detail_transaction_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_transaction_section)
+
+	var transaction_header := HBoxContainer.new()
+	_business_detail_transaction_section.add_child(transaction_header)
+	var transaction_title := Label.new()
+	transaction_title.text = "Transactions (last %d days)" % TRADER_TRANSACTION_HISTORY_DAYS
+	transaction_title.add_theme_font_size_override("font_size", 14)
+	transaction_header.add_child(transaction_title)
+	var transaction_spacer := Control.new()
+	transaction_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	transaction_header.add_child(transaction_spacer)
+	var transaction_filter_group := ButtonGroup.new()
+	for filter in ["both", "import", "export"]:
+		var filter_button := Button.new()
+		filter_button.text = filter.capitalize() + ("s" if filter != "both" else "")
+		filter_button.toggle_mode = true
+		filter_button.button_group = transaction_filter_group
+		filter_button.button_pressed = filter == _trader_transaction_filter
+		filter_button.pressed.connect(_on_trader_transaction_filter_pressed.bind(filter))
+		transaction_header.add_child(filter_button)
+
+	_business_detail_transaction_empty = Label.new()
+	_business_detail_transaction_empty.text = "No matching transactions in the last %d days." % TRADER_TRANSACTION_HISTORY_DAYS
+	_business_detail_transaction_empty.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_business_detail_transaction_section.add_child(_business_detail_transaction_empty)
+
+	_business_detail_transaction_grid = GridContainer.new()
+	_business_detail_transaction_grid.columns = 5
+	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
+
 	var employees_label := Label.new()
 	employees_label.text = "Employees"
 	employees_label.add_theme_font_size_override("font_size", 14)
@@ -343,6 +379,10 @@ func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 
+func _on_trader_transaction_filter_pressed(filter: String) -> void:
+	_trader_transaction_filter = filter
+	_refresh_business_detail()
+
 ## Rebuilds (not just re-labels) the detail grid every call -- the row set
 ## itself differs by business kind (a Trader has no land/fields, a
 ## non-field PRODUCTION business has no harvest countdown), so there's no
@@ -406,6 +446,9 @@ func _refresh_business_detail() -> void:
 		var f: Dictionary = fields[i]
 		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]])
 
+	_business_detail_transaction_section.visible = report["kind"] == "trader"
+	if _business_detail_transaction_section.visible:
+		_refresh_trader_transactions()
 	_refresh_business_detail_employees()
 
 func _add_detail_row(label_text: String, value_text: String) -> void:
@@ -416,6 +459,40 @@ func _add_detail_row(label_text: String, value_text: String) -> void:
 	var value := Label.new()
 	value.text = value_text
 	_business_detail_grid.add_child(value)
+
+func _refresh_trader_transactions() -> void:
+	for child in _business_detail_transaction_grid.get_children():
+		_business_detail_transaction_grid.remove_child(child)
+		child.queue_free()
+
+	for heading in ["Day", "Direction", "Commodity", "Quantity", "Local value"]:
+		var header := Label.new()
+		header.text = heading
+		header.custom_minimum_size = Vector2(80 if heading != "Commodity" else 120, 0)
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		_business_detail_transaction_grid.add_child(header)
+
+	var shown := 0
+	for transaction in _simulation.get_trader_transactions(_selected_business_id, TRADER_TRANSACTION_HISTORY_DAYS):
+		var direction: String = transaction["direction"]
+		if _trader_transaction_filter != "both" and direction != _trader_transaction_filter:
+			continue
+		var values := [
+			str(transaction["day"]),
+			direction.capitalize(),
+			transaction["commodity"],
+			"%.1f" % transaction["quantity"],
+			"%.1f" % transaction["local_value"],
+		]
+		for i in values.size():
+			var value := Label.new()
+			value.text = values[i]
+			if i == 1:
+				value.add_theme_color_override("font_color", Color(0.55, 0.8, 1.0) if direction == "import" else Color(0.65, 0.9, 0.65))
+			_business_detail_transaction_grid.add_child(value)
+		shown += 1
+	_business_detail_transaction_empty.visible = shown == 0
+	_business_detail_transaction_grid.visible = shown > 0
 
 ## Every household currently employed at the selected business -- there's no
 ## query on HESimulation for "who works here" specifically, so this filters
@@ -512,7 +589,7 @@ func _rebuild_business_rows() -> void:
 	var grid := GridContainer.new()
 	grid.columns = 14
 	scroll.add_child(grid)
-	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Status", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
+	for col_label in ["Name", "Target", "Max", "Employed", "Land (ac)", "Status", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
 		if col_label == "Status":
