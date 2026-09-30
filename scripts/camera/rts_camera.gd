@@ -1,6 +1,7 @@
 extends Node3D
 
 @export var pan_speed: float = 15.0
+@export var rotation_speed: float = 75.0  # degrees per second while holding Q/E
 @export var zoom_min: float = 5.0
 @export var zoom_max: float = 40.0
 @export var tilt_sensitivity: float = 0.3  # degrees per pixel of vertical mouse movement
@@ -28,6 +29,7 @@ extends Node3D
 var _dragging := false
 var _drag_last := Vector2.ZERO
 var _current_tilt: float = 90.0  # 90 = top-down, tilt_min = most angled
+var _current_yaw: float = 0.0
 
 func _ready() -> void:
 	add_to_group("rts_camera")
@@ -43,13 +45,27 @@ func center_on(world_pos: Vector3) -> void:
 	_clamp_to_pan_limit()
 
 func _process(delta: float) -> void:
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit:
+		return
+	var turn := float(Input.is_physical_key_pressed(KEY_Q)) - float(Input.is_physical_key_pressed(KEY_E))
+	if turn != 0.0:
+		rotate_view(turn * rotation_speed * delta)
 	_pan_keyboard(delta)
+
+func rotate_view(degrees: float) -> void:
+	_current_yaw = wrapf(_current_yaw + degrees, -180.0, 180.0)
+	_apply_tilt()
+	_clamp_to_pan_limit()
+
+func _screen_ground_direction(direction: Vector3) -> Vector3:
+	return direction.rotated(Vector3.UP, deg_to_rad(_current_yaw))
 
 # Pivots camera around the rig's ground point so the view centre stays anchored.
 func _apply_tilt() -> void:
 	var rad := deg_to_rad(_current_tilt)
-	_camera.position = Vector3(0, pivot_height, pivot_height * cos(rad) / sin(rad))
-	_camera.rotation_degrees = Vector3(-_current_tilt, 0, 0)
+	_camera.position = _screen_ground_direction(Vector3(0, pivot_height, pivot_height * cos(rad) / sin(rad)))
+	_camera.rotation_degrees = Vector3(-_current_tilt, _current_yaw, 0)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -74,8 +90,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			var world_per_px := _camera.size / get_viewport().get_visible_rect().size.y
 			var delta: Vector2 = event.position - _drag_last
 			_drag_last = event.position
-			position.x -= delta.x * world_per_px
-			position.z -= delta.y * world_per_px
+			var tilt_stretch := 1.0 / sin(deg_to_rad(_current_tilt))
+			position -= _screen_ground_direction(Vector3(delta.x, 0, delta.y * tilt_stretch)) * world_per_px
 			_clamp_to_pan_limit()
 
 func _pan_keyboard(delta: float) -> void:
@@ -87,7 +103,7 @@ func _pan_keyboard(delta: float) -> void:
 	if dir == Vector3.ZERO:
 		return
 	var speed := pan_speed * (_camera.size / 20.0)
-	position += dir.normalized() * speed * delta
+	position += _screen_ground_direction(dir.normalized()) * speed * delta
 	_clamp_to_pan_limit()
 
 ## Keeps the visible ground rectangle inside pan_limit -- otherwise panning
@@ -114,4 +130,9 @@ func _visible_half_extent() -> Vector2:
 	var tilt_rad := deg_to_rad(clampf(_current_tilt, 1.0, 90.0))
 	var tilt_stretch := 1.0 / sin(tilt_rad)
 	var elevation_reach := max_ground_height / tan(tilt_rad)
-	return Vector2(_camera.size * 0.5 * aspect, _camera.size * 0.5 * tilt_stretch + elevation_reach)
+	var local_half := Vector2(_camera.size * 0.5 * aspect, _camera.size * 0.5 * tilt_stretch + elevation_reach)
+	# World-aligned bounds of the rotated ground footprint.
+	var yaw := deg_to_rad(_current_yaw)
+	var c := absf(cos(yaw))
+	var s := absf(sin(yaw))
+	return Vector2(c * local_half.x + s * local_half.y, s * local_half.x + c * local_half.y)

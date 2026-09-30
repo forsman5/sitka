@@ -7,10 +7,13 @@ func _init() -> void:
 
 func _capture() -> void:
 	var view := "overview"
+	var yaw := 0.0
 	var output_path := "user://landscape-overview.png"
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--view="):
 			view = argument.trim_prefix("--view=")
+		elif argument.begins_with("--yaw="):
+			yaw = argument.trim_prefix("--yaw=").to_float()
 		elif argument.begins_with("--output="):
 			output_path = argument.trim_prefix("--output=")
 
@@ -42,6 +45,8 @@ func _capture() -> void:
 		camera.size = 350.0
 		camera_rig.call("center_on", Vector3.ZERO)
 	await process_frame
+	await process_frame
+	camera_rig.call("rotate_view", yaw)
 	await process_frame
 	await RenderingServer.frame_post_draw
 	var error := root.get_texture().get_image().save_png(output_path)

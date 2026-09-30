@@ -33,6 +33,7 @@ var _settlement_markers: Dictionary = {}
 var _terrain: AuthoredValleyTerrain
 var _river_outlines: Dictionary = {}
 var _transport_clearance: Array[PackedVector2Array] = []
+var _building_clearance: Array[Rect2] = []
 
 ## Rendered settlement sites, shared by selection and vegetation clearance.
 var settlement_cluster_positions: Dictionary = {}
@@ -196,6 +197,12 @@ func is_transport_clear(point: Vector2) -> bool:
 			return false
 	return true
 
+func is_building_clear(point: Vector2) -> bool:
+	for footprint in _building_clearance:
+		if footprint.has_point(point):
+			return false
+	return true
+
 func _build_settlements() -> void:
 	for settlement_id in map_definition.settlements:
 		var spec: Dictionary = map_definition.settlements[settlement_id]
@@ -217,12 +224,17 @@ func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color)
 	marker.set_meta("settlement_id", settlement_id)
 	_settlement_markers[settlement_id] = marker
 
-	var offsets := [Vector2(-4, -2), Vector2(4, -1), Vector2(-2, 4), Vector2(4, 4)]
-	for i in offsets.size():
-		var offset: Vector2 = offsets[i]
-		var size := Vector3(2.7 + (i % 2), 1.6 + (i % 2) * 0.4, 2.5)
-		_add_house(center + Vector3(offset.x, 0.8, offset.y), size, accent.darkened(0.28))
-	_add_house(center + Vector3(0.0, 1.35, 0.0), Vector3(4.6, 2.7, 3.8), accent.darkened(0.38))
+	var buildings: Array = map_definition.settlements[settlement_id].get("buildings", [])
+	if not buildings.is_empty():
+		for building in buildings:
+			_add_authored_building(center, building)
+	else:
+		var offsets := [Vector2(-4, -2), Vector2(4, -1), Vector2(-2, 4), Vector2(4, 4)]
+		for i in offsets.size():
+			var offset: Vector2 = offsets[i]
+			var size := Vector3(2.7 + (i % 2), 1.6 + (i % 2) * 0.4, 2.5)
+			_add_house(center + Vector3(offset.x, 0.8, offset.y), size, accent.darkened(0.28))
+		_add_house(center + Vector3(0.0, 1.35, 0.0), Vector3(4.6, 2.7, 3.8), accent.darkened(0.38))
 
 	if settlement_id == ValleySeed.ALDFORD:
 		# The landing follows the waterfront anchor independently of the houses.
@@ -237,6 +249,40 @@ func _add_settlement_cluster(settlement_id: int, center: Vector3, accent: Color)
 		# 18-unit-wide channel -- a physical mill building can't float on the
 		# water the way the quay's jetty is meant to.
 		_add_box("StaitheMill", river_edge + Vector3(-7.0, 1.4, 10.0), Vector3(3.0, 2.8, 3.0), Color("c5b27d"))
+
+func _add_authored_building(center: Vector3, spec: Dictionary) -> void:
+	# Instantiate only the art, not gameplay building scripts or simulation state.
+	var model := (load(spec["model"]) as PackedScene).instantiate() as Node3D
+	model.name = spec["name"]
+	add_child(model)
+	model.rotation.y = deg_to_rad(spec["yaw"])
+	var bounds := _building_bounds(model)
+	var scale_factor: float = spec["width"] / maxf(bounds.size.x, bounds.size.z)
+	model.scale = Vector3.ONE * scale_factor
+	bounds = _building_bounds(model)
+	var offset: Vector2 = spec["offset"]
+	var site := Vector2(center.x, center.z) + offset
+	_building_clearance.append(Rect2(site - Vector2(bounds.size.x, bounds.size.z) * 0.5, Vector2(bounds.size.x, bounds.size.z)).grow(2.0))
+	var low := INF
+	var high := -INF
+	for x in [-bounds.size.x * 0.5, bounds.size.x * 0.5]:
+		for z in [-bounds.size.z * 0.5, bounds.size.z * 0.5]:
+			var ground := get_valley_ground_height(site + Vector2(x, z))
+			low = minf(low, ground)
+			high = maxf(high, ground)
+	model.position = Vector3(site.x - bounds.get_center().x, high - bounds.position.y, site.y - bounds.get_center().z)
+	# A shallow plinth fills the slope beneath an upright building.
+	_add_box(spec["name"] + "Foundation", Vector3(site.x, (low + high) * 0.5 - 0.06, site.y), Vector3(bounds.size.x, high - low + 0.12, bounds.size.z), Color("777365"))
+
+func _building_bounds(model: Node3D) -> AABB:
+	var bounds := AABB()
+	var first := true
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node := node as MeshInstance3D
+		var box: AABB = mesh_node.global_transform * mesh_node.get_aabb()
+		bounds = box if first else bounds.merge(box)
+		first = false
+	return bounds
 
 func _add_resource_region(center: Vector3, district: String, accent: Color) -> void:
 	match district:
@@ -271,7 +317,7 @@ func _build_interface() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
 	_hint_label = Label.new()
-	_hint_label.text = "River Valley — mouse wheel: zoom   |   middle drag / WASD: pan   |   Alt + drag: tilt   |   click a settlement"
+	_hint_label.text = "River Valley — wheel: zoom   |   middle drag / WASD: pan   |   Q/E: rotate   |   Alt + drag: tilt   |   click a settlement"
 	_hint_label.position = Vector2(18, 16)
 	_hint_label.add_theme_font_size_override("font_size", 15)
 	canvas.add_child(_hint_label)

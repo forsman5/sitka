@@ -56,6 +56,8 @@ func _scatter_ellipse(region: String, center: Vector2, radii: Vector2, count: in
 			continue
 		if _too_close_to_settlement(point):
 			continue
+		if not get_parent().is_building_clear(point):
+			continue
 		if get_parent().has_method("is_transport_clear") and not get_parent().call("is_transport_clear", point):
 			continue
 		if _too_close_to_tree(point, 2.7):

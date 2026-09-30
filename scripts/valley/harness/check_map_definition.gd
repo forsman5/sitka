@@ -56,7 +56,10 @@ func _run() -> void:
 			for vertex in ribbon.mesh.get_faces():
 				check(absf(vertex.x) <= half.x + 0.001 and absf(vertex.z) <= half.y + 0.001, node_name + " extends beyond terrain")
 	for tree in view.get_node("ValleyVegetation").get_children():
+		check(view.is_building_clear(Vector2(tree.position.x, tree.position.z)), "Tree overlaps authored building")
 		check(view.is_transport_clear(Vector2(tree.position.x, tree.position.z)), "Tree overlaps transport corridor")
+	for building in map.settlements[1]["buildings"]:
+		check(view.has_node(building["name"]), "Missing authored building " + building["name"])
 	view.free()
 	var broken := Layout.create_map()
 	broken.crossings["oakmere"]["river"] = "missing"
