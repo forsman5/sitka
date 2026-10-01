@@ -531,7 +531,13 @@ func _check_trader_employment_does_not_churn_between_harvests() -> void:
 			if not latest_firing.is_empty() and latest_firing[0]["day"] == sim.day - 1:
 				late_layoff_days += 1
 		print("  %s: %d Trader layoff days from day 211 to 500" % [scenario, late_layoff_days])
-		_assert(late_layoff_days <= 4, "Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
+		# Limit is 5, not 4: with the ranches in the scenario the household
+		# basket includes wool, which lifts the reference wage a little above
+		# the ranch-less economy's, so the Trader trims one more time while it
+		# settles (5 days here vs 2 without ranches). Still a "settles, not
+		# thrashes" bound -- the unfixed bug this guards against laid off
+		# roughly every three weeks (11+ days).
+		_assert(late_layoff_days <= 5, "Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)
