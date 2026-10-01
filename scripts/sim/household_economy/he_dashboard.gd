@@ -72,6 +72,7 @@ var _business_detail_title: Label
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
+var _business_detail_cull_target_hint: Label
 ## Which business the cull-target box was last loaded for. The box is only
 ## (re)loaded when the selection changes -- the detail view refreshes every
 ## tick, and rewriting the box then would clobber whatever's being typed.
@@ -353,6 +354,14 @@ func _build_ui() -> void:
 	_business_detail_cull_target_box.custom_minimum_size = Vector2(110, 0)
 	_business_detail_cull_target_box.value_changed.connect(_on_cull_target_changed)
 	cull_target_row.add_child(_business_detail_cull_target_box)
+	# Sheep only (hidden for cattle): what flock the settlement's wool demand
+	# would actually support. Plain label, refreshed every tick -- unlike the
+	# box above it, nothing to clobber.
+	_business_detail_cull_target_hint = Label.new()
+	_business_detail_cull_target_hint.add_theme_font_size_override("font_size", 12)
+	_business_detail_cull_target_hint.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_business_detail_cull_target_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_business_detail_herd_events_section.add_child(_business_detail_cull_target_hint)
 	var herd_events_title := Label.new()
 	herd_events_title.text = "Herd events (births, culls, hardship sales)"
 	herd_events_title.add_theme_font_size_override("font_size", 14)
@@ -662,6 +671,10 @@ func _refresh_business_detail() -> void:
 			_business_detail_cull_target_box.min_value = report["cull_target_min"]
 			_business_detail_cull_target_box.max_value = report["cull_target_max"]
 			_business_detail_cull_target_box.set_value_no_signal(report["cull_target"])
+		var has_wool_hint: bool = report.has("wool_sustaining_unstaffed")
+		_business_detail_cull_target_hint.visible = has_wool_hint
+		if has_wool_hint:
+			_business_detail_cull_target_hint.text = "Household wool demand is sustained by about %d sheep (%d if fully staffed)." % [report["wool_sustaining_unstaffed"], report["wool_sustaining_staffed"]]
 		var herd_events: Array = report["herd_events"]
 		if herd_events.is_empty():
 			_business_detail_herd_events_display.text = "[i]No herd events yet.[/i]"
