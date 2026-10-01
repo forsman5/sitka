@@ -928,7 +928,13 @@ func _record_business_revenue_history() -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		var employed := _business_employed_worker_count(business_id)
-		var revenue_per_worker: float = (b.last_revenue / employed) if employed > 0 else 0.0
+		# Revenue that lands on a day with nobody employed is still the
+		# payoff of earlier staffed work (a harvest sells a crop that a crew
+		# grew while on the payroll). Recording it as 0.0 per worker made
+		# lumpy businesses read as unprofitable exactly when a payoff
+		# arrived, and the tuner then kept the crew out. Count it against a
+		# crew of at least one.
+		var revenue_per_worker: float = b.last_revenue / maxi(employed, 1)
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
 
