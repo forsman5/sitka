@@ -16,11 +16,21 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
-## Blotter shows a scrollable scan of recent history, not the full
-## HESimulation.EVENT_LOG_MAX -- older entries just aren't rendered.
-const BLOTTER_DISPLAY_LIMIT := 40
+## Filters always rescan this complete simulated-time window. The view is
+## scrollable, so no separate event-count cap can hide an enabled category.
+const BLOTTER_HISTORY_DAYS := 30
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
+const BLOTTER_FILTERS := [
+	{"type": "birth", "label": "Births"},
+	{"type": "emigrate", "label": "Starvation emigration"},
+	{"type": "old_age", "label": "Old-age deaths"},
+	{"type": "adopted", "label": "Adoptions"},
+	{"type": "split", "label": "Household founding"},
+	{"type": "coming_of_age", "label": "Coming of age"},
+	{"type": "job", "label": "Hiring"},
+	{"type": "fired", "label": "Firing / layoffs"},
+]
 
 const SCENARIOS := [
 	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
@@ -47,6 +57,8 @@ var _business_names: Dictionary = {} # business_id -> name, for the household ta
 var _blotter_display: RichTextLabel
 var _blotter_column: VBoxContainer
 var _blotter_toggle_button: Button
+var _blotter_filter_button: MenuButton
+var _blotter_filter_enabled: Dictionary = {}
 var _blotter_minimized: bool = false
 
 ## -1 means no business is selected -- the household list fills the
@@ -65,6 +77,8 @@ var _trader_transaction_filter := "both"
 var _business_detail_employee_grid: GridContainer
 
 func _ready() -> void:
+	for filter in BLOTTER_FILTERS:
+		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
 	_load_scenario(0)
 	_build_ui()
@@ -329,6 +343,16 @@ func _build_ui() -> void:
 	_blotter_toggle_button.pressed.connect(_on_blotter_toggle_pressed)
 	blotter_header.add_child(_blotter_toggle_button)
 
+	_blotter_filter_button = MenuButton.new()
+	_blotter_filter_button.text = "Filters"
+	_blotter_filter_button.tooltip_text = "Choose which notification types appear in the blotter"
+	var blotter_filter_popup := _blotter_filter_button.get_popup()
+	for i in BLOTTER_FILTERS.size():
+		blotter_filter_popup.add_check_item(BLOTTER_FILTERS[i]["label"], i)
+		blotter_filter_popup.set_item_checked(blotter_filter_popup.get_item_index(i), true)
+	blotter_filter_popup.id_pressed.connect(_on_blotter_filter_pressed)
+	blotter_header.add_child(_blotter_filter_button)
+
 	_blotter_display = RichTextLabel.new()
 	_blotter_display.bbcode_enabled = true
 	_blotter_display.scroll_following = false
@@ -349,6 +373,14 @@ func _make_speed_button(label: String, speed: float) -> Button:
 func _on_blotter_toggle_pressed() -> void:
 	_set_blotter_minimized(not _blotter_minimized)
 
+func _on_blotter_filter_pressed(id: int) -> void:
+	var event_type: String = BLOTTER_FILTERS[id]["type"]
+	var enabled: bool = not _blotter_filter_enabled[event_type]
+	_blotter_filter_enabled[event_type] = enabled
+	var popup := _blotter_filter_button.get_popup()
+	popup.set_item_checked(popup.get_item_index(id), enabled)
+	_refresh_blotter()
+
 ## Minimized: the blotter shrinks to a thin strip docked at the right edge
 ## (SIZE_SHRINK_END so it hugs that edge rather than floating wherever its
 ## small minimum size happens to land) instead of sharing lower_row's width
@@ -358,13 +390,14 @@ func _on_blotter_toggle_pressed() -> void:
 func _set_blotter_minimized(minimized: bool) -> void:
 	_blotter_minimized = minimized
 	_blotter_display.visible = not minimized
+	_blotter_filter_button.visible = not minimized
 	if minimized:
 		_blotter_toggle_button.text = "◂"
 		_blotter_toggle_button.tooltip_text = "Restore the blotter"
 		_blotter_column.custom_minimum_size = Vector2(32, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_SHRINK_END
 	else:
-		_blotter_toggle_button.text = "Blotter ▸"
+		_blotter_toggle_button.text = "Blotter (%dd) ▸" % BLOTTER_HISTORY_DAYS
 		_blotter_toggle_button.tooltip_text = "Minimize the blotter"
 		_blotter_column.custom_minimum_size = Vector2(0, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -825,13 +858,15 @@ func _refresh() -> void:
 ## Newest event first, since that's what a player checking in on the city
 ## cares about seeing without scrolling.
 func _refresh_blotter() -> void:
-	var events := _simulation.get_event_log(BLOTTER_DISPLAY_LIMIT)
-	if events.is_empty():
-		_blotter_display.text = "[i]No events yet.[/i]"
-		return
+	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
 	var lines: Array[String] = []
 	for i in range(events.size() - 1, -1, -1):
+		if not _blotter_filter_enabled.get(events[i]["type"], true):
+			continue
 		lines.append(_format_event(events[i]))
+	if lines.is_empty():
+		_blotter_display.text = "[i]No events match the active filters.[/i]"
+		return
 	_blotter_display.text = "\n".join(lines)
 
 func _format_event(event: Dictionary) -> String:
@@ -857,5 +892,16 @@ func _format_event(event: Dictionary) -> String:
 		"job":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
+		"fired":
+			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			var reason: String
+			match event["reason"]:
+				"low_revenue":
+					reason = "revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
+				"cash_runway":
+					reason = "cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				_:
+					reason = "target reduced to %d workers" % event["new_capacity"]
+			return "[color=#e09a8d]Day %d - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
 		_:
 			return "Day %d - %s" % [day, event["type"]]

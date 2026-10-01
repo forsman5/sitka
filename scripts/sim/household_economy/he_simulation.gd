@@ -33,7 +33,7 @@ extends RefCounted
 ##   get_settlement_summary(id), get_business_reports(settlement_id),
 ##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
 ##   get_daily_history(days), get_trader_transactions(business_id, days),
-##   get_event_log(limit)
+##   get_event_log(limit), get_event_log_days(days)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
@@ -195,10 +195,10 @@ const CASH_RUNWAY_DANGER_DAYS := 14.0
 const SELL_PACE_HEADROOM := 1.15
 
 const HISTORY_MAX_DAYS := 360
-## The blotter (get_event_log) only needs enough recent history for a
-## player to scan -- unlike _history, nothing aggregates over it, so it's
-## kept far shorter.
-const EVENT_LOG_MAX := 200
+## Event retention is day-based so a burst of hiring/firing cannot evict
+## quieter notification types from the same recent-time window. The
+## dashboard queries a smaller slice through get_event_log_days().
+const EVENT_LOG_RETENTION_DAYS := 360
 
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
@@ -601,17 +601,28 @@ func get_trader_transactions(business_id: int, days: int = 30) -> Array:
 	return out
 
 ## Up to the last `limit` blotter entries (births, emigrations, old-age
-## deaths, adoptions, splits, hirings, coming-of-age), oldest first -- same
+## deaths, adoptions, splits, hirings/firings, coming-of-age), oldest first -- same
 ## convention as get_daily_history. Pass -1 (default) for everything
-## currently retained (bounded by EVENT_LOG_MAX regardless). Each entry has
+## currently retained (bounded by EVENT_LOG_RETENTION_DAYS regardless). Each entry has
 ## at least "day" and "type" ("birth"/"emigrate"/"old_age"/"adopted"/
-## "split"/"job"/"coming_of_age"); see _log_event()'s call sites for the
+## "split"/"job"/"fired"/"coming_of_age"); see _log_event()'s call sites for the
 ## type-specific fields.
 func get_event_log(limit: int = -1) -> Array:
 	var start: int = 0 if limit < 0 else max(0, _event_log.size() - limit)
 	var out: Array = []
 	for i in range(start, _event_log.size()):
 		out.append((_event_log[i] as Dictionary).duplicate(true))
+	return out
+
+## Every retained event from the last `days` simulated days, oldest first.
+## Unlike get_event_log(limit), a busy event category cannot crowd another
+## category out of this query merely by producing more rows.
+func get_event_log_days(days: int) -> Array:
+	var cutoff_day: int = day - maxi(days, 0)
+	var out: Array = []
+	for event in _event_log:
+		if event["day"] >= cutoff_day:
+			out.append((event as Dictionary).duplicate(true))
 	return out
 
 # ---------------------------------------------------------------------------
@@ -643,7 +654,7 @@ func _daily_tick() -> void:
 		_evaluate_life_cycle(record)
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
-		_reconcile_employment()
+		_reconcile_employment(record)
 	_finalize_daily_record(record)
 
 func _reset_household_daily_records() -> void:
@@ -676,6 +687,7 @@ func _new_daily_record() -> Dictionary:
 		"goods_written_off": {},
 		"births": 0,
 		"worker_promotions": 0,
+		"capacity_changes": {},
 	}
 
 func _finalize_daily_record(record: Dictionary) -> void:
@@ -1219,18 +1231,35 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# recipe for overshoot. See _capacity_eval_interval_days.
 			continue
 		var delta := 0
+		var change_reason := ""
+		var avg_revenue := b.rolling_average_revenue_per_worker()
 		if reference_wage > 0.0:
-			var avg_revenue := b.rolling_average_revenue_per_worker()
 			var ratio_error := (avg_revenue - reference_wage) / reference_wage
 			if absf(ratio_error) > WAGE_PROFIT_MARGIN:
 				var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
 				delta = roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
+				change_reason = "low_revenue" if delta < 0 else "high_revenue"
+		var cash_runway := INF
+		var required_runway := 0.0
 		if b.capacity > CAPACITY_TRIAL_HIRE_WORKERS:
-			var required_runway: float = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
-			if _business_cash_runway_days(b) < required_runway:
+			required_runway = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
+			cash_runway = _business_cash_runway_days(b)
+			if cash_runway < required_runway:
 				delta = mini(delta, -CAPACITY_STEP_MAX_WORKERS)
+				change_reason = "cash_runway"
 		if delta != 0:
+			var old_capacity := b.capacity
 			b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
+			if b.capacity != old_capacity:
+				record["capacity_changes"][business_id] = {
+					"reason": change_reason,
+					"old_capacity": old_capacity,
+					"new_capacity": b.capacity,
+					"average_revenue_per_worker": avg_revenue,
+					"reference_wage_per_worker": reference_wage,
+					"cash_runway_days": cash_runway,
+					"required_runway_days": required_runway,
+				}
 	record["reference_wage_by_settlement"] = reference_wages
 	if reference_wages.size() == 1:
 		record["reference_wage"] = reference_wages.values()[0]
@@ -1287,7 +1316,7 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 ## expanding into the same freed labor at once -- a deterministic but real
 ## bias, same spirit as the pooled model's documented edge-order bias in
 ## _run_trade.
-func _reconcile_employment() -> void:
+func _reconcile_employment(record: Dictionary = {}) -> void:
 	var business_ids := businesses.keys()
 	business_ids.sort()
 
@@ -1305,6 +1334,20 @@ func _reconcile_employment() -> void:
 			var h: HEHousehold = households[household_id]
 			employed_workers -= h.worker_capacity()
 			h.employer_business_id = -1
+			var capacity_change: Dictionary = record.get("capacity_changes", {}).get(business_id, {})
+			_log_event("fired", {
+				"household_id": household_id,
+				"business_id": business_id,
+				"settlement_id": b.settlement_id,
+				"workers": h.worker_capacity(),
+				"reason": capacity_change.get("reason", "target_capacity"),
+				"old_capacity": capacity_change.get("old_capacity", b.capacity),
+				"new_capacity": capacity_change.get("new_capacity", b.capacity),
+				"average_revenue_per_worker": capacity_change.get("average_revenue_per_worker", b.rolling_average_revenue_per_worker()),
+				"reference_wage_per_worker": capacity_change.get("reference_wage_per_worker", _reference_wage_per_worker(b.settlement_id)),
+				"cash_runway_days": capacity_change.get("cash_runway_days", _business_cash_runway_days(b)),
+				"required_runway_days": capacity_change.get("required_runway_days", 0.0),
+			})
 			i -= 1
 
 	for settlement_id in get_settlement_ids():
@@ -1547,15 +1590,16 @@ func _run_trade(record: Dictionary) -> void:
 func _accumulate(dict: Dictionary, key, amount: float) -> void:
 	dict[key] = dict.get(key, 0.0) + amount
 
-## Appends one blotter row (see get_event_log()) tagged with the CURRENT
-## day, then trims from the front once past EVENT_LOG_MAX -- same
-## ring-buffer shape as _finalize_daily_record's _history trim.
+## Appends one blotter row tagged with the current day, then drops events
+## older than EVENT_LOG_RETENTION_DAYS. Retention follows simulation time,
+## not event count, so bursts cannot erase other same-period event types.
 func _log_event(type: String, data: Dictionary) -> void:
 	var entry := {"day": day, "type": type}
 	for key in data.keys():
 		entry[key] = data[key]
 	_event_log.append(entry)
-	if _event_log.size() > EVENT_LOG_MAX:
+	var cutoff_day: int = day - EVENT_LOG_RETENTION_DAYS + 1
+	while not _event_log.is_empty() and _event_log[0]["day"] < cutoff_day:
 		_event_log.pop_front()
 
 func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:

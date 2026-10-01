@@ -23,6 +23,8 @@ func _init() -> void:
 	_check_bloomery_smelting()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_bloomery_stays_off_when_not_seeded()
+	_check_firing_is_logged_with_reason()
+	_check_event_history_survives_busy_categories()
 	_check_field_model_dynamics()
 	_check_labor_self_tunes_toward_profitable_business()
 	_check_emigration_actually_happens()
@@ -269,6 +271,51 @@ func _check_bloomery_stays_off_when_not_seeded() -> void:
 	for report in sim.get_business_reports():
 		_assert(report["business_id"] != HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "A Bloomery should never appear in a scenario that never constructed one")
 	print("  no Bloomery business exists after 200 days in a scenario that never seeded one")
+
+func _check_firing_is_logged_with_reason() -> void:
+	print("\n=== Employment: firing is logged with the capacity-change reason ===")
+	var sim := _new_sim("build_three_business_economy")
+	var farm = sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	var old_capacity: int = farm.capacity
+	farm.capacity = 0
+	sim._reconcile_employment({"capacity_changes": {
+		HEScenarioSeeds.FARM_BUSINESS_ID: {
+			"reason": "low_revenue",
+			"old_capacity": old_capacity,
+			"new_capacity": 0,
+			"average_revenue_per_worker": 0.25,
+			"reference_wage_per_worker": 0.75,
+			"cash_runway_days": INF,
+			"required_runway_days": 0.0,
+		},
+	}})
+	var events := sim.get_event_log()
+	var firing: Dictionary = {}
+	for event in events:
+		if event["type"] == "fired":
+			firing = event
+			break
+	_assert(not firing.is_empty(), "Reducing an occupied business target should log a firing")
+	_assert(firing.get("business_id", -1) == HEScenarioSeeds.FARM_BUSINESS_ID, "Firing should identify the former employer")
+	_assert(firing.get("reason", "") == "low_revenue", "Firing should retain its capacity-change reason")
+	_assert(firing.get("old_capacity", -1) == old_capacity and firing.get("new_capacity", -1) == 0, "Firing should show the old and new target")
+	print("  firing identifies household, employer, target change, and profitability evidence")
+
+func _check_event_history_survives_busy_categories() -> void:
+	print("\n=== Blotter: filters can rescan a complete day-based history ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim._log_event("old_age", {"household_id": 1, "workers": 1})
+	for i in 250:
+		sim._log_event("job", {"household_id": 1000 + i, "business_id": HEScenarioSeeds.FARM_BUSINESS_ID})
+	var events := sim.get_event_log_days(30)
+	var found_old_age := false
+	for event in events:
+		if event["type"] == "old_age":
+			found_old_age = true
+			break
+	_assert(events.size() == 251, "A busy category should not evict events inside the requested day window")
+	_assert(found_old_age, "Changing filters should recover a quieter event from the same day window")
+	print("  all 251 same-window events remain available after an event burst")
 
 ## Field/harvest model regression checks, day by day over one Farm growth
 ## cycle plus change: harvests are lumpy (stock only jumps on a harvest
