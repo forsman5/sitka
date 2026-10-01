@@ -642,8 +642,10 @@ func _refresh_business_detail() -> void:
 		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
-		rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
-		rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
+		# Wool is a sheep-only product; a cattle ranch has no wool to report.
+		if report["species"] == "Sheep":
+			rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
+			rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
 		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
