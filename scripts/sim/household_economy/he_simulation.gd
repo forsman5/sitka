@@ -33,6 +33,7 @@ extends RefCounted
 ##   get_settlement_summary(id), get_business_reports(settlement_id),
 ##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
 ##   get_daily_history(days), get_trader_transactions(business_id, days),
+##   get_business_employment_events(business_id, event_type, limit),
 ##   get_event_log(limit), get_event_log_days(days)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -199,6 +200,10 @@ const HISTORY_MAX_DAYS := 360
 ## quieter notification types from the same recent-time window. The
 ## dashboard queries a smaller slice through get_event_log_days().
 const EVENT_LOG_RETENTION_DAYS := 360
+## Employment changes are sparse for a stable business. Keep the latest
+## events of EACH type regardless of age, so filtering to firings or hires
+## still shows the last change after a long quiet period.
+const EMPLOYMENT_EVENTS_PER_TYPE := 100
 
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
@@ -260,6 +265,7 @@ var _history: Array[Dictionary] = []
 ## Blotter: one entry per birth/death/split, newest appended last -- see
 ## get_event_log() and _log_event().
 var _event_log: Array[Dictionary] = []
+var _employment_event_log: Dictionary[int, Array] = {} # business_id -> events, oldest first
 
 func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true) -> void:
 	rng = RandomNumberGenerator.new()
@@ -598,6 +604,22 @@ func get_trader_transactions(business_id: int, days: int = 30) -> Array:
 			var transaction: Dictionary = record["trader_transactions"][transaction_index]
 			if transaction["business_id"] == business_id:
 				out.append(transaction.duplicate(true))
+	return out
+
+## Up to `limit` hiring/firing events for any business, newest first. A type
+## filter is applied before the limit; "both" includes hires and firings.
+## Returns copies so callers cannot change the stored history.
+func get_business_employment_events(business_id: int, event_type: String = "both", limit: int = 50) -> Array:
+	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
+	assert(event_type in ["both", "job", "fired"], "Unknown employment event type %s" % event_type)
+	var events: Array = _employment_event_log.get(business_id, [])
+	var out: Array = []
+	for i in range(events.size() - 1, -1, -1):
+		if out.size() >= maxi(limit, 0):
+			break
+		var event: Dictionary = events[i]
+		if event_type == "both" or event["type"] == event_type:
+			out.append(event.duplicate(true))
 	return out
 
 ## Up to the last `limit` blotter entries (births, emigrations, old-age
@@ -1370,7 +1392,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 					continue
 				h.employer_business_id = business_id
 				employed_workers += h.worker_capacity()
-				_log_event("job", {"household_id": household_id, "business_id": business_id, "settlement_id": settlement_id})
+				_log_event("job", {"household_id": household_id, "business_id": business_id, "settlement_id": settlement_id, "workers": h.worker_capacity()})
 
 ## Step: prepare and clear local offers/requests, one commodity at a time.
 ## Snapshots every household's balance ONCE before either commodity clears
@@ -1598,6 +1620,21 @@ func _log_event(type: String, data: Dictionary) -> void:
 	for key in data.keys():
 		entry[key] = data[key]
 	_event_log.append(entry)
+	if type in ["job", "fired"]:
+		var business_id: int = entry["business_id"]
+		if not _employment_event_log.has(business_id):
+			_employment_event_log[business_id] = []
+		var employment_events: Array = _employment_event_log[business_id]
+		employment_events.append(entry)
+		var same_type_count := 0
+		for employment_event in employment_events:
+			if employment_event["type"] == type:
+				same_type_count += 1
+		if same_type_count > EMPLOYMENT_EVENTS_PER_TYPE:
+			for i in employment_events.size():
+				if employment_events[i]["type"] == type:
+					employment_events.remove_at(i)
+					break
 	var cutoff_day: int = day - EVENT_LOG_RETENTION_DAYS + 1
 	while not _event_log.is_empty() and _event_log[0]["day"] < cutoff_day:
 		_event_log.pop_front()

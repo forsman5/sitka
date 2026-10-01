@@ -299,12 +299,26 @@ func _check_firing_is_logged_with_reason() -> void:
 	_assert(firing.get("business_id", -1) == HEScenarioSeeds.FARM_BUSINESS_ID, "Firing should identify the former employer")
 	_assert(firing.get("reason", "") == "low_revenue", "Firing should retain its capacity-change reason")
 	_assert(firing.get("old_capacity", -1) == old_capacity and firing.get("new_capacity", -1) == 0, "Firing should show the old and new target")
+	var farm_events := sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID)
+	_assert(farm_events.size() > 0 and farm_events[0]["type"] == "fired", "Farm employment history should include its recent firing first")
+	_assert(sim.get_business_employment_events(HEScenarioSeeds.TRADER_BUSINESS_ID).is_empty(), "Farm firings should not appear in Trader employment history")
+	if not farm_events.is_empty():
+		farm_events[0]["reason"] = "changed by caller"
+		_assert(sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID)[0]["reason"] == "low_revenue", "Employment history should return copies")
+	farm.capacity = old_capacity
+	sim._reconcile_employment()
+	var updated_events := sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID)
+	_assert(not updated_events.is_empty() and updated_events[0]["type"] == "job" and updated_events[0].get("workers", 0) > 0, "Farm employment history should put hires first and record hired workers")
+	sim.day = HESimulation.EVENT_LOG_RETENTION_DAYS + 1
+	sim._log_event("birth", {"household_id": 1})
+	_assert(sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID, "fired").size() > 0, "Employment history should survive beyond the shared notification window")
 	print("  firing identifies household, employer, target change, and profitability evidence")
 
 func _check_event_history_survives_busy_categories() -> void:
 	print("\n=== Blotter: filters can rescan a complete day-based history ===")
 	var sim := _new_sim("build_three_business_economy")
 	sim._log_event("old_age", {"household_id": 1, "workers": 1})
+	sim._log_event("fired", {"household_id": 1, "business_id": HEScenarioSeeds.FARM_BUSINESS_ID})
 	for i in 250:
 		sim._log_event("job", {"household_id": 1000 + i, "business_id": HEScenarioSeeds.FARM_BUSINESS_ID})
 	var events := sim.get_event_log_days(30)
@@ -313,9 +327,11 @@ func _check_event_history_survives_busy_categories() -> void:
 		if event["type"] == "old_age":
 			found_old_age = true
 			break
-	_assert(events.size() == 251, "A busy category should not evict events inside the requested day window")
+	_assert(events.size() == 252, "A busy category should not evict events inside the requested day window")
 	_assert(found_old_age, "Changing filters should recover a quieter event from the same day window")
-	print("  all 251 same-window events remain available after an event burst")
+	_assert(sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID, "job", 200).size() == HESimulation.EMPLOYMENT_EVENTS_PER_TYPE, "Employment history should cap hires per business")
+	_assert(sim.get_business_employment_events(HEScenarioSeeds.FARM_BUSINESS_ID, "fired").size() == 1, "A burst of hires should not evict the latest firing")
+	print("  all 252 same-window events remain available; employment history retains each event type separately")
 
 ## Field/harvest model regression checks, day by day over one Farm growth
 ## cycle plus change: harvests are lumpy (stock only jumps on a harvest

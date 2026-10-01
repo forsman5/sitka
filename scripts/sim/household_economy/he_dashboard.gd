@@ -21,6 +21,7 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 const BLOTTER_HISTORY_DAYS := 30
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
+const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
 const BLOTTER_FILTERS := [
 	{"type": "birth", "label": "Births"},
 	{"type": "emigrate", "label": "Starvation emigration"},
@@ -74,6 +75,9 @@ var _business_detail_transaction_section: VBoxContainer
 var _business_detail_transaction_grid: GridContainer
 var _business_detail_transaction_empty: Label
 var _trader_transaction_filter := "both"
+var _business_detail_employment_grid: GridContainer
+var _business_detail_employment_empty: Label
+var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
 
 func _ready() -> void:
@@ -319,6 +323,34 @@ func _build_ui() -> void:
 	_business_detail_transaction_grid.columns = 5
 	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
 
+	var employment_section := VBoxContainer.new()
+	detail_content.add_child(employment_section)
+	var employment_header := HBoxContainer.new()
+	employment_section.add_child(employment_header)
+	var employment_title := Label.new()
+	employment_title.text = "Employment blotter (latest %d)" % BUSINESS_EMPLOYMENT_VISIBLE_EVENTS
+	employment_title.add_theme_font_size_override("font_size", 14)
+	employment_header.add_child(employment_title)
+	var employment_spacer := Control.new()
+	employment_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	employment_header.add_child(employment_spacer)
+	var employment_filter_group := ButtonGroup.new()
+	for filter in ["both", "job", "fired"]:
+		var filter_button := Button.new()
+		filter_button.text = {"both": "Both", "job": "Hires", "fired": "Firings"}[filter]
+		filter_button.toggle_mode = true
+		filter_button.button_group = employment_filter_group
+		filter_button.button_pressed = filter == _business_employment_filter
+		filter_button.pressed.connect(_on_business_employment_filter_pressed.bind(filter))
+		employment_header.add_child(filter_button)
+	_business_detail_employment_empty = Label.new()
+	_business_detail_employment_empty.text = "No employment events recorded for this business yet."
+	_business_detail_employment_empty.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	employment_section.add_child(_business_detail_employment_empty)
+	_business_detail_employment_grid = GridContainer.new()
+	_business_detail_employment_grid.columns = 5
+	employment_section.add_child(_business_detail_employment_grid)
+
 	var employees_label := Label.new()
 	employees_label.text = "Employees"
 	employees_label.add_theme_font_size_override("font_size", 14)
@@ -416,6 +448,10 @@ func _on_trader_transaction_filter_pressed(filter: String) -> void:
 	_trader_transaction_filter = filter
 	_refresh_business_detail()
 
+func _on_business_employment_filter_pressed(filter: String) -> void:
+	_business_employment_filter = filter
+	_refresh_business_employment()
+
 ## Rebuilds (not just re-labels) the detail grid every call -- the row set
 ## itself differs by business kind (a Trader has no land/fields, a
 ## non-field PRODUCTION business has no harvest countdown), so there's no
@@ -482,6 +518,7 @@ func _refresh_business_detail() -> void:
 	_business_detail_transaction_section.visible = report["kind"] == "trader"
 	if _business_detail_transaction_section.visible:
 		_refresh_trader_transactions()
+	_refresh_business_employment()
 	_refresh_business_detail_employees()
 
 func _add_detail_row(label_text: String, value_text: String) -> void:
@@ -526,6 +563,47 @@ func _refresh_trader_transactions() -> void:
 		shown += 1
 	_business_detail_transaction_empty.visible = shown == 0
 	_business_detail_transaction_grid.visible = shown > 0
+
+func _refresh_business_employment() -> void:
+	for child in _business_detail_employment_grid.get_children():
+		_business_detail_employment_grid.remove_child(child)
+		child.queue_free()
+
+	for heading in ["Day", "Event", "Household", "Workers", "Reason"]:
+		var header := Label.new()
+		header.text = heading
+		header.custom_minimum_size = Vector2(85 if heading != "Reason" else 180, 0)
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		_business_detail_employment_grid.add_child(header)
+
+	var shown := 0
+	for event in _simulation.get_business_employment_events(_selected_business_id, _business_employment_filter, BUSINESS_EMPLOYMENT_VISIBLE_EVENTS):
+		var event_type: String = event["type"]
+		var reason := ""
+		if event_type == "fired":
+			match event["reason"]:
+				"low_revenue":
+					reason = "Revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
+				"cash_runway":
+					reason = "Cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				_:
+					reason = "Target capacity %d to %d" % [event["old_capacity"], event["new_capacity"]]
+		var values := [
+			str(event["day"]),
+			"Hired" if event_type == "job" else "Fired",
+			str(event["household_id"]),
+			str(event["workers"]),
+			reason,
+		]
+		for i in values.size():
+			var value := Label.new()
+			value.text = values[i]
+			if i == 1:
+				value.add_theme_color_override("font_color", Color(0.55, 0.85, 0.8) if event_type == "job" else Color(0.9, 0.6, 0.55))
+			_business_detail_employment_grid.add_child(value)
+		shown += 1
+	_business_detail_employment_empty.visible = shown == 0
+	_business_detail_employment_grid.visible = shown > 0
 
 ## Every household currently employed at the selected business -- there's no
 ## query on HESimulation for "who works here" specifically, so this filters
