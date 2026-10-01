@@ -273,6 +273,9 @@ const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodit
 ## scales with its bigger HERD_CULL_TARGET (still ~20% of target, same
 ## proportion as before) so a hardship sale can't gut just as large a
 ## fraction of the now-bigger herd.
+## Smallest hardship sale (in head) that gets a blotter entry -- smaller
+## sales still happen, they just aren't worth a line each.
+const HARDSHIP_BUTCHER_MIN_LOGGED_HEAD := 0.1
 const HARDSHIP_BUTCHER_PRICE_FRACTION := 0.25
 const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 30.0,
@@ -966,6 +969,11 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	# firing on a staffed Cattle Ranch).
 	record["export_revenue"] += proceeds
 	_export_revenue_total += proceeds
+	# Daily shortfalls are often a few cents -> a sliver of an animal. The sale
+	# is real and already accounted for above, but a "0.0 head" blotter line
+	# is just noise, so only notable sales are logged.
+	if butchered < HARDSHIP_BUTCHER_MIN_LOGGED_HEAD:
+		return
 	_log_event("hardship_butcher", {
 		"business_id": b.id, "head": butchered, "proceeds": proceeds,
 		"shortfall": cash_shortfall, "herd_after": b.herd_size,
