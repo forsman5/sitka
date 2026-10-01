@@ -739,6 +739,65 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
 	}
 
+## Current participants and physical holdings. Requests/offers are estimates
+## from the present state for the next clearing; last_clearing is yesterday's
+## completed aggregate and is deliberately kept separate.
+func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
+	var report := get_market_report(settlement_id, commodity)
+	var buyers: Array = []
+	var sellers: Array = []
+	var holdings: Array = []
+	var price: float = report["price"]
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		var stock := h.stock(commodity)
+		if stock > 0.0001:
+			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
+		if SUBSISTENCE_COMMODITIES.has(commodity):
+			var desired: float = maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - stock)
+			if desired > 0.0001:
+				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
+					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
+					"stock": stock})
+	var business_ids := businesses.keys()
+	business_ids.sort()
+	for business_id in business_ids:
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id != settlement_id:
+			continue
+		var stock := b.stock(commodity)
+		if stock > 0.0001:
+			holdings.append({"owner": b.name, "quantity": stock})
+		if b.kind != HEBusiness.Kind.PRODUCTION:
+			continue
+		if b.output_commodity() == commodity:
+			var offered := stock
+			if SUBSISTENCE_COMMODITIES.has(commodity) and b.uses_field_model():
+				offered = minf(stock, stock / float(maxi(1, b.days_until_next_harvest())) * SELL_PACE_HEADROOM)
+			elif not SUBSISTENCE_COMMODITIES.has(commodity):
+				offered = _seller_surplus_above_reserve(b, settlement_id, commodity)
+			sellers.append({"owner": b.name, "offered": offered, "stock": stock})
+		if b.recipe.inputs.has(commodity):
+			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
+			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
+			if desired > 0.0001:
+				buyers.append({"owner": b.name, "requested": desired,
+					"funded": minf(desired, maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
+					"stock": stock})
+	var trader := _settlement_trader(settlement_id)
+	if trader != null:
+		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
+			sellers.append({"owner": "%s (imports; no stored stock)" % trader.name,
+				"offered": capacity, "stock": 0.0})
+		elif EXPORT_COMMODITIES.has(commodity) and _business_selling(settlement_id, commodity) != null:
+			buyers.append({"owner": "%s (exports)" % trader.name,
+				"requested": capacity, "funded": capacity, "stock": 0.0})
+	report["buyers"] = buyers
+	report["sellers"] = sellers
+	report["holdings"] = holdings
+	return report
+
 ## City-wide totals AND distributions -- a healthy average must not hide a
 ## hungry or unfunded household.
 func get_settlement_summary(settlement_id: int) -> Dictionary:

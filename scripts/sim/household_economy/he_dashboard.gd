@@ -81,6 +81,10 @@ var _business_detail_employment_grid: GridContainer
 var _business_detail_employment_empty: Label
 var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
+var _selected_market_commodity: int = -1
+var _market_detail_panel: PanelContainer
+var _market_detail_title: Label
+var _market_detail_content: VBoxContainer
 
 func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
@@ -137,6 +141,9 @@ func _load_scenario(index: int) -> void:
 	_selected_business_id = -1
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	if _market_detail_panel != null:
+		_market_detail_panel.visible = false
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -376,6 +383,34 @@ func _build_ui() -> void:
 	_business_detail_employee_grid.columns = 5
 	detail_content.add_child(_business_detail_employee_grid)
 
+	_market_detail_panel = PanelContainer.new()
+	_market_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_market_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_market_detail_panel.visible = false
+	content_area.add_child(_market_detail_panel)
+	var market_detail_box := VBoxContainer.new()
+	_market_detail_panel.add_child(market_detail_box)
+	var market_title_bar := HBoxContainer.new()
+	market_detail_box.add_child(market_title_bar)
+	_market_detail_title = Label.new()
+	_market_detail_title.add_theme_font_size_override("font_size", 16)
+	market_title_bar.add_child(_market_detail_title)
+	var market_title_spacer := Control.new()
+	market_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	market_title_bar.add_child(market_title_spacer)
+	var market_close := Button.new()
+	market_close.text = "X"
+	market_close.tooltip_text = "Close (back to household list)"
+	market_close.pressed.connect(_on_market_detail_close_pressed)
+	market_title_bar.add_child(market_close)
+	var market_scroll := ScrollContainer.new()
+	market_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	market_detail_box.add_child(market_scroll)
+	_market_detail_content = VBoxContainer.new()
+	_market_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_market_detail_content.add_theme_constant_override("separation", 6)
+	market_scroll.add_child(_market_detail_content)
+
 	_blotter_column = VBoxContainer.new()
 	lower_row.add_child(_blotter_column)
 
@@ -452,6 +487,8 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
 func _on_business_row_selected(business_id: int) -> void:
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
 	_selected_business_id = business_id
 	_business_detail_panel.visible = true
 	_refresh_business_detail()
@@ -459,6 +496,56 @@ func _on_business_row_selected(business_id: int) -> void:
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+
+func _on_market_row_selected(commodity: int) -> void:
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = commodity
+	_market_detail_panel.visible = true
+	_refresh_market_detail()
+
+func _on_market_detail_close_pressed() -> void:
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+
+func _refresh_market_detail() -> void:
+	if _selected_market_commodity == -1:
+		return
+	var commodity: Commodity.Type = _selected_market_commodity
+	var report := _simulation.get_market_detail(_simulation.get_settlement_ids()[0], commodity)
+	_market_detail_title.text = "%s market" % Commodity.name_of(commodity)
+	for child in _market_detail_content.get_children():
+		_market_detail_content.remove_child(child)
+		child.queue_free()
+	var clearing: Dictionary = report["last_clearing"]
+	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, funded %.1f, traded %.1f" % [
+		report["price"], clearing.get("total_offered", 0.0),
+		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	_add_market_detail_line("Current buyers: %d  |  Current sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
+	_add_market_detail_line("Current requests and offers are estimates for the next clearing.")
+	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
+	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
+	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
+
+func _add_market_detail_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_market_detail_content.add_child(label)
+
+func _add_market_detail_section(title: String, rows: Array, quantity_key: String, secondary_key: String) -> void:
+	var heading := Label.new()
+	heading.text = "%s (%d)" % [title, rows.size()]
+	heading.add_theme_font_size_override("font_size", 14)
+	_market_detail_content.add_child(heading)
+	if rows.is_empty():
+		_add_market_detail_line("None")
+		return
+	for row in rows:
+		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
+		if secondary_key != "":
+			line += "  |  %.1f %s" % [row[secondary_key], secondary_key]
+		_add_market_detail_line(line)
 
 func _on_trader_transaction_filter_pressed(filter: String) -> void:
 	_trader_transaction_filter = filter
@@ -700,10 +787,16 @@ func _rebuild_market_grid() -> void:
 		_market_grid.add_child(header)
 
 	for name in _simulation.get_market_summary().keys():
-		var name_label := Label.new()
-		name_label.text = name
-		name_label.custom_minimum_size = Vector2(70, 0)
-		_market_grid.add_child(name_label)
+		var name_button := Button.new()
+		name_button.text = name
+		name_button.flat = true
+		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_button.custom_minimum_size = Vector2(70, 0)
+		for c in Commodity.ALL:
+			if Commodity.name_of(c) == name:
+				name_button.pressed.connect(_on_market_row_selected.bind(c))
+				break
+		_market_grid.add_child(name_button)
 
 		var labels := {}
 		for key in ["price", "offered", "funded", "traded"]:
@@ -874,6 +967,7 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
+	_refresh_market_detail()
 
 	for report in _simulation.get_business_reports():
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
