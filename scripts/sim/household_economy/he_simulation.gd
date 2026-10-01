@@ -966,7 +966,10 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	# firing on a staffed Cattle Ranch).
 	record["export_revenue"] += proceeds
 	_export_revenue_total += proceeds
-	_log_event("hardship_butcher", {"business_id": b.id, "head": butchered, "proceeds": proceeds})
+	_log_event("hardship_butcher", {
+		"business_id": b.id, "head": butchered, "proceeds": proceeds,
+		"shortfall": cash_shortfall, "herd_after": b.herd_size,
+	})
 
 ## Each PRODUCTION business produces its one recipe output using however
 ## many workers it currently has (derived live from household

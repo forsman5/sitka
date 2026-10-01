@@ -875,5 +875,9 @@ func _format_event(event: Dictionary) -> String:
 		"job":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
+		"hardship_butcher":
+			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			return "[color=#e0b080]Day %d - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
+				day, owner_name, event["head"], event["proceeds"], event["shortfall"], event["herd_after"]]
 		_:
 			return "Day %d - %s" % [day, event["type"]]
