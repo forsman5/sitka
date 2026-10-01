@@ -1,4 +1,4 @@
-class_name HESimulation
+﻿class_name HESimulation
 extends RefCounted
 
 ## H1, labor-market cut: deterministic, tick-based household economies with
@@ -139,8 +139,9 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 const TRADER_CAPACITY_PER_WORKER := 8.0
 
 ## Herds: two more workplace kinds (he_business.gd's HEBusiness.Kind.HERD),
-## a Cattle Ranch and a Sheep Farm, that grow/thin a live herd_size on their
-## own rather than employing anyone -- see _run_herds. Cadence matches the
+## a Cattle Ranch and a Sheep Farm, whose live herd_size grows/thins on its
+## own and is improved by the husbandry staff they employ (see
+## HERD_LABOR_PER_HEAD_PER_DAY) -- see _run_herds. Cadence matches the
 ## pooled model's DAYS_PER_SEASON (simulation.gd) rather than HE's usual
 ## weekly/monthly evaluation intervals, since reproduction/mortality are
 ## seasonal-scale processes, not daily ones.
@@ -205,6 +206,37 @@ const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.SHEEP: 0.20,
 }
 
+## Husbandry (the herd analogue of a field's labor_per_area_per_day). A herd
+## of N head needs N * labor_per_head workers on the job every day for FULL
+## care; the staffed share of that, averaged over the review interval, is
+## what _run_herds turns into wool, mortality and reproduction. This is what
+## gives a herd's labor a real marginal product -- without it a herd earned
+## the same with 0 or 4 workers and the capacity tuner (which compares
+## revenue per worker to the reference wage) had no stable staffing level to
+## find. Also sets each ranch's max_capacity (ceil(HERD_CULL_TARGET *
+## labor_per_head)), the way a field business derives it from acreage.
+## Sheep need more hands per head than cattle (lambing, dipping, shearing,
+## predator watch) even though a sheep is far smaller.
+const HERD_LABOR_PER_HEAD_PER_DAY: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 1.0 / 150.0,
+	HEBusiness.Species.SHEEP: 1.0 / 120.0,
+}
+
+## What staffing BUYS, as upsides over the authored free-range baseline (the
+## HERD_GROWTH_RATE / HERD_LOSS_RATE_* / WOOL_PER_HEAD_PER_INTERVAL values
+## above are what an UNSTAFFED herd does). That baseline matters: a ranch has
+## no income until its first cull, so a herd that only grew when staffed
+## could never afford the staff -- a poverty trap. Each effect scales with
+## the staffed share (0..1) of the care the herd needs, from
+## HERD_LABOR_PER_HEAD_PER_DAY.
+## Calving/lambing assistance: reproduction x (1 + bonus * staffed share).
+const HERD_STAFFED_REPRODUCTION_BONUS := 0.5
+## Fewer deaths (predators, disease, injury): loss rate x (1 - cut * share).
+const HERD_STAFFED_MORTALITY_CUT := 0.6
+## Sheep only: a full, properly shorn clip vs. what an untended flock sheds
+## and loses: wool x (1 + bonus * share).
+const HERD_STAFFED_WOOL_BONUS := 1.0
+
 ## Once herd_size crosses this, the ranch culls straight back down to it
 ## every eval interval, moving the excess into its own inventory as
 ## herd_commodity() units. Cattle's target keeps the SAME ratio to
@@ -243,7 +275,7 @@ const WOOL_PER_HEAD_PER_INTERVAL := 0.07
 ## store of wealth in a subsistence economy, arguably more so than grain),
 ## and at the old parity price the ranch's entire steady-state cull volume
 ## was worth pennies, nowhere near enough to fund even one wage-earning
-## worker (see he_scenario_seeds.gd's CATTLE_RANCH_MAX_CAPACITY history).
+## worker (before herd_max_capacity() and husbandry made staffing pay).
 ## Raised until a fully-staffed ranch's export income can actually clear
 ## the reference wage -- verified empirically, not just priced up
 ## arbitrarily. See _run_trade's herd export pass.
@@ -571,6 +603,8 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["last_wool_produced"] = b.last_wool_produced
 			report["last_hardship_butchered"] = b.last_hardship_butchered
 			report["herd_events"] = b.herd_events.duplicate(true)
+			report["care_fraction"] = b.last_care_fraction
+			report["care_workers_needed"] = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species]
 		else:
 			var output_commodity := b.output_commodity()
 			report["recipe_id"] = b.recipe.id
@@ -915,7 +949,10 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		var floor: float = -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
 		if b.kind == HEBusiness.Kind.HERD:
-			_hardship_butcher_if_needed(b, total_needed - max(0.0, b.balance - floor), record)
+			# Not clamped at the floor: debt already BELOW the floor counts
+			# toward what must be raised, so a crew that's hired is always
+			# actually paid (a hire into existing debt otherwise worked for 0).
+			_hardship_butcher_if_needed(b, maxf(0.0, total_needed - (b.balance - floor)), record)
 		var available: float = max(0.0, b.balance - floor)
 		var paid: float = clampf(total_needed, 0.0, available)
 		var shortfall: float = total_needed - paid
@@ -962,12 +999,12 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	if price <= 0.0:
 		return
 	var available_head: float = max(0.0, b.herd_size - HARDSHIP_BUTCHER_MIN_HERD[b.species])
-	# Whole animals only, and only once the shortfall actually covers one --
-	# rounding UP sold a full animal every time wages were a few cents short,
-	# which drained the herd below its cull target. The shortfall is
-	# recomputed from the balance each day, so it keeps growing until it
-	# covers a head.
-	var butchered: float = min(floorf(available_head), floorf(cash_shortfall / price))
+	# Whole animals only, rounded UP: the shortfall is just today's unpaid
+	# wage (cents), so rounding down would never sell anything and the ranch
+	# would sit past its wage floor paying nobody. One head's proceeds then
+	# sit in the balance and fund the following days' wages, so this fires
+	# roughly once per (head price / daily wage) days, not daily.
+	var butchered: float = min(floorf(available_head), ceilf(cash_shortfall / price))
 	if butchered < 1.0:
 		return
 	b.herd_size -= butchered
@@ -1004,6 +1041,11 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 func _run_production(record: Dictionary) -> void:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.HERD:
+			# Husbandry accrues daily; _run_herds turns it into a care
+			# fraction at the next review (HERD_LABOR_PER_HEAD_PER_DAY).
+			b.care_worker_days += float(_business_employed_worker_count(business_id))
+			continue
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.uses_field_model():
@@ -1929,16 +1971,25 @@ func _run_herds(record: Dictionary) -> void:
 		# has outgrown its share is neglected -- no grain is bought to make
 		# up the gap (see SETTLEMENT_GRAZING_LAND's doc comment).
 		var fed := b.herd_size <= max_herd_by_land
-		var loss_rate: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
 		var herd_before: float = b.herd_size
-		var born: float = herd_before * HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER
+
+		# Care: the staffed share of the worker-days this herd needs for full
+		# care over the interval. 0 = nobody employed (free-range baseline),
+		# 1 = fully staffed. Drives the upsides in HERD_STAFFED_*.
+		var care_required: float = herd_before * HERD_LABOR_PER_HEAD_PER_DAY[b.species] * HERD_EVAL_INTERVAL_DAYS
+		var care: float = clampf(b.care_worker_days / care_required, 0.0, 1.0) if care_required > 0.0 else 1.0
+		b.care_worker_days = 0.0
+		b.last_care_fraction = care
+
+		var loss_rate: float = (HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]) * (1.0 - HERD_STAFFED_MORTALITY_CUT * care)
+		var born: float = herd_before * HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER * (1.0 + HERD_STAFFED_REPRODUCTION_BONUS * care)
 		var died: float = herd_before * loss_rate
 		b.herd_size = clampf(herd_before + born - died, 0.0, max_herd_by_land)
-		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "herd_after": b.herd_size})
+		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "care": care, "herd_after": b.herd_size})
 
 		b.last_wool_produced = 0.0
 		if b.species == HEBusiness.Species.SHEEP:
-			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL
+			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL * (1.0 + HERD_STAFFED_WOOL_BONUS * care)
 			b.add_stock(Commodity.Type.WOOL, wool)
 			b.last_wool_produced = wool
 			_accumulate(record["produced"], Commodity.name_of(Commodity.Type.WOOL), wool)

@@ -32,6 +32,7 @@ func _init() -> void:
 	_check_old_age_deaths_actually_happen()
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
+	_check_herd_staffing_matters()
 	_check_herd_monetization()
 
 	if _ok:
@@ -150,6 +151,12 @@ func _check_conservation() -> void:
 		min_household_balance = min(min_household_balance, h["balance"])
 	for report in sim.get_business_reports():
 		min_stock = min(min_stock, report["stock"])
+		# The floor scales with CURRENT employees, so a business that laid
+		# everyone off still carrying a little debt from wages it legally
+		# paid while staffed would read as a breach (floor 0). There is
+		# nobody left to ration, so only check businesses that employ people.
+		if report["employed_workers"] <= 0:
+			continue
 		var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * report["reference_wage_per_worker"] * report["employed_workers"]
 		worst_business_floor_breach = max(worst_business_floor_breach, floor - report["balance"])
 	print("  minimum stock=%.3f, minimum household balance=%.3f, worst business wage-floor breach=%.4f" % [min_stock, min_household_balance, worst_business_floor_breach])
@@ -683,6 +690,39 @@ func _check_herds_grow_and_cull() -> void:
 ## resolves a seller and clears real trades, not just a phantom demand that
 ## never funds), and culled Cattle/Sheep stock earns real money through the
 ## Trader's export pass even though neither ranch employs or pays anyone.
+## Husbandry: a herd's labor must have a real marginal product, or the
+## capacity tuner has no stable staffing level to find (it churned the Sheep
+## Farm ~400 times in 10 years when staffing changed nothing). Same seed, two
+## worlds: ranches with no workers allowed vs. ranches pinned fully staffed
+## (protected from the tuner so the comparison isn't muddied by hiring noise).
+func _check_herd_staffing_matters() -> void:
+	print("\n=== Herds: staffing a ranch actually changes how its herd and wool do ===")
+	var unstaffed := _new_sim("build_three_business_economy")
+	var staffed := _new_sim("build_three_business_economy")
+	for business_id in [HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID, HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID]:
+		var u: HEBusiness = unstaffed.businesses[business_id]
+		u.max_capacity = 0
+		u.capacity = 0
+		var s: HEBusiness = staffed.businesses[business_id]
+		s.capacity = s.max_capacity
+		s.protected_until_day = 1000000
+	unstaffed.advance_ticks(360)
+	staffed.advance_ticks(360)
+
+	var cattle_id := HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID
+	var sheep_id := HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID
+	var cattle_u: HEBusiness = unstaffed.businesses[cattle_id]
+	var cattle_s: HEBusiness = staffed.businesses[cattle_id]
+	var sheep_u: HEBusiness = unstaffed.businesses[sheep_id]
+	var sheep_s: HEBusiness = staffed.businesses[sheep_id]
+	print("  after 1 year, cattle herd: unstaffed=%.1f staffed=%.1f (care %.2f vs %.2f) | sheep herd: unstaffed=%.1f staffed=%.1f, wool made last review: %.2f vs %.2f" % [
+		cattle_u.herd_size, cattle_s.herd_size, cattle_u.last_care_fraction, cattle_s.last_care_fraction,
+		sheep_u.herd_size, sheep_s.herd_size, sheep_u.last_wool_produced, sheep_s.last_wool_produced])
+	_assert(cattle_u.last_care_fraction == 0.0, "An unstaffed ranch should apply zero staffed care, got %.2f" % cattle_u.last_care_fraction)
+	_assert(cattle_s.last_care_fraction > 0.5, "A fully staffed ranch should apply most of the care it needs, got %.2f" % cattle_s.last_care_fraction)
+	_assert(cattle_s.herd_size > cattle_u.herd_size, "A staffed Cattle Ranch's herd should grow faster than an unstaffed one (%.1f vs %.1f)" % [cattle_s.herd_size, cattle_u.herd_size])
+	_assert(sheep_s.last_wool_produced > sheep_u.last_wool_produced, "A staffed Sheep Farm should produce more wool per head-review than an unstaffed one (%.2f vs %.2f)" % [sheep_s.last_wool_produced, sheep_u.last_wool_produced])
+
 func _check_herd_monetization() -> void:
 	print("\n=== Herds monetize: wool sells locally, culled stock exports through the Trader ===")
 	var sim := _new_sim("build_three_business_economy")
@@ -703,10 +743,9 @@ func _check_herd_monetization() -> void:
 	print("  Cattle Ranch balance=%.1f  Sheep Farm balance=%.1f  city export_revenue_total=%.1f" % [
 		cattle["balance"], sheep["balance"], sim.get_city_summary()["export_revenue_total"]])
 	_assert(cattle["balance"] > 0.0, "Cattle Ranch should have earned real money from the Trader exporting its culled stock, balance is still 0")
-	# No Sheep Farm balance>0 assertion on purpose: a single-instant balance
-	# is revenue minus wages paid at the settlement reference wage, which
-	# swings 0.2-2.7 and can leave a healthy sheep farm negative at the
-	# snapshot. Whether wool actually sold is asserted below instead.
+	# Husbandry makes a sheep farm's labor pay for itself, so unlike before it
+	# should be comfortably in the black at the snapshot, not just noisy.
+	_assert(sheep["balance"] > 0.0, "Sheep Farm should have earned real money (wool sold locally and/or its own stock exported), balance is %.1f" % sheep["balance"])
 
 	var market := sim.get_market_summary()
 	_assert(market.has("Wool"), "Wool should now be a market commodity alongside Grain/Timber")

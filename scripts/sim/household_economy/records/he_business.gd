@@ -96,6 +96,15 @@ var last_hardship_butchered: float = 0.0
 ## 200-entry ring fills with household chatter long before a ranch's rare
 ## events would age out of a per-business detail view.
 var herd_events: Array[Dictionary] = []
+## Kind.HERD only: worker-days of husbandry applied since the last review
+## (employed workers added daily by he_simulation.gd's _run_production),
+## consumed and reset by _run_herds -- the herd analogue of a field's
+## labor_applied.
+var care_worker_days: float = 0.0
+## Kind.HERD only, reporting: the effective care (free-range baseline plus
+## staffed share, 0..1) the last review applied to wool, mortality and
+## reproduction. Starts at the baseline an unstaffed herd gets.
+var last_care_fraction: float = 0.0
 
 ## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
 ## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for

@@ -491,6 +491,7 @@ func _refresh_business_detail() -> void:
 		rows.append(["Species", report["species"]])
 		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
+		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
 		rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
 		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
@@ -947,7 +948,7 @@ func _format_event(event: Dictionary) -> String:
 		"herd_birth":
 			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var condition := "" if event["fed"] else " (overgrazed)"
-			return "[color=#8fd98f]Day %d - %s: %.1f born, %.1f died%s (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["herd_after"]]
+			return "[color=#8fd98f]Day %d - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#d9c98f]Day %d - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]

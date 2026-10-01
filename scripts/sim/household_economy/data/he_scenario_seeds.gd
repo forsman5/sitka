@@ -80,29 +80,15 @@ const BLOOMERY_MAX_CAPACITY := 20
 const CATTLE_STARTING_HERD := 100.0
 const SHEEP_STARTING_HERD := 60.0
 
-## Ranches aren't land-based the way Farm/Woodlot are (they share
-## HESimulation.SETTLEMENT_GRAZING_LAND, a different resource entirely --
-## see he_business.gd's Kind.HERD doc comment), so they keep a flat
-## authored ceiling like the Trader rather than one derived from acreage.
-## Smaller than Farm/Woodlot -- tending a herd that mostly grows/thins on
-## its own needs fewer hands than working a field every day.
-##
-## Cattle previously couldn't sustainably fund even one worker (its cull
-## revenue was worth pennies) and was left at 0 -- fixed not by tuning
-## employment directly but by raising what cattle are actually WORTH
-## (HESimulation.HERD_EXPORT_PRICE/HERD_CULL_TARGET), now that consumption
-## (Trader export, local wool market) is wired up and there's somewhere
-## real for a bigger, pricier herd to go. Verified at the new scale with a
-## standalone trace: 1 worker stabilizes cleanly by its first cull (~day
-## 1500) and compounds steadily afterward. A ceiling of 2 was tried first
-## and reverted -- it let the dynamic self-tuner oscillate 0/1/2 rather
-## than settling, which repeatedly hardship-butchered the still-growing
-## herd hard enough to delay its first cull well past the acceptance
-## harness's 6-year check window and (in the live scenario, not just the
-## isolated trace) tripped a real, if small, wage-floor breach. 1 is the
-## verified-sustainable number, not just a starting guess.
-const CATTLE_RANCH_MAX_CAPACITY := 1
-const SHEEP_FARM_MAX_CAPACITY := 10
+## A ranch's staff ceiling is derived from its herd, the way a field
+## business derives its from acreage: the workers a herd at its cull target
+## needs for FULL care (HESimulation.HERD_LABOR_PER_HEAD_PER_DAY), rounded up.
+## Not a hand-tuned flat number any more -- the old flat ceilings (cattle 1,
+## sheep 10) existed to keep a self-tuner from overshooting a herd whose
+## labor produced nothing; with husbandry now driving wool, mortality and
+## reproduction, the ceiling just states how many hands the herd can use.
+static func herd_max_capacity(species: HEBusiness.Species) -> int:
+	return ceili(HESimulation.HERD_CULL_TARGET[species] * HESimulation.HERD_LABOR_PER_HEAD_PER_DAY[species])
 
 ## Opt-in alongside the Bloomery. Like the workshop, this is a compact,
 ## legacy (daily-output) production site rather than a land/field business.
@@ -246,9 +232,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	# is still set to HESimulation.HERD_EVAL_INTERVAL_DAYS below, purely so
 	# rolling_average_revenue_per_worker() smooths over the ranch's own
 	# cycle length instead of a flat week (see HEBusiness.has_long_cycle()).
-	var cattle_ranch := HEBusiness.new(CATTLE_RANCH_BUSINESS_ID, "Cattle Ranch", null, CATTLE_RANCH_MAX_CAPACITY, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.CATTLE, CATTLE_STARTING_HERD)
+	var cattle_ranch := HEBusiness.new(CATTLE_RANCH_BUSINESS_ID, "Cattle Ranch", null, herd_max_capacity(HEBusiness.Species.CATTLE), 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.CATTLE, CATTLE_STARTING_HERD)
 	cattle_ranch.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
-	var sheep_farm := HEBusiness.new(SHEEP_FARM_BUSINESS_ID, "Sheep Farm", null, SHEEP_FARM_MAX_CAPACITY, 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.SHEEP, SHEEP_STARTING_HERD)
+	var sheep_farm := HEBusiness.new(SHEEP_FARM_BUSINESS_ID, "Sheep Farm", null, herd_max_capacity(HEBusiness.Species.SHEEP), 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.SHEEP, SHEEP_STARTING_HERD)
 	sheep_farm.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 
 	var estimated_wage := _estimated_starting_reference_wage()
