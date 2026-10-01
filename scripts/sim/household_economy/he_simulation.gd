@@ -82,7 +82,7 @@ const PRICE_ADJUST_STEP := 0.05
 const PRICE_MULTIPLIER_MIN := 0.25
 const PRICE_MULTIPLIER_MAX := 4.0
 
-## Commodities a Trader can move OUT of the settlement -- a superset of
+## Default commodities a Trader moves OUT of the settlement -- a superset of
 ## SUBSISTENCE_COMMODITIES (households never need iron, so _run_trade's
 ## reserve calc for it naturally comes out to zero and it exports freely;
 ## see _seller_surplus_above_reserve). IRON goes FIRST, ahead of GRAIN and
@@ -98,6 +98,9 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
 const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER]
+## Priority is fixed so changing checkboxes never silently reorders which
+## good gets first use of shared Trader capacity. Ore starts disabled.
+const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.IRON_ORE]
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -212,6 +215,7 @@ var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
 var markets: Dictionary[int, HEMarket] = {}
+var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_id -> commodity -> bool
 
 var rng: RandomNumberGenerator
 var day: int = 0
@@ -282,6 +286,13 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 		settlements[legacy_settlement.id] = legacy_settlement
 	households = world["households"]
 	businesses = world["businesses"]
+	for business_id in businesses.keys():
+		if (businesses[business_id] as HEBusiness).kind != HEBusiness.Kind.TRADER:
+			continue
+		var enabled := {}
+		for commodity in EXPORT_PRIORITY:
+			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+		_trader_export_enabled[business_id] = enabled
 	for settlement_id in settlements.keys():
 		markets[settlement_id] = HEMarket.new(BASE_PRICE.duplicate())
 	# Normalize business locality first so the household pass can reject any
@@ -525,6 +536,20 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
 	}
 
+func get_trader_export_settings(business_id: int) -> Array:
+	var out: Array = []
+	if not _trader_export_enabled.has(business_id):
+		return out
+	for commodity in EXPORT_PRIORITY:
+		out.append({"commodity_id": commodity, "name": Commodity.name_of(commodity),
+			"enabled": _trader_export_enabled[business_id].get(commodity, false)})
+	return out
+
+func set_trader_export_enabled(business_id: int, commodity: Commodity.Type, enabled: bool) -> void:
+	if not _trader_export_enabled.has(business_id) or not EXPORT_PRIORITY.has(commodity):
+		return
+	_trader_export_enabled[business_id][commodity] = enabled
+
 ## Current participants and physical holdings. Requests/offers are estimates
 ## from the present state for the next clearing; last_clearing is yesterday's
 ## completed aggregate and is deliberately kept separate.
@@ -574,11 +599,13 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 	if trader != null:
 		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
 		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
-			sellers.append({"owner": "%s (imports; no stored stock)" % trader.name,
-				"offered": capacity, "stock": 0.0})
-		elif EXPORT_COMMODITIES.has(commodity) and _business_selling(settlement_id, commodity) != null:
-			buyers.append({"owner": "%s (exports)" % trader.name,
-				"requested": capacity, "funded": capacity, "stock": 0.0})
+			sellers.append({"owner": "%s (imports)" % trader.name,
+				"kind": "import", "capacity": capacity})
+		elif _trader_export_enabled[trader.id].get(commodity, false) and _business_selling(settlement_id, commodity) != null:
+			var export_seller := _business_selling(settlement_id, commodity)
+			buyers.append({"owner": "%s (exports)" % trader.name, "kind": "export",
+				"capacity": capacity,
+				"available": minf(capacity, _exportable_surplus(export_seller, settlement_id, commodity))})
 	report["buyers"] = buyers
 	report["sellers"] = sellers
 	report["holdings"] = holdings
@@ -722,6 +749,10 @@ func get_event_log_days(days: int) -> Array:
 func _daily_tick() -> void:
 	_record_price_history()
 	_reset_household_daily_records()
+	# A good with no trade today must not keep showing an older clearing after
+	# its export checkbox is disabled or its seller runs out of stock.
+	for market in markets.values():
+		(market as HEMarket).last_clearing.clear()
 	var record := _new_daily_record()
 	_pay_wages(record)
 	_run_input_purchasing(record)
@@ -1588,7 +1619,7 @@ func _adjust_price(settlement_id: int, commodity: Commodity.Type, total_offer: f
 ## households already had first crack at buying that same day -- it never
 ## competes with a household for a good it needs, by construction. Each
 ## Kind.TRADER business independently draws down every PRODUCTION
-## business's surplus above its reserve for every EXPORT_COMMODITIES good,
+## business's surplus above its reserve for every enabled EXPORT_PRIORITY good,
 ## capped by the trader's own labor-derived handling capacity, and pays a
 ## deliberately low price (TRADER_BUY_PRICE_FRACTION of the going market
 ## rate) for what it takes -- see the constants' doc comment above for why.
@@ -1610,13 +1641,15 @@ func _run_trade(record: Dictionary) -> void:
 		var trader_margin_today := 0.0
 		var total_exported := 0.0
 
-		for commodity in EXPORT_COMMODITIES:
+		for commodity in EXPORT_PRIORITY:
 			if remaining_capacity <= 0.0001:
 				break
+			if not _trader_export_enabled[trader_id].get(commodity, false):
+				continue
 			var seller := _business_selling(trader.settlement_id, commodity)
 			if seller == null:
 				continue
-			var surplus := _seller_surplus_above_reserve(seller, trader.settlement_id, commodity)
+			var surplus := _exportable_surplus(seller, trader.settlement_id, commodity)
 			var quantity: float = min(surplus, remaining_capacity)
 			if quantity <= 0.0001:
 				continue
@@ -1745,6 +1778,22 @@ func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commo
 	var reserve_days: float = float(seller.days_until_next_harvest()) if seller.uses_field_model() else TRADER_RESERVE_BUFFER_DAYS
 	var reserve: float = _settlement_daily_demand(settlement_id, commodity) * reserve_days
 	return max(0.0, seller.stock(commodity) - reserve)
+
+## Export happens after local input purchases and production. Leave enough
+## at the seller for staffed local businesses to buy their next day's input
+## before the next production pass. This matters when ore exports are enabled:
+## without it the Trader could take every ore mined today before the
+## Bloomery gets its first chance to buy that newly produced ore tomorrow.
+func _exportable_surplus(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type) -> float:
+	var surplus := _seller_surplus_above_reserve(seller, settlement_id, commodity)
+	var next_day_input_need := 0.0
+	for business_id in businesses.keys():
+		var buyer: HEBusiness = businesses[business_id]
+		if buyer.settlement_id != settlement_id or buyer.kind != HEBusiness.Kind.PRODUCTION or not buyer.recipe.inputs.has(commodity):
+			continue
+		var planned: float = float(_business_employed_worker_count(business_id)) * buyer.recipe.outputs[buyer.output_commodity()]
+		next_day_input_need += maxf(0.0, planned * buyer.recipe.inputs[commodity] - buyer.stock(commodity))
+	return maxf(0.0, surplus - next_day_input_need)
 
 ## Runs first thing in the tick (right after _pay_wages, before
 ## _run_production) so a PRODUCTION business with recipe.inputs buys toward
