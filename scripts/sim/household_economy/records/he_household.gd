@@ -238,8 +238,14 @@ func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 func remove_member_for_emigration() -> void:
 	var removing_a_dependent := demographics.dependents > 0
 	demographics.remove_member()
-	if removing_a_dependent and not _dependent_ages.is_empty():
-		_dependent_ages.pop_back()
+	if removing_a_dependent:
+		if not _dependent_ages.is_empty():
+			_dependent_ages.pop_back()
+	elif not _worker_ages.is_empty():
+		# Same sync as above for a worker leaving (dependents go first, so
+		# this only runs once none are left) -- without it _worker_ages kept
+		# an entry for someone no longer in worker_capacity.
+		_worker_ages.pop_back()
 
 ## Monthly: removes every dependent whose age has crossed
 ## AGING_THRESHOLD_DAYS from THIS household and returns how many. Jobs are

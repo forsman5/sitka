@@ -273,9 +273,6 @@ const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodit
 ## scales with its bigger HERD_CULL_TARGET (still ~20% of target, same
 ## proportion as before) so a hardship sale can't gut just as large a
 ## fraction of the now-bigger herd.
-## Smallest hardship sale (in head) that gets a blotter entry -- smaller
-## sales still happen, they just aren't worth a line each.
-const HARDSHIP_BUTCHER_MIN_LOGGED_HEAD := 0.1
 const HARDSHIP_BUTCHER_PRICE_FRACTION := 0.25
 const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 30.0,
@@ -950,8 +947,13 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	if price <= 0.0:
 		return
 	var available_head: float = max(0.0, b.herd_size - HARDSHIP_BUTCHER_MIN_HERD[b.species])
-	var butchered: float = min(available_head, cash_shortfall / price)
-	if butchered <= 0.0001:
+	# Whole animals only, and only once the shortfall actually covers one --
+	# rounding UP sold a full animal every time wages were a few cents short,
+	# which drained the herd below its cull target. The shortfall is
+	# recomputed from the balance each day, so it keeps growing until it
+	# covers a head.
+	var butchered: float = min(floorf(available_head), floorf(cash_shortfall / price))
+	if butchered < 1.0:
 		return
 	b.herd_size -= butchered
 	var proceeds: float = butchered * price
@@ -969,11 +971,6 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	# firing on a staffed Cattle Ranch).
 	record["export_revenue"] += proceeds
 	_export_revenue_total += proceeds
-	# Daily shortfalls are often a few cents -> a sliver of an animal. The sale
-	# is real and already accounted for above, but a "0.0 head" blotter line
-	# is just noise, so only notable sales are logged.
-	if butchered < HARDSHIP_BUTCHER_MIN_LOGGED_HEAD:
-		return
 	_log_event("hardship_butcher", {
 		"business_id": b.id, "head": butchered, "proceeds": proceeds,
 		"shortfall": cash_shortfall, "herd_after": b.herd_size,
