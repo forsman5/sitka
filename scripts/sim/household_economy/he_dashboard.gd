@@ -438,6 +438,13 @@ func _refresh_business_detail() -> void:
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
+	if report.has("herd_size"):
+		rows.append(["Species", report["species"]])
+		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
+		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
+		rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
+		rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
+		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
 
