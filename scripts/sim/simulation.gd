@@ -132,6 +132,14 @@ var day: int = 0
 var year: int = 0
 var _next_shipment_id := 1
 
+## Commodities this valley actually models, in Commodity.Type order. Derived
+## from the seeded valley (see _build_modeled_commodities) rather than
+## authored, so a commodity another sim adds to the shared enum (e.g.
+## IRON_ORE, which only the household economy uses) stays out of the valley's
+## inventories, price tables and trade loop until a recipe or stockpile here
+## actually uses it.
+var _modeled_commodities: Array[Commodity.Type] = []
+
 var _history: Dictionary[int, Array] = {} # settlement_id -> Array[Dictionary], oldest first, capped at HISTORY_MAX_DAYS
 
 var _migration_pressure_count: Dictionary = {} # settlement_id -> int, recomputed weekly
@@ -154,6 +162,31 @@ func _init(seed: int, valley_builder: Callable = Callable()) -> void:
 	transport_edges = valley.get("transport_edges", {})
 	for settlement_id in settlements.keys():
 		_history[settlement_id] = []
+	_build_modeled_commodities()
+
+## A commodity is modeled if any workplace recipe consumes or produces it, or
+## any settlement starts holding it (covers herd capital like cattle/sheep,
+## which no recipe input consumes). Household-only demand needs no separate
+## scan: everything households draw down is also produced or stocked here.
+func _build_modeled_commodities() -> void:
+	var seen := {}
+	for workplace: Workplace in workplaces.values():
+		for c in workplace.recipe.inputs.keys():
+			seen[c] = true
+		for c in workplace.recipe.outputs.keys():
+			seen[c] = true
+	for settlement: Settlement in settlements.values():
+		for c in settlement.inventory.keys():
+			seen[c] = true
+	_modeled_commodities.clear()
+	for c in Commodity.ALL:
+		if seen.has(c):
+			assert(BASE_PRICE.has(c) and REFERENCE_STOCK.has(c),
+				"Modeled commodity %s needs BASE_PRICE and REFERENCE_STOCK entries" % Commodity.name_of(c))
+			_modeled_commodities.append(c)
+
+func get_modeled_commodities() -> Array[Commodity.Type]:
+	return _modeled_commodities
 
 func season() -> Season:
 	return ((day / DAYS_PER_SEASON) % SEASONS_PER_YEAR) as Season
@@ -189,7 +222,7 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
 
 	var inventory := {}
-	for c in Commodity.ALL:
+	for c in _modeled_commodities:
 		inventory[Commodity.name_of(c)] = settlement.stock(c)
 
 	var population := _live_population(settlement_id)
@@ -271,7 +304,7 @@ func get_workplace_reports(settlement_id: int) -> Array:
 func get_settlement_prices(settlement_id: int) -> Dictionary:
 	var settlement: Settlement = settlements[settlement_id]
 	var prices := {}
-	for c in Commodity.ALL:
+	for c in _modeled_commodities:
 		prices[Commodity.name_of(c)] = _price_for(settlement, c)
 	return prices
 
@@ -397,7 +430,7 @@ func _new_daily_record(settlement_id: int) -> Dictionary:
 func _snapshot_stock(settlement_id: int) -> Dictionary:
 	var settlement: Settlement = settlements[settlement_id]
 	var snap := {}
-	for c in Commodity.ALL:
+	for c in _modeled_commodities:
 		snap[Commodity.name_of(c)] = settlement.stock(c)
 	return snap
 
@@ -601,7 +634,7 @@ func _run_trade(records: Dictionary) -> void:
 				continue
 			var dest_id := edge.other_end(source.id)
 			var destination: Settlement = settlements[dest_id]
-			for c in Commodity.ALL:
+			for c in _modeled_commodities:
 				var source_price := _price_for(source, c)
 				var destination_price := _price_for(destination, c)
 				if source_price >= destination_price:

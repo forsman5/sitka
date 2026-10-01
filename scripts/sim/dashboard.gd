@@ -153,7 +153,7 @@ func _build_ui() -> void:
 	# status coloring instead -- see route_map.gd's selected_commodity.
 	_commodity_picker = OptionButton.new()
 	_commodity_picker.add_item("All", -1)
-	for c in Commodity.ALL:
+	for c in _simulation.get_modeled_commodities():
 		_commodity_picker.add_item(Commodity.name_of(c), c)
 	_commodity_picker.item_selected.connect(func(index: int) -> void:
 		_route_map.selected_commodity = _commodity_picker.get_item_id(index)
@@ -245,7 +245,7 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	var stock_labels := {}
 	var price_labels := {}
 	var today_labels := {}
-	for c in Commodity.ALL:
+	for c in _simulation.get_modeled_commodities():
 		var name_label := Label.new()
 		name_label.text = Commodity.name_of(c)
 		name_label.custom_minimum_size = Vector2(90, 0)

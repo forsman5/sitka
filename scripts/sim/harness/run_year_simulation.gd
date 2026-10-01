@@ -84,7 +84,7 @@ func _run_year(seed: int) -> Dictionary:
 func _check_invariants(sim: Simulation, on_day: int) -> void:
 	for settlement_id in sim.get_settlement_ids():
 		var s := sim.get_settlement_summary(settlement_id)
-		for c in Commodity.ALL:
+		for c in sim.get_modeled_commodities():
 			var name := Commodity.name_of(c)
 			var v: float = s["inventory"][name]
 			if v < -0.001:
@@ -110,7 +110,7 @@ func _check_balance_reconciliation(sim: Simulation, on_day: int) -> void:
 		var industrial_consumption: Dictionary = record["industrial_consumption"]
 		var trade_in: Dictionary = record["trade_in"]
 		var trade_out: Dictionary = record["trade_out"]
-		for c in Commodity.ALL:
+		for c in sim.get_modeled_commodities():
 			var name := Commodity.name_of(c)
 			var expected: float = opening.get(name, 0.0) + produced.get(name, 0.0) + trade_in.get(name, 0.0) \
 				- household_consumption.get(name, 0.0) - industrial_consumption.get(name, 0.0) - trade_out.get(name, 0.0)
