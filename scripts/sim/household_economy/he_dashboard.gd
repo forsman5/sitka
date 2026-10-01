@@ -741,7 +741,8 @@ func _refresh_business_detail() -> void:
 		var has_wool_hint: bool = report.has("wool_sustaining_unstaffed")
 		_business_detail_cull_target_hint.visible = has_wool_hint
 		if has_wool_hint:
-			_business_detail_cull_target_hint.text = "Household wool demand is sustained by about %d sheep (%d if fully staffed)." % [report["wool_sustaining_unstaffed"], report["wool_sustaining_staffed"]]
+			_business_detail_cull_target_hint.text = "Sheep needed to cover household wool demand: about %d with no staff, %d at current staffing (%.0f%% care), %d with a full crew." % [
+				report["wool_sustaining_unstaffed"], report["wool_sustaining_current"], report["care_fraction"] * 100.0, report["wool_sustaining_staffed"]]
 		var herd_events: Array = report["herd_events"]
 		if herd_events.is_empty():
 			_business_detail_herd_events_display.text = "[i]No herd events yet.[/i]"

@@ -629,7 +629,8 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			if b.species == HEBusiness.Species.SHEEP:
 				var sustaining := wool_sustaining_herd_counts(b)
 				report["wool_sustaining_unstaffed"] = int(sustaining.x)
-				report["wool_sustaining_staffed"] = int(sustaining.y)
+				report["wool_sustaining_current"] = int(sustaining.y)
+				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
 			report["care_workers_needed"] = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species]
 		else:
@@ -2088,24 +2089,25 @@ func herd_cull_target_range(b: HEBusiness) -> Vector2:
 	return Vector2(lowest, highest)
 
 ## How many sheep it takes to cover this settlement's current household wool
-## demand (population x WOOL_PER_PERSON_PER_DAY), as (unstaffed, fully
-## staffed) head counts -- staffing lifts each sheep's yield by
-## HERD_STAFFED_WOOL_BONUS, so a staffed flock needs fewer. Informational
-## only (a hint for setting the sheep cull target); Vector2.ZERO for a
-## non-sheep business.
-func wool_sustaining_herd_counts(b: HEBusiness) -> Vector2:
+## demand (population x WOOL_PER_PERSON_PER_DAY), as (no staff, at the
+## ranch's CURRENT staffing, full crew) head counts. Each sheep's yield is
+## the base fleece x (1 + HERD_STAFFED_WOOL_BONUS x care), so more care means
+## fewer sheep are needed. "Current" uses the care the last review applied
+## (b.last_care_fraction). Informational only (a hint for setting the sheep
+## cull target); Vector3.ZERO for a non-sheep business.
+func wool_sustaining_herd_counts(b: HEBusiness) -> Vector3:
 	if b.kind != HEBusiness.Kind.HERD or b.species != HEBusiness.Species.SHEEP:
-		return Vector2.ZERO
+		return Vector3.ZERO
 	var population := 0
 	for household_id in (settlements[b.settlement_id] as HESettlement).household_ids:
 		population += (households[household_id] as HEHousehold).headcount()
 	var demand_per_day: float = population * WOOL_PER_PERSON_PER_DAY
 	var wool_per_head_per_day: float = WOOL_PER_HEAD_PER_INTERVAL / float(HERD_EVAL_INTERVAL_DAYS)
 	if wool_per_head_per_day <= 0.0:
-		return Vector2.ZERO
-	return Vector2(
-		ceilf(demand_per_day / wool_per_head_per_day),
-		ceilf(demand_per_day / (wool_per_head_per_day * (1.0 + HERD_STAFFED_WOOL_BONUS))))
+		return Vector3.ZERO
+	var at_care := func(care: float) -> float:
+		return ceilf(demand_per_day / (wool_per_head_per_day * (1.0 + HERD_STAFFED_WOOL_BONUS * care)))
+	return Vector3(at_care.call(0.0), at_care.call(b.last_care_fraction), at_care.call(1.0))
 
 ## Player-facing setter for a ranch's cull target. Clamps to
 ## herd_cull_target_range(), re-derives the ranch's staff ceiling from the
