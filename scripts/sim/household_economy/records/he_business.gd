@@ -17,8 +17,8 @@ extends RefCounted
 ## recipe and produces nothing. Instead it draws down whichever PRODUCTION
 ## business's stock has grown past a comfortable reserve, converting it to
 ## money at a deliberately low price -- see he_simulation.gd's _run_trade.
-## Everything else about it (hiring, wages, weekly capacity self-tuning) is
-## identical to a PRODUCTION business.
+## It uses the same hiring and wage rules, but its capacity decision uses a
+## longer revenue window and review interval to span supplier harvests.
 ##
 ## Kind.HERD (a "Cattle Ranch" or "Sheep Farm") is a second odd one out, in
 ## the opposite direction from Kind.TRADER: it has no recipe and no fields.
@@ -54,6 +54,10 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 
 const WAGE_ROLLING_WINDOW_DAYS := 7
+## The seeded Woodlot's four stands harvest roughly 45 days apart. A Trader
+## can see no export revenue in a one-week window even while its trade is
+## profitable over a supplier's harvest cycle.
+const TRADER_REVENUE_WINDOW_DAYS := 45
 
 ## Independent of WAGE_ROLLING_WINDOW_DAYS -- this backs the dashboard's
 ## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
@@ -305,11 +309,14 @@ func days_until_next_harvest() -> int:
 ## own crop/herd cycle for any has_long_cycle() business (see
 ## he_simulation.gd's _evaluate_business_capacity doc comment for why a
 ## full cycle, not a fixed week, is the right smoothing window when income
-## arrives in lumps at harvest rather than daily) -- Trader and legacy
-## PRODUCTION businesses fall back to the same WAGE_ROLLING_WINDOW_DAYS as
-## the wage.
+## arrives in lumps at harvest rather than daily). Trader revenue is also
+## harvest-driven; only legacy instant-output businesses use the wage window.
 func rolling_window_days() -> int:
-	return growth_days if has_long_cycle() else WAGE_ROLLING_WINDOW_DAYS
+	if has_long_cycle():
+		return growth_days
+	if kind == Kind.TRADER:
+		return TRADER_REVENUE_WINDOW_DAYS
+	return WAGE_ROLLING_WINDOW_DAYS
 
 func record_revenue_per_worker_day(value: float) -> void:
 	_revenue_per_worker_history.append(value)

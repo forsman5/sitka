@@ -220,14 +220,9 @@ func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 		and demographics.food_stress <= BIRTH_STRESS_THRESHOLD
 	_consecutive_prosperous_days = (_consecutive_prosperous_days + 1) if prosperous else 0
 
-## Wraps demographics.remove_member() for emigration so _dependent_ages
-## stays in sync: that pooled method decrements dependents directly with no
-## idea this household is also tracking individual ages, so removing a
-## dependent here must also pop one age entry -- otherwise _dependent_ages
-## ends up with more entries than demographics.dependents actually is, and
-## evaluate_aging() below can later drive dependents negative promoting from
-## that phantom surplus (which headcount()/is_empty() would then silently
-## miscount, since nothing re-checks emptiness after aging).
+## Wraps demographics.remove_member() for emigration so both age arrays stay
+## in sync with the aggregate counts. The pooled method removes a dependent
+## first, then a worker, but knows nothing about their individual ages.
 ##
 ## "Emigration" is a cosmetic label for now, not a real destination -- H1
 ## is still one isolated settlement. The mechanic is identical to what was
@@ -238,13 +233,9 @@ func advance_day_for_lifecycle(rolling_grain_fulfillment_today: float) -> void:
 func remove_member_for_emigration() -> void:
 	var removing_a_dependent := demographics.dependents > 0
 	demographics.remove_member()
-	if removing_a_dependent:
-		if not _dependent_ages.is_empty():
-			_dependent_ages.pop_back()
-	elif not _worker_ages.is_empty():
-		# Same sync as above for a worker leaving (dependents go first, so
-		# this only runs once none are left) -- without it _worker_ages kept
-		# an entry for someone no longer in worker_capacity.
+	if removing_a_dependent and not _dependent_ages.is_empty():
+		_dependent_ages.pop_back()
+	elif not removing_a_dependent and not _worker_ages.is_empty():
 		_worker_ages.pop_back()
 
 ## Monthly: removes every dependent whose age has crossed
