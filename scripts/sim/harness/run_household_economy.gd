@@ -27,6 +27,7 @@ func _init() -> void:
 	_check_event_history_survives_busy_categories()
 	_check_field_model_dynamics()
 	_check_labor_self_tunes_toward_profitable_business()
+	_check_trader_employment_does_not_churn_between_harvests()
 	_check_emigration_actually_happens()
 	_check_life_cycle_births_and_aging()
 	_check_old_age_deaths_actually_happen()
@@ -466,6 +467,24 @@ func _check_labor_self_tunes_toward_profitable_business() -> void:
 		"Trader should still be trading by day 300, not permanently died out")
 	_assert(late["trader"]["rolling_average_revenue_per_worker"] > 0.0,
 		"Trader should be earning real revenue by day 300, not stuck at 0 like the permanently-dead-capacity bug this test guards against")
+
+## Supplier harvests arrive every few weeks, so a Trader should not lay off
+## workers every time a single seven-day stretch contains no surplus. Check
+## both the plain and Bloomery economies after their initial adjustment.
+func _check_trader_employment_does_not_churn_between_harvests() -> void:
+	print("\n=== Trader: staffing remains stable across supplier harvest gaps ===")
+	for scenario in ["build_three_business_economy", "build_three_business_economy_with_bloomery"]:
+		var sim := _new_sim(scenario)
+		var late_layoff_days := 0
+		for _day in 500:
+			sim.advance_ticks(1)
+			if sim.day <= 210:
+				continue
+			var latest_firing := sim.get_business_employment_events(HEScenarioSeeds.TRADER_BUSINESS_ID, "fired", 1)
+			if not latest_firing.is_empty() and latest_firing[0]["day"] == sim.day - 1:
+				late_layoff_days += 1
+		print("  %s: %d Trader layoff days from day 211 to 500" % [scenario, late_layoff_days])
+		_assert(late_layoff_days <= 4, "Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)

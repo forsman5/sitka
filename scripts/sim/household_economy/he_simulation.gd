@@ -154,6 +154,9 @@ const TRADER_CAPACITY_PER_WORKER := 8.0
 ## today-but-conceptually-distinct constant for the zero-capacity recovery
 ## case below, which has no wage signal to be proportional to at all.
 const CAPACITY_EVAL_INTERVAL_DAYS := 7
+## Trader revenue arrives in batches after supplier harvests; one decision
+## per roughly farm-harvest interval avoids reacting to the same gap weekly.
+const TRADER_CAPACITY_EVAL_INTERVAL_DAYS := 21
 const CAPACITY_STEP_MAX_WORKERS := 4
 const CAPACITY_TRIAL_HIRE_WORKERS := 4
 const WAGE_PROFIT_MARGIN := 0.1
@@ -1289,13 +1292,13 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 ## How often (in days, always a whole multiple of CAPACITY_EVAL_INTERVAL_
 ## DAYS so it still only ever fires on one of the ticks the calling
 ## _daily_tick has already gated on that cadence) a business's TARGET
-## capacity should actually be re-evaluated. A field-model business grows
-## its own re-evaluation cadence with its production lag (roughly a sixth
-## of its own growth cycle) instead of always using the flat weekly
-## default -- see _evaluate_business_capacity's doc comment for why judging
-## it that often would compound many step changes before the first one's
-## effect on revenue is even visible.
+## capacity should actually be re-evaluated. Trader uses three weeks because
+## its suppliers release stock in harvest batches. A field-model business
+## grows its cadence with its production lag (roughly a sixth of its growth
+## cycle) so step changes do not compound before output responds.
 func _capacity_eval_interval_days(b: HEBusiness) -> int:
+	if b.kind == HEBusiness.Kind.TRADER:
+		return TRADER_CAPACITY_EVAL_INTERVAL_DAYS
 	if not b.uses_field_model():
 		return CAPACITY_EVAL_INTERVAL_DAYS
 	var weeks: int = maxi(1, roundi(float(b.growth_days) / 6.0 / float(CAPACITY_EVAL_INTERVAL_DAYS)))
