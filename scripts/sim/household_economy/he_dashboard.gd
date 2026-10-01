@@ -71,6 +71,11 @@ var _business_detail_panel: PanelContainer
 var _business_detail_title: Label
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
+var _business_detail_cull_target_box: SpinBox
+## Which business the cull-target box was last loaded for. The box is only
+## (re)loaded when the selection changes -- the detail view refreshes every
+## tick, and rewriting the box then would clobber whatever's being typed.
+var _cull_target_loaded_for: int = -1
 var _business_detail_herd_events_section: VBoxContainer
 var _business_detail_herd_events_display: RichTextLabel
 var _business_detail_transaction_section: VBoxContainer
@@ -336,6 +341,18 @@ func _build_ui() -> void:
 	# and Sheep Farm both) -- lines come from _format_event, same as the blotter.
 	_business_detail_herd_events_section = VBoxContainer.new()
 	detail_content.add_child(_business_detail_herd_events_section)
+	var cull_target_row := HBoxContainer.new()
+	_business_detail_herd_events_section.add_child(cull_target_row)
+	var cull_target_label := Label.new()
+	cull_target_label.text = "Cull target (head)"
+	cull_target_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	cull_target_label.tooltip_text = "The herd size this ranch culls back down to every review. Culled animals are exported; a bigger target needs more staff to look after it."
+	cull_target_row.add_child(cull_target_label)
+	_business_detail_cull_target_box = SpinBox.new()
+	_business_detail_cull_target_box.step = 5.0
+	_business_detail_cull_target_box.custom_minimum_size = Vector2(110, 0)
+	_business_detail_cull_target_box.value_changed.connect(_on_cull_target_changed)
+	cull_target_row.add_child(_business_detail_cull_target_box)
 	var herd_events_title := Label.new()
 	herd_events_title.text = "Herd events (births, culls, hardship sales)"
 	herd_events_title.add_theme_font_size_override("font_size", 14)
@@ -490,8 +507,18 @@ func _on_business_row_selected(business_id: int) -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
 	_selected_business_id = business_id
+	_cull_target_loaded_for = -1
 	_business_detail_panel.visible = true
 	_refresh_business_detail()
+
+func _on_cull_target_changed(value: float) -> void:
+	if _selected_business_id == -1:
+		return
+	var applied := _simulation.set_herd_cull_target(_selected_business_id, value)
+	if applied >= 0.0:
+		# Reflect any clamping back into the box without re-triggering this.
+		_business_detail_cull_target_box.set_value_no_signal(applied)
+		_refresh_business_detail()
 
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
@@ -628,6 +655,11 @@ func _refresh_business_detail() -> void:
 
 	_business_detail_herd_events_section.visible = report.has("herd_events")
 	if _business_detail_herd_events_section.visible:
+		if _cull_target_loaded_for != _selected_business_id:
+			_cull_target_loaded_for = _selected_business_id
+			_business_detail_cull_target_box.min_value = report["cull_target_min"]
+			_business_detail_cull_target_box.max_value = report["cull_target_max"]
+			_business_detail_cull_target_box.set_value_no_signal(report["cull_target"])
 		var herd_events: Array = report["herd_events"]
 		if herd_events.is_empty():
 			_business_detail_herd_events_display.text = "[i]No herd events yet.[/i]"

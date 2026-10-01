@@ -105,6 +105,12 @@ var herd_events: Array[Dictionary] = []
 ## consumed and reset by _run_herds -- the herd analogue of a field's
 ## labor_applied.
 var care_worker_days: float = 0.0
+## Kind.HERD only: the herd size this ranch culls back down to each review.
+## Seeded from he_simulation.gd's HERD_CULL_TARGET species default and then
+## player-configurable through HESimulation.set_herd_cull_target(), which
+## also re-derives max_capacity from it. 0.0 = "not set, use the species
+## default" (any builder that doesn't seed one still works).
+var cull_target: float = 0.0
 ## Kind.HERD only, reporting: the effective care (free-range baseline plus
 ## staffed share, 0..1) the last review applied to wool, mortality and
 ## reproduction. Starts at the baseline an unstaffed herd gets.

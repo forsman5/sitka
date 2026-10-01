@@ -612,6 +612,9 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["last_wool_produced"] = b.last_wool_produced
 			report["last_hardship_butchered"] = b.last_hardship_butchered
 			report["herd_events"] = b.herd_events.duplicate(true)
+			report["cull_target"] = herd_cull_target(b)
+			report["cull_target_min"] = herd_cull_target_range(b).x
+			report["cull_target_max"] = herd_cull_target_range(b).y
 			report["care_fraction"] = b.last_care_fraction
 			report["care_workers_needed"] = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species]
 		else:
@@ -2035,6 +2038,39 @@ func _run_trade(record: Dictionary) -> void:
 		trader.last_planned_units = capacity_limit
 		trader.last_actual_units = total_exported
 
+## The herd size `b` culls back down to each review: its own player-set
+## cull_target, or the species default if none was ever set.
+func herd_cull_target(b: HEBusiness) -> float:
+	return b.cull_target if b.cull_target > 0.0 else HERD_CULL_TARGET[b.species]
+
+## The range a ranch's cull target may be set to: never below the hardship
+## butchering floor (selling down to it would otherwise fight the cull), and
+## never above what the whole shared pasture could hold for this species.
+func herd_cull_target_range(b: HEBusiness) -> Vector2:
+	var land_per_head: float = CATTLE_LAND_PER_HEAD if b.species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
+	var lowest: float = HARDSHIP_BUTCHER_MIN_HERD[b.species]
+	var highest: float = maxf(lowest, floorf(SETTLEMENT_GRAZING_LAND / land_per_head))
+	return Vector2(lowest, highest)
+
+## Player-facing setter for a ranch's cull target. Clamps to
+## herd_cull_target_range(), re-derives the ranch's staff ceiling from the
+## new target (the same formula the scenario seeds use, so a bigger herd to
+## look after raises it and a smaller one lowers it), and returns the value
+## actually applied. A herd already above a lowered target is culled down to
+## it at the next review. No-op (returns -1) for a non-herd business.
+func set_herd_cull_target(business_id: int, value: float) -> float:
+	if not businesses.has(business_id):
+		return -1.0
+	var b: HEBusiness = businesses[business_id]
+	if b.kind != HEBusiness.Kind.HERD:
+		return -1.0
+	var limits := herd_cull_target_range(b)
+	b.cull_target = clampf(value, limits.x, limits.y)
+	b.max_capacity = ceili(b.cull_target * HERD_LABOR_PER_HEAD_PER_DAY[b.species])
+	if b.capacity > b.max_capacity:
+		b.capacity = b.max_capacity
+	return b.cull_target
+
 ## Every HERD_EVAL_INTERVAL_DAYS: each ranch grazes, breeds/dies, and culls
 ## on its own -- no employment, no wages, no market clearing (see
 ## he_business.gd's Kind.HERD doc comment for why). Ranches within the same
@@ -2086,7 +2122,7 @@ func _run_herds(record: Dictionary) -> void:
 
 		b.last_culled = {}
 		b.last_actual_units = 0.0
-		var target: float = HERD_CULL_TARGET[b.species]
+		var target: float = herd_cull_target(b)
 		if b.herd_size > target:
 			var excess: float = b.herd_size - target
 			b.herd_size = target

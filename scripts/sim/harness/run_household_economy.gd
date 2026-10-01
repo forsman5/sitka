@@ -33,6 +33,7 @@ func _init() -> void:
 	_check_old_age_deaths_actually_happen()
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
+	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
 
@@ -725,6 +726,35 @@ func _check_herds_grow_and_cull() -> void:
 ## resolves a seller and clears real trades, not just a phantom demand that
 ## never funds), and culled Cattle/Sheep stock earns real money through the
 ## Trader's export pass even though neither ranch employs or pays anyone.
+## The player can set a ranch's cull target: the ranch culls back down to it,
+## its staff ceiling follows, and out-of-range values are clamped.
+func _check_herd_cull_target_is_configurable() -> void:
+	print("\n=== Herds: the cull target is configurable per ranch ===")
+	var sim := _new_sim("build_three_business_economy")
+	var sheep_id := HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID
+	var sheep: HEBusiness = sim.businesses[sheep_id]
+	var default_target := HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP]
+	_assert(is_equal_approx(sim.herd_cull_target(sheep), default_target), "An untouched ranch should use its species default cull target")
+	var default_capacity := sheep.max_capacity
+
+	# Raising it: the staff ceiling grows with the bigger herd to look after.
+	var raised := sim.set_herd_cull_target(sheep_id, 400.0)
+	_assert(is_equal_approx(raised, 400.0), "A target inside the allowed range should be applied as given, got %.1f" % raised)
+	_assert(sheep.max_capacity > default_capacity, "A bigger cull target should raise the ranch's staff ceiling (%d -> %d)" % [default_capacity, sheep.max_capacity])
+
+	# Lowering it below the herd: next review culls straight down to it.
+	var lowered := sim.set_herd_cull_target(sheep_id, 120.0)
+	sim.advance_ticks(24 * HESimulation.HERD_EVAL_INTERVAL_DAYS)
+	print("  sheep herd after 6 years with target %.0f: %.1f (staff ceiling %d, was %d)" % [lowered, sheep.herd_size, sheep.max_capacity, default_capacity])
+	_assert(sheep.herd_size <= lowered + EPSILON, "The herd should never exceed its configured cull target, got %.2f vs %.2f" % [sheep.herd_size, lowered])
+	_assert(sheep.max_capacity < default_capacity or default_capacity <= 1, "A smaller cull target should lower the staff ceiling")
+
+	# Out-of-range values are clamped, not trusted.
+	var limits := sim.herd_cull_target_range(sheep)
+	_assert(is_equal_approx(sim.set_herd_cull_target(sheep_id, 1.0), limits.x), "A target below the hardship floor should clamp up to it")
+	_assert(is_equal_approx(sim.set_herd_cull_target(sheep_id, 1000000.0), limits.y), "A target above what the pasture holds should clamp down")
+	_assert(sim.set_herd_cull_target(HEScenarioSeeds.FARM_BUSINESS_ID, 100.0) < 0.0, "Setting a cull target on a non-herd business should be rejected")
+
 ## Husbandry: a herd's labor must have a real marginal product, or the
 ## capacity tuner has no stable staffing level to find (it churned the Sheep
 ## Farm ~400 times in 10 years when staffing changed nothing). Same seed, two
