@@ -22,6 +22,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_local_iron_mine_supplies_bloomery_first()
+	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
 	_check_firing_is_logged_with_reason()
 	_check_event_history_survives_busy_categories()
@@ -279,6 +280,33 @@ func _check_local_iron_mine_supplies_bloomery_first() -> void:
 		_assert(not (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore"), "Local-mine Trader history should not contain an Iron Ore import")
 	_assert(maximum_buffered_timber > 0.0 and maximum_buffered_ore > 0.0, "Bloomery should retain both recipe inputs between production days")
 	_assert(worst_input_stock_gap < EPSILON, "Buffered Timber/Iron Ore stock did not reconcile, worst gap %.4f" % worst_input_stock_gap)
+
+func _check_trader_export_settings() -> void:
+	print("\n=== Trader export settings: ore opt-in and local input reserve ===")
+	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	var ore_enabled := true
+	for option in sim.get_trader_export_settings(trader_id):
+		if option["commodity_id"] == Commodity.Type.IRON_ORE:
+			ore_enabled = option["enabled"]
+	_assert(not ore_enabled, "Iron Ore export should start disabled")
+	sim.set_trader_export_enabled(trader_id, Commodity.Type.IRON_ORE, true)
+	sim.advance_ticks(30)
+	var ore_exported := 0.0
+	var iron_produced := 0.0
+	for record in sim.get_daily_history(30):
+		ore_exported += (record["exported"] as Dictionary).get("Iron Ore", 0.0)
+		iron_produced += (record["produced"] as Dictionary).get("Iron", 0.0)
+	_assert(ore_exported > EPSILON, "Enabling ore export should sell surplus ore")
+	_assert(iron_produced > EPSILON, "Ore export must leave enough local ore for the Bloomery")
+	sim.set_trader_export_enabled(trader_id, Commodity.Type.IRON_ORE, false)
+	sim.advance_ticks(10)
+	for record in sim.get_daily_history(10):
+		_assert((record["exported"] as Dictionary).get("Iron Ore", 0.0) < EPSILON,
+			"Disabling ore export should stop new ore shipments")
+	_assert((sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"] as Dictionary).is_empty(),
+		"Disabled ore export should not keep displaying a stale clearing")
+	print("  enabled ore exported %.1f while Bloomery produced %.1f iron; disabling ore stopped exports" % [ore_exported, iron_produced])
 
 ## Building a scenario WITHOUT the Bloomery must never spawn one later --
 ## the opt-in toggle is which scenario builder gets picked (see

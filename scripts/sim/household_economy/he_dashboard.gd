@@ -69,6 +69,11 @@ var _blotter_minimized: bool = false
 var _selected_business_id: int = -1
 var _business_detail_panel: PanelContainer
 var _business_detail_title: Label
+var _business_detail_overview_scroll: ScrollContainer
+var _trader_settings_scroll: ScrollContainer
+var _trader_settings_list: VBoxContainer
+var _trader_settings_button: Button
+var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
@@ -145,6 +150,7 @@ func _load_scenario(index: int) -> void:
 	# guarded null check because this runs once before _build_ui() ever
 	# creates the panel (see _ready()).
 	_selected_business_id = -1
+	_trader_settings_open = false
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -276,6 +282,11 @@ func _build_ui() -> void:
 	var detail_title_spacer := Control.new()
 	detail_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_title_bar.add_child(detail_title_spacer)
+	_trader_settings_button = Button.new()
+	_trader_settings_button.text = "Export settings"
+	_trader_settings_button.visible = false
+	_trader_settings_button.pressed.connect(_on_trader_settings_pressed)
+	detail_title_bar.add_child(_trader_settings_button)
 
 	var detail_close_button := Button.new()
 	detail_close_button.text = "X"
@@ -283,16 +294,16 @@ func _build_ui() -> void:
 	detail_close_button.pressed.connect(_on_business_detail_close_pressed)
 	detail_title_bar.add_child(detail_close_button)
 
-	var detail_scroll := ScrollContainer.new()
-	detail_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	detail_vbox.add_child(detail_scroll)
+	_business_detail_overview_scroll = ScrollContainer.new()
+	_business_detail_overview_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_vbox.add_child(_business_detail_overview_scroll)
 
 	# Everything below scrolls together as one column -- the sparkline, the
 	# key/value facts, and the employee list -- rather than each getting its
 	# own independent scroll region.
 	var detail_content := VBoxContainer.new()
 	detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail_scroll.add_child(detail_content)
+	_business_detail_overview_scroll.add_child(detail_content)
 
 	var cash_history_label := Label.new()
 	cash_history_label.text = "Cash (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
@@ -408,6 +419,14 @@ func _build_ui() -> void:
 	_business_detail_employee_grid = GridContainer.new()
 	_business_detail_employee_grid.columns = 5
 	detail_content.add_child(_business_detail_employee_grid)
+	_trader_settings_scroll = ScrollContainer.new()
+	_trader_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_trader_settings_scroll.visible = false
+	detail_vbox.add_child(_trader_settings_scroll)
+	_trader_settings_list = VBoxContainer.new()
+	_trader_settings_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trader_settings_list.add_theme_constant_override("separation", 8)
+	_trader_settings_scroll.add_child(_trader_settings_list)
 
 	_market_detail_panel = PanelContainer.new()
 	_market_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -517,6 +536,7 @@ func _on_business_row_selected(business_id: int) -> void:
 	_market_detail_panel.visible = false
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
+	_trader_settings_open = false
 	_business_detail_panel.visible = true
 	_refresh_business_detail()
 
@@ -532,6 +552,40 @@ func _on_cull_target_changed(value: float) -> void:
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+
+func _on_trader_settings_pressed() -> void:
+	_trader_settings_open = not _trader_settings_open
+	if _trader_settings_open:
+		_rebuild_trader_settings()
+	_update_trader_detail_page()
+
+func _update_trader_detail_page() -> void:
+	_business_detail_overview_scroll.visible = not _trader_settings_open
+	_trader_settings_scroll.visible = _trader_settings_open
+	_trader_settings_button.text = "Overview" if _trader_settings_open else "Export settings"
+
+func _rebuild_trader_settings() -> void:
+	for child in _trader_settings_list.get_children():
+		_trader_settings_list.remove_child(child)
+		child.queue_free()
+	var title := Label.new()
+	title.text = "Goods this Trader may export"
+	title.add_theme_font_size_override("font_size", 16)
+	_trader_settings_list.add_child(title)
+	var note := Label.new()
+	note.text = "Changes take effect on the next day and reset when you load a scenario. Enabled goods use shared export capacity in the order shown. Local households and businesses buy before exports."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_trader_settings_list.add_child(note)
+	for option in _simulation.get_trader_export_settings(_selected_business_id):
+		var checkbox := CheckBox.new()
+		checkbox.text = option["name"]
+		checkbox.button_pressed = option["enabled"]
+		checkbox.toggled.connect(_on_trader_export_toggled.bind(_selected_business_id, option["commodity_id"]))
+		_trader_settings_list.add_child(checkbox)
+
+func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) -> void:
+	_simulation.set_trader_export_enabled(business_id, commodity, enabled)
+	_refresh()
 
 func _on_market_row_selected(commodity: int) -> void:
 	_selected_business_id = -1
@@ -554,11 +608,11 @@ func _refresh_market_detail() -> void:
 		_market_detail_content.remove_child(child)
 		child.queue_free()
 	var clearing: Dictionary = report["last_clearing"]
-	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, funded %.1f, traded %.1f" % [
+	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
-	_add_market_detail_line("Current buyers: %d  |  Current sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
-	_add_market_detail_line("Current requests and offers are estimates for the next clearing.")
+	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
+	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
 	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
 	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
 	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
@@ -578,9 +632,18 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 		_add_market_detail_line("None")
 		return
 	for row in rows:
+		if row.get("kind", "") == "export":
+			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
+				row["owner"], row["capacity"], row["available"]])
+			continue
+		if row.get("kind", "") == "import":
+			_add_market_detail_line("%s: up to %.1f shared import capacity  |  no stored stock" % [
+				row["owner"], row["capacity"]])
+			continue
 		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
 		if secondary_key != "":
-			line += "  |  %.1f %s" % [row[secondary_key], secondary_key]
+			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
+			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
 		_add_market_detail_line(line)
 
 func _on_trader_transaction_filter_pressed(filter: String) -> void:
@@ -611,6 +674,10 @@ func _refresh_business_detail() -> void:
 		return
 
 	_business_detail_title.text = report["name"]
+	_trader_settings_button.visible = report["kind"] == "trader"
+	if not _trader_settings_button.visible:
+		_trader_settings_open = false
+	_update_trader_detail_page()
 	_business_detail_sparkline.set_data(report["balance_history"])
 
 	for child in _business_detail_grid.get_children():
@@ -827,7 +894,7 @@ func _rebuild_market_grid() -> void:
 		child.queue_free()
 	_market_labels.clear()
 
-	for col_label in ["Good", "Price", "Offered", "Funded request", "Traded"]:
+	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
