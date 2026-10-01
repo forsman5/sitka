@@ -32,12 +32,14 @@ extends RefCounted
 ##   get_clock_summary(), get_household_summary(id),
 ##   get_settlement_summary(id), get_business_reports(settlement_id),
 ##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
-##   get_daily_history(days), get_event_log(limit)
+##   get_daily_history(days), get_trader_transactions(business_id, days),
+##   get_event_log(limit)
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
 
@@ -542,9 +544,16 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"cash_runway_days": _business_cash_runway_days(b),
 			"wage_shortfall": b.last_wage_shortfall,
 			"land_area_acres": b.land_area_acres,
-			"days_to_next_harvest": b.days_until_next_harvest(),
+			# A herd's "harvest" is the shared review tick (_run_herds), so
+			# report the real countdown to it, not days_until_next_harvest()'s
+			# constant growth_days stand-in (which sell-pace logic wants).
+			"days_to_next_harvest": (HERD_EVAL_INTERVAL_DAYS - day % HERD_EVAL_INTERVAL_DAYS) if b.kind == HEBusiness.Kind.HERD else b.days_until_next_harvest(),
 			"fields": _field_reports(b),
 		}
+		if b.uses_field_model():
+			var projection := _next_harvest_projection(b, int(report["employed_workers"]))
+			report["next_harvest_expected_units"] = projection["expected_units"]
+			report["next_harvest_yield_fraction"] = projection["yield_fraction"]
 		if b.kind == HEBusiness.Kind.TRADER:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
@@ -604,6 +613,29 @@ func _field_reports(b: HEBusiness) -> Array:
 	for f in b.fields:
 		out.append({"area": f.area, "days_growing": f.days_growing, "growth_days": b.growth_days})
 	return out
+
+## Forecast for the next field to mature, assuming today's crew stays at
+## its current size until that harvest. Yield uses actual accumulated
+## worker-days plus the work that current staffing would add over the
+## remaining growth days, against the same requirement used at harvest.
+func _next_harvest_projection(b: HEBusiness, employed: int) -> Dictionary:
+	if not b.uses_field_model():
+		return {"expected_units": 0.0, "yield_fraction": 0.0}
+	var next_field: HEField = b.fields[0]
+	var days_remaining := b.growth_days - next_field.days_growing
+	for f in b.fields:
+		var candidate_days: int = b.growth_days - f.days_growing
+		if candidate_days < days_remaining:
+			next_field = f
+			days_remaining = candidate_days
+	var daily_labor: float = float(employed) * (next_field.area / b.land_area_acres) if b.land_area_acres > 0.0 else 0.0
+	var projected_labor: float = next_field.labor_applied + daily_labor * maxi(0, days_remaining)
+	var required_labor: float = next_field.area * b.labor_per_area_per_day * b.growth_days
+	var yield_fraction: float = clampf(projected_labor / required_labor, 0.0, 1.0) if required_labor > 0.0 else 0.0
+	return {
+		"expected_units": next_field.area * b.yield_per_area * yield_fraction,
+		"yield_fraction": yield_fraction,
+	}
 
 ## Every commodity with a REAL presence in this settlement's market right
 ## now -- BASE_PRICE.keys() (not just SUBSISTENCE_COMMODITIES, so a
@@ -729,6 +761,22 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
+## This Trader's imports and exports from up to the last `days` daily
+## records, newest first. Each transaction is copied so callers cannot
+## mutate simulation history through the query result.
+func get_trader_transactions(business_id: int, days: int = 30) -> Array:
+	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
+	assert((businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER, "Business %d is not a Trader" % business_id)
+	var start: int = max(0, _history.size() - days)
+	var out: Array = []
+	for record_index in range(_history.size() - 1, start - 1, -1):
+		var record: Dictionary = _history[record_index]
+		for transaction_index in range((record["trader_transactions"] as Array).size() - 1, -1, -1):
+			var transaction: Dictionary = record["trader_transactions"][transaction_index]
+			if transaction["business_id"] == business_id:
+				out.append(transaction.duplicate(true))
+	return out
+
 ## Up to the last `limit` blotter entries (births, emigrations, old-age
 ## deaths, adoptions, splits, hirings, coming-of-age), oldest first -- same
 ## convention as get_daily_history. Pass -1 (default) for everything
@@ -799,6 +847,7 @@ func _new_daily_record() -> Dictionary:
 		"export_revenue": 0.0,
 		"imported": {},
 		"import_cost": 0.0,
+		"trader_transactions": [],
 		"wages_paid": {},
 		"emigrations": 0,
 		"old_age_deaths": 0,
@@ -1729,6 +1778,15 @@ func _run_trade(record: Dictionary) -> void:
 			trader.last_exported[commodity] = quantity
 			var name := Commodity.name_of(commodity)
 			record["exported"][name] = record["exported"].get(name, 0.0) + quantity
+			record["trader_transactions"].append({
+				"day": day + 1,
+				"business_id": trader.id,
+				"direction": "export",
+				"commodity": name,
+				"quantity": quantity,
+				"unit_price": local_price,
+				"local_value": quantity * local_price,
+			})
 			# New money entering the closed system, valued at market price
 			# -- see _export_revenue_total's doc comment.
 			var revenue: float = quantity * local_price
@@ -2031,6 +2089,15 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				trader.last_cash_change += margin
 				trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
 				record["imported"][name] = record["imported"].get(name, 0.0) + bought
+				record["trader_transactions"].append({
+					"day": day + 1,
+					"business_id": trader.id,
+					"direction": "import",
+					"commodity": name,
+					"quantity": bought,
+					"unit_price": price,
+					"local_value": cost,
+				})
 				record["import_cost"] += import_cost
 				_import_cost_total += import_cost
 

@@ -19,12 +19,14 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## Blotter shows a scrollable scan of recent history, not the full
 ## HESimulation.EVENT_LOG_MAX -- older entries just aren't rendered.
 const BLOTTER_DISPLAY_LIMIT := 40
+const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
+const TRADER_TRANSACTION_HISTORY_DAYS := 30
 
 const SCENARIOS := [
-	{"label": "Three businesses, evenly staffed", "builder": "build_three_business_economy"},
-	{"label": "Three businesses, lopsided start", "builder": "build_lopsided_start"},
-	{"label": "Four businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
-	{"label": "Five businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
+	{"label": "Five businesses, evenly staffed", "builder": "build_three_business_economy"},
+	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start"},
+	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
+	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
 ]
 
 var _simulation: HESimulation
@@ -56,6 +58,10 @@ var _business_detail_panel: PanelContainer
 var _business_detail_title: Label
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
+var _business_detail_transaction_section: VBoxContainer
+var _business_detail_transaction_grid: GridContainer
+var _business_detail_transaction_empty: Label
+var _trader_transaction_filter := "both"
 var _business_detail_employee_grid: GridContainer
 
 func _ready() -> void:
@@ -268,6 +274,37 @@ func _build_ui() -> void:
 	_business_detail_grid.columns = 2
 	detail_content.add_child(_business_detail_grid)
 
+	_business_detail_transaction_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_transaction_section)
+
+	var transaction_header := HBoxContainer.new()
+	_business_detail_transaction_section.add_child(transaction_header)
+	var transaction_title := Label.new()
+	transaction_title.text = "Transactions (last %d days)" % TRADER_TRANSACTION_HISTORY_DAYS
+	transaction_title.add_theme_font_size_override("font_size", 14)
+	transaction_header.add_child(transaction_title)
+	var transaction_spacer := Control.new()
+	transaction_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	transaction_header.add_child(transaction_spacer)
+	var transaction_filter_group := ButtonGroup.new()
+	for filter in ["both", "import", "export"]:
+		var filter_button := Button.new()
+		filter_button.text = filter.capitalize() + ("s" if filter != "both" else "")
+		filter_button.toggle_mode = true
+		filter_button.button_group = transaction_filter_group
+		filter_button.button_pressed = filter == _trader_transaction_filter
+		filter_button.pressed.connect(_on_trader_transaction_filter_pressed.bind(filter))
+		transaction_header.add_child(filter_button)
+
+	_business_detail_transaction_empty = Label.new()
+	_business_detail_transaction_empty.text = "No matching transactions in the last %d days." % TRADER_TRANSACTION_HISTORY_DAYS
+	_business_detail_transaction_empty.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_business_detail_transaction_section.add_child(_business_detail_transaction_empty)
+
+	_business_detail_transaction_grid = GridContainer.new()
+	_business_detail_transaction_grid.columns = 5
+	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
+
 	var employees_label := Label.new()
 	employees_label.text = "Employees"
 	employees_label.add_theme_font_size_override("font_size", 14)
@@ -342,6 +379,10 @@ func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 
+func _on_trader_transaction_filter_pressed(filter: String) -> void:
+	_trader_transaction_filter = filter
+	_refresh_business_detail()
+
 ## Rebuilds (not just re-labels) the detail grid every call -- the row set
 ## itself differs by business kind (a Trader has no land/fields, a
 ## non-field PRODUCTION business has no harvest countdown), so there's no
@@ -374,8 +415,16 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
-		["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]],
+		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
+	]
+	if report["kind"] != "trader":
+		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
+	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
+		var input_parts: Array[String] = []
+		for commodity_name in (report["input_inventory"] as Dictionary).keys():
+			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
+		rows.append(["Input inventory", ", ".join(input_parts)])
+	rows.append_array([
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
 		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
@@ -385,12 +434,7 @@ func _refresh_business_detail() -> void:
 		["Last revenue", "%.2f" % report["last_revenue"]],
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
-	]
-	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
-		var input_parts: Array[String] = []
-		for commodity_name in (report["input_inventory"] as Dictionary).keys():
-			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
-		rows.insert(5, ["Input inventory", ", ".join(input_parts)])
+	])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
@@ -402,6 +446,9 @@ func _refresh_business_detail() -> void:
 		var f: Dictionary = fields[i]
 		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]])
 
+	_business_detail_transaction_section.visible = report["kind"] == "trader"
+	if _business_detail_transaction_section.visible:
+		_refresh_trader_transactions()
 	_refresh_business_detail_employees()
 
 func _add_detail_row(label_text: String, value_text: String) -> void:
@@ -412,6 +459,40 @@ func _add_detail_row(label_text: String, value_text: String) -> void:
 	var value := Label.new()
 	value.text = value_text
 	_business_detail_grid.add_child(value)
+
+func _refresh_trader_transactions() -> void:
+	for child in _business_detail_transaction_grid.get_children():
+		_business_detail_transaction_grid.remove_child(child)
+		child.queue_free()
+
+	for heading in ["Day", "Direction", "Commodity", "Quantity", "Local value"]:
+		var header := Label.new()
+		header.text = heading
+		header.custom_minimum_size = Vector2(80 if heading != "Commodity" else 120, 0)
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		_business_detail_transaction_grid.add_child(header)
+
+	var shown := 0
+	for transaction in _simulation.get_trader_transactions(_selected_business_id, TRADER_TRANSACTION_HISTORY_DAYS):
+		var direction: String = transaction["direction"]
+		if _trader_transaction_filter != "both" and direction != _trader_transaction_filter:
+			continue
+		var values := [
+			str(transaction["day"]),
+			direction.capitalize(),
+			transaction["commodity"],
+			"%.1f" % transaction["quantity"],
+			"%.1f" % transaction["local_value"],
+		]
+		for i in values.size():
+			var value := Label.new()
+			value.text = values[i]
+			if i == 1:
+				value.add_theme_color_override("font_color", Color(0.55, 0.8, 1.0) if direction == "import" else Color(0.65, 0.9, 0.65))
+			_business_detail_transaction_grid.add_child(value)
+		shown += 1
+	_business_detail_transaction_empty.visible = shown == 0
+	_business_detail_transaction_grid.visible = shown > 0
 
 ## Every household currently employed at the selected business -- there's no
 ## query on HESimulation for "who works here" specifically, so this filters
@@ -506,11 +587,14 @@ func _rebuild_business_rows() -> void:
 	_business_list.add_child(scroll)
 
 	var grid := GridContainer.new()
-	grid.columns = 15
+	grid.columns = 14
 	scroll.add_child(grid)
-	for col_label in ["Name", "Capacity", "Max", "Employed", "Land (ac)", "Next harvest", "Output", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
+	for col_label in ["Name", "Target", "Max", "Employed", "Land (ac)", "Status", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
+		if col_label == "Status":
+			header.custom_minimum_size = Vector2(BUSINESS_STATUS_COLUMN_WIDTH, 0)
+			header.clip_text = true
 		if col_label == "Revenue/worker (avg)":
 			header.mouse_filter = Control.MOUSE_FILTER_STOP
 			header.mouse_default_cursor_shape = Control.CURSOR_HELP
@@ -521,7 +605,7 @@ func _rebuild_business_rows() -> void:
 	for report in _simulation.get_business_reports():
 		var business_id: int = report["business_id"]
 		var labels := {}
-		for key in ["name", "capacity", "max_capacity", "employed", "land", "next_harvest", "output", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
+		for key in ["name", "capacity", "max_capacity", "employed", "land", "status", "revenue_per_worker", "reference", "stock", "balance", "runway", "shortfall", "wages", "cash_change"]:
 			if key == "name":
 				# The only clickable cell in the row -- opens this business's
 				# detail panel (see _on_business_row_selected). `flat` keeps
@@ -535,7 +619,12 @@ func _rebuild_business_rows() -> void:
 				labels[key] = name_button
 				continue
 			var label := Label.new()
-			label.custom_minimum_size = Vector2(90, 0)
+			label.custom_minimum_size = Vector2(BUSINESS_STATUS_COLUMN_WIDTH if key == "status" else 90, 0)
+			if key == "status":
+				label.clip_text = true
+				label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				label.mouse_filter = Control.MOUSE_FILTER_STOP
+				label.mouse_default_cursor_shape = Control.CURSOR_HELP
 			if key == "revenue_per_worker":
 				label.mouse_filter = Control.MOUSE_FILTER_STOP
 				label.mouse_default_cursor_shape = Control.CURSOR_HELP
@@ -656,19 +745,26 @@ func _refresh() -> void:
 		(row["employed"] as Label).text = "%d workers / %d hh" % [report["employed_workers"], report["employed_household_count"]]
 		var land: float = report["land_area_acres"]
 		(row["land"] as Label).text = ("%.0f" % land) if land > 0.0 else "-"
-		var next_harvest: int = report["days_to_next_harvest"]
-		(row["next_harvest"] as Label).text = ("%dd" % next_harvest) if next_harvest >= 0 else "-"
+		var status_label := row["status"] as Label
 		if report.has("herd_size"):
-			var output_text := "culled %.1f %s" % [report["last_actual_units"], report["output_commodity"]]
+			var herd_text := "Herd %.0f · next review in %dd · culled %.1f %s" % [report["herd_size"], maxi(report["days_to_next_harvest"], 0), report["last_actual_units"], report["output_commodity"]]
 			if report.get("last_wool_produced", 0.0) > 0.0:
-				output_text += "  +%.2f wool" % report["last_wool_produced"]
-			(row["output"] as Label).text = output_text
+				herd_text += " · +%.2f wool" % report["last_wool_produced"]
+			status_label.text = herd_text
+			status_label.tooltip_text = herd_text
+		elif land > 0.0:
+			var next_harvest: int = report["days_to_next_harvest"]
+			var expected: float = report["next_harvest_expected_units"]
+			var yield_percent: float = report["next_harvest_yield_fraction"] * 100.0
+			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
+			status_label.text = status_text
+			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
+		elif report["kind"] == "trader":
+			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
+			status_label.tooltip_text = report["output_commodity"]
 		else:
-			(row["output"] as Label).text = "%.1f %s/day" % [report["last_actual_units"], report["output_commodity"]]
-		# Ranches now hire and earn revenue-per-worker exactly like Farm/
-		# Woodlot (see he_business.gd's has_long_cycle()), so they use the
-		# same column/coloring as every other business -- no herd-specific
-		# override needed here any more.
+			status_label.text = "Producing %.1f / %.1f %s" % [report["last_actual_units"], report["last_planned_units"], report["output_commodity"]]
+			status_label.tooltip_text = "Actual output / labor-planned output for the current day."
 		var revenue_per_worker: float = report["rolling_average_revenue_per_worker"]
 		var reference: float = report["reference_wage_per_worker"]
 		var revenue_label := row["revenue_per_worker"] as Label

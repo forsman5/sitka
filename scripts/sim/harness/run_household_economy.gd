@@ -211,6 +211,14 @@ func _check_bloomery_smelting() -> void:
 			bloomery_report = report
 	_assert(not bloomery_report.is_empty(), "Bloomery should appear in business reports when the scenario includes it")
 	_assert(bloomery_report.get("capacity", 0) > 0, "Bloomery should still have staff after 200 days -- its recipe should clear the reference wage (see he_scenario_seeds.gd's _bloomery_recipe doc comment), not starve to zero")
+	var recent_transactions := sim.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30)
+	var saw_ore_import := false
+	var saw_iron_export := false
+	for transaction in recent_transactions:
+		saw_ore_import = saw_ore_import or (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore")
+		saw_iron_export = saw_iron_export or (transaction["direction"] == "export" and transaction["commodity"] == "Iron")
+	_assert(saw_ore_import, "Trader's last-30-day transaction history should include an Iron Ore import")
+	_assert(saw_iron_export, "Trader's last-30-day transaction history should include an Iron export")
 
 ## The local mine must replace the Trader's ore-import fallback. Input
 ## purchasing runs before surplus export each day, so the Bloomery gets its
@@ -256,6 +264,8 @@ func _check_local_iron_mine_supplies_bloomery_first() -> void:
 	_assert(ore_produced > 0.0, "Iron Mine should produce ore")
 	_assert(iron_produced > 0.0, "Bloomery should smelt iron from locally mined ore")
 	_assert(ore_imported < EPSILON, "Trader should not import ore while a local Iron Mine supplies it, imported %.3f" % ore_imported)
+	for transaction in sim.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30):
+		_assert(not (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore"), "Local-mine Trader history should not contain an Iron Ore import")
 	_assert(maximum_buffered_timber > 0.0 and maximum_buffered_ore > 0.0, "Bloomery should retain both recipe inputs between production days")
 	_assert(worst_input_stock_gap < EPSILON, "Buffered Timber/Iron Ore stock did not reconcile, worst gap %.4f" % worst_input_stock_gap)
 
@@ -290,6 +300,7 @@ func _check_field_model_dynamics() -> void:
 	var worst_floor_breach := 0.0
 	var over_cap_by := 0
 	var free_revenue_days := 0
+	var invalid_harvest_projections := 0
 	var previous_stock := {}
 	for report in sim.get_business_reports():
 		previous_stock[report["business_id"]] = report["stock"]
@@ -309,6 +320,11 @@ func _check_field_model_dynamics() -> void:
 				worst_stock_gap = max(worst_stock_gap, abs(report["stock"] - expected_stock))
 				if traded <= 0.0001 and exported <= 0.0001 and report["last_revenue"] > 0.0001:
 					free_revenue_days += 1
+				if report["land_area_acres"] > 0.0:
+					var projected_yield: float = report["next_harvest_yield_fraction"]
+					var projected_units: float = report["next_harvest_expected_units"]
+					if projected_yield < 0.0 or projected_yield > 1.0 or projected_units < 0.0:
+						invalid_harvest_projections += 1
 			previous_stock[business_id] = report["stock"]
 
 			var employed: int = report["employed_workers"]
@@ -327,6 +343,7 @@ func _check_field_model_dynamics() -> void:
 	_assert(worst_floor_breach < EPSILON, "A business's balance dropped below its own generous wage floor by %.4f" % worst_floor_breach)
 	_assert(over_cap_by == 0, "A business employed %d workers past its own land-derived max_capacity" % over_cap_by)
 	_assert(free_revenue_days == 0, "A business recorded revenue on a day it sold nothing locally and exported nothing")
+	_assert(invalid_harvest_projections == 0, "A next-harvest projection reported invalid expected units or yield")
 
 ## The core "let it tune itself" claim: starting from a deliberately
 ## mis-staffed split (Woodlot overstaffed, Farm understaffed), the business
