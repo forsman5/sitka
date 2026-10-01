@@ -353,7 +353,7 @@ func _select_settlement(settlement_id: int) -> void:
 	_selection_role.text = map_definition.settlements[settlement_id]["role"]
 	_selection_stats.text = "Population: %d   Households: %d\nWorkers: %d available   Status: %s" % [summary["population"], summary["household_count"], summary["available_workers"], summary["status"]]
 	var stock_parts: Array[String] = []
-	for commodity in Commodity.ALL:
+	for commodity in _simulation.get_modeled_commodities():
 		var name := Commodity.name_of(commodity)
 		stock_parts.append("%s %.0f" % [name, summary["inventory"][name]])
 	_selection_inventory.text = "Seeded inventory\n" + ", ".join(stock_parts)

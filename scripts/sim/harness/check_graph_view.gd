@@ -69,7 +69,7 @@ func _run() -> void:
 		dashboard._bottom_tabs.current_tab = tab
 		await process_frame
 		check(dashboard._bottom_tabs.size.y <= 230, "Bottom tabs must remain compact")
-	for commodity in map.Commodity.ALL:
+	for commodity in map.simulation.get_modeled_commodities():
 		map.selected_commodity = commodity
 		map.refresh_prices()
 		var total: float = 0.0
