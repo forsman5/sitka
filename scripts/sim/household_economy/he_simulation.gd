@@ -257,7 +257,7 @@ const HERD_CULL_TARGET: Dictionary[HEBusiness.Species, float] = {
 ## herd_size every eval interval, independent of culling -- wool doesn't
 ## require slaughtering the animal the way a cull does. Cattle have no
 ## equivalent passive yield.
-const WOOL_PER_HEAD_PER_INTERVAL := 0.07
+const WOOL_PER_HEAD_PER_INTERVAL := 0.75
 
 ## Monetization for culled herd stock (Commodity.Type.CATTLE/SHEEP -- the
 ## whole animal, standing in for meat and hides bundled together, same

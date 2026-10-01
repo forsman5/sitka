@@ -78,7 +78,7 @@ const BLOOMERY_MAX_CAPACITY := 20
 ## a bigger absolute scale (see HESimulation.HERD_CULL_TARGET's doc
 ## comment) -- keeps the ~900-day time-to-first-cull unchanged.
 const CATTLE_STARTING_HERD := 100.0
-const SHEEP_STARTING_HERD := 60.0
+const SHEEP_STARTING_HERD := 100.0
 
 ## A ranch's staff ceiling is derived from its herd, the way a field
 ## business derives its from acreage: the workers a herd at its cull target
