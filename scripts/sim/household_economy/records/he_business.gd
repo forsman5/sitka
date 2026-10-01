@@ -90,6 +90,12 @@ var last_wool_produced: float = 0.0
 ## _hardship_butcher_if_needed to cover a wage shortfall the ranch's own
 ## cash couldn't. 0.0 on any ordinary day.
 var last_hardship_butchered: float = 0.0
+## Kind.HERD only: this ranch's own recent births / culls / hardship sales,
+## oldest first, bounded by he_simulation.gd's HERD_EVENT_HISTORY_MAX. Kept
+## per business (not just in the shared blotter) because the blotter's
+## 200-entry ring fills with household chatter long before a ranch's rare
+## events would age out of a per-business detail view.
+var herd_events: Array[Dictionary] = []
 
 ## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
 ## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for

@@ -58,6 +58,8 @@ var _business_detail_panel: PanelContainer
 var _business_detail_title: Label
 var _business_detail_sparkline: HESparkline
 var _business_detail_grid: GridContainer
+var _business_detail_herd_events_section: VBoxContainer
+var _business_detail_herd_events_display: RichTextLabel
 var _business_detail_transaction_section: VBoxContainer
 var _business_detail_transaction_grid: GridContainer
 var _business_detail_transaction_empty: Label
@@ -305,6 +307,20 @@ func _build_ui() -> void:
 	_business_detail_transaction_grid.columns = 5
 	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
 
+	# Built once, shown for whichever herd business is selected (Cattle Ranch
+	# and Sheep Farm both) -- lines come from _format_event, same as the blotter.
+	_business_detail_herd_events_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_herd_events_section)
+	var herd_events_title := Label.new()
+	herd_events_title.text = "Herd events (births, culls, hardship sales)"
+	herd_events_title.add_theme_font_size_override("font_size", 14)
+	_business_detail_herd_events_section.add_child(herd_events_title)
+	_business_detail_herd_events_display = RichTextLabel.new()
+	_business_detail_herd_events_display.bbcode_enabled = true
+	_business_detail_herd_events_display.fit_content = true
+	_business_detail_herd_events_display.scroll_active = false
+	_business_detail_herd_events_section.add_child(_business_detail_herd_events_display)
+
 	var employees_label := Label.new()
 	employees_label.text = "Employees"
 	employees_label.add_theme_font_size_override("font_size", 14)
@@ -452,6 +468,17 @@ func _refresh_business_detail() -> void:
 	for i in fields.size():
 		var f: Dictionary = fields[i]
 		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]])
+
+	_business_detail_herd_events_section.visible = report.has("herd_events")
+	if _business_detail_herd_events_section.visible:
+		var herd_events: Array = report["herd_events"]
+		if herd_events.is_empty():
+			_business_detail_herd_events_display.text = "[i]No herd events yet.[/i]"
+		else:
+			var herd_lines: Array[String] = []
+			for i in range(herd_events.size() - 1, -1, -1):
+				herd_lines.append(_format_event(herd_events[i]))
+			_business_detail_herd_events_display.text = "\n".join(herd_lines)
 
 	_business_detail_transaction_section.visible = report["kind"] == "trader"
 	if _business_detail_transaction_section.visible:
@@ -882,6 +909,13 @@ func _format_event(event: Dictionary) -> String:
 		"job":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
+		"herd_birth":
+			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			var condition := "" if event["fed"] else " (overgrazed)"
+			return "[color=#8fd98f]Day %d - %s: %.1f born, %.1f died%s (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["herd_after"]]
+		"herd_cull":
+			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			return "[color=#d9c98f]Day %d - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
 		"hardship_butcher":
 			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#e0b080]Day %d - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [

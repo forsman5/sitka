@@ -351,6 +351,8 @@ const HISTORY_MAX_DAYS := 360
 ## player to scan -- unlike _history, nothing aggregates over it, so it's
 ## kept far shorter.
 const EVENT_LOG_MAX := 200
+## Per-ranch history kept on HEBusiness.herd_events (see its doc comment).
+const HERD_EVENT_HISTORY_MAX := 60
 
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
@@ -568,6 +570,7 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["wool_stock"] = b.stock(Commodity.Type.WOOL) if b.species == HEBusiness.Species.SHEEP else 0.0
 			report["last_wool_produced"] = b.last_wool_produced
 			report["last_hardship_butchered"] = b.last_hardship_butchered
+			report["herd_events"] = b.herd_events.duplicate(true)
 		else:
 			var output_commodity := b.output_commodity()
 			report["recipe_id"] = b.recipe.id
@@ -971,7 +974,7 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	# firing on a staffed Cattle Ranch).
 	record["export_revenue"] += proceeds
 	_export_revenue_total += proceeds
-	_log_event("hardship_butcher", {
+	_log_herd_event(b, "hardship_butcher", {
 		"business_id": b.id, "head": butchered, "proceeds": proceeds,
 		"shortfall": cash_shortfall, "herd_after": b.herd_size,
 	})
@@ -1884,7 +1887,11 @@ func _run_herds(record: Dictionary) -> void:
 		# up the gap (see SETTLEMENT_GRAZING_LAND's doc comment).
 		var fed := b.herd_size <= max_herd_by_land
 		var loss_rate: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
-		b.herd_size = clampf(b.herd_size * (1.0 + HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER - loss_rate), 0.0, max_herd_by_land)
+		var herd_before: float = b.herd_size
+		var born: float = herd_before * HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER
+		var died: float = herd_before * loss_rate
+		b.herd_size = clampf(herd_before + born - died, 0.0, max_herd_by_land)
+		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "herd_after": b.herd_size})
 
 		b.last_wool_produced = 0.0
 		if b.species == HEBusiness.Species.SHEEP:
@@ -1904,6 +1911,7 @@ func _run_herds(record: Dictionary) -> void:
 			b.last_culled[commodity] = excess
 			b.last_actual_units = excess
 			_accumulate(record["produced"], Commodity.name_of(commodity), excess)
+			_log_herd_event(b, "herd_cull", {"head": excess, "herd_after": b.herd_size})
 
 		land_claimed[b.settlement_id] = claimed_by_others + b.herd_size * land_per_head
 
@@ -1920,6 +1928,17 @@ func _log_event(type: String, data: Dictionary) -> void:
 	_event_log.append(entry)
 	if _event_log.size() > EVENT_LOG_MAX:
 		_event_log.pop_front()
+
+## One entry point for every ranch event: appended to the ranch's own
+## bounded history (shown in its detail view) AND to the shared blotter,
+## tagged with business_id either way so one formatter serves both.
+func _log_herd_event(b: HEBusiness, type: String, data: Dictionary) -> void:
+	var payload := data.duplicate()
+	payload["business_id"] = b.id
+	_log_event(type, payload)
+	b.herd_events.append(_event_log.back().duplicate())
+	if b.herd_events.size() > HERD_EVENT_HISTORY_MAX:
+		b.herd_events.pop_front()
 
 ## Resolves whichever business sells `commodity` locally -- a PRODUCTION
 ## business's one recipe output, or (WOOL only) whichever Sheep Farm holds
