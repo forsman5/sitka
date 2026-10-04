@@ -44,6 +44,40 @@ const FLOW_VIEWS := [
 		],
 	},
 ]
+## Town tab read-outs: [label, city-summary key, format].
+const TOWN_STATS := [
+	["Households", "household_count", "%d"],
+	["Population", "population", "%d"],
+	["Unemployed households", "unemployed_household_count", "%d"],
+	["Avg stress", "avg_food_stress", "%.2f"],
+	["Short of goods", "households_short_of_goods", "%d"],
+	["Short of funds", "households_short_of_funds", "%d"],
+	["Total money", "total_money", "%.1f"],
+	["Emigrations (lifetime)", "emigrations_total", "%d"],
+	["Old age deaths (lifetime)", "old_age_deaths_total", "%d"],
+	["Births (lifetime)", "births_total", "%d"],
+	["Worker promotions (lifetime)", "worker_promotions_total", "%d"],
+	["Money written off", "money_written_off_total", "%.1f"],
+	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
+	["Import cost (lifetime)", "import_cost_total", "%.1f"],
+]
+const TOWN_CHART_DAYS := 90
+## Births, emigrations and deaths are evaluated monthly, so the daily record is
+## mostly zeros with a spike every 30 days; the flow chart plots a trailing
+## sum over this many days instead so the lines are readable.
+const TOWN_FLOW_WINDOW_DAYS := 30
+## [series name, daily-record key]
+const TOWN_POPULATION_SERIES := [
+	["Population", "population"],
+	["Households", "households"],
+	["Unemployed households", "unemployed_households"],
+]
+const TOWN_FLOW_SERIES := [
+	["Births", "births"],
+	["Emigrations", "emigrations"],
+	["Old-age deaths", "old_age_deaths"],
+]
+
 const BLOTTER_FILTERS := [
 	{"type": "birth", "label": "Births"},
 	{"type": "emigrate", "label": "Starvation emigration"},
@@ -64,7 +98,9 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _day_label: Label
-var _city_stats_label: Label
+var _town_stat_labels: Dictionary = {} # city-summary key -> Label
+var _town_population_chart: HESparkline
+var _town_flow_chart: HESparkline
 var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
 var _known_market_commodities: Array = [] # rebuild trigger -- see _refresh()
@@ -231,17 +267,14 @@ func _build_ui() -> void:
 	top_bar.add_child(_make_speed_button("10x", 10.0))
 	top_bar.add_child(_make_speed_button("100x", 100.0))
 
-	_city_stats_label = Label.new()
-	_city_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_city_stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
-	vbox.add_child(_city_stats_label)
-
-	# Businesses and Goods share one fixed-height tabbed area. Stacked, the
+	# Town, Businesses and Goods share one fixed-height tabbed area. Stacked, the
 	# business list grew with every new business and crowded out the
 	# households/detail row below; each tab scrolls internally instead.
 	var top_tabs := TabContainer.new()
-	top_tabs.custom_minimum_size = Vector2(0, 200)
+	top_tabs.custom_minimum_size = Vector2(0, 250)
 	vbox.add_child(top_tabs)
+
+	_build_town_tab(top_tabs)
 
 	var business_scroll := ScrollContainer.new()
 	business_scroll.name = "Businesses"
@@ -588,6 +621,87 @@ func _build_ui() -> void:
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
+
+## Town tab (index 0): the city-wide indicators on the left, and two charts on
+## the right -- population levels, and births/emigrations/deaths.
+func _build_town_tab(top_tabs: TabContainer) -> void:
+	var row := HBoxContainer.new()
+	row.name = "Town"
+	row.add_theme_constant_override("separation", 16)
+	top_tabs.add_child(row)
+
+	var stats_scroll := ScrollContainer.new()
+	stats_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.size_flags_stretch_ratio = 1.0
+	stats_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(stats_scroll)
+	var stats_grid := GridContainer.new()
+	stats_grid.columns = 2
+	stats_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.add_child(stats_grid)
+	for stat in TOWN_STATS:
+		var name_label := Label.new()
+		name_label.text = stat[0]
+		name_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stats_grid.add_child(name_label)
+		var value_label := Label.new()
+		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		stats_grid.add_child(value_label)
+		_town_stat_labels[stat[1]] = value_label
+
+	var charts := VBoxContainer.new()
+	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	charts.size_flags_stretch_ratio = 2.0
+	row.add_child(charts)
+	_town_population_chart = _add_town_chart(charts, "Population (last %d days)" % TOWN_CHART_DAYS, TOWN_POPULATION_SERIES)
+	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
+
+## A title row with a color-keyed legend above a hoverable chart.
+func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	parent.add_child(header)
+	var title := Label.new()
+	title.text = title_text
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	for i in series_defs.size():
+		var legend := Label.new()
+		legend.text = series_defs[i][0]
+		legend.add_theme_color_override("font_color", HESparkline.color_for_series(i))
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 60)
+	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	chart.show_max_label = true
+	parent.add_child(chart)
+	return chart
+
+func _refresh_town() -> void:
+	var city := _simulation.get_city_summary()
+	for stat in TOWN_STATS:
+		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
+	# Extra leading days so the trailing flow sums are full from the first point.
+	var history := _simulation.get_daily_history(TOWN_CHART_DAYS + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - TOWN_CHART_DAYS)
+	var population_series: Array = []
+	for i in TOWN_POPULATION_SERIES.size():
+		var values: Array[float] = []
+		for d in range(shown_from, history.size()):
+			values.append(float(history[d][TOWN_POPULATION_SERIES[i][1]]))
+		population_series.append({"name": TOWN_POPULATION_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
+	_town_population_chart.set_series(population_series)
+	var flow_series: Array = []
+	for i in TOWN_FLOW_SERIES.size():
+		var values: Array[float] = []
+		for d in range(shown_from, history.size()):
+			var total := 0.0
+			for k in range(maxi(0, d - TOWN_FLOW_WINDOW_DAYS + 1), d + 1):
+				total += float(history[k][TOWN_FLOW_SERIES[i][1]])
+			values.append(total)
+		flow_series.append({"name": TOWN_FLOW_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
+	_town_flow_chart.set_series(flow_series)
 
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
@@ -1533,11 +1647,7 @@ func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
 
-	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f  import cost (lifetime)=%.1f" % [
-		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
-		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"], city["import_cost_total"]]
+	_refresh_town()
 
 	var market := _simulation.get_market_summary()
 	var current_market_commodities := market.keys()
