@@ -9,8 +9,9 @@ extends Control
 ## visually obvious even without reading a single number.
 ##
 ## set_data() draws one series; set_series() draws several on one shared
-## y-axis (an array of {"values": Array[float], "color": Color}), which is
-## how the production-output chart handles a multi-output recipe. A separate
+## y-axis (an array of {"values": Array[float], "color": Color, "dashed":
+## bool (optional)}), which is how the goods-flow charts show several goods,
+## and inputs vs. outputs, together. A separate
 ## axis per series is deliberately not supported yet.
 
 const LINE_COLOR := Color(0.6, 0.85, 0.6)
@@ -79,7 +80,11 @@ func _draw() -> void:
 		for i in values.size():
 			var x: float = PADDING + w * (float(i) / float(values.size() - 1))
 			points.append(Vector2(x, y_for_value.call(values[i])))
-		draw_polyline(points, s["color"], 2.0, true)
+		if s.get("dashed", false):
+			for i in range(points.size() - 1):
+				draw_dashed_line(points[i], points[i + 1], s["color"], 2.0, 4.0)
+		else:
+			draw_polyline(points, s["color"], 2.0, true)
 
 	if show_max_label:
 		draw_string(ThemeDB.fallback_font, Vector2(PADDING + 2.0, PADDING + LABEL_FONT_SIZE), "%.1f" % max_v, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE, LABEL_COLOR)

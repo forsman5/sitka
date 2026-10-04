@@ -21,7 +21,7 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
-	_check_production_history_matches_daily_record()
+	_check_goods_flow_history_reconciles_with_stock()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -168,6 +168,55 @@ func _check_conservation() -> void:
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
 
+## The detail tab's goods-flow charts: every production business reports a
+## history per flow, and those histories must reconcile with its own storage
+## -- end stock = start stock + produced - sold for its output, and
+## + bought - consumed for each input. Run shorter than the history window
+## so nothing has been trimmed off the front yet.
+func _check_goods_flow_history_reconciles_with_stock() -> void:
+	print("\n=== Production business goods-flow histories reconcile with storage ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	var start_stock := {}
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		if b.kind != HEBusiness.Kind.PRODUCTION:
+			continue
+		start_stock[business_id] = {}
+		for commodity in b.recipe.outputs.keys() + b.recipe.inputs.keys():
+			start_stock[business_id][Commodity.name_of(commodity)] = b.stock(commodity)
+	var days := 60
+	sim.advance_ticks(days)
+
+	var checked := 0
+	for report in sim.get_business_reports():
+		if report["kind"] != "production":
+			_assert(not report.has("flow_history"), "%s is not a production business and should report no flow_history" % report["name"])
+			continue
+		var flows: Dictionary = report["flow_history"]
+		var output_name: String = report["output_commodity"]
+		_assert(flows[HEBusiness.FLOW_PRODUCED].size() == 1, "%s has one output good, expected 1 produced series" % report["name"])
+		_assert(flows[HEBusiness.FLOW_PRODUCED][0]["commodity"] == output_name, "%s produced series should be its output commodity" % report["name"])
+		_assert((flows[HEBusiness.FLOW_PRODUCED][0]["values"] as Array).size() == days, "%s produced series should have one entry per day" % report["name"])
+
+		var closing := {output_name: report["stock"]}
+		for input_name in (report["input_inventory"] as Dictionary).keys():
+			closing[input_name] = report["input_inventory"][input_name]
+		var net := {}
+		for flow in HEBusiness.ALL_FLOWS:
+			var direction := 1.0 if flow in [HEBusiness.FLOW_PRODUCED, HEBusiness.FLOW_BOUGHT] else -1.0
+			for entry in flows[flow]:
+				_assert((entry["values"] as Array).size() == days, "%s %s/%s series should have one entry per day" % [report["name"], flow, entry["commodity"]])
+				for v in entry["values"]:
+					net[entry["commodity"]] = net.get(entry["commodity"], 0.0) + direction * v
+		for good in closing.keys():
+			var expected: float = start_stock[report["business_id"]][good] + net.get(good, 0.0)
+			_assert(absf(closing[good] - expected) < EPSILON, "%s %s stock %.3f should equal start + flows %.3f" % [report["name"], good, closing[good], expected])
+		_assert((flows[HEBusiness.FLOW_SOLD] as Array).size() > 0, "%s should have sold some %s in %d days" % [report["name"], output_name, days])
+		if not (report["input_inventory"] as Dictionary).is_empty():
+			_assert((flows[HEBusiness.FLOW_CONSUMED] as Array).size() > 0 and (flows[HEBusiness.FLOW_BOUGHT] as Array).size() > 0, "%s has inputs and should show both consumed and bought series" % report["name"])
+		checked += 1
+	_assert(checked > 0, "Scenario should contain at least one production business")
+
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
 ## then exports since no household ever wants iron directly (see
@@ -177,35 +226,6 @@ func _check_conservation() -> void:
 ## check for iron's own goods conservation (opening + produced - exported,
 ## no consumed/written_off term since no household or emigration ever
 ## touches iron).
-func _check_production_history_matches_daily_record() -> void:
-	print("
-=== Production business report carries a per-commodity goods-produced history ===")
-	var sim := _new_sim("build_three_business_economy_with_bloomery")
-	sim.advance_ticks(100)
-	var history := sim.get_daily_history(100)
-	var window := HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
-	var checked := 0
-	for report in sim.get_business_reports():
-		if report["kind"] != "production":
-			_assert(not report.has("production_history"), "%s is not a production business and should report no production_history" % report["name"])
-			continue
-		var series_list: Array = report["production_history"]
-		_assert(series_list.size() == 1, "%s has one output good, expected 1 series, got %d" % [report["name"], series_list.size()])
-		var entry: Dictionary = series_list[0]
-		var values: Array = entry["values"]
-		_assert(entry["commodity"] == report["output_commodity"], "%s series should be its output commodity" % report["name"])
-		_assert(values.size() == (report["balance_history"] as Array).size(), "%s production history should be the same length as its cash history" % report["name"])
-		var expected_days: int = mini(history.size(), window)
-		var total := 0.0
-		for v in values:
-			total += v
-		var expected_total := 0.0
-		for i in range(history.size() - expected_days, history.size()):
-			expected_total += (history[i]["produced"] as Dictionary).get(entry["commodity"], 0.0)
-		_assert(absf(total - expected_total) < 0.01 + 0.0001 * expected_total, "%s history total %.2f should match the daily record's %.2f" % [report["name"], total, expected_total])
-		checked += 1
-	_assert(checked > 0, "Scenario should contain at least one production business")
-
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")
