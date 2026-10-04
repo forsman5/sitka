@@ -927,11 +927,13 @@ func _rebuild_market_grid() -> void:
 		name_button.text = name
 		name_button.flat = true
 		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		name_button.custom_minimum_size = Vector2(70, 0)
-		for c in Commodity.ALL:
-			if Commodity.name_of(c) == name:
-				name_button.pressed.connect(_on_market_row_selected.bind(c))
-				break
+		name_button.custom_minimum_size = Vector2(90, 20)
+		var commodity := Commodity.type_from_name(name)
+		if commodity != -1:
+			name_button.pressed.connect(_on_market_row_selected.bind(commodity))
+			name_button.icon = Commodity.icon_of(commodity)
+			name_button.expand_icon = true
+			name_button.add_theme_constant_override("icon_max_width", 18)
 		_market_grid.add_child(name_button)
 
 		var labels := {}
@@ -1012,7 +1014,7 @@ func _rebuild_household_rows() -> void:
 	var grid := GridContainer.new()
 	grid.columns = 11
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in ["ID", "Employer", "Workers", "Dependents", Commodity.name_of(Commodity.Type.GRAIN), Commodity.name_of(Commodity.Type.TIMBER), Commodity.name_of(Commodity.Type.WOOL), "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
