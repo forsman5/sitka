@@ -100,6 +100,9 @@ var _selected_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
+## User toggle for the market chart's "Requested" series -- see
+## _add_market_detail_chart.
+var _market_chart_export_appetite := false
 var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
@@ -498,6 +501,14 @@ func _build_ui() -> void:
 	market_close.tooltip_text = "Close (back to household list)"
 	market_close.pressed.connect(_on_market_detail_close_pressed)
 	market_title_bar.add_child(market_close)
+	# Outside _market_detail_content on purpose: that content is rebuilt on
+	# every refresh, and recreating a checkbox mid-click would swallow it.
+	var export_toggle := CheckBox.new()
+	export_toggle.text = "Count Trader export capacity as demand"
+	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's remaining capacity, i.e. what it would take if the seller had the stock."
+	export_toggle.button_pressed = _market_chart_export_appetite
+	export_toggle.toggled.connect(_on_market_export_appetite_toggled)
+	market_detail_box.add_child(export_toggle)
 	var market_scroll := ScrollContainer.new()
 	market_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	market_detail_box.add_child(market_scroll)
@@ -754,11 +765,45 @@ func _refresh_market_detail() -> void:
 	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
 	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
 	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
 	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
+
+## Last 90 days of supplied (offered) vs. requested (affordable) quantity on
+## one shared axis, with a color-keyed legend. Rebuilt with the rest of the
+## detail content each refresh.
+func _add_market_detail_chart(report: Dictionary) -> void:
+	var supplied_color := HESparkline.color_for_series(0)
+	var requested_color := HESparkline.color_for_series(1)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	_market_detail_content.add_child(header)
+	var title := Label.new()
+	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
+	var requested_history: Array = report["demanded_with_export_history"] if _market_chart_export_appetite else report["demanded_history"]
+	for entry in [["Supplied", supplied_color], [requested_name, requested_color]]:
+		var legend := Label.new()
+		legend.text = entry[0]
+		legend.add_theme_color_override("font_color", entry[1])
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 60)
+	chart.show_max_label = true
+	chart.set_series([
+		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
+		{"name": "Requested", "values": requested_history, "color": requested_color},
+	])
+	_market_detail_content.add_child(chart)
+
+func _on_market_export_appetite_toggled(enabled: bool) -> void:
+	_market_chart_export_appetite = enabled
+	_refresh_market_detail()
 
 func _add_market_detail_line(value: String) -> void:
 	var label := Label.new()
@@ -1018,7 +1063,7 @@ func _refresh_trader_transactions() -> void:
 		if _trader_transaction_filter != "both" and direction != _trader_transaction_filter:
 			continue
 		var values := [
-			str(transaction["day"]),
+			_format_day(transaction["day"]),
 			direction.capitalize(),
 			transaction["commodity"],
 			"%.1f" % transaction["quantity"],
@@ -1062,7 +1107,7 @@ func _refresh_business_employment() -> void:
 				_:
 					reason = "Target capacity %d to %d" % [event["old_capacity"], event["new_capacity"]]
 		var values := [
-			str(event["day"]),
+			_format_day(event["day"]),
 			"Hired" if event_type == "job" else "Fired",
 			str(event["household_id"]),
 			str(event["workers"]),
@@ -1300,7 +1345,7 @@ func _rebuild_household_rows() -> void:
 
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
-	_day_label.text = "Day %d" % clock["day"]
+	_day_label.text = _format_day(clock["day"])
 
 	var city := _simulation.get_city_summary()
 	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f  import cost (lifetime)=%.1f" % [
@@ -1445,39 +1490,46 @@ func _refresh_blotter() -> void:
 		return
 	_blotter_display.text = "\n".join(lines)
 
+## Day 456 -> "Year 1, Day 91". Within the first year, just "Day N".
+func _format_day(day: int) -> String:
+	var year := day / 365
+	if year <= 0:
+		return "Day %d" % day
+	return "Year %d, Day %d" % [year, day % 365]
+
 func _format_event(event: Dictionary) -> String:
-	var day: int = event["day"]
+	var day: String = _format_day(event["day"])
 	match event["type"]:
 		"birth":
-			return "[color=#8fd98f]Day %d - Household %d: birth[/color]" % [day, event["household_id"]]
+			return "[color=#8fd98f]%s - Household %d: birth[/color]" % [day, event["household_id"]]
 		"emigrate":
 			var suffix := " - household ended" if event["household_ended"] else ""
-			return "[color=#e08d8d]Day %d - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
+			return "[color=#e08d8d]%s - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
 		"old_age":
 			var count: int = event["count"]
 			var plural := "s" if count != 1 else ""
-			return "[color=#a0a0a0]Day %d - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
+			return "[color=#a0a0a0]%s - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
 		"adopted":
 			var dep_count: int = event["dependents"]
 			var dep_plural := "s" if dep_count != 1 else ""
-			return "[color=#a0a0a0]Day %d - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
+			return "[color=#a0a0a0]%s - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
-			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+			return "[color=#8db4e0]%s - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
 		"coming_of_age":
-			return "[color=#d9c98f]Day %d - Household %d: member came of age[/color]" % [day, event["household_id"]]
+			return "[color=#d9c98f]%s - Household %d: member came of age[/color]" % [day, event["household_id"]]
 		"job":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
+			return "[color=#8fd9d0]%s - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
 		"herd_birth":
 			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var condition := "" if event["fed"] else " (overgrazed)"
-			return "[color=#8fd98f]Day %d - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
+			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#d9c98f]Day %d - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
+			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
 		"hardship_butcher":
 			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#e0b080]Day %d - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
+			return "[color=#e0b080]%s - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
 				day, owner_name, event["head"], event["proceeds"], event["shortfall"], event["herd_after"]]
 		"fired":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
@@ -1489,6 +1541,6 @@ func _format_event(event: Dictionary) -> String:
 					reason = "cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
-			return "[color=#e09a8d]Day %d - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
+			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
 		_:
-			return "Day %d - %s" % [day, event["type"]]
+			return "%s - %s" % [day, event["type"]]
