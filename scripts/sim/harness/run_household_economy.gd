@@ -22,6 +22,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_businesses_share_wood_with_households()
+	_check_production_history_matches_daily_record()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -168,21 +169,11 @@ func _check_conservation() -> void:
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
 
-## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
-## iron ore imported by the Trader smelt into iron, which that same Trader
-## then exports since no household ever wants iron directly (see
-## he_simulation.gd's _run_input_purchasing/_run_trade doc comments).
-## Reuses _check_conservation's exact money-reconciliation formula (this is
-## the scenario where import_cost actually moves) plus the same shape of
-## check for iron's own goods conservation (opening + produced - exported,
-## no consumed/written_off term since no household or emigration ever
-## touches iron).
 ## No woodlot reserve for households: the Bloomery buys wood as a market
 ## participant alongside them. Households may go short while the Woodlot's
 ## workforce and price catch up, but over the long run both are served.
 func _check_businesses_share_wood_with_households() -> void:
-	print("
-=== Wood: businesses and households share the Woodlot's offer, no household reserve ===")
+	print("\n=== Wood: businesses and households share the Woodlot's offer, no household reserve ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")
 	var early_demand := 0.0
 	var early_got := 0.0
@@ -208,6 +199,44 @@ func _check_businesses_share_wood_with_households() -> void:
 	_assert(late_got >= late_demand * 0.9,
 		"Households should get >=90%% of their wood in the long run without a reserve -- got %.1f of %.1f" % [late_got, late_demand])
 	_assert(early_got > 0.0, "Households should buy some wood even in the first 120 days")
+
+## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
+## iron ore imported by the Trader smelt into iron, which that same Trader
+## then exports since no household ever wants iron directly (see
+## he_simulation.gd's _run_input_purchasing/_run_trade doc comments).
+## Reuses _check_conservation's exact money-reconciliation formula (this is
+## the scenario where import_cost actually moves) plus the same shape of
+## check for iron's own goods conservation (opening + produced - exported,
+## no consumed/written_off term since no household or emigration ever
+## touches iron).
+func _check_production_history_matches_daily_record() -> void:
+	print("
+=== Production business report carries a per-commodity goods-produced history ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	sim.advance_ticks(100)
+	var history := sim.get_daily_history(100)
+	var window := HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	var checked := 0
+	for report in sim.get_business_reports():
+		if report["kind"] != "production":
+			_assert(not report.has("production_history"), "%s is not a production business and should report no production_history" % report["name"])
+			continue
+		var series_list: Array = report["production_history"]
+		_assert(series_list.size() == 1, "%s has one output good, expected 1 series, got %d" % [report["name"], series_list.size()])
+		var entry: Dictionary = series_list[0]
+		var values: Array = entry["values"]
+		_assert(entry["commodity"] == report["output_commodity"], "%s series should be its output commodity" % report["name"])
+		_assert(values.size() == (report["balance_history"] as Array).size(), "%s production history should be the same length as its cash history" % report["name"])
+		var expected_days: int = mini(history.size(), window)
+		var total := 0.0
+		for v in values:
+			total += v
+		var expected_total := 0.0
+		for i in range(history.size() - expected_days, history.size()):
+			expected_total += (history[i]["produced"] as Dictionary).get(entry["commodity"], 0.0)
+		_assert(absf(total - expected_total) < 0.01 + 0.0001 * expected_total, "%s history total %.2f should match the daily record's %.2f" % [report["name"], total, expected_total])
+		checked += 1
+	_assert(checked > 0, "Scenario should contain at least one production business")
 
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")

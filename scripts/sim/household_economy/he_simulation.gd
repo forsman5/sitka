@@ -649,6 +649,13 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			for input_commodity in b.recipe.inputs.keys():
 				input_inventory[Commodity.name_of(input_commodity)] = b.stock(input_commodity)
 			report["input_inventory"] = input_inventory
+			# One entry per output commodity, so a multi-output recipe is just
+			# more series: [{"commodity": name, "values": Array[float]}].
+			var production_series: Array = []
+			var history := b.production_history()
+			for commodity in history.keys():
+				production_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
+			report["production_history"] = production_series
 		out.append(report)
 	return out
 
@@ -1264,6 +1271,7 @@ func _record_business_revenue_history() -> void:
 		var revenue_per_worker: float = b.last_revenue / maxi(employed, 1)
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
+		b.record_production_day()
 
 ## Shared by _daily_need (times a household's headcount) and
 ## _reference_wage_per_worker (times a settlement's average price) -- the

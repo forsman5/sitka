@@ -76,6 +76,9 @@ var _trader_settings_list: VBoxContainer
 var _trader_settings_button: Button
 var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
+var _business_detail_production_section: VBoxContainer
+var _business_detail_production_legend: HBoxContainer
+var _business_detail_production_chart: HESparkline
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
@@ -334,6 +337,25 @@ func _build_ui() -> void:
 	_business_detail_sparkline = HESparkline.new()
 	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
 	detail_content.add_child(_business_detail_sparkline)
+
+	_business_detail_production_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_production_section)
+
+	var production_header := HBoxContainer.new()
+	production_header.add_theme_constant_override("separation", 12)
+	_business_detail_production_section.add_child(production_header)
+	var production_history_label := Label.new()
+	production_history_label.text = "Goods produced per day (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	production_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	production_header.add_child(production_history_label)
+	_business_detail_production_legend = HBoxContainer.new()
+	_business_detail_production_legend.add_theme_constant_override("separation", 12)
+	production_header.add_child(_business_detail_production_legend)
+
+	_business_detail_production_chart = HESparkline.new()
+	_business_detail_production_chart.custom_minimum_size = Vector2(0, 60)
+	_business_detail_production_chart.show_max_label = true
+	_business_detail_production_section.add_child(_business_detail_production_chart)
 
 	_business_detail_grid = GridContainer.new()
 	_business_detail_grid.columns = 2
@@ -600,6 +622,11 @@ func _rebuild_trader_settings() -> void:
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
 		checkbox.text = option["name"]
+		var option_icon := Commodity.icon_of(option["commodity_id"])
+		if option_icon != null:
+			checkbox.icon = option_icon
+			checkbox.expand_icon = true
+			checkbox.add_theme_constant_override("icon_max_width", 18)
 		checkbox.button_pressed = option["enabled"]
 		checkbox.toggled.connect(_on_trader_export_toggled.bind(_selected_business_id, option["commodity_id"]))
 		_trader_settings_list.add_child(checkbox)
@@ -700,6 +727,7 @@ func _refresh_business_detail() -> void:
 		_trader_settings_open = false
 	_update_trader_detail_page()
 	_business_detail_sparkline.set_data(report["balance_history"])
+	_refresh_business_production_chart(report)
 
 	for child in _business_detail_grid.get_children():
 		_business_detail_grid.remove_child(child)
@@ -711,15 +739,20 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
 	]
+	if report.has("herd_size"):
+		# A herd's last_actual_units is what the periodic review culled (once
+		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
+		rows.append(["Last review culled", [[report["output_commodity"], "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]]]])
+	else:
+		rows.append(["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]])
 	if report["kind"] != "trader":
-		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
+		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
-		var input_parts: Array[String] = []
+		var input_parts: Array = []
 		for commodity_name in (report["input_inventory"] as Dictionary).keys():
-			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
-		rows.append(["Input inventory", ", ".join(input_parts)])
+			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
+		rows.append(["Input inventory", input_parts])
 	rows.append_array([
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
@@ -735,14 +768,15 @@ func _refresh_business_detail() -> void:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
 	if report.has("herd_size"):
-		rows.append(["Species", report["species"]])
+		rows.append(["Species", [[report["species"], report["species"]]]])
 		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		# Wool is a sheep-only product; a cattle ranch has no wool to report.
 		if report["species"] == "Sheep":
-			rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
-			rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
+			var wool_name := Commodity.name_of(Commodity.Type.WOOL)
+			rows.append(["Wool in stock", [[wool_name, "%.1f" % report["wool_stock"]]]])
+			rows.append(["Last wool produced", [[wool_name, "%.2f" % report["last_wool_produced"]]]])
 		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
@@ -779,14 +813,97 @@ func _refresh_business_detail() -> void:
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
 
-func _add_detail_row(label_text: String, value_text: String) -> void:
+## Only PRODUCTION businesses report production_history (traders and herds
+## produce nothing through a recipe), so the section hides for the rest. One
+## line per output commodity on a shared axis, with a color-keyed legend.
+func _refresh_business_production_chart(report: Dictionary) -> void:
+	var production_history: Array = report.get("production_history", [])
+	_business_detail_production_section.visible = not production_history.is_empty()
+	for child in _business_detail_production_legend.get_children():
+		_business_detail_production_legend.remove_child(child)
+		child.queue_free()
+	if production_history.is_empty():
+		return
+	var series: Array = []
+	for i in production_history.size():
+		var entry: Dictionary = production_history[i]
+		var color := HESparkline.color_for_series(i)
+		series.append({"values": entry["values"], "color": color})
+		var legend_label := Label.new()
+		legend_label.text = entry["commodity"]
+		legend_label.add_theme_color_override("font_color", color)
+		_business_detail_production_legend.add_child(legend_label)
+	_business_detail_production_chart.set_series(series)
+
+## value is either plain text or an Array of [commodity_name, text] parts;
+## each part gets the good's icon in front of its text (the name stays in the
+## text so the icon is decoration, never the only identifier).
+func _add_detail_row(label_text: String, value) -> void:
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	_business_detail_grid.add_child(label)
-	var value := Label.new()
-	value.text = value_text
-	_business_detail_grid.add_child(value)
+	if value is Array:
+		var box := HBoxContainer.new()
+		box.add_theme_constant_override("separation", 12)
+		for part in value:
+			# A third element marks text that names several goods inline
+			# (the Trader's "Export (...) / Import (...)" summary).
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+		_business_detail_grid.add_child(box)
+		return
+	var value_label := Label.new()
+	value_label.text = value
+	_business_detail_grid.add_child(value_label)
+
+## Text that mentions goods by name; each mention gets its icon placed right
+## before it, e.g. "Export (Grain, Timber)" -> "Export ([icon]Grain, [icon]Timber)".
+func _inline_goods_cell(text: String) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+	# Longest names first so "Iron Ore" wins over "Iron".
+	var names: Array[String] = []
+	for t in Commodity.ALL:
+		names.append(Commodity.name_of(t))
+	names.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
+	var pattern := RegEx.new()
+	pattern.compile("|".join(names.map(func(n: String) -> String: return "\\b%s\\b" % n)))
+	var cursor := 0
+	for m in pattern.search_all(text):
+		var before := text.substr(cursor, m.get_start() - cursor)
+		if before != "":
+			box.add_child(_plain_label(before))
+		box.add_child(_goods_cell(m.get_string(), m.get_string()))
+		cursor = m.get_end()
+	var rest := text.substr(cursor)
+	if rest != "":
+		box.add_child(_plain_label(rest))
+	return box
+
+func _plain_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	return label
+
+## Icon (when the good is known and has one) + text label in one cell.
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.custom_minimum_size = Vector2(min_width, 0)
+	var commodity := Commodity.type_from_name(commodity_name)
+	var icon := Commodity.icon_of(commodity) if commodity != -1 else null
+	if icon != null:
+		var rect := TextureRect.new()
+		rect.texture = icon
+		rect.custom_minimum_size = Vector2(18, 18)
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		box.add_child(rect)
+	var label := Label.new()
+	label.text = text
+	box.add_child(label)
+	return box
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -813,6 +930,9 @@ func _refresh_trader_transactions() -> void:
 			"%.1f" % transaction["local_value"],
 		]
 		for i in values.size():
+			if i == 2:
+				_business_detail_transaction_grid.add_child(_goods_cell(values[i], values[i], 120.0))
+				continue
 			var value := Label.new()
 			value.text = values[i]
 			if i == 1:
@@ -927,11 +1047,13 @@ func _rebuild_market_grid() -> void:
 		name_button.text = name
 		name_button.flat = true
 		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		name_button.custom_minimum_size = Vector2(70, 0)
-		for c in Commodity.ALL:
-			if Commodity.name_of(c) == name:
-				name_button.pressed.connect(_on_market_row_selected.bind(c))
-				break
+		name_button.custom_minimum_size = Vector2(90, 20)
+		var commodity := Commodity.type_from_name(name)
+		if commodity != -1:
+			name_button.pressed.connect(_on_market_row_selected.bind(commodity))
+			name_button.icon = Commodity.icon_of(commodity)
+			name_button.expand_icon = true
+			name_button.add_theme_constant_override("icon_max_width", 18)
 		_market_grid.add_child(name_button)
 
 		var labels := {}
@@ -1012,7 +1134,7 @@ func _rebuild_household_rows() -> void:
 	var grid := GridContainer.new()
 	grid.columns = 11
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in ["ID", "Employer", "Workers", "Dependents", Commodity.name_of(Commodity.Type.GRAIN), Commodity.name_of(Commodity.Type.TIMBER), Commodity.name_of(Commodity.Type.WOOL), "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))

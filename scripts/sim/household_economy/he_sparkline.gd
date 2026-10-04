@@ -1,37 +1,62 @@
 class_name HESparkline
 extends Control
 
-## Minimal single-line chart of a rolling numeric history -- no axes, ticks,
-## or interaction, just a quick shape so a business's cash trend over its
+## Minimal line chart of rolling numeric histories -- no ticks or interaction,
+## just a quick shape so a business's cash trend (or goods produced) over its
 ## last N days is visible at a glance in the business detail panel (see
 ## he_dashboard.gd). A dashed baseline is drawn wherever 0 falls in the
 ## current data's range, so a business that's dipped into the red is
 ## visually obvious even without reading a single number.
+##
+## set_data() draws one series; set_series() draws several on one shared
+## y-axis (an array of {"values": Array[float], "color": Color}), which is
+## how the production-output chart handles a multi-output recipe. A separate
+## axis per series is deliberately not supported yet.
 
 const LINE_COLOR := Color(0.6, 0.85, 0.6)
 const BASELINE_COLOR := Color(0.55, 0.55, 0.6, 0.6)
 const PADDING := 4.0
+## Distinct enough to tell apart on the dark panel; series i uses color i.
+const SERIES_COLORS := [
+	Color(0.6, 0.85, 0.6),
+	Color(0.95, 0.75, 0.4),
+	Color(0.5, 0.75, 0.95),
+	Color(0.85, 0.6, 0.85),
+]
+const LABEL_COLOR := Color(0.65, 0.65, 0.7)
+const LABEL_FONT_SIZE := 11
 
-var _values: Array[float] = []
+## When true, the top of the y-range is printed in the upper-left corner so
+## the chart's scale can be read -- useful for unit counts, noise for cash.
+var show_max_label := false
+
+var _series: Array = [] # [{"values": Array[float], "color": Color}]
 
 func set_data(values: Array[float]) -> void:
-	_values = values
+	set_series([{"values": values, "color": LINE_COLOR}])
+
+func set_series(series: Array) -> void:
+	_series = series
 	queue_redraw()
 
+static func color_for_series(index: int) -> Color:
+	return SERIES_COLORS[index % SERIES_COLORS.size()]
+
 func _draw() -> void:
-	if _values.size() < 2:
+	var longest := 0
+	for s in _series:
+		longest = maxi(longest, (s["values"] as Array).size())
+	if longest < 2:
 		return
 
-	var min_v: float = _values[0]
-	var max_v: float = _values[0]
-	for v in _values:
-		min_v = minf(min_v, v)
-		max_v = maxf(max_v, v)
-	# Guarantee 0 falls inside the range whenever the series actually
-	# crosses it, so the baseline below is a meaningful reference line
-	# rather than sitting outside the drawn area.
-	min_v = minf(min_v, 0.0)
-	max_v = maxf(max_v, 0.0)
+	# 0 is always inside the range, so the baseline below is a meaningful
+	# reference line rather than sitting outside the drawn area.
+	var min_v := 0.0
+	var max_v := 0.0
+	for s in _series:
+		for v in s["values"]:
+			min_v = minf(min_v, v)
+			max_v = maxf(max_v, v)
 	var span: float = max_v - min_v
 	if span < 0.0001:
 		span = 1.0
@@ -46,8 +71,15 @@ func _draw() -> void:
 
 	draw_dashed_line(Vector2(PADDING, y_for_value.call(0.0)), Vector2(size.x - PADDING, y_for_value.call(0.0)), BASELINE_COLOR, 1.0)
 
-	var points := PackedVector2Array()
-	for i in _values.size():
-		var x: float = PADDING + w * (float(i) / float(_values.size() - 1))
-		points.append(Vector2(x, y_for_value.call(_values[i])))
-	draw_polyline(points, LINE_COLOR, 2.0, true)
+	for s in _series:
+		var values: Array = s["values"]
+		if values.size() < 2:
+			continue
+		var points := PackedVector2Array()
+		for i in values.size():
+			var x: float = PADDING + w * (float(i) / float(values.size() - 1))
+			points.append(Vector2(x, y_for_value.call(values[i])))
+		draw_polyline(points, s["color"], 2.0, true)
+
+	if show_max_label:
+		draw_string(ThemeDB.fallback_font, Vector2(PADDING + 2.0, PADDING + LABEL_FONT_SIZE), "%.1f" % max_v, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE, LABEL_COLOR)
