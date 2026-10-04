@@ -7,6 +7,8 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
 ## H1 labor-market acceptance check. Run with:
 ##   godot --headless --script res://scripts/sim/harness/run_household_economy.gd
@@ -38,6 +40,8 @@ func _init() -> void:
 	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_needs_catalog()
+	_check_need_substitutes()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -908,6 +912,79 @@ func _check_herd_monetization() -> void:
 	_assert(any_wool_traded, "Households should have actually bought wool from the Sheep Farm at least once in the run's final year")
 
 	_check_demographic_invariants(sim)
+
+## The catalog is what every consumption/market/reserve loop reads, so pin its
+## shape: the three needs, today's one satisfier each, and food alone driving
+## the lifecycle engine.
+func _check_needs_catalog() -> void:
+	print("\n=== Household needs: catalog ===")
+	var ids: Array = []
+	for need in HENeeds.all():
+		ids.append(need.id)
+	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL],
+		"Subsistence commodities should be the union of every need's satisfiers, in need order")
+	for need in HENeeds.all():
+		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
+		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
+	_assert(HENeeds.for_commodity(Commodity.Type.GRAIN).id == HENeed.Id.FOOD, "Grain should satisfy food")
+	_assert(HENeeds.for_commodity(Commodity.Type.IRON) == null, "Iron satisfies no household need")
+	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
+	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
+	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
+	print("  catalog shape and Bloomery heat slot as expected")
+
+	# The household detail page reads this: one entry per need, in need units.
+	sim.advance_ticks(3)
+	var h := sim.get_household_summary(sim.get_household_ids()[0])
+	var needs: Array = h["needs"]
+	_assert(needs.size() == HENeeds.all().size(), "A household summary should report every need")
+	for i in needs.size():
+		var need: HENeed = HENeeds.all()[i]
+		var entry: Dictionary = needs[i]
+		_assert(entry["label"] == need.label, "Summary needs should follow catalog order")
+		_assert(is_equal_approx(entry["required"], h["headcount"] * need.per_person_daily),
+			"%s required should be headcount x per-person daily need" % need.label)
+		_assert(entry["provided"] <= entry["required"] + EPSILON, "%s cannot be provided beyond what is required" % need.label)
+		_assert((entry["satisfiers"] as Array).size() == need.satisfiers().size(), "%s should list each of its satisfiers" % need.label)
+	print("  household summary reports each need's required/provided and its satisfiers")
+
+## Today's catalog gives every need a single satisfier, so substitution can't
+## show up in a scenario run. Exercise it with a fixture need -- timber (1
+## unit) or a denser stand-in (4 units) -- so the next real satisfier (charcoal
+## for heat, meat for food, ...) lands on logic that is already checked.
+func _check_need_substitutes() -> void:
+	print("\n=== Household needs: substitutable satisfiers ===")
+	var units: Dictionary[Commodity.Type, float] = {Commodity.Type.WOOL: 4.0, Commodity.Type.TIMBER: 1.0}
+	var need := HENeed.new(HENeed.Id.HEAT, "Fixture heat", 0.5, units, Commodity.Type.TIMBER)
+	_assert(is_equal_approx(need.units_per_person_daily(Commodity.Type.WOOL), 0.125), "A 4x-dense satisfier needs a quarter of the units")
+
+	var h := HEHousehold.new(1, 2, 0)
+	h.add_stock(Commodity.Type.WOOL, 2.0)
+	h.add_stock(Commodity.Type.TIMBER, 3.0)
+	_assert(is_equal_approx(need.held(h), 11.0), "Held should sum value-weighted stock across satisfiers: got %.2f" % need.held(h))
+
+	var burn := need.burn(h, 10.0)
+	_assert(is_equal_approx(burn["provided"], 10.0), "Burning 10 should be fully met")
+	_assert(is_equal_approx(burn["burned"].get(Commodity.Type.WOOL, 0.0), 2.0), "The denser satisfier should be spent first")
+	_assert(is_equal_approx(burn["burned"].get(Commodity.Type.TIMBER, 0.0), 2.0), "The remainder should come from the next satisfier")
+	_assert(is_equal_approx(h.stock(Commodity.Type.TIMBER), 1.0), "Timber should be left with only what was not burned")
+
+	var short := need.burn(h, 5.0)
+	_assert(is_equal_approx(short["provided"], 1.0), "A burn beyond what is held supplies only what exists: got %.2f" % short["provided"])
+	_assert(is_equal_approx(need.held(h), 0.0), "Everything held should be spent")
+
+	# Preferred satisfier: the baseline until an alternative is both in supply
+	# and cheaper per need-unit (wool 2.0 / 4 = 0.5 vs timber 1.0).
+	var sim := _new_sim("build_three_business_economy")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.TIMBER, "With no alternative in supply, the baseline should be preferred")
+	var trader: HEBusiness = sim._settlement_trader(settlement_id)
+	trader.add_stock(Commodity.Type.WOOL, 5.0)
+	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.WOOL, "A cheaper-per-unit satisfier in supply should be preferred")
+	print("  burn order, partial burns and preferred-satisfier choice behave as expected")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

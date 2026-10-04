@@ -89,6 +89,14 @@ var capacity: int
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
 
+## Kind.PRODUCTION only: recipe inputs that are really an HENeed rather than a
+## fixed feedstock, recipe input commodity -> HENeed.Id. The recipe quantity
+## is read in the need's units (a furnace's TIMBER input is heat), so any
+## satisfier of that need may fill it -- see he_simulation.gd's
+## _run_input_purchasing and _run_production. A business whose input must stay
+## that exact good (a charcoal burner's timber is raw material) leaves it empty.
+var need_inputs: Dictionary[Commodity.Type, int] = {}
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0
