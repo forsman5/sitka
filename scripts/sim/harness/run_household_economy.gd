@@ -202,6 +202,21 @@ func _check_goods_flow_history_reconciles_with_stock() -> void:
 		_assert(flows[HEBusiness.FLOW_PRODUCED][0]["commodity"] == output_name, "%s produced series should be its output commodity" % report["name"])
 		_assert((flows[HEBusiness.FLOW_PRODUCED][0]["values"] as Array).size() == days, "%s produced series should have one entry per day" % report["name"])
 
+		# The inventory chart is the running total of the other two output
+		# lines: each day's change in stock is produced minus sold.
+		var stock_series: Array = flows[HEBusiness.LEVEL_STOCK]
+		_assert(stock_series.size() == 1 and stock_series[0]["commodity"] == output_name, "%s should report one stock series, its output good" % report["name"])
+		var stock_values: Array = stock_series[0]["values"]
+		_assert(stock_values.size() == days, "%s stock series should have one entry per day" % report["name"])
+		_assert(absf(stock_values[days - 1] - float(report["stock"])) < EPSILON, "%s last stock point %.3f should equal reported stock %.3f" % [report["name"], stock_values[days - 1], report["stock"]])
+		var sold_values: Array = flows[HEBusiness.FLOW_SOLD][0]["values"] if not (flows[HEBusiness.FLOW_SOLD] as Array).is_empty() else []
+		var worst_delta_gap := 0.0
+		for i in range(1, days):
+			var sold_today: float = sold_values[i] if i < sold_values.size() else 0.0
+			var delta: float = stock_values[i] - stock_values[i - 1]
+			worst_delta_gap = maxf(worst_delta_gap, absf(delta - (flows[HEBusiness.FLOW_PRODUCED][0]["values"][i] - sold_today)))
+		_assert(worst_delta_gap < EPSILON, "%s daily stock change should equal produced - sold, worst gap %.4f" % [report["name"], worst_delta_gap])
+
 		var closing := {output_name: report["stock"]}
 		for input_name in (report["input_inventory"] as Dictionary).keys():
 			closing[input_name] = report["input_inventory"][input_name]

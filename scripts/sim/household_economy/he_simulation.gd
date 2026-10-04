@@ -653,7 +653,7 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			# {flow: [{"commodity": name, "values": Array[float]}]} -- one entry
 			# per good, so a multi-good recipe is just more series.
 			var flow_history := {}
-			for flow in HEBusiness.ALL_FLOWS:
+			for flow in HEBusiness.ALL_SERIES:
 				var flow_series: Array = []
 				var history := b.flow_history(flow)
 				for commodity in history.keys():

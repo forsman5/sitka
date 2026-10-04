@@ -23,18 +23,25 @@ const BLOTTER_HISTORY_DAYS := 30
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
-## Goods-flow charts on a production business's detail tab. Each series is
-## [flow, legend suffix, dashed]: outputs solid, inputs dashed, so one chart
-## can carry both directions. A chart hides when none of its flows ever moved
-## anything (a Farm has no inputs, but still shows its output lines).
-const FLOW_CHARTS := [
+## Views of the goods chart on a production business's detail tab, switched
+## by tabs above it. Each series is [series id, legend suffix, dashed]: outputs
+## solid, inputs dashed. "details" are [series id, label] pairs listed in the
+## hover readout under each good's value without being drawn -- the inventory
+## view shows that day's made/sold beside the stock, since stock is just the
+## running total of those two. The Flows view shows made and sold (outputs),
+## used and bought (inputs); the chart hides when nothing ever moved.
+const FLOW_VIEWS := [
 	{
-		"title": "Production & consumption per day",
-		"series": [[HEBusiness.FLOW_PRODUCED, "made", false], [HEBusiness.FLOW_CONSUMED, "used", true]],
+		"label": "Inventory",
+		"series": [[HEBusiness.LEVEL_STOCK, "in stock", false]],
+		"details": [[HEBusiness.FLOW_PRODUCED, "made"], [HEBusiness.FLOW_SOLD, "sold"]],
 	},
 	{
-		"title": "Market flow per day: sold from / bought into storage",
-		"series": [[HEBusiness.FLOW_SOLD, "out", false], [HEBusiness.FLOW_BOUGHT, "in", true]],
+		"label": "Flows",
+		"series": [
+			[HEBusiness.FLOW_PRODUCED, "made", false], [HEBusiness.FLOW_SOLD, "out", false],
+			[HEBusiness.FLOW_CONSUMED, "used", true], [HEBusiness.FLOW_BOUGHT, "in", true],
+		],
 	},
 ]
 const BLOTTER_FILTERS := [
@@ -90,7 +97,8 @@ var _trader_settings_list: VBoxContainer
 var _trader_settings_button: Button
 var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
-var _business_detail_flow_charts: Array = [] # per FLOW_CHARTS entry: {"section", "legend", "chart"}
+var _business_detail_flow_chart: Dictionary = {} # {"section", "legend", "chart"}, see _build_flow_chart
+var _business_flow_view := 0 # index into FLOW_VIEWS; kept across business selections
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
@@ -357,8 +365,7 @@ func _build_ui() -> void:
 	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
 	detail_content.add_child(_business_detail_sparkline)
 
-	for chart_def in FLOW_CHARTS:
-		_business_detail_flow_charts.append(_build_flow_chart(detail_content, chart_def["title"]))
+	_business_detail_flow_chart = _build_flow_chart(detail_content)
 
 	_business_detail_grid = GridContainer.new()
 	_business_detail_grid.columns = 2
@@ -818,7 +825,7 @@ func _refresh_business_detail() -> void:
 		_trader_settings_open = false
 	_update_trader_detail_page()
 	_business_detail_sparkline.set_data(report["balance_history"])
-	_refresh_business_flow_charts(report)
+	_refresh_business_flow_chart(report)
 
 	for child in _business_detail_grid.get_children():
 		_business_detail_grid.remove_child(child)
@@ -904,18 +911,29 @@ func _refresh_business_detail() -> void:
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
 
-func _build_flow_chart(parent: Control, title: String) -> Dictionary:
+## Built once (not per refresh) so the tab buttons stay clickable.
+func _build_flow_chart(parent: Control) -> Dictionary:
 	var section := VBoxContainer.new()
 	parent.add_child(section)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 12)
 	section.add_child(header)
 	var title_label := Label.new()
-	title_label.text = "%s (last %d days)" % [title, HEBusiness.BALANCE_HISTORY_WINDOW_DAYS]
+	title_label.text = "Goods (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
 	title_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title_label)
-	var legend := HBoxContainer.new()
-	legend.add_theme_constant_override("separation", 12)
+	var tab_group := ButtonGroup.new()
+	for view_index in FLOW_VIEWS.size():
+		var tab := Button.new()
+		tab.text = FLOW_VIEWS[view_index]["label"]
+		tab.toggle_mode = true
+		tab.button_group = tab_group
+		tab.button_pressed = view_index == _business_flow_view
+		tab.pressed.connect(_on_business_flow_view_pressed.bind(view_index))
+		header.add_child(tab)
+	var legend := HFlowContainer.new()
+	legend.add_theme_constant_override("h_separation", 12)
+	legend.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(legend)
 	var chart := HESparkline.new()
 	chart.custom_minimum_size = Vector2(0, 60)
@@ -923,29 +941,37 @@ func _build_flow_chart(parent: Control, title: String) -> Dictionary:
 	section.add_child(chart)
 	return {"section": section, "legend": legend, "chart": chart}
 
+func _on_business_flow_view_pressed(view_index: int) -> void:
+	_business_flow_view = view_index
+	_refresh_business_detail()
+
 ## Only PRODUCTION businesses report flow_history (traders and herds produce
-## nothing through a recipe), so the charts hide for the rest. One line per
+## nothing through a recipe), so the chart hides for the rest. One line per
 ## good on a shared axis, with a color-keyed legend.
-func _refresh_business_flow_charts(report: Dictionary) -> void:
+func _refresh_business_flow_chart(report: Dictionary) -> void:
 	var flow_history: Dictionary = report.get("flow_history", {})
-	for chart_index in FLOW_CHARTS.size():
-		var widgets: Dictionary = _business_detail_flow_charts[chart_index]
-		var legend: HBoxContainer = widgets["legend"]
-		for child in legend.get_children():
-			legend.remove_child(child)
-			child.queue_free()
-		var series: Array = []
-		for series_def in FLOW_CHARTS[chart_index]["series"]:
-			for entry in flow_history.get(series_def[0], []):
-				var color := HESparkline.color_for_series(series.size())
-				var series_name := "%s %s" % [entry["commodity"], series_def[1]]
-				series.append({"name": series_name, "values": entry["values"], "color": color, "dashed": series_def[2]})
-				var legend_label := Label.new()
-				legend_label.text = series_name
-				legend_label.add_theme_color_override("font_color", color)
-				legend.add_child(legend_label)
-		(widgets["section"] as Control).visible = not series.is_empty()
-		(widgets["chart"] as HESparkline).set_series(series)
+	var view: Dictionary = FLOW_VIEWS[_business_flow_view]
+	var legend: Container = _business_detail_flow_chart["legend"]
+	for child in legend.get_children():
+		legend.remove_child(child)
+		child.queue_free()
+	var series: Array = []
+	for series_def in view["series"]:
+		for entry in flow_history.get(series_def[0], []):
+			var color := HESparkline.color_for_series(series.size())
+			var series_name := "%s %s" % [entry["commodity"], series_def[1]]
+			var details: Array = []
+			for detail_def in view.get("details", []):
+				for detail_entry in flow_history.get(detail_def[0], []):
+					if detail_entry["commodity"] == entry["commodity"]:
+						details.append({"name": detail_def[1], "values": detail_entry["values"]})
+			series.append({"name": series_name, "values": entry["values"], "color": color, "dashed": series_def[2], "details": details})
+			var legend_label := Label.new()
+			legend_label.text = series_name
+			legend_label.add_theme_color_override("font_color", color)
+			legend.add_child(legend_label)
+	(_business_detail_flow_chart["section"] as Control).visible = not flow_history.is_empty() and not series.is_empty()
+	(_business_detail_flow_chart["chart"] as HESparkline).set_series(series)
 
 ## value is either plain text or an Array of [commodity_name, text] parts;
 ## each part gets the good's icon in front of its text (the name stays in the

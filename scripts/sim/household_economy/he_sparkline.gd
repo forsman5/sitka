@@ -15,7 +15,9 @@ extends Control
 ##
 ## Hovering any chart built on this control shows a marker and a readout of
 ## each series' value at that day (prefixed with the series' "name" when it
-## has one), so a new chart gets the readout for free -- just name its series. A separate
+## has one), so a new chart gets the readout for free -- just name its series.
+## A series may also carry "details": [{"name", "values"}], extra per-day
+## numbers listed under its value in the readout without being drawn. A separate
 ## axis per series is deliberately not supported yet.
 
 const LINE_COLOR := Color(0.6, 0.85, 0.6)
@@ -136,6 +138,13 @@ func _draw_hover(longest: int, w: float, y_for_value: Callable) -> void:
 		var label: String = s.get("name", "")
 		lines.append("%s%.2f" % [label + ": " if label != "" else "", values[_hover_index]])
 		colors.append(s["color"])
+		# Readout-only extras (not drawn): {"name", "values"} entries shown
+		# under the series' own value, e.g. the day's made/sold beside stock.
+		for detail in s.get("details", []):
+			var detail_values: Array = detail["values"]
+			if _hover_index < detail_values.size():
+				lines.append("   %s %.2f" % [detail["name"], detail_values[_hover_index]])
+				colors.append(LABEL_COLOR)
 		draw_circle(Vector2(x, y_for_value.call(values[_hover_index])), 3.0, s["color"])
 	var line_h: float = LABEL_FONT_SIZE + 3.0
 	var box_w := 0.0

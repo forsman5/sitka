@@ -74,6 +74,12 @@ const FLOW_CONSUMED := "consumed"
 const FLOW_SOLD := "sold"
 const FLOW_BOUGHT := "bought"
 const ALL_FLOWS := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT]
+## Not a flow but a level: each day's closing stock of the recipe's output
+## goods. Net of the flows above, it is what the Output inventory chart
+## shows (produced - sold, plus any other movement out of storage).
+const LEVEL_STOCK := "stock"
+## Everything recorded into the rolling history and reported per business.
+const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
 enum Kind { PRODUCTION, TRADER, HERD }
 enum Species { CATTLE, SHEEP }
@@ -286,12 +292,23 @@ func add_flow(flow: String, commodity: Commodity.Type, amount: float) -> void:
 	var by_commodity: Dictionary = todays_flows.get_or_add(flow, {})
 	by_commodity[commodity] = by_commodity.get(commodity, 0.0) + amount
 
+func _todays_values(series_id: String) -> Dictionary:
+	if series_id == FLOW_PRODUCED:
+		return last_output_produced
+	if series_id == LEVEL_STOCK:
+		var levels := {}
+		if recipe != null:
+			for commodity in recipe.outputs.keys():
+				levels[commodity] = stock(commodity)
+		return levels
+	return todays_flows.get(series_id, {})
+
 ## Called once per day alongside record_balance_day(). A commodity that has
 ## moved before keeps getting a 0.0 on idle days so every series stays aligned
 ## to the same calendar days.
 func record_flow_day() -> void:
-	for flow in ALL_FLOWS:
-		var today: Dictionary = last_output_produced if flow == FLOW_PRODUCED else todays_flows.get(flow, {})
+	for flow in ALL_SERIES:
+		var today: Dictionary = _todays_values(flow)
 		var history: Dictionary = _flow_history.get_or_add(flow, {})
 		for commodity in today.keys():
 			if not history.has(commodity):
