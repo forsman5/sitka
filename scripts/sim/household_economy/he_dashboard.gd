@@ -672,11 +672,24 @@ func _refresh_household_detail() -> void:
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
 	var member_index := 1
 	for age in h["worker_ages"]:
-		_add_household_detail_line("Member %d: worker, age %d days" % [member_index, age])
+		_add_household_detail_line("Member %d: worker, age %s" % [member_index, _format_age(age)])
 		member_index += 1
 	for age in h["dependent_ages"]:
-		_add_household_detail_line("Member %d: dependent, age %d days" % [member_index, age])
+		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
 		member_index += 1
+
+	_add_household_detail_heading("Events (last %d days)" % BLOTTER_HISTORY_DAYS)
+	var event_lines: Array[String] = []
+	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
+	for i in range(events.size() - 1, -1, -1):
+		if _is_household_event(events[i], _selected_household_id):
+			event_lines.append(_format_event(events[i]))
+	var events_display := RichTextLabel.new()
+	events_display.bbcode_enabled = true
+	events_display.fit_content = true
+	events_display.scroll_active = false
+	events_display.text = "\n".join(event_lines) if not event_lines.is_empty() else "[i]No events in this window.[/i]"
+	_household_detail_content.add_child(events_display)
 
 	_add_household_detail_heading("Inventory")
 	var inventory: Dictionary = h["inventory"]
@@ -1705,6 +1718,23 @@ func _format_day(day: int) -> String:
 	if year <= 0:
 		return "Day %d" % day
 	return "Year %d, Day %d" % [year, day % 365]
+
+## 456 days -> "1 years 91 days". Ages are durations, so unlike _format_day
+## the year is always shown.
+func _format_age(age_days: int) -> String:
+	return "%d years %d days" % [age_days / 365, age_days % 365]
+
+## Household-detail events: life events only (births, deaths, leaving, splits,
+## adoptions); hiring/firing and herd events stay on the main blotter.
+func _is_household_event(event: Dictionary, household_id: int) -> bool:
+	match event["type"]:
+		"birth", "old_age", "emigrate":
+			return event["household_id"] == household_id
+		"split":
+			return event["parent_household_id"] == household_id or event["new_household_id"] == household_id
+		"adopted":
+			return event["household_id"] == household_id or event["adopting_household_id"] == household_id
+	return false
 
 func _format_event(event: Dictionary) -> String:
 	var day: String = _format_day(event["day"])
