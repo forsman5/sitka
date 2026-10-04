@@ -113,6 +113,11 @@ var _dependent_ages: Array[int] = []
 ## of their working life, not all freshly of age) override this via
 ## seed_worker_ages() instead, mirroring seed_dependent_ages().
 var _worker_ages: Array[int] = []
+
+## Member numbers (see the household detail's "Member N" list) of whoever the
+## last evaluate_aging() promoted, in the order they left. Placeholder until
+## members have persistent IDs.
+var last_promoted_member_numbers: Array[int] = []
 var _consecutive_prosperous_days: int = 0
 ## Starts already at the cooldown ceiling so a household prosperous from
 ## day one isn't artificially blocked from its FIRST birth.
@@ -260,9 +265,14 @@ func remove_member_for_emigration() -> void:
 func evaluate_aging() -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
-	for age in _dependent_ages:
+	last_promoted_member_numbers.clear()
+	for i in _dependent_ages.size():
+		var age: int = _dependent_ages[i]
 		if age >= AGING_THRESHOLD_DAYS:
 			promoted += 1
+			# 1-based position in the member list (workers first, then
+			# dependents) as of just before promotion.
+			last_promoted_member_numbers.append(_worker_ages.size() + i + 1)
 		else:
 			remaining.append(age)
 	if promoted == 0:
