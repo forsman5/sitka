@@ -780,8 +780,8 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.show_max_label = true
 	chart.set_series([
-		{"values": report["supplied_history"], "color": supplied_color},
-		{"values": report["demanded_history"], "color": requested_color},
+		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
+		{"name": "Requested", "values": report["demanded_history"], "color": requested_color},
 	])
 	_market_detail_content.add_child(chart)
 
