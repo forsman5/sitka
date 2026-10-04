@@ -1,0 +1,64 @@
+name: PR preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# A newer push cancels a stale build; closing cancels any in-flight build before teardown.
+concurrency:
+  group: preview-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Both jobs are limited to same-repo PRs: the sitka runner pool has in-cluster pods/exec,
+  # so fork PRs must never reach it. Do not switch this to pull_request_target.
+  preview:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: sitka
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/deploy-web
+        with:
+          dest: previews/sitka-pr-${{ github.event.number }}
+      # Posted only after the copy succeeds, so the link never points at a missing build.
+      - uses: marocchino/sticky-pull-request-comment@v3.0.5
+        with:
+          header: gamedev-preview
+          message: |
+            **Preview ready:** https://gamedev.tail6f8350.ts.net/previews/sitka-pr-${{ github.event.number }}/
+
+            Built from `${{ github.event.pull_request.head.sha }}`. Tailnet-only; the link is removed when this PR closes.
+
+  teardown:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: sitka
+    # No checkout and no local composite actions here: on close, the PR's merge ref may no
+    # longer exist, which would make checkout fail. kubectl is installed inline instead.
+    steps:
+      - name: Install kubectl
+        run: |
+          curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-1.35.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mkdir -p "$HOME/bin"
+          mv kubectl "$HOME/bin/kubectl"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Remove preview
+        env:
+          PR: ${{ github.event.number }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::bad PR number: $PR"; exit 1; }
+          POD=$(kubectl -n gamedev get pod -l app.kubernetes.io/name=gamedev-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          test -n "$POD"
+          kubectl -n gamedev exec "$POD" -- rm -rf "/app/exports/web/previews/sitka-pr-${PR}"
+      - uses: marocchino/sticky-pull-request-comment@v3.0.5
+        with:
+          header: gamedev-preview
+          message: Preview removed.

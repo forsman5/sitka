@@ -5,42 +5,17 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Two pushes must not swap the same destination at once; queue instead of cancelling.
+concurrency:
+  group: deploy-sitka
+  cancel-in-progress: false
+
 jobs:
   deploy:
     # Matches runnerScaleSetName in homelab-infra's gamedev runner release.
     runs-on: sitka
     steps:
       - uses: actions/checkout@v4
-
-      - uses: chickensoft-games/setup-godot@v2
+      - uses: ./.github/actions/deploy-web
         with:
-          version: 4.6.2
-          use-dotnet: false
-          include-templates: true
-
-      - name: Export web build
-        run: |
-          mkdir -p exports/web
-          # The editable Blender blockouts are not used at runtime. Godot's
-          # headless importer aborts the entire asset pass when Blender is
-          # unavailable, leaving even referenced GLTF models unimported.
-          rm -f assets/river_valley_blockout.blend assets/river_valley_blockout_v2.blend
-          godot --headless --import
-          godot --headless --export-release "Web" exports/web/index.html
-          test -f exports/web/index.html
-          godot --headless --main-pack exports/web/index.pck --script "$PWD/scripts/ci/check_web_assets.gd"
-
-      - name: Install kubectl
-        run: |
-          curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          mkdir -p "$HOME/bin"
-          mv kubectl "$HOME/bin/kubectl"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
-
-      - name: Copy build onto gamedev-server
-        run: |
-          POD=$(kubectl -n gamedev get pod -l app.kubernetes.io/name=gamedev-server -o jsonpath='{.items[0].metadata.name}')
-          test -n "$POD"
-          kubectl -n gamedev exec "$POD" -- mkdir -p /app/exports/web/sitka
-          tar -C exports/web -cf - . | kubectl -n gamedev exec -i "$POD" -- tar -xf - -C /app/exports/web/sitka
+          dest: sitka

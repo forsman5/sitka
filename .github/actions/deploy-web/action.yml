@@ -1,0 +1,70 @@
+name: Deploy web export to gamedev-server
+description: Export the Godot Web build and swap it into gamedev-server at the given path.
+
+inputs:
+  dest:
+    description: "Directory under the server root: 'sitka' or 'previews/sitka-pr-<n>'."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Fail before the ~10 minute build if the destination is anything unexpected;
+    # DEST is later used in rm -rf / mv inside the pod.
+    - name: Validate destination
+      shell: bash
+      env:
+        DEST: ${{ inputs.dest }}
+      run: |
+        [[ "$DEST" =~ ^(sitka|previews/sitka-pr-[0-9]+)$ ]] || { echo "::error::bad dest: $DEST"; exit 1; }
+
+    - uses: chickensoft-games/setup-godot@v2
+      with:
+        version: 4.6.2
+        use-dotnet: false
+        include-templates: true
+
+    - name: Export web build
+      shell: bash
+      run: |
+        mkdir -p exports/web
+        # The editable Blender blockouts are not used at runtime. Godot's
+        # headless importer aborts the entire asset pass when Blender is
+        # unavailable, leaving even referenced GLTF models unimported.
+        rm -f assets/river_valley_blockout.blend assets/river_valley_blockout_v2.blend
+        godot --headless --import
+        godot --headless --export-release "Web" exports/web/index.html
+        test -f exports/web/index.html
+        godot --headless --main-pack exports/web/index.pck --script "$PWD/scripts/ci/check_web_assets.gd"
+
+    - uses: ./.github/actions/setup-kubectl
+
+    # All values are computed here on the runner and passed into the pod as positional
+    # args; nothing is interpolated inside the single-quoted pod scripts. TMP is unique per
+    # run+attempt so concurrent deploys never share a temp dir. The build is extracted
+    # there and swapped into place, so files removed from a build don't linger.
+    - name: Copy build onto gamedev-server
+      shell: bash
+      env:
+        DEST: ${{ inputs.dest }}
+      run: |
+        ROOT=/app/exports/web
+        POD=$(kubectl -n gamedev get pod -l app.kubernetes.io/name=gamedev-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+        test -n "$POD"
+        TMP=".tmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        echo "GAMEDEV_POD=$POD" >> "$GITHUB_ENV"
+        echo "GAMEDEV_TMP=$ROOT/$TMP" >> "$GITHUB_ENV"
+        # The leading `: "${n:?}"` aborts the script before any rm if an argument is unset or
+        # empty, so a lost argument can never become rm -rf "/" or delete dest and then fail.
+        kubectl -n gamedev exec "$POD" -- sh -c ': "${1:?}" "${2:?}"; rm -rf "$1/$2" && mkdir -p "$1/$2"' _ "$ROOT" "$TMP"
+        tar -C exports/web -cf - . | kubectl -n gamedev exec -i "$POD" -- tar -xf - -C "$ROOT/$TMP"
+        kubectl -n gamedev exec "$POD" -- sh -c ': "${1:?}" "${2:?}" "${3:?}"; rm -rf "$1/$3" && mkdir -p "$(dirname "$1/$3")" && mv "$1/$2" "$1/$3"' _ "$ROOT" "$TMP" "$DEST"
+
+    # Runs on failure and cancellation too. After a successful swap the temp dir is already
+    # gone, so this is a no-op; a pod killed mid-run is caught by preview-gc.yml instead.
+    - name: Remove temp dir
+      if: always()
+      shell: bash
+      run: |
+        [ -n "${GAMEDEV_POD:-}" ] && [ -n "${GAMEDEV_TMP:-}" ] || exit 0
+        kubectl -n gamedev exec "$GAMEDEV_POD" -- rm -rf "$GAMEDEV_TMP" || true

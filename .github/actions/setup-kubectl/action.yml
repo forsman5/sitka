@@ -1,0 +1,15 @@
+name: Set up kubectl
+description: Install kubectl onto PATH, pinned to the cluster's minor version.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # stable-1.35 tracks the latest 1.35.x patch, staying within kubectl's +/-1 minor
+        # skew of the k3s 1.35 server. Bump this when the cluster upgrades.
+        curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-1.35.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mkdir -p "$HOME/bin"
+        mv kubectl "$HOME/bin/kubectl"
+        echo "$HOME/bin" >> "$GITHUB_PATH"
