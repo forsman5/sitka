@@ -1745,7 +1745,7 @@ func _format_event(event: Dictionary) -> String:
 			var dep_plural := "s" if dep_count != 1 else ""
 			return "[color=#a0a0a0]%s - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
-			return "[color=#8db4e0]%s - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+			return "[color=#8db4e0]%s - Household %d split: Member %d left to found Household %d[/color]" % [day, event["parent_household_id"], event["member_number"], event["new_household_id"]]
 		"coming_of_age":
 			return "[color=#d9c98f]%s - Household %d: member came of age[/color]" % [day, event["household_id"]]
 		"job":
