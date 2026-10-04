@@ -121,7 +121,13 @@ var _days_since_last_birth: int = BIRTH_COOLDOWN_DAYS
 ## Reported by HESimulation each day, keyed by Commodity.Type. Kept on the
 ## household (rather than only in the daily ledger) so a caller can read a
 ## household's current-day outcome without re-deriving it from history.
-var last_demand: Dictionary[Commodity.Type, float] = {}
+##
+## Needs are recorded as outcomes of the NEED (keyed by HENeed.Id, in need
+## units: what the household required and what its satisfiers supplied), plus
+## the units of each satisfier good actually spent. A need met by two goods is
+## therefore one requirement, not one per good.
+var last_need_required: Dictionary[int, float] = {}
+var last_need_provided: Dictionary[int, float] = {}
 var last_consumed: Dictionary[Commodity.Type, float] = {}
 ## Wanted but physically unavailable (no stock to buy or consume), separate
 ## from last_unmet_unaffordable -- see docs/household-economy-next-cut.md:
