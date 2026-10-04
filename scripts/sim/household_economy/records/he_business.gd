@@ -65,6 +65,22 @@ const TRADER_REVENUE_WINDOW_DAYS := 45
 ## signal needs.
 const BALANCE_HISTORY_WINDOW_DAYS := 90
 
+## Goods flows tracked for the detail panel's charts. PRODUCED/CONSUMED are
+## what the production step actually made and used up; SOLD/BOUGHT are what
+## left or entered this business's storage (to households, other businesses
+## or the Trader) -- availability to the market, not output.
+const FLOW_PRODUCED := "produced"
+const FLOW_CONSUMED := "consumed"
+const FLOW_SOLD := "sold"
+const FLOW_BOUGHT := "bought"
+const ALL_FLOWS := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT]
+## Not a flow but a level: each day's closing stock of the recipe's output
+## goods. Net of the flows above, it is what the Output inventory chart
+## shows (produced - sold, plus any other movement out of storage).
+const LEVEL_STOCK := "stock"
+## Everything recorded into the rolling history and reported per business.
+const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
+
 enum Kind { PRODUCTION, TRADER, HERD }
 enum Species { CATTLE, SHEEP }
 
@@ -160,12 +176,20 @@ var last_wage_shortfall: float = 0.0
 ## below), read by nothing that affects simulation outcomes.
 var _balance_history: Array[float] = []
 
-## PRODUCTION only, reporting: rolling daily units produced per output
-## commodity, oldest first, each series capped at BALANCE_HISTORY_WINDOW_DAYS.
-## Keyed by commodity so a multi-output recipe just adds series; today every
-## recipe has exactly one. Field-model businesses show lumpy spikes on harvest
+## Reporting only: today's goods movements through this business's own
+## storage, {flow: {Commodity.Type: units}}, where flow is one of the FLOW_*
+## constants below (PRODUCED is derived from last_output_produced instead).
+## Reset every tick by he_simulation.gd's _pay_wages, filled by add_flow()
+## from each place goods actually move, and folded into _flow_history by
+## record_flow_day() at the end of the day.
+var todays_flows: Dictionary = {}
+
+## Reporting only: rolling daily history of each flow per commodity,
+## {flow: {Commodity.Type: Array[float]}}, oldest first, each series capped at
+## BALANCE_HISTORY_WINDOW_DAYS. Keyed by commodity so a multi-good recipe just
+## adds series. Field-model businesses show lumpy PRODUCED spikes on harvest
 ## days, since last_output_produced is 0.0 on every other day.
-var _production_history: Dictionary[Commodity.Type, Array] = {}
+var _flow_history: Dictionary = {}
 
 ## Set whenever a zero-capacity business gets its trial crew back (see
 ## he_simulation.gd's _evaluate_business_capacity) to the day that
@@ -264,27 +288,47 @@ func record_balance_day() -> void:
 func balance_history() -> Array[float]:
 	return _balance_history.duplicate()
 
-## Called once per day alongside record_balance_day(). A commodity that has
-## produced before keeps getting a 0.0 on idle days so every series stays
-## aligned to the same calendar days.
-func record_production_day() -> void:
-	for commodity in last_output_produced.keys():
-		if not _production_history.has(commodity):
-			var backfill: Array[float] = []
-			backfill.resize(_balance_history.size() - 1)
-			backfill.fill(0.0)
-			_production_history[commodity] = backfill
-	for commodity in _production_history.keys():
-		var series: Array = _production_history[commodity]
-		series.append(last_output_produced.get(commodity, 0.0))
-		if series.size() > BALANCE_HISTORY_WINDOW_DAYS:
-			series.pop_front()
+func add_flow(flow: String, commodity: Commodity.Type, amount: float) -> void:
+	var by_commodity: Dictionary = todays_flows.get_or_add(flow, {})
+	by_commodity[commodity] = by_commodity.get(commodity, 0.0) + amount
 
-## Duplicated like balance_history(). Returns {Commodity.Type: Array[float]}.
-func production_history() -> Dictionary:
+func _todays_values(series_id: String) -> Dictionary:
+	if series_id == FLOW_PRODUCED:
+		return last_output_produced
+	if series_id == LEVEL_STOCK:
+		var levels := {}
+		if recipe != null:
+			for commodity in recipe.outputs.keys():
+				levels[commodity] = stock(commodity)
+		return levels
+	return todays_flows.get(series_id, {})
+
+## Called once per day alongside record_balance_day(). A commodity that has
+## moved before keeps getting a 0.0 on idle days so every series stays aligned
+## to the same calendar days.
+func record_flow_day() -> void:
+	for flow in ALL_SERIES:
+		var today: Dictionary = _todays_values(flow)
+		var history: Dictionary = _flow_history.get_or_add(flow, {})
+		for commodity in today.keys():
+			if not history.has(commodity):
+				var backfill: Array[float] = []
+				backfill.resize(_balance_history.size() - 1)
+				backfill.fill(0.0)
+				history[commodity] = backfill
+		for commodity in history.keys():
+			var series: Array = history[commodity]
+			series.append(today.get(commodity, 0.0))
+			if series.size() > BALANCE_HISTORY_WINDOW_DAYS:
+				series.pop_front()
+
+## Duplicated like balance_history(). Returns {Commodity.Type: Array[float]}
+## for one flow (empty if that flow never moved anything).
+func flow_history(flow: String) -> Dictionary:
 	var out := {}
-	for commodity in _production_history.keys():
-		out[commodity] = (_production_history[commodity] as Array).duplicate()
+	var history: Dictionary = _flow_history.get(flow, {})
+	for commodity in history.keys():
+		out[commodity] = (history[commodity] as Array).duplicate()
 	return out
 
 func record_wage_day(wage_per_worker: float) -> void:

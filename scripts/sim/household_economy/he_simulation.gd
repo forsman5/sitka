@@ -654,13 +654,16 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			for input_commodity in b.recipe.inputs.keys():
 				input_inventory[Commodity.name_of(input_commodity)] = b.stock(input_commodity)
 			report["input_inventory"] = input_inventory
-			# One entry per output commodity, so a multi-output recipe is just
-			# more series: [{"commodity": name, "values": Array[float]}].
-			var production_series: Array = []
-			var history := b.production_history()
-			for commodity in history.keys():
-				production_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
-			report["production_history"] = production_series
+			# {flow: [{"commodity": name, "values": Array[float]}]} -- one entry
+			# per good, so a multi-good recipe is just more series.
+			var flow_history := {}
+			for flow in HEBusiness.ALL_SERIES:
+				var flow_series: Array = []
+				var history := b.flow_history(flow)
+				for commodity in history.keys():
+					flow_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
+				flow_history[flow] = flow_series
+			report["flow_history"] = flow_history
 		out.append(report)
 	return out
 
@@ -1080,6 +1083,7 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_wages_paid = 0.0
 		b.last_cash_change = 0.0
 		b.last_wage_shortfall = 0.0
+		b.todays_flows = {}
 		# Single reset point for the day, since not every business's
 		# last_revenue gets overwritten later the same tick the way a
 		# SUBSISTENCE_COMMODITIES seller's does in _clear_market_for --
@@ -1211,6 +1215,7 @@ func _run_production(record: Dictionary) -> void:
 				continue
 			var consumed: float = units * b.recipe.inputs[input_commodity]
 			b.consume(input_commodity, consumed)
+			b.add_flow(HEBusiness.FLOW_CONSUMED, input_commodity, consumed)
 			var input_name := Commodity.name_of(input_commodity)
 			record["consumed"][input_name] = record["consumed"].get(input_name, 0.0) + consumed
 			# Capacity tuning should recognize input cost when the buffered
@@ -1236,6 +1241,7 @@ func _burn_need_input(b: HEBusiness, input_commodity: Commodity.Type, quantity: 
 		var burned_units: float = burn["burned"][satisfier]
 		var satisfier_name := Commodity.name_of(satisfier)
 		record["consumed"][satisfier_name] = record["consumed"].get(satisfier_name, 0.0) + burned_units
+		b.add_flow(HEBusiness.FLOW_CONSUMED, satisfier, burned_units)
 		b.last_revenue -= burned_units * (markets[b.settlement_id] as HEMarket).price[satisfier]
 
 ## One day of growth for every field of a land-based business: today's
@@ -1299,7 +1305,7 @@ func _record_business_revenue_history() -> void:
 		var revenue_per_worker: float = b.last_revenue / maxi(employed, 1)
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
-		b.record_production_day()
+		b.record_flow_day()
 
 ## One person's daily use of `commodity` lives in HENeeds, so a household's
 ## need and the reference wage's cost of living can never drift apart.
@@ -2036,6 +2042,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 
 		if seller != null:
 			seller.consume(commodity, quantity_traded)
+			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity_traded)
 			var revenue := quantity_traded * price
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
@@ -2120,6 +2127,7 @@ func _run_trade(record: Dictionary) -> void:
 			var local_price: float = local_market.price[commodity]
 			var pay_price: float = local_price * TRADER_BUY_PRICE_FRACTION
 			seller.consume(commodity, quantity)
+			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
 			# Adds to whatever seller.last_revenue this same tick's earlier
 			# steps (_run_input_purchasing, local market clearing) already
 			# contributed -- tomorrow's wage for THIS business is funded by
@@ -2547,12 +2555,14 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			buyer.balance -= cost
 			buyer.last_cash_change -= cost
 			buyer.add_stock(commodity, bought)
+			buyer.add_flow(HEBusiness.FLOW_BOUGHT, commodity, bought)
 			var name := Commodity.name_of(commodity)
 			record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
 
 			var seller := _business_selling(buyer.settlement_id, commodity)
 			if seller != null:
 				seller.consume(commodity, bought)
+				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
 				seller.balance += cost
 				seller.last_revenue += cost
 				seller.last_cash_change += cost
