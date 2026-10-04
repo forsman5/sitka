@@ -1600,7 +1600,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		var promoted := h.evaluate_aging()
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
-			new_households.append(_split_off_new_household(h, pre_split_headcount - i))
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
 		if h.evaluate_birth():
 			births += 1
@@ -1624,7 +1624,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 ## left, since evaluate_aging() may have promoted several at once this same
 ## period) -- a plain transfer, not a gift from nowhere, so total city
 ## money/goods are unaffected by a household splitting.
-func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int) -> HEHousehold:
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int) -> HEHousehold:
 	var new_id := _next_household_id
 	_next_household_id += 1
 	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
@@ -1640,7 +1640,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 
 	_log_event("split", {
 		"parent_household_id": parent.id, "new_household_id": new_id,
-		"starting_balance": starting_balance,
+		"starting_balance": starting_balance, "member_number": member_number,
 	})
 	return new_household
 

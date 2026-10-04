@@ -20,6 +20,9 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
 const BLOTTER_HISTORY_DAYS := 30
+## Household detail looks back as far as the sim retains events
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
@@ -770,6 +773,29 @@ func _refresh_household_detail() -> void:
 	for child in _household_detail_content.get_children():
 		_household_detail_content.remove_child(child)
 		child.queue_free()
+
+	# TODO: pull names -- members are just numbered by index for now.
+	_add_household_detail_heading("Members (%d)" % h["headcount"])
+	var member_index := 1
+	for age in h["worker_ages"]:
+		_add_household_detail_line("Member %d: worker, age %s" % [member_index, _format_age(age)])
+		member_index += 1
+	for age in h["dependent_ages"]:
+		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
+		member_index += 1
+
+	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
+	var event_lines: Array[String] = []
+	var events := _simulation.get_event_log_days(HOUSEHOLD_EVENT_HISTORY_DAYS)
+	for i in range(events.size() - 1, -1, -1):
+		if _is_household_event(events[i], _selected_household_id):
+			event_lines.append(_format_event(events[i]))
+	var events_display := RichTextLabel.new()
+	events_display.bbcode_enabled = true
+	events_display.fit_content = true
+	events_display.scroll_active = false
+	events_display.text = "\n".join(event_lines) if not event_lines.is_empty() else "[i]No events in this window.[/i]"
+	_household_detail_content.add_child(events_display)
 
 	_add_household_detail_heading("Inventory")
 	var inventory: Dictionary = h["inventory"]
@@ -1795,6 +1821,23 @@ func _format_day(day: int) -> String:
 		return "Day %d" % day
 	return "Year %d, Day %d" % [year, day % 365]
 
+## 456 days -> "1 years 91 days". Ages are durations, so unlike _format_day
+## the year is always shown.
+func _format_age(age_days: int) -> String:
+	return "%d years %d days" % [age_days / 365, age_days % 365]
+
+## Household-detail events: life events only (births, deaths, leaving, splits,
+## adoptions); hiring/firing and herd events stay on the main blotter.
+func _is_household_event(event: Dictionary, household_id: int) -> bool:
+	match event["type"]:
+		"birth", "old_age", "emigrate":
+			return event["household_id"] == household_id
+		"split":
+			return event["parent_household_id"] == household_id or event["new_household_id"] == household_id
+		"adopted":
+			return event["household_id"] == household_id or event["adopting_household_id"] == household_id
+	return false
+
 func _format_event(event: Dictionary) -> String:
 	var day: String = _format_day(event["day"])
 	match event["type"]:
@@ -1812,7 +1855,7 @@ func _format_event(event: Dictionary) -> String:
 			var dep_plural := "s" if dep_count != 1 else ""
 			return "[color=#a0a0a0]%s - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
-			return "[color=#8db4e0]%s - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+			return "[color=#8db4e0]%s - Household %d split: Member %d left to found Household %d[/color]" % [day, event["parent_household_id"], event["member_number"], event["new_household_id"]]
 		"coming_of_age":
 			return "[color=#d9c98f]%s - Household %d: member came of age[/color]" % [day, event["household_id"]]
 		"job":
