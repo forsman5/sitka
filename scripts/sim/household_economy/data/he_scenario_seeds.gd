@@ -29,6 +29,12 @@ const IRON_MINE_BUSINESS_ID := 5
 ## -- the opt-in scenarios and the ranches can all be present at once.
 const CATTLE_RANCH_BUSINESS_ID := 6
 const SHEEP_FARM_BUSINESS_ID := 7
+## The town government (Kind.GOVERNMENT): a treasury filled by sales tax that
+## pays one permanent administrator household. Present in every _build_world
+## town, including build_custom's, which never offers it as a choice.
+const GOVERNMENT_BUSINESS_ID := 8
+## Days of administrator wages a new government's treasury starts with.
+const STARTING_TREASURY_DAYS := 10.0
 
 const HOUSEHOLD_COUNT := 30
 
@@ -318,7 +324,54 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		households[household_id] = household
 		settlement.household_ids.append(household_id)
 
+	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
+
 	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses}
+
+## Adds a Government business to `settlement` and employs one existing
+## household as its permanent administrator (the last unemployed household,
+## else the last one of the most-staffed business, so the existing day-one
+## staffing barely shifts -- population is unchanged; the donor employer's
+## weekly reconcile refills the slot). Starts with a small treasury float
+## (STARTING_TREASURY_DAYS of wages); after that the administrator is paid out
+## of sales tax alone. Public so a multi-town
+## builder (the valley) can give each settlement its own, with a unique id.
+## TODO(builders): seed builder_slots and builder households here once the
+## builder jobs are modeled (see HEBusiness.builder_slots).
+static func add_government(settlement: HESettlement, households: Dictionary, businesses: Dictionary, government_id: int) -> HEBusiness:
+	var gov := HEBusiness.new(government_id, "Government", null, WORKER_CAPACITY, WORKER_CAPACITY, HEBusiness.Kind.GOVERNMENT, settlement.id)
+	# A small float so day-one wages aren't rationed while the first sales
+	# tax trickles in (probed: an empty treasury rationed the administrator
+	# for ~9 days); from then on tax alone sustains the wage.
+	gov.balance = STARTING_TREASURY_DAYS * _estimated_starting_reference_wage() * WORKER_CAPACITY
+	businesses[government_id] = gov
+	settlement.business_ids.append(government_id)
+	var admin: HEHousehold = null
+	for household_id in settlement.household_ids:
+		var h: HEHousehold = households[household_id]
+		if h.worker_capacity() > 0 and h.employer_business_id == -1:
+			admin = h
+	if admin == null:
+		# Draw from the business with the most households (its last one) --
+		# the small Trader/Bloomery/Mine slices are tuned tightly and a day-
+		# one short crew there visibly shifts trade (see the Trader churn and
+		# Bloomery checks in run_household_economy.gd).
+		var staff_by_employer: Dictionary = {}
+		for household_id in settlement.household_ids:
+			var h: HEHousehold = households[household_id]
+			if h.worker_capacity() > 0 and h.employer_business_id != -1:
+				staff_by_employer[h.employer_business_id] = staff_by_employer.get(h.employer_business_id, 0) + 1
+		var donor_id := -1
+		for employer_id in staff_by_employer.keys():
+			if donor_id == -1 or staff_by_employer[employer_id] > staff_by_employer[donor_id] or (staff_by_employer[employer_id] == staff_by_employer[donor_id] and employer_id < donor_id):
+				donor_id = employer_id
+		for household_id in settlement.household_ids:
+			var h: HEHousehold = households[household_id]
+			if h.worker_capacity() > 0 and h.employer_business_id == donor_id:
+				admin = h
+	if admin != null:
+		admin.employer_business_id = government_id
+	return gov
 
 ## Evenly staffed on day one -- HOUSEHOLD_COUNT*WORKER_CAPACITY workers split
 ## with a small slice going to the Trader and the rest split 50/50 between
@@ -401,7 +454,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
 	for business_id in businesses.keys():
-		if not included.has(business_id):
+		if business_id != GOVERNMENT_BUSINESS_ID and not included.has(business_id):
 			businesses.erase(business_id)
 			settlement.business_ids.erase(business_id)
 	return world
