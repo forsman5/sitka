@@ -76,6 +76,9 @@ var _trader_settings_list: VBoxContainer
 var _trader_settings_button: Button
 var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
+var _business_detail_production_section: VBoxContainer
+var _business_detail_production_legend: HBoxContainer
+var _business_detail_production_chart: HESparkline
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
@@ -334,6 +337,25 @@ func _build_ui() -> void:
 	_business_detail_sparkline = HESparkline.new()
 	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
 	detail_content.add_child(_business_detail_sparkline)
+
+	_business_detail_production_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_production_section)
+
+	var production_header := HBoxContainer.new()
+	production_header.add_theme_constant_override("separation", 12)
+	_business_detail_production_section.add_child(production_header)
+	var production_history_label := Label.new()
+	production_history_label.text = "Goods produced per day (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	production_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	production_header.add_child(production_history_label)
+	_business_detail_production_legend = HBoxContainer.new()
+	_business_detail_production_legend.add_theme_constant_override("separation", 12)
+	production_header.add_child(_business_detail_production_legend)
+
+	_business_detail_production_chart = HESparkline.new()
+	_business_detail_production_chart.custom_minimum_size = Vector2(0, 60)
+	_business_detail_production_chart.show_max_label = true
+	_business_detail_production_section.add_child(_business_detail_production_chart)
 
 	_business_detail_grid = GridContainer.new()
 	_business_detail_grid.columns = 2
@@ -705,6 +727,7 @@ func _refresh_business_detail() -> void:
 		_trader_settings_open = false
 	_update_trader_detail_page()
 	_business_detail_sparkline.set_data(report["balance_history"])
+	_refresh_business_production_chart(report)
 
 	for child in _business_detail_grid.get_children():
 		_business_detail_grid.remove_child(child)
@@ -789,6 +812,28 @@ func _refresh_business_detail() -> void:
 		_refresh_trader_transactions()
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
+
+## Only PRODUCTION businesses report production_history (traders and herds
+## produce nothing through a recipe), so the section hides for the rest. One
+## line per output commodity on a shared axis, with a color-keyed legend.
+func _refresh_business_production_chart(report: Dictionary) -> void:
+	var production_history: Array = report.get("production_history", [])
+	_business_detail_production_section.visible = not production_history.is_empty()
+	for child in _business_detail_production_legend.get_children():
+		_business_detail_production_legend.remove_child(child)
+		child.queue_free()
+	if production_history.is_empty():
+		return
+	var series: Array = []
+	for i in production_history.size():
+		var entry: Dictionary = production_history[i]
+		var color := HESparkline.color_for_series(i)
+		series.append({"values": entry["values"], "color": color})
+		var legend_label := Label.new()
+		legend_label.text = entry["commodity"]
+		legend_label.add_theme_color_override("font_color", color)
+		_business_detail_production_legend.add_child(legend_label)
+	_business_detail_production_chart.set_series(series)
 
 ## value is either plain text or an Array of [commodity_name, text] parts;
 ## each part gets the good's icon in front of its text (the name stays in the
