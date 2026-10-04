@@ -54,6 +54,10 @@ var _known_market_commodities: Array = [] # rebuild trigger -- see _refresh()
 var _business_list: VBoxContainer
 var _business_rows: Dictionary = {} # business_id -> {row labels...}
 var _household_list: VBoxContainer
+var _jobs_list: VBoxContainer
+var _job_rows: Dictionary = {} # business_id -> {name, capacity, max_capacity, employed, open}
+var _job_totals: Dictionary = {}
+var _unemployed_label: Label
 var _household_rows: Dictionary = {} # household_id -> {row labels...}
 var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
@@ -101,6 +105,9 @@ var _selected_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
+## User toggle for the market chart's "Requested" series -- see
+## _add_market_detail_chart.
+var _market_chart_export_appetite := false
 var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
@@ -257,11 +264,6 @@ func _build_ui() -> void:
 	household_column.size_flags_stretch_ratio = 2.0
 	lower_row.add_child(household_column)
 
-	var household_header := Label.new()
-	household_header.text = "Households"
-	household_header.add_theme_font_size_override("font_size", 16)
-	household_column.add_child(household_header)
-
 	# Plain Control, not another box container -- both children below are
 	# anchored to fill it completely, so whichever one is .visible occupies
 	# the WHOLE area rather than the two sharing it top-to-bottom. That's
@@ -273,9 +275,23 @@ func _build_ui() -> void:
 	content_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	household_column.add_child(content_area)
 
+	# Jobs (index 0) is a collapsed one-row-per-business view; Households
+	# (index 1) is the per-household table. The detail panels added below sit
+	# over the whole tab container, so they still override whichever is showing.
+	var list_tabs := TabContainer.new()
+	list_tabs.set_anchors_preset(Control.PRESET_FULL_RECT)
+	content_area.add_child(list_tabs)
+
+	var jobs_scroll := ScrollContainer.new()
+	jobs_scroll.name = "Jobs"
+	list_tabs.add_child(jobs_scroll)
+	_jobs_list = VBoxContainer.new()
+	_jobs_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	jobs_scroll.add_child(_jobs_list)
+
 	var scroll := ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	content_area.add_child(scroll)
+	scroll.name = "Households"
+	list_tabs.add_child(scroll)
 
 	_household_list = VBoxContainer.new()
 	_household_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -499,6 +515,14 @@ func _build_ui() -> void:
 	market_close.tooltip_text = "Close (back to household list)"
 	market_close.pressed.connect(_on_market_detail_close_pressed)
 	market_title_bar.add_child(market_close)
+	# Outside _market_detail_content on purpose: that content is rebuilt on
+	# every refresh, and recreating a checkbox mid-click would swallow it.
+	var export_toggle := CheckBox.new()
+	export_toggle.text = "Count Trader export capacity as demand"
+	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's remaining capacity, i.e. what it would take if the seller had the stock."
+	export_toggle.button_pressed = _market_chart_export_appetite
+	export_toggle.toggled.connect(_on_market_export_appetite_toggled)
+	market_detail_box.add_child(export_toggle)
 	var market_scroll := ScrollContainer.new()
 	market_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	market_detail_box.add_child(market_scroll)
@@ -755,11 +779,45 @@ func _refresh_market_detail() -> void:
 	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
 	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
 	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
 	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
+
+## Last 90 days of supplied (offered) vs. requested (affordable) quantity on
+## one shared axis, with a color-keyed legend. Rebuilt with the rest of the
+## detail content each refresh.
+func _add_market_detail_chart(report: Dictionary) -> void:
+	var supplied_color := HESparkline.color_for_series(0)
+	var requested_color := HESparkline.color_for_series(1)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	_market_detail_content.add_child(header)
+	var title := Label.new()
+	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
+	var requested_history: Array = report["demanded_with_export_history"] if _market_chart_export_appetite else report["demanded_history"]
+	for entry in [["Supplied", supplied_color], [requested_name, requested_color]]:
+		var legend := Label.new()
+		legend.text = entry[0]
+		legend.add_theme_color_override("font_color", entry[1])
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 60)
+	chart.show_max_label = true
+	chart.set_series([
+		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
+		{"name": "Requested", "values": requested_history, "color": requested_color},
+	])
+	_market_detail_content.add_child(chart)
+
+func _on_market_export_appetite_toggled(enabled: bool) -> void:
+	_market_chart_export_appetite = enabled
+	_refresh_market_detail()
 
 func _add_market_detail_line(value: String) -> void:
 	var label := Label.new()
@@ -1019,7 +1077,7 @@ func _refresh_trader_transactions() -> void:
 		if _trader_transaction_filter != "both" and direction != _trader_transaction_filter:
 			continue
 		var values := [
-			str(transaction["day"]),
+			_format_day(transaction["day"]),
 			direction.capitalize(),
 			transaction["commodity"],
 			"%.1f" % transaction["quantity"],
@@ -1063,7 +1121,7 @@ func _refresh_business_employment() -> void:
 				_:
 					reason = "Target capacity %d to %d" % [event["old_capacity"], event["new_capacity"]]
 		var values := [
-			str(event["day"]),
+			_format_day(event["day"]),
 			"Hired" if event_type == "job" else "Fired",
 			str(event["household_id"]),
 			str(event["workers"]),
@@ -1219,6 +1277,94 @@ func _rebuild_business_rows() -> void:
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels
+	_rebuild_job_rows()
+
+## One row per business (not per household): target capacity, max capacity and
+## how many workers are employed. Filled in by _refresh_job_rows.
+func _rebuild_job_rows() -> void:
+	for child in _jobs_list.get_children():
+		_jobs_list.remove_child(child)
+		child.queue_free()
+	_job_rows.clear()
+	_job_totals.clear()
+
+	var grid := GridContainer.new()
+	grid.columns = 5
+	_jobs_list.add_child(grid)
+	for col_label in ["Business", "Employed", "Target", "Max capacity", "Open (vs max)"]:
+		var header := Label.new()
+		header.text = col_label
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(header)
+
+	for report in _simulation.get_business_reports():
+		var business_id: int = report["business_id"]
+		var name_button := Button.new()
+		name_button.custom_minimum_size = Vector2(110, 0)
+		name_button.flat = true
+		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_button.pressed.connect(_on_business_row_selected.bind(business_id))
+		grid.add_child(name_button)
+		var labels := {"name": name_button}
+		for key in ["employed", "capacity", "max_capacity", "open"]:
+			var label := Label.new()
+			label.custom_minimum_size = Vector2(90, 0)
+			grid.add_child(label)
+			labels[key] = label
+		_job_rows[business_id] = labels
+
+	var total_name := Label.new()
+	total_name.text = "Total"
+	total_name.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	grid.add_child(total_name)
+	for key in ["employed", "capacity", "max_capacity", "open"]:
+		var label := Label.new()
+		label.custom_minimum_size = Vector2(90, 0)
+		label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(label)
+		_job_totals[key] = label
+
+	_unemployed_label = Label.new()
+	_unemployed_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_jobs_list.add_child(_unemployed_label)
+
+func _refresh_job_rows() -> void:
+	var total_employed := 0
+	var total_capacity := 0
+	var total_max := 0
+	for report in _simulation.get_business_reports():
+		total_employed += report["employed_workers"]
+		total_capacity += report["capacity"]
+		total_max += report["max_capacity"]
+		var row: Dictionary = _job_rows.get(report["business_id"], {})
+		if row.is_empty():
+			continue
+		(row["name"] as Button).text = report["name"]
+		(row["employed"] as Label).text = str(report["employed_workers"])
+		(row["capacity"] as Label).text = str(report["capacity"])
+		(row["max_capacity"] as Label).text = str(report["max_capacity"])
+		(row["open"] as Label).text = str(maxi(report["max_capacity"] - report["employed_workers"], 0))
+	if _job_totals.is_empty():
+		return
+	(_job_totals["employed"] as Label).text = str(total_employed)
+	(_job_totals["capacity"] as Label).text = str(total_capacity)
+	(_job_totals["max_capacity"] as Label).text = str(total_max)
+	(_job_totals["open"] as Label).text = str(maxi(total_max - total_employed, 0))
+
+	# Workers in households with no employer, against the jobs businesses are
+	# currently trying to fill (target minus employed). Red when both exist at
+	# once -- people without work while jobs sit open.
+	var unemployed_workers := 0
+	var unemployed_households := 0
+	for household_id in _simulation.get_household_ids():
+		var h := _simulation.get_household_summary(household_id)
+		if _business_names.has(h["employer_business_id"]):
+			continue
+		unemployed_households += 1
+		unemployed_workers += h["worker_capacity"]
+	var open_targets := maxi(total_capacity - total_employed, 0)
+	_unemployed_label.text = "Unemployed: %d workers (%d households)  |  %d openings at current targets" % [unemployed_workers, unemployed_households, open_targets]
+	_unemployed_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.5) if unemployed_workers > 0 and open_targets > 0 else Color(0.75, 0.75, 0.8))
 
 func _rebuild_household_rows() -> void:
 	_known_household_ids = _simulation.get_household_ids()
@@ -1301,7 +1447,7 @@ func _rebuild_household_rows() -> void:
 
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
-	_day_label.text = "Day %d" % clock["day"]
+	_day_label.text = _format_day(clock["day"])
 
 	var city := _simulation.get_city_summary()
 	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f  import cost (lifetime)=%.1f" % [
@@ -1381,6 +1527,8 @@ func _refresh() -> void:
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
 
+	_refresh_job_rows()
+
 	if _selected_business_id != -1:
 		_refresh_business_detail()
 
@@ -1446,39 +1594,46 @@ func _refresh_blotter() -> void:
 		return
 	_blotter_display.text = "\n".join(lines)
 
+## Day 456 -> "Year 1, Day 91". Within the first year, just "Day N".
+func _format_day(day: int) -> String:
+	var year := day / 365
+	if year <= 0:
+		return "Day %d" % day
+	return "Year %d, Day %d" % [year, day % 365]
+
 func _format_event(event: Dictionary) -> String:
-	var day: int = event["day"]
+	var day: String = _format_day(event["day"])
 	match event["type"]:
 		"birth":
-			return "[color=#8fd98f]Day %d - Household %d: birth[/color]" % [day, event["household_id"]]
+			return "[color=#8fd98f]%s - Household %d: birth[/color]" % [day, event["household_id"]]
 		"emigrate":
 			var suffix := " - household ended" if event["household_ended"] else ""
-			return "[color=#e08d8d]Day %d - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
+			return "[color=#e08d8d]%s - Household %d: %s emigrated (starvation)%s[/color]" % [day, event["household_id"], event["member_type"], suffix]
 		"old_age":
 			var count: int = event["count"]
 			var plural := "s" if count != 1 else ""
-			return "[color=#a0a0a0]Day %d - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
+			return "[color=#a0a0a0]%s - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
 		"adopted":
 			var dep_count: int = event["dependents"]
 			var dep_plural := "s" if dep_count != 1 else ""
-			return "[color=#a0a0a0]Day %d - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
+			return "[color=#a0a0a0]%s - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
-			return "[color=#8db4e0]Day %d - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+			return "[color=#8db4e0]%s - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
 		"coming_of_age":
-			return "[color=#d9c98f]Day %d - Household %d: member came of age[/color]" % [day, event["household_id"]]
+			return "[color=#d9c98f]%s - Household %d: member came of age[/color]" % [day, event["household_id"]]
 		"job":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#8fd9d0]Day %d - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
+			return "[color=#8fd9d0]%s - Household %d: hired by %s[/color]" % [day, event["household_id"], employer]
 		"herd_birth":
 			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var condition := "" if event["fed"] else " (overgrazed)"
-			return "[color=#8fd98f]Day %d - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
+			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#d9c98f]Day %d - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
+			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
 		"hardship_butcher":
 			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#e0b080]Day %d - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
+			return "[color=#e0b080]%s - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
 				day, owner_name, event["head"], event["proceeds"], event["shortfall"], event["herd_after"]]
 		"fired":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
@@ -1490,6 +1645,6 @@ func _format_event(event: Dictionary) -> String:
 					reason = "cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
-			return "[color=#e09a8d]Day %d - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
+			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
 		_:
-			return "Day %d - %s" % [day, event["type"]]
+			return "%s - %s" % [day, event["type"]]
