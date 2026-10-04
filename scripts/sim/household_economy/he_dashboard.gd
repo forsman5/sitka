@@ -55,13 +55,9 @@ const BLOTTER_FILTERS := [
 	{"type": "fired", "label": "Firing / layoffs"},
 ]
 
-const SCENARIOS := [
-	{"label": "Five businesses, evenly staffed", "builder": "build_three_business_economy"},
-	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start"},
-	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
-	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
-	{"label": "Eight businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner"},
-]
+## Set by the config page (he_config.gd) before it switches to this scene.
+## Falls back to the evenly staffed preset if the scene is opened directly.
+static var pending_builder: Callable = Callable()
 
 var _simulation: HESimulation
 var _speed_multiplier: float = 1.0
@@ -144,7 +140,7 @@ func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
-	_load_scenario(0)
+	_load_scenario()
 	_build_ui()
 	_refresh()
 
@@ -182,9 +178,11 @@ func _process(delta: float) -> void:
 		_day_accumulator -= 1.0
 	_refresh()
 
-func _load_scenario(index: int) -> void:
-	var scenario: Dictionary = SCENARIOS[index]
-	_simulation = HESimulation.new(SEED, Callable(HEScenarioSeeds, scenario["builder"]))
+func _load_scenario() -> void:
+	var builder := pending_builder
+	if not builder.is_valid():
+		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+	_simulation = HESimulation.new(SEED, builder)
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
@@ -223,16 +221,6 @@ func _build_ui() -> void:
 	_day_label = Label.new()
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
-
-	var scenario_picker := OptionButton.new()
-	for scenario in SCENARIOS:
-		scenario_picker.add_item(scenario["label"])
-	scenario_picker.item_selected.connect(func(index: int) -> void:
-		_load_scenario(index)
-		_rebuild_business_rows()
-		_rebuild_household_rows()
-		_refresh())
-	top_bar.add_child(scenario_picker)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
