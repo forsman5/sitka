@@ -1,0 +1,51 @@
+name: Preview cleanup
+
+# Backstop for missed `closed` events (runner down, cancelled run) and for temp dirs
+# orphaned when a runner pod is killed mid-deploy.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gc:
+    runs-on: sitka
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kubectl
+
+      - id: prs
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            core.setOutput('open', prs.map(p => p.number).join(' '));
+
+      - name: Remove previews for closed PRs and stale temp dirs
+        env:
+          OPEN_PRS: ${{ steps.prs.outputs.open }}
+        run: |
+          POD=$(kubectl -n gamedev get pod -l app.kubernetes.io/name=gamedev-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          test -n "$POD"
+          # OPEN_PRS is numbers only (from the API); intentionally unquoted to split into args.
+          kubectl -n gamedev exec "$POD" -- sh -c '
+            root=${1:?}; shift
+            find "$root" -maxdepth 1 -name ".tmp-*" -mmin +1440 -exec rm -rf {} +
+            [ -d "$root/previews" ] || exit 0
+            for d in "$root"/previews/sitka-pr-*; do
+              [ -e "$d" ] || continue
+              n=${d##*sitka-pr-}
+              keep=0
+              for o in "$@"; do [ "$o" = "$n" ] && keep=1; done
+              if [ "$keep" = 0 ]; then echo "removing $d"; rm -rf "$d"; fi
+            done
+          ' _ /app/exports/web $OPEN_PRS
