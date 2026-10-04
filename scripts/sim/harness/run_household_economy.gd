@@ -5,7 +5,8 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
-const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
+const Commodity =preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 
 ## H1 labor-market acceptance check. Run with:
@@ -22,6 +23,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_production_history_matches_daily_record()
+	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -205,6 +207,23 @@ func _check_production_history_matches_daily_record() -> void:
 		_assert(absf(total - expected_total) < 0.01 + 0.0001 * expected_total, "%s history total %.2f should match the daily record's %.2f" % [report["name"], total, expected_total])
 		checked += 1
 	_assert(checked > 0, "Scenario should contain at least one production business")
+
+func _check_market_supply_demand_history() -> void:
+	print("\n=== Market detail carries a rolling supplied/requested history ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	sim.advance_ticks(100)
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var window := HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	var any_activity := false
+	for commodity in sim.markets[settlement_id].price.keys():
+		var report := sim.get_market_detail(settlement_id, commodity)
+		var supplied: Array = report["supplied_history"]
+		var demanded: Array = report["demanded_history"]
+		_assert(supplied.size() == window and demanded.size() == window, "%s history should be capped at %d days, got %d/%d" % [Commodity.name_of(commodity), window, supplied.size(), demanded.size()])
+		for v in supplied + demanded:
+			if v > 0.0:
+				any_activity = true
+	_assert(any_activity, "At least one market should show nonzero supply or demand over 100 days")
 
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")

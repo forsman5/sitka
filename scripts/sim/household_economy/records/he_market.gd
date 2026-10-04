@@ -18,3 +18,31 @@ var last_clearing: Dictionary[Commodity.Type, Dictionary] = {}
 
 func _init(starting_price: Dictionary) -> void:
 	price.assign(starting_price)
+
+## Rolling per-commodity history of each day's clearing, oldest first, capped
+## at SUPPLY_DEMAND_HISTORY_WINDOW_DAYS. "supplied" is total_offered and
+## "demanded" is total_requested_funded (the affordable request) from
+## last_clearing; a day with no clearing records 0 for both so the chart's
+## x-axis stays one point per day.
+const SUPPLY_DEMAND_HISTORY_WINDOW_DAYS := 90
+var _supplied_history: Dictionary[Commodity.Type, Array] = {}
+var _demanded_history: Dictionary[Commodity.Type, Array] = {}
+
+func record_supply_demand_history() -> void:
+	for commodity in price.keys():
+		var clearing: Dictionary = last_clearing.get(commodity, {})
+		_push_history(_supplied_history, commodity, clearing.get("total_offered", 0.0))
+		_push_history(_demanded_history, commodity, clearing.get("total_requested_funded", 0.0))
+
+func _push_history(store: Dictionary, commodity: Commodity.Type, value: float) -> void:
+	var series: Array = store.get(commodity, [])
+	series.append(value)
+	if series.size() > SUPPLY_DEMAND_HISTORY_WINDOW_DAYS:
+		series.pop_front()
+	store[commodity] = series
+
+func supplied_history(commodity: Commodity.Type) -> Array:
+	return (_supplied_history.get(commodity, []) as Array).duplicate()
+
+func demanded_history(commodity: Commodity.Type) -> Array:
+	return (_demanded_history.get(commodity, []) as Array).duplicate()

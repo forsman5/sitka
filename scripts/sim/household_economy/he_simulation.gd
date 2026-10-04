@@ -763,6 +763,8 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"commodity_id": commodity,
 		"price": local_market.price[commodity],
 		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
+		"supplied_history": local_market.supplied_history(commodity),
+		"demanded_history": local_market.demanded_history(commodity),
 	}
 
 func get_trader_export_settings(business_id: int) -> Array:
@@ -988,6 +990,8 @@ func _daily_tick() -> void:
 	_run_production(record)
 	_run_market(record)
 	_run_trade(record)
+	for market in markets.values():
+		(market as HEMarket).record_supply_demand_history()
 	_record_business_revenue_history()
 	_run_consumption(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
