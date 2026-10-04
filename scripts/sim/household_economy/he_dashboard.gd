@@ -616,6 +616,16 @@ func _refresh_household_detail() -> void:
 		_household_detail_content.remove_child(child)
 		child.queue_free()
 
+	# TODO: pull names -- members are just numbered by index for now.
+	_add_household_detail_heading("Members (%d)" % h["headcount"])
+	var member_index := 1
+	for age in h["worker_ages"]:
+		_add_household_detail_line("Member %d: worker, age %d days" % [member_index, age])
+		member_index += 1
+	for age in h["dependent_ages"]:
+		_add_household_detail_line("Member %d: dependent, age %d days" % [member_index, age])
+		member_index += 1
+
 	_add_household_detail_heading("Inventory")
 	var inventory: Dictionary = h["inventory"]
 	for commodity_name in inventory.keys():
