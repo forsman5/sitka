@@ -43,6 +43,15 @@ extends RefCounted
 ## field-model business gets, even though it has no `fields` of its own --
 ## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
 ##
+## A PRODUCTION business with `processes_livestock` set (the Butcher) is a
+## fourth shape: its recipe has outputs only (MEAT and LEATHER), and its
+## input is whichever live CATTLE/SHEEP the settlement's ranches hold. It
+## buys culled head from the ranches locally -- a better price than the
+## Trader's discounted export -- and turns them into goods, limited by labor
+## (see he_simulation.gd's BUTCHERY_* constants, _run_livestock_purchasing
+## and _run_butchery). It is staffed by individual workers and self-tunes
+## its capacity like any other PRODUCTION business.
+##
 ## A PRODUCTION business's `recipe.inputs` (e.g. the Bloomery: wood +
 ## iron ore -> iron) are bought business-to-business and retained in its
 ## inventory until production consumes them. An input nothing local
@@ -91,6 +100,11 @@ var kind: Kind
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int
+## Capacity self-tuning never lays this business below this many employee
+## slots. 0 (the default) lets any business shut down; the Butcher keeps a
+## skeleton crew because its work arrives in lumps (a ranch's cull), so a
+## business tuned to zero between culls would miss the next one entirely.
+var min_capacity: int = 0
 
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
@@ -102,6 +116,11 @@ var balance: float = 0.0
 ## _run_input_purchasing and _run_production. A business whose input must stay
 ## that exact good (a charcoal burner's timber is raw material) leaves it empty.
 var need_inputs: Dictionary[Commodity.Type, int] = {}
+
+## Kind.PRODUCTION only: this business converts live CATTLE/SHEEP bought from
+## local ranches into its recipe outputs (the Butcher) instead of drawing on
+## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
+var processes_livestock: bool = false
 
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
@@ -249,19 +268,29 @@ func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_i
 	species = p_species
 	herd_size = p_herd_size
 
-## H1's PRODUCTION businesses each have exactly one recipe output (Farm ->
-## grain, Woodlot -> timber); a business with a multi-output recipe isn't
-## supported by this single-commodity assumption. Never called on a
-## Kind.TRADER or Kind.HERD business, neither of which has a recipe.
+## The primary recipe output (Farm -> grain, Woodlot -> timber, Butcher ->
+## meat). Most PRODUCTION businesses have exactly one; for a multi-output
+## recipe use sells() to ask about the others. Never called on a Kind.TRADER
+## or Kind.HERD business, neither of which has a recipe.
 func output_commodity() -> Commodity.Type:
 	return recipe.outputs.keys()[0]
+
+## Whether this PRODUCTION business sells `commodity`. A multi-output recipe
+## (the Butcher's meat and leather) sells every output; output_commodity() is
+## only the primary one, used for single-good reporting.
+func sells(commodity: Commodity.Type) -> bool:
+	return kind == Kind.PRODUCTION and recipe != null and recipe.outputs.has(commodity)
+
+## The commodity a live animal of `p_species` is held and traded as.
+static func livestock_commodity(p_species: Species) -> Commodity.Type:
+	return Commodity.Type.CATTLE if p_species == Species.CATTLE else Commodity.Type.SHEEP
 
 ## Kind.HERD only: which commodity this ranch's live herd converts into when
 ## culled (see he_simulation.gd's _run_herds). Sheep also produce WOOL, but
 ## that's a passive trickle from herd_size, not this herd's "primary" output,
 ## so it isn't returned here.
 func herd_commodity() -> Commodity.Type:
-	return Commodity.Type.CATTLE if species == Species.CATTLE else Commodity.Type.SHEEP
+	return livestock_commodity(species)
 
 func stock(commodity: Commodity.Type) -> float:
 	return inventory.get(commodity, 0.0)

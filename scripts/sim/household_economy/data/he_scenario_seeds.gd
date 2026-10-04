@@ -29,6 +29,16 @@ const IRON_MINE_BUSINESS_ID := 5
 ## -- the opt-in scenarios and the ranches can all be present at once.
 const CATTLE_RANCH_BUSINESS_ID := 6
 const SHEEP_FARM_BUSINESS_ID := 7
+const BUTCHER_BUSINESS_ID := 8
+
+## The Butcher turns the ranches' culled livestock into meat and leather (see
+## HESimulation's BUTCHERY_* constants). It keeps one household on year-round
+## -- ranch culls arrive in lumps every HERD_EVAL_INTERVAL_DAYS, and a
+## business tuned to zero between them would miss the next one -- and may grow
+## to a second when there is enough to process. Like the ranches it has no
+## day-one employees: it is hired from the unemployed pool.
+const BUTCHER_MIN_CAPACITY := 2
+const BUTCHER_MAX_CAPACITY := 4
 
 const HOUSEHOLD_COUNT := 30
 
@@ -140,6 +150,17 @@ static func _woodlot_recipe() -> Recipe:
 ## deliberately high (see BASE_PRICE's Iron comment) since, unlike Farm/
 ## Woodlot, EVERY unit the Bloomery sells goes through that same export
 ## discount rather than mostly selling to local households at full price.
+## Outputs only: the butchery pass (he_simulation.gd's _run_butchery) draws on
+## live livestock instead of recipe.inputs. The rates are the nominal output
+## per worker-day working cattle, which is what the "planned" figure shows.
+static func _butcher_recipe() -> Recipe:
+	var cattle := HEBusiness.Species.CATTLE
+	var cattle_head_per_worker_day: float = 1.0 / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[cattle]
+	return Recipe.new("butcher", {}, {
+		Commodity.Type.MEAT: HESimulation.BUTCHERY_MEAT_PER_HEAD[cattle] * cattle_head_per_worker_day,
+		Commodity.Type.LEATHER: HESimulation.BUTCHERY_LEATHER_PER_HEAD[cattle] * cattle_head_per_worker_day,
+	})
+
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
@@ -239,10 +260,18 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var sheep_farm := HEBusiness.new(SHEEP_FARM_BUSINESS_ID, "Sheep Farm", null, herd_max_capacity(HEBusiness.Species.SHEEP), 0, HEBusiness.Kind.HERD, SETTLEMENT_ID, HEBusiness.Species.SHEEP, SHEEP_STARTING_HERD)
 	sheep_farm.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 
+	var butcher := HEBusiness.new(BUTCHER_BUSINESS_ID, "Butcher", _butcher_recipe(), BUTCHER_MAX_CAPACITY, BUTCHER_MIN_CAPACITY, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+	butcher.processes_livestock = true
+	butcher.min_capacity = BUTCHER_MIN_CAPACITY
+	# Meat and leather sell down over the following cull cycle, so smooth its
+	# revenue over that cycle like a ranch (see HEBusiness.has_long_cycle()).
+	butcher.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
+
 	var estimated_wage := _estimated_starting_reference_wage()
 	farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * farm_capacity
 	woodlot.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * woodlot_capacity
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
+	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY
 
 	var farm_days_to_first_harvest: int = FARM_GROWTH_DAYS - FARM_FIELD_START_DAYS.max()
 	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
@@ -255,12 +284,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		TRADER_BUSINESS_ID: trader,
 		CATTLE_RANCH_BUSINESS_ID: cattle_ranch,
 		SHEEP_FARM_BUSINESS_ID: sheep_farm,
+		BUTCHER_BUSINESS_ID: butcher,
 	}
 	settlement.business_ids.append(FARM_BUSINESS_ID)
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
 	settlement.business_ids.append(TRADER_BUSINESS_ID)
 	settlement.business_ids.append(CATTLE_RANCH_BUSINESS_ID)
 	settlement.business_ids.append(SHEEP_FARM_BUSINESS_ID)
+	settlement.business_ids.append(BUTCHER_BUSINESS_ID)
 
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
