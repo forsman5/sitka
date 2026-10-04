@@ -58,12 +58,9 @@ const BLOTTER_FILTERS := [
 	{"type": "fired", "label": "Firing / layoffs"},
 ]
 
-const SCENARIOS := [
-	{"label": "Five businesses, evenly staffed", "builder": "build_three_business_economy"},
-	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start"},
-	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
-	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
-]
+## Set by the config page (he_config.gd) before it switches to this scene.
+## Falls back to the evenly staffed preset if the scene is opened directly.
+static var pending_builder: Callable = Callable()
 
 var _simulation: HESimulation
 var external_simulation: HESimulation
@@ -153,7 +150,7 @@ func _ready() -> void:
 		for report in _simulation.get_business_reports():
 			_business_names[report["business_id"]] = report["name"]
 	else:
-		_load_scenario(0)
+		_load_scenario()
 	_build_ui()
 	_refresh()
 
@@ -197,9 +194,11 @@ func refresh_external() -> void:
 	if embedded_mode and is_node_ready():
 		_refresh()
 
-func _load_scenario(index: int) -> void:
-	var scenario: Dictionary = SCENARIOS[index]
-	_simulation = HESimulation.new(SEED, Callable(HEScenarioSeeds, scenario["builder"]))
+func _load_scenario() -> void:
+	var builder := pending_builder
+	if not builder.is_valid():
+		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+	_simulation = HESimulation.new(SEED, builder)
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
@@ -248,16 +247,6 @@ func _build_ui() -> void:
 		back_button.text = "← Valley"
 		back_button.pressed.connect(func() -> void: back_requested.emit())
 		top_bar.add_child(back_button)
-	else:
-		var scenario_picker := OptionButton.new()
-		for scenario in SCENARIOS:
-			scenario_picker.add_item(scenario["label"])
-		scenario_picker.item_selected.connect(func(index: int) -> void:
-			_load_scenario(index)
-			_rebuild_business_rows()
-			_rebuild_household_rows()
-			_refresh())
-		top_bar.add_child(scenario_picker)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
