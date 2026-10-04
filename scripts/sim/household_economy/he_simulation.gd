@@ -43,22 +43,21 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
-## H1's local household goods -- grain (food) and timber (household fuel
-## demand) are survival-critical and drive food_stress/starvation; wool is a
-## third good with the same local demand/market/reference-wage treatment as
-## timber (real recurring cost, but does NOT feed the stress engine -- see
-## _run_consumption). Added once the Cattle Ranch/Sheep Farm (Kind.HERD)
-## started producing WOOL, mirroring the pooled model's own convention of
-## treating wool as an ordinary per-person consumption good (see
-## simulation.gd's WOOL_PER_PERSON_PER_DAY) while cattle/sheep themselves are
-## NOT -- see HERD_EXPORT_PRICE's doc comment for why those two stay
-## Trader-export-only instead of joining this list.
-const SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL]
-
-const GRAIN_PER_PERSON_PER_DAY := 0.4 # matches Simulation.GRAIN_PER_PERSON_PER_DAY
-const FUEL_TIMBER_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tuned
-const WOOL_PER_PERSON_PER_DAY := 0.01 # matches Simulation.WOOL_PER_PERSON_PER_DAY
+## H1's local household goods: every good that satisfies one of HENeeds' needs
+## (food, heat, clothing). Grain (food) is survival-critical and drives
+## food_stress/starvation; fuel and wool have the same local demand/market/
+## reference-wage treatment but do NOT feed the stress engine -- see
+## _run_consumption and HENeed.drives_lifecycle. Wool joined once the Cattle
+## Ranch/Sheep Farm (Kind.HERD) started producing it, mirroring the pooled
+## model's own convention of treating wool as an ordinary per-person
+## consumption good (see simulation.gd's WOOL_PER_PERSON_PER_DAY) while
+## cattle/sheep themselves are NOT -- see HERD_EXPORT_PRICE's doc comment for
+## why those two stay Trader-export-only. Derived, so a new satisfier added to
+## HENeeds joins every market, reserve and summary loop automatically.
+static var SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = HENeeds.satisfier_commodities()
 
 ## A household requests up to this many days' worth of buffer; there is no
 ## "protected" seller buffer any more -- businesses aren't consumers of
@@ -535,17 +534,27 @@ func get_clock_summary() -> Dictionary:
 func get_household_summary(household_id: int) -> Dictionary:
 	var h: HEHousehold = households[household_id]
 	var inventory := {}
-	var demand := {}
-	var consumed := {}
 	var unmet_scarcity := {}
 	var unmet_unaffordable := {}
 	for c in SUBSISTENCE_COMMODITIES:
 		var name := Commodity.name_of(c)
 		inventory[name] = h.stock(c)
-		demand[name] = h.last_demand.get(c, 0.0)
-		consumed[name] = h.last_consumed.get(c, 0.0)
 		unmet_scarcity[name] = h.last_unmet_scarcity.get(c, 0.0)
 		unmet_unaffordable[name] = h.last_unmet_unaffordable.get(c, 0.0)
+
+	# Today's outcome per NEED, in need units, with the satisfier goods that
+	# met it. This -- not a per-good "demand" -- is what a household requires.
+	var needs: Array[Dictionary] = []
+	for need in HENeeds.all():
+		var satisfiers: Array[Dictionary] = []
+		for c in need.satisfiers():
+			satisfiers.append({"name": Commodity.name_of(c), "consumed": h.last_consumed.get(c, 0.0)})
+		needs.append({
+			"label": need.label,
+			"required": h.last_need_required.get(need.id, 0.0),
+			"provided": h.last_need_provided.get(need.id, 0.0),
+			"satisfiers": satisfiers,
+		})
 
 	return {
 		"id": h.id,
@@ -563,8 +572,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
 		"dependent_ages": h.dependent_ages(),
 		"worker_ages": h.worker_ages(),
-		"demand_today": demand,
-		"consumed_today": consumed,
+		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
 	}
@@ -797,7 +805,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 		if stock > 0.0001:
 			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
 		if SUBSISTENCE_COMMODITIES.has(commodity):
-			var desired: float = maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - stock)
+			var desired: float = _desired_purchase(h, commodity)
 			if desired > 0.0001:
 				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
@@ -1017,7 +1025,8 @@ func _daily_tick() -> void:
 func _reset_household_daily_records() -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
-		h.last_demand = {}
+		h.last_need_required = {}
+		h.last_need_provided = {}
 		h.last_consumed = {}
 		h.last_unmet_scarcity = {}
 		h.last_unmet_unaffordable = {}
@@ -1198,6 +1207,9 @@ func _run_production(record: Dictionary) -> void:
 		var planned: float = float(employed) * rate
 		var units: float = planned * b.last_input_fulfillment_ratio
 		for input_commodity in b.recipe.inputs.keys():
+			if b.need_inputs.has(input_commodity):
+				_burn_need_input(b, input_commodity, units * b.recipe.inputs[input_commodity], record)
+				continue
 			var consumed: float = units * b.recipe.inputs[input_commodity]
 			b.consume(input_commodity, consumed)
 			var input_name := Commodity.name_of(input_commodity)
@@ -1213,6 +1225,19 @@ func _run_production(record: Dictionary) -> void:
 		b.last_output_produced = {output_commodity: units}
 		var name := Commodity.name_of(output_commodity)
 		record["produced"][name] = record["produced"].get(name, 0.0) + units
+
+## Production's use of a need-input slot (HEBusiness.need_inputs): `quantity`
+## is in units of the recipe's own input commodity; it is spent from whichever
+## satisfiers the business holds, densest first, and booked at each one's own
+## price like any other consumed input.
+func _burn_need_input(b: HEBusiness, input_commodity: Commodity.Type, quantity: float, record: Dictionary) -> void:
+	var need := HENeeds.get_need(b.need_inputs[input_commodity])
+	var burn := need.burn(b, quantity * need.value_of(input_commodity))
+	for satisfier in burn["burned"].keys():
+		var burned_units: float = burn["burned"][satisfier]
+		var satisfier_name := Commodity.name_of(satisfier)
+		record["consumed"][satisfier_name] = record["consumed"].get(satisfier_name, 0.0) + burned_units
+		b.last_revenue -= burned_units * (markets[b.settlement_id] as HEMarket).price[satisfier]
 
 ## One day of growth for every field of a land-based business: today's
 ## employed workers are split across ALL of its fields proportional to
@@ -1277,52 +1302,97 @@ func _record_business_revenue_history() -> void:
 		b.record_balance_day()
 		b.record_production_day()
 
-## Shared by _daily_need (times a household's headcount) and
-## _reference_wage_per_worker (times a settlement's average price) -- the
-## one place a commodity's per-person daily rate is defined, so the two
-## can never drift apart.
-func _per_person_daily_rate(commodity: Commodity.Type) -> float:
-	match commodity:
-		Commodity.Type.GRAIN:
-			return GRAIN_PER_PERSON_PER_DAY
-		Commodity.Type.TIMBER:
-			return FUEL_TIMBER_PER_PERSON_PER_DAY
-		Commodity.Type.WOOL:
-			return WOOL_PER_PERSON_PER_DAY
-	return 0.0
-
+## One person's daily use of `commodity` lives in HENeeds, so a household's
+## need and the reference wage's cost of living can never drift apart.
+## `commodity` is expressed as if it were the need's only source; goods that
+## satisfy no need return 0.
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
-	return float(h.headcount()) * _per_person_daily_rate(commodity)
+	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
+
+## Whether `satisfier` can actually be bought in this settlement today. A
+## need's baseline is always available; any other satisfier needs a local
+## seller or Trader holding stock, so a settlement with no source of it
+## behaves exactly as it did when the baseline was the only option.
+func _satisfier_has_supply(settlement_id: int, need: HENeed, satisfier: Commodity.Type) -> bool:
+	if satisfier == need.baseline:
+		return true
+	var seller := _business_selling(settlement_id, satisfier)
+	if seller != null and seller.stock(satisfier) > 0.0001:
+		return true
+	var trader := _settlement_trader(settlement_id)
+	return trader != null and trader.stock(satisfier) > 0.0001
+
+## The satisfier with the lowest posted price per need-unit among those in
+## supply. Ties, and the no-alternative case, fall back to the baseline. This
+## is the single seam for how households choose between substitutes.
+func _preferred_satisfier(settlement_id: int, need: HENeed) -> Commodity.Type:
+	var best := need.baseline
+	if need.unit_values.size() == 1:
+		return best
+	var local_market: HEMarket = markets[settlement_id]
+	var best_cost: float = local_market.price[best] / need.value_of(best)
+	for c in need.satisfiers():
+		if c == need.baseline or not _satisfier_has_supply(settlement_id, need, c):
+			continue
+		var cost: float = local_market.price[c] / need.value_of(c)
+		if cost < best_cost - 0.0001:
+			best = c
+			best_cost = cost
+	return best
+
+## How much of `commodity` a household asks for today. The buffer is
+## measured in the need's units across every satisfier already held, and the
+## whole shortfall is requested in the single preferred satisfier, so a
+## household stocked with one source doesn't also stock another on top.
+func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
+	var need := HENeeds.for_commodity(commodity)
+	if need == null or _preferred_satisfier(h.settlement_id, need) != commodity:
+		return 0.0
+	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
+	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## Consume owned goods -> update household stress/outcomes, purely from
-## each household's OWN inventory. Only grain drives food_stress/migration-
-## pressure/starvation-candidacy (fuel shortfall is tracked/reported but
-## doesn't feed the reused stress engine, mirroring the pooled model's
-## wool/tools-don't-feed-food-stress convention).
+## each household's OWN inventory. Only needs flagged drives_lifecycle (food)
+## drive food_stress/migration-pressure/starvation-candidacy (everything
+## else is tracked/reported but doesn't feed the reused stress engine,
+## mirroring the pooled model's wool/tools-don't-feed-food-stress convention).
 func _run_consumption(record: Dictionary) -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
-		for commodity in SUBSISTENCE_COMMODITIES:
-			var demand := _daily_need(h, commodity)
-			var taken := h.consume(commodity, demand)
-			var shortfall := demand - taken
-			h.last_demand[commodity] = demand
-			h.last_consumed[commodity] = taken
-			if shortfall > 0.0001:
-				_accumulate(h.last_unmet_scarcity, commodity, shortfall)
+		for need in HENeeds.all():
+			_consume_need(h, need, record)
 
-			var name := Commodity.name_of(commodity)
-			record["consumed"][name] = record["consumed"].get(name, 0.0) + taken
-			record["unmet_scarcity"][name] = record["unmet_scarcity"].get(name, 0.0) + h.last_unmet_scarcity.get(commodity, 0.0)
-			record["unmet_unaffordable"][name] = record["unmet_unaffordable"].get(name, 0.0) + h.last_unmet_unaffordable.get(commodity, 0.0)
+## One need for one household: spend satisfiers densest-first until the need
+## is met. A shortfall is reported against the need's baseline satisfier, in
+## that good's units. The household's record is the need's own outcome
+## (required and provided, in need units) plus what each satisfier spent.
+func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
+	var needed := float(h.headcount()) * need.per_person_daily
+	var result := need.burn(h, needed)
+	var provided: float = result["provided"]
+	var burned: Dictionary = result["burned"]
+	h.last_need_required[need.id] = needed
+	h.last_need_provided[need.id] = provided
 
-			if commodity == Commodity.Type.GRAIN:
-				var daily_ratio := h.record_grain_day(demand, taken)
-				var rolling := h.rolling_grain_fulfillment()
-				var rolling_is_low := rolling < Household.MIGRATION_PRESSURE_FULFILLMENT_THRESHOLD
-				var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
-				h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
-				h.advance_day_for_lifecycle(rolling)
+	var shortfall_units := (needed - provided) / need.value_of(need.baseline)
+	if shortfall_units > 0.0001:
+		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
+
+	for c in need.satisfiers():
+		var taken: float = burned.get(c, 0.0)
+		h.last_consumed[c] = taken
+		var name := Commodity.name_of(c)
+		record["consumed"][name] = record["consumed"].get(name, 0.0) + taken
+		record["unmet_scarcity"][name] = record["unmet_scarcity"].get(name, 0.0) + h.last_unmet_scarcity.get(c, 0.0)
+		record["unmet_unaffordable"][name] = record["unmet_unaffordable"].get(name, 0.0) + h.last_unmet_unaffordable.get(c, 0.0)
+
+	if need.drives_lifecycle:
+		var daily_ratio := h.record_grain_day(needed, provided)
+		var rolling := h.rolling_grain_fulfillment()
+		var rolling_is_low := rolling < Household.MIGRATION_PRESSURE_FULFILLMENT_THRESHOLD
+		var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
+		h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
+		h.advance_day_for_lifecycle(rolling)
 
 ## Reporting only, exactly like the pooled model's migration pressure --
 ## does NOT move or remove anyone.
@@ -1889,11 +1959,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
-		var daily_need := _daily_need(h, commodity)
-		var target_stock := daily_need * TARGET_BUFFER_DAYS
-		var stock := h.stock(commodity)
-
-		var desired_qty: float = max(0.0, target_stock - stock)
+		var desired_qty: float = _desired_purchase(h, commodity)
 		if desired_qty > 0.0001:
 			var available_balance: float = starting_balance[household_id] - reserved_spend.get(household_id, 0.0)
 			var affordable_qty: float = (available_balance / price) if price > 0.0 else 0.0
@@ -2195,7 +2261,7 @@ func herd_cull_target_range(b: HEBusiness) -> Vector2:
 	return Vector2(lowest, highest)
 
 ## How many sheep it takes to cover this settlement's current household wool
-## demand (population x WOOL_PER_PERSON_PER_DAY), as (no staff, at the
+## demand (population x wool's per-person daily use), as (no staff, at the
 ## ranch's CURRENT staffing, full crew) head counts. Each sheep's yield is
 ## the base fleece x (1 + HERD_STAFFED_WOOL_BONUS x care), so more care means
 ## fewer sheep are needed. "Current" uses the care the last review applied
@@ -2207,7 +2273,7 @@ func wool_sustaining_herd_counts(b: HEBusiness) -> Vector3:
 	var population := 0
 	for household_id in (settlements[b.settlement_id] as HESettlement).household_ids:
 		population += (households[household_id] as HEHousehold).headcount()
-	var demand_per_day: float = population * WOOL_PER_PERSON_PER_DAY
+	var demand_per_day: float = population * HENeeds.units_per_person_daily(Commodity.Type.WOOL)
 	var wool_per_head_per_day: float = WOOL_PER_HEAD_PER_INTERVAL / float(HERD_EVAL_INTERVAL_DAYS)
 	if wool_per_head_per_day <= 0.0:
 		return Vector3.ZERO
@@ -2461,6 +2527,20 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		var trader := _settlement_trader(buyer.settlement_id)
 		var local_market: HEMarket = markets[buyer.settlement_id]
 		var purchase_ratio := 1.0
+
+		# A need-input slot (HEBusiness.need_inputs) is bought as whichever
+		# satisfier is preferred, in that good's units, and the heat/etc. the
+		# business already holds in ANY satisfier counts against the buffer.
+		var purchase_inputs: Dictionary[Commodity.Type, float] = {}
+		var slot_needs: Dictionary[Commodity.Type, HENeed] = {} # purchased commodity -> its need
+		for commodity in buyer.recipe.inputs.keys():
+			if buyer.need_inputs.has(commodity):
+				var need := HENeeds.get_need(buyer.need_inputs[commodity])
+				var satisfier := _preferred_satisfier(buyer.settlement_id, need)
+				purchase_inputs[satisfier] = buyer.recipe.inputs[commodity] * need.value_of(commodity) / need.value_of(satisfier)
+				slot_needs[satisfier] = need
+			else:
+				purchase_inputs[commodity] = buyer.recipe.inputs[commodity]
 		var needed_by_commodity: Dictionary[Commodity.Type, float] = {}
 		var requested_by_commodity: Dictionary[Commodity.Type, float] = {}
 		var total_cost_if_fully_supplied := 0.0
@@ -2472,11 +2552,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# per-input (checking it here too would let the same balance count
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
-		for commodity in buyer.recipe.inputs.keys():
-			var needed: float = planned_units * buyer.recipe.inputs[commodity]
+		for commodity in purchase_inputs.keys():
+			var needed: float = planned_units * purchase_inputs[commodity]
 			needed_by_commodity[commodity] = needed
 			var target: float = needed * PRODUCTION_INPUT_BUFFER_DAYS
-			var requested: float = max(0.0, target - buyer.stock(commodity))
+			var requested: float = max(0.0, target - _input_held(buyer, commodity, slot_needs))
 			requested_by_commodity[commodity] = requested
 			if requested <= 0.0001:
 				continue
@@ -2507,7 +2587,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var affordable_ratio: float = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
-		for commodity in buyer.recipe.inputs.keys():
+		for commodity in purchase_inputs.keys():
 			var requested: float = requested_by_commodity.get(commodity, 0.0)
 			if requested <= 0.0001 or purchase_ratio <= 0.0:
 				continue
@@ -2566,18 +2646,35 @@ func _run_input_purchasing(record: Dictionary) -> void:
 					_adjust_price(buyer.settlement_id, commodity, offer_before, requested)
 
 		var production_ratio := 1.0
-		for commodity in buyer.recipe.inputs.keys():
+		for commodity in purchase_inputs.keys():
 			var needed: float = needed_by_commodity.get(commodity, 0.0)
 			if needed > 0.0001:
-				production_ratio = minf(production_ratio, minf(needed, buyer.stock(commodity)) / needed)
+				production_ratio = minf(production_ratio, minf(needed, _input_held(buyer, commodity, slot_needs)) / needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+## How much of purchased input `commodity` `buyer` holds. For a need-input
+## slot that is every satisfier of the need it fills, converted into
+## `commodity`'s units.
+func _input_held(buyer: HEBusiness, commodity: Commodity.Type, slot_needs: Dictionary[Commodity.Type, HENeed]) -> float:
+	if slot_needs.has(commodity):
+		var need: HENeed = slot_needs[commodity]
+		return need.held(buyer) / need.value_of(commodity)
+	return buyer.stock(commodity)
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
 ## this), so the reserve tracks the settlement's actual size/composition
 ## rather than being a fixed number that a shrinking or growing population
 ## would drift away from.
+##
+## Only the satisfiers households actually buy count: the preferred one, and
+## the need's baseline as the fallback if that runs out. Reserving a full
+## need's worth of EVERY satisfier would hold back several times the stock
+## households will ever draw.
 func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> float:
+	var need := HENeeds.for_commodity(commodity)
+	if need != null and commodity != need.baseline and _preferred_satisfier(settlement_id, need) != commodity:
+		return 0.0
 	var total := 0.0
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		total += _daily_need(households[household_id] as HEHousehold, commodity)
@@ -2630,8 +2727,8 @@ func _average_price_history(settlement_id: int, c: Commodity.Type) -> float:
 ## The going rate a worker's wage needs to clear for that worker's WHOLE
 ## household to afford subsistence: (population / total workers) people
 ## depend on each worker's wage, on average, and each of those people needs
-## GRAIN_PER_PERSON_PER_DAY worth of grain plus FUEL_TIMBER_PER_PERSON_PER_DAY
-## worth of timber, priced at each commodity's trailing average
+## every HENeed's per-person daily amount, bought as the cheapest satisfier
+## per need-unit on offer, priced at each commodity's trailing average
 ## (_average_price_history) in THIS settlement's market rather than today's
 ## live spot price. A
 ## business's rolling_average_wage() is already smoothed over
@@ -2662,8 +2759,12 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
 	var per_person_cost := 0.0
-	for c in SUBSISTENCE_COMMODITIES:
-		per_person_cost += _average_price_history(settlement_id, c) * _per_person_daily_rate(c)
+	for need in HENeeds.all():
+		var cheapest_unit_cost := INF
+		for c in need.satisfiers():
+			if _satisfier_has_supply(settlement_id, need, c):
+				cheapest_unit_cost = minf(cheapest_unit_cost, _average_price_history(settlement_id, c) / need.value_of(c))
+		per_person_cost += cheapest_unit_cost * need.per_person_daily
 	return dependency_ratio * per_person_cost
 
 ## BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES -- every commodity

@@ -673,13 +673,16 @@ func _refresh_household_detail() -> void:
 	for commodity_name in inventory.keys():
 		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
 
-	# Whatever the sim reports households as consuming -- no list of its own.
-	_add_household_detail_heading("Required consumption (today)")
-	var demand: Dictionary = h["demand_today"]
-	var consumed: Dictionary = h["consumed_today"]
-	for commodity_name in demand.keys():
-		_add_household_detail_line("%s: needs %.2f, consumed %.2f" % [
-			commodity_name, demand[commodity_name], consumed[commodity_name]])
+	# One line per household need, straight from the sim's HENeeds -- no list
+	# of its own. Amounts are in the need's units; the goods that met it (heat
+	# from timber AND charcoal, say) are nested under it rather than each
+	# being listed as a separate requirement.
+	_add_household_detail_heading("Needs (today)")
+	for need in h["needs"]:
+		_add_household_detail_line("%s: needs %.2f, met %.2f" % [need["label"], need["required"], need["provided"]])
+		for satisfier in need["satisfiers"]:
+			if satisfier["consumed"] > 0.0001:
+				_add_household_detail_line("    %s used: %.2f" % [satisfier["name"], satisfier["consumed"]])
 
 func _add_household_detail_heading(value: String) -> void:
 	var heading := Label.new()
@@ -1255,9 +1258,17 @@ func _rebuild_household_rows() -> void:
 	_household_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 11
+	# One stock column per good that satisfies a household need (HENeeds), so a
+	# new satisfier gets its column without a dashboard edit.
+	var goods_columns: Array[String] = []
+	for c in HESimulation.SUBSISTENCE_COMMODITIES:
+		goods_columns.append(Commodity.name_of(c))
+	var col_labels: Array[String] = ["ID", "Employer", "Workers", "Dependents"]
+	col_labels.append_array(goods_columns)
+	col_labels.append_array(["Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"])
+	grid.columns = col_labels.size()
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", Commodity.name_of(Commodity.Type.GRAIN), Commodity.name_of(Commodity.Type.TIMBER), Commodity.name_of(Commodity.Type.WOOL), "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in col_labels:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -1287,17 +1298,12 @@ func _rebuild_household_rows() -> void:
 		dependents_label.tooltip_text = "Age (in days) of each dependent still in this household; the oldest is next to come of age and split off on its own."
 		grid.add_child(dependents_label)
 
-		var grain_label := Label.new()
-		grain_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(grain_label)
-
-		var timber_label := Label.new()
-		timber_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(timber_label)
-
-		var wool_label := Label.new()
-		wool_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(wool_label)
+		var goods_labels := {}
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			var goods_label := Label.new()
+			goods_label.custom_minimum_size = Vector2(70, 0)
+			grid.add_child(goods_label)
+			goods_labels[c] = goods_label
 
 		var balance_label := Label.new()
 		balance_label.custom_minimum_size = Vector2(70, 0)
@@ -1319,7 +1325,7 @@ func _rebuild_household_rows() -> void:
 
 		_household_rows[household_id] = {
 			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
-			"grain": grain_label, "timber": timber_label, "wool": wool_label, "balance": balance_label,
+			"goods": goods_labels, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
@@ -1419,9 +1425,6 @@ func _refresh() -> void:
 		_known_household_ids = current_ids
 		_rebuild_household_rows()
 
-	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
-	var timber_name := Commodity.name_of(Commodity.Type.TIMBER)
-	var wool_name := Commodity.name_of(Commodity.Type.WOOL)
 	for household_id in _household_rows.keys():
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
@@ -1442,9 +1445,8 @@ func _refresh() -> void:
 		else:
 			var oldest: int = dependent_ages.max()
 			dependents_label.text = "%d (oldest: %dd)" % [dependent_ages.size(), oldest]
-		(row["grain"] as Label).text = "%.1f" % h["inventory"][grain_name]
-		(row["timber"] as Label).text = "%.1f" % h["inventory"][timber_name]
-		(row["wool"] as Label).text = "%.1f" % h["inventory"][wool_name]
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			(row["goods"][c] as Label).text = "%.1f" % h["inventory"][Commodity.name_of(c)]
 		(row["balance"] as Label).text = "%.1f" % h["balance"]
 		(row["stress"] as Label).text = "%.2f" % h["food_stress"]
 
