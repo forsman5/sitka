@@ -34,6 +34,15 @@ static var _night_assigned: bool = false
 
 @onready var _mesh: MeshInstance3D = $MeshInstance3D
 @onready var _nav_agent: NavigationAgent3D = $NavigationAgent3D
+@onready var _anim: AnimationPlayer = $Model/AnimationPlayer
+@onready var _skin_mesh: MeshInstance3D = $Model/CharacterArmature/Skeleton3D/Body2
+
+const SKIN_TONES: Array[Dictionary] = [
+	{"color": Color(0.87, 0.72, 0.59), "weight": 50.0}, # white
+	{"color": Color(0.70, 0.56, 0.40), "weight": 25.0}, # olive
+	{"color": Color(0.30, 0.20, 0.14), "weight": 13.0}, # black
+	{"color": Color(0.52, 0.36, 0.25), "weight": 12.0}, # brown
+]
 
 var _terrain: Node = null
 
@@ -44,11 +53,14 @@ func _ready() -> void:
 	add_to_group("persons")
 	_terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	motion_mode = MOTION_MODE_FLOATING
-	_mat_normal = _mesh.get_surface_override_material(0)
+	if _mesh.visible:
+		_mat_normal = _mesh.get_surface_override_material(0)
 	_mat_selected = StandardMaterial3D.new()
 	_mat_selected.albedo_color = Color(1.0, 0.85, 0.0)
 	_nav_agent.target_desired_distance = 1.0
 	_nav_agent.velocity_computed.connect(_on_velocity_computed)
+	_anim.play("CharacterArmature|Idle")
+	_apply_random_skin_tone()
 	var n := get_parent()
 	while n != null:
 		var jm := n.get_node_or_null("JobsManager")
@@ -66,6 +78,7 @@ func _physics_process(_delta: float) -> void:
 	if _nav_agent.is_navigation_finished():
 		velocity = Vector3.ZERO
 		move_and_slide()
+		_update_animation(false)
 		global_position.y = (_terrain.get_height(global_position.x, global_position.z) if _terrain != null else 0.0) as float
 		return
 	var next_pos := _nav_agent.get_next_path_position()
@@ -80,14 +93,48 @@ func _on_velocity_computed(safe_velocity: Vector3) -> void:
 	velocity = safe_velocity
 	velocity.y = 0.0
 	move_and_slide()
+	var moving := velocity.length() > 0.05
+	_update_animation(moving)
+	if moving:
+		look_at(global_position + velocity.normalized(), Vector3.UP)
 	global_position.y = (_terrain.get_height(global_position.x, global_position.z) if _terrain != null else 0.0) as float
+
+func _apply_random_skin_tone() -> void:
+	var skin_surface := -1
+	for i in _skin_mesh.mesh.get_surface_count():
+		if _skin_mesh.mesh.surface_get_name(i) == "Skin":
+			skin_surface = i
+			break
+	if skin_surface == -1:
+		return
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _pick_skin_tone()
+	_skin_mesh.set_surface_override_material(skin_surface, mat)
+
+func _pick_skin_tone() -> Color:
+	var roll := randf() * 100.0
+	var acc := 0.0
+	for entry in SKIN_TONES:
+		acc += entry["weight"] as float
+		if roll < acc:
+			return entry["color"] as Color
+	return (SKIN_TONES[-1]["color"] as Color)
+
+func _update_animation(moving: bool) -> void:
+	var carrying := current_weight() > 0.0
+	var anim_name := "CharacterArmature|Idle"
+	if moving:
+		anim_name = "CharacterArmature|Walk_Carry" if carrying else "CharacterArmature|Walk"
+	if _anim.current_animation != anim_name:
+		_anim.play(anim_name)
 
 func move_to(world_pos: Vector3) -> void:
 	_nav_agent.set_target_position(world_pos)
 
 func set_selected(value: bool) -> void:
 	selected = value
-	_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
+	if _mesh.visible:
+		_mesh.set_surface_override_material(0, _mat_selected if selected else _mat_normal)
 
 func get_save_data() -> Dictionary:
 	var inv: Array = []
