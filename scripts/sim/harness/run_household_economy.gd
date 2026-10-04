@@ -43,6 +43,7 @@ func _init() -> void:
 	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_mill_and_bakery_chain()
@@ -230,6 +231,11 @@ func _check_goods_flow_history_reconciles_with_stock() -> void:
 	for report in sim.get_business_reports():
 		if report["kind"] != "production":
 			_assert(not report.has("flow_history"), "%s is not a production business and should report no flow_history" % report["name"])
+			continue
+		# This check assumes one output good and recipe inputs; the Butcher has
+		# two outputs and live-animal inputs, and is checked in
+		# _check_butcher_processes_livestock.
+		if (sim.businesses[report["business_id"]] as HEBusiness).processes_livestock:
 			continue
 		var flows: Dictionary = report["flow_history"]
 		var output_name: String = report["output_commodity"]
@@ -1017,6 +1023,67 @@ func _check_herd_monetization() -> void:
 
 	_check_demographic_invariants(sim)
 
+## The Butcher turns a ranch's cull into meat and leather instead of the Trader
+## exporting it raw, and households eat the meat (twice grain's food value) and
+## may wear the leather. Run for four years so both ranches have culled
+## several times, reconciling goods and money every single day.
+func _check_butcher_processes_livestock() -> void:
+	print("\n=== Butcher: ranch culls become meat and leather, which households eat ===")
+	var sim := _new_sim("build_three_business_economy")
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	_assert(butcher.processes_livestock and butcher.sells(Commodity.Type.MEAT) and butcher.sells(Commodity.Type.LEATHER),
+		"The seeded Butcher should process livestock into meat and leather")
+	_assert(sim._business_selling(sim.get_settlement_ids()[0], Commodity.Type.LEATHER) == butcher,
+		"The Butcher should be the local seller of its secondary output too")
+
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	var produced := {}
+	var consumed := {}
+	var exported := {}
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for window in 4:
+		sim.advance_ticks(360)
+		for record in sim.get_daily_history(360):
+			for c in reconciled_commodities:
+				var name := Commodity.name_of(c)
+				var day_produced: float = record["produced"].get(name, 0.0)
+				var day_consumed: float = record["consumed"].get(name, 0.0)
+				var day_exported: float = (record["exported"] as Dictionary).get(name, 0.0)
+				var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				var expected: float = record["opening_stock"][name] + day_produced - day_consumed - day_exported - written_off
+				worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+				produced[name] = produced.get(name, 0.0) + day_produced
+				consumed[name] = consumed.get(name, 0.0) + day_consumed
+				exported[name] = exported.get(name, 0.0) + day_exported
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+
+	var butchered: float = consumed.get("Cattle", 0.0) + consumed.get("Sheep", 0.0)
+	var exported_raw: float = exported.get("Cattle", 0.0) + exported.get("Sheep", 0.0)
+	print("  over 4 years: butchered %.0f head (exported raw: %.0f) -> meat %.0f, leather %.0f | households ate %.0f meat" % [
+		butchered, exported_raw, produced.get("Meat", 0.0), produced.get("Leather", 0.0), consumed.get("Meat", 0.0)])
+	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(butchered > 0.0, "The Butcher should have processed some livestock in four years")
+	_assert(produced.get("Meat", 0.0) > 0.0 and produced.get("Leather", 0.0) > 0.0, "The Butcher should have made both meat and leather")
+	_assert(butchered > exported_raw, "Most of the cull should go to the Butcher rather than leave raw (%.0f butchered vs %.0f exported)" % [butchered, exported_raw])
+	_assert(consumed.get("Meat", 0.0) > 0.0, "Households should have eaten some of the meat")
+	# Meat sits near price parity with grain. Households judge that price a
+	# little differently, so demand shifts gradually across it; if they all
+	# agreed, every household would flip together each time the price crossed
+	# parity and demand would alternate between everyone and no one.
+	var demanded: Array = sim.get_market_report(sim.get_settlement_ids()[0], Commodity.Type.MEAT)["demanded_history"]
+	var zero_demand_days := 0
+	for v in demanded:
+		if v <= 0.0001:
+			zero_demand_days += 1
+	print("  meat demand: %d zero-demand days in the last %d" % [zero_demand_days, demanded.size()])
+	_assert(zero_demand_days <= 5, "Meat demand should not swing to zero as households all flip satisfier together: %d zero days of %d" % [zero_demand_days, demanded.size()])
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Butcher present, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
+	_check_demographic_invariants(sim)
+
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
 ## the lifecycle engine.
@@ -1026,7 +1093,7 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.FLOUR, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.MEAT, Commodity.Type.FLOUR, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	var food := HENeeds.get_need(HENeed.Id.FOOD)
 	_assert(food.value_of(Commodity.Type.BREAD) == 4.0 and food.value_of(Commodity.Type.FLOUR) == 1.0 and food.value_of(Commodity.Type.GRAIN) == 0.5,
@@ -1036,6 +1103,18 @@ func _check_needs_catalog() -> void:
 		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
 	_assert(HENeeds.for_commodity(Commodity.Type.GRAIN).id == HENeed.Id.FOOD, "Grain should satisfy food")
 	_assert(HENeeds.for_commodity(Commodity.Type.IRON) == null, "Iron satisfies no household need")
+	_assert(HENeeds.for_commodity(Commodity.Type.MEAT).id == HENeed.Id.FOOD, "Meat should satisfy food")
+	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.MEAT), 2.0 * HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.GRAIN)),
+		"Meat should be worth twice grain as food")
+	var food_order := HENeeds.get_need(HENeed.Id.FOOD).satisfiers()
+	_assert(food_order[0] == Commodity.Type.BREAD and food_order.find(Commodity.Type.MEAT) < food_order.find(Commodity.Type.GRAIN),
+		"Bread is the densest food and meat is denser than grain, so they should burn first")
+	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.MEAT), 0.2), "A person needs half as much meat as grain")
+	_assert(HENeeds.for_commodity(Commodity.Type.LEATHER).id == HENeed.Id.CLOTHING, "Leather should satisfy clothing")
+	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.LEATHER), HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.WOOL)),
+		"Leather and wool should clothe one-for-one")
+	_assert(HENeeds.get_need(HENeed.Id.CLOTHING).baseline == Commodity.Type.WOOL and HENeeds.get_need(HENeed.Id.FOOD).baseline == Commodity.Type.GRAIN,
+		"Baselines should stay wool and grain")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
 	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
