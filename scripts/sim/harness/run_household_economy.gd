@@ -1068,6 +1068,17 @@ func _check_butcher_processes_livestock() -> void:
 	_assert(produced.get("Meat", 0.0) > 0.0 and produced.get("Leather", 0.0) > 0.0, "The Butcher should have made both meat and leather")
 	_assert(butchered > exported_raw, "Most of the cull should go to the Butcher rather than leave raw (%.0f butchered vs %.0f exported)" % [butchered, exported_raw])
 	_assert(consumed.get("Meat", 0.0) > 0.0, "Households should have eaten some of the meat")
+	# Meat sits near price parity with grain. Households judge that price a
+	# little differently, so demand shifts gradually across it; if they all
+	# agreed, every household would flip together each time the price crossed
+	# parity and demand would alternate between everyone and no one.
+	var demanded: Array = sim.get_market_report(sim.get_settlement_ids()[0], Commodity.Type.MEAT)["demanded_history"]
+	var zero_demand_days := 0
+	for v in demanded:
+		if v <= 0.0001:
+			zero_demand_days += 1
+	print("  meat demand: %d zero-demand days in the last %d" % [zero_demand_days, demanded.size()])
+	_assert(zero_demand_days <= 5, "Meat demand should not swing to zero as households all flip satisfier together: %d zero days of %d" % [zero_demand_days, demanded.size()])
 	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Butcher present, worst gap %.4f" % worst_stock_gap)
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
