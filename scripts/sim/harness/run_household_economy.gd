@@ -24,6 +24,7 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
+	_check_businesses_share_wood_with_households()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
@@ -174,6 +175,37 @@ func _check_conservation() -> void:
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
+
+## No woodlot reserve for households: the Bloomery buys wood as a market
+## participant alongside them. Households may go short while the Woodlot's
+## workforce and price catch up, but over the long run both are served.
+func _check_businesses_share_wood_with_households() -> void:
+	print("\n=== Wood: businesses and households share the Woodlot's offer, no household reserve ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	var early_demand := 0.0
+	var early_got := 0.0
+	var late_demand := 0.0
+	var late_got := 0.0
+	var bloomery_wood_bought := 0.0
+	for day in 600:
+		sim.advance_ticks(1)
+		for household_id in sim.households.keys():
+			var h = sim.households[household_id]
+			var demand: float = h.last_need_required.get(HENeed.Id.HEAT, 0.0)
+			var got: float = h.last_need_provided.get(HENeed.Id.HEAT, 0.0)
+			if day < 120:
+				early_demand += demand
+				early_got += got
+			elif day >= 360:
+				late_demand += demand
+				late_got += got
+	for record in sim.get_daily_history(600):
+		bloomery_wood_bought += (record["consumed"] as Dictionary).get("Timber", 0.0)
+	print("  household wood fulfilment: days 0-120=%.0f%%, days 360-600=%.0f%% (Bloomery + households consumed %.1f timber)" % [
+		100.0 * early_got / maxf(early_demand, EPSILON), 100.0 * late_got / maxf(late_demand, EPSILON), bloomery_wood_bought])
+	_assert(late_got >= late_demand * 0.9,
+		"Households should get >=90%% of their wood in the long run without a reserve -- got %.1f of %.1f" % [late_got, late_demand])
+	_assert(early_got > 0.0, "Households should buy some wood even in the first 120 days")
 
 ## The detail tab's goods-flow charts: every production business reports a
 ## history per flow, and those histories must reconcile with its own storage
