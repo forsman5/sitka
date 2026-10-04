@@ -938,9 +938,10 @@ func _refresh_business_flow_charts(report: Dictionary) -> void:
 		for series_def in FLOW_CHARTS[chart_index]["series"]:
 			for entry in flow_history.get(series_def[0], []):
 				var color := HESparkline.color_for_series(series.size())
-				series.append({"values": entry["values"], "color": color, "dashed": series_def[2]})
+				var series_name := "%s %s" % [entry["commodity"], series_def[1]]
+				series.append({"name": series_name, "values": entry["values"], "color": color, "dashed": series_def[2]})
 				var legend_label := Label.new()
-				legend_label.text = "%s %s" % [entry["commodity"], series_def[1]]
+				legend_label.text = series_name
 				legend_label.add_theme_color_override("font_color", color)
 				legend.add_child(legend_label)
 		(widgets["section"] as Control).visible = not series.is_empty()

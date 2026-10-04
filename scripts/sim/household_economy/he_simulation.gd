@@ -1231,6 +1231,7 @@ func _burn_need_input(b: HEBusiness, input_commodity: Commodity.Type, quantity: 
 		var burned_units: float = burn["burned"][satisfier]
 		var satisfier_name := Commodity.name_of(satisfier)
 		record["consumed"][satisfier_name] = record["consumed"].get(satisfier_name, 0.0) + burned_units
+		b.add_flow(HEBusiness.FLOW_CONSUMED, satisfier, burned_units)
 		b.last_revenue -= burned_units * (markets[b.settlement_id] as HEMarket).price[satisfier]
 
 ## One day of growth for every field of a land-based business: today's

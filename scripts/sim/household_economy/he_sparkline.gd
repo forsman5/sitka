@@ -9,9 +9,13 @@ extends Control
 ## visually obvious even without reading a single number.
 ##
 ## set_data() draws one series; set_series() draws several on one shared
-## y-axis (an array of {"values": Array[float], "color": Color, "dashed":
-## bool (optional)}), which is how the goods-flow charts show several goods,
-## and inputs vs. outputs, together. A separate
+## y-axis (an array of {"values": Array[float], "color": Color, "name":
+## String (optional), "dashed": bool (optional)}), which is how the goods-flow
+## charts show several goods, and inputs vs. outputs, together.
+##
+## Hovering any chart built on this control shows a marker and a readout of
+## each series' value at that day (prefixed with the series' "name" when it
+## has one), so a new chart gets the readout for free -- just name its series. A separate
 ## axis per series is deliberately not supported yet.
 
 const LINE_COLOR := Color(0.6, 0.85, 0.6)
@@ -31,7 +35,30 @@ const LABEL_FONT_SIZE := 11
 ## the chart's scale can be read -- useful for unit counts, noise for cash.
 var show_max_label := false
 
-var _series: Array = [] # [{"values": Array[float], "color": Color}]
+var _series: Array = [] # [{"values": Array[float], "color": Color, optional "name": String}]
+## Index of the data point under the mouse, or -1 when not hovering.
+var _hover_index := -1
+
+func _ready() -> void:
+	mouse_exited.connect(_on_mouse_exited)
+
+func _on_mouse_exited() -> void:
+	_hover_index = -1
+	queue_redraw()
+
+func _gui_input(event: InputEvent) -> void:
+	if not event is InputEventMouseMotion:
+		return
+	var longest := 0
+	for s in _series:
+		longest = maxi(longest, (s["values"] as Array).size())
+	var w: float = size.x - PADDING * 2.0
+	if longest < 2 or w <= 0.0:
+		_hover_index = -1
+	else:
+		var t: float = clampf((event.position.x - PADDING) / w, 0.0, 1.0)
+		_hover_index = roundi(t * float(longest - 1))
+	queue_redraw()
 
 func set_data(values: Array[float]) -> void:
 	set_series([{"values": values, "color": LINE_COLOR}])
@@ -88,3 +115,39 @@ func _draw() -> void:
 
 	if show_max_label:
 		draw_string(ThemeDB.fallback_font, Vector2(PADDING + 2.0, PADDING + LABEL_FONT_SIZE), "%.1f" % max_v, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE, LABEL_COLOR)
+		if min_v < -0.0001:
+			draw_string(ThemeDB.fallback_font, Vector2(PADDING + 2.0, size.y - PADDING), "%.1f" % min_v, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE, LABEL_COLOR)
+
+	if _hover_index >= 0 and _hover_index < longest:
+		_draw_hover(longest, w, y_for_value)
+
+## Vertical marker at the hovered point plus a small readout box listing each
+## series' value there (and how many days ago, for the x position).
+func _draw_hover(longest: int, w: float, y_for_value: Callable) -> void:
+	var x: float = PADDING + w * (float(_hover_index) / float(longest - 1))
+	draw_line(Vector2(x, PADDING), Vector2(x, size.y - PADDING), BASELINE_COLOR, 1.0)
+	var font := ThemeDB.fallback_font
+	var lines: Array = ["%d days ago" % (longest - 1 - _hover_index) if _hover_index < longest - 1 else "latest"]
+	var colors: Array = [LABEL_COLOR]
+	for s in _series:
+		var values: Array = s["values"]
+		if _hover_index >= values.size():
+			continue
+		var label: String = s.get("name", "")
+		lines.append("%s%.2f" % [label + ": " if label != "" else "", values[_hover_index]])
+		colors.append(s["color"])
+		draw_circle(Vector2(x, y_for_value.call(values[_hover_index])), 3.0, s["color"])
+	var line_h: float = LABEL_FONT_SIZE + 3.0
+	var box_w := 0.0
+	for line in lines:
+		box_w = maxf(box_w, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE).x)
+	box_w += 8.0
+	var box_h: float = line_h * lines.size() + 4.0
+	var box_x: float = x + 8.0
+	if box_x + box_w > size.x:
+		box_x = x - 8.0 - box_w
+	var box_rect := Rect2(box_x, PADDING, box_w, box_h)
+	draw_rect(box_rect, Color(0.1, 0.1, 0.13, 0.92))
+	draw_rect(box_rect, BASELINE_COLOR, false, 1.0)
+	for i in lines.size():
+		draw_string(font, Vector2(box_x + 4.0, PADDING + 2.0 + line_h * (i + 1) - 3.0), lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, LABEL_FONT_SIZE, colors[i])
