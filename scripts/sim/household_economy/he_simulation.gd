@@ -1347,12 +1347,6 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
-## How much of `commodity` a household asks for today: enough to top its
-## inventory back up to TARGET_BUFFER_DAYS of need. The one definition shared
-## by market clearing, the B2B fair-share estimate and the market detail view.
-func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
-	return maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - h.stock(commodity))
-
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only needs flagged drives_lifecycle (food)
 ## drive food_stress/migration-pressure/starvation-candidacy (everything

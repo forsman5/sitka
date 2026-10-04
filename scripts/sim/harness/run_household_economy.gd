@@ -188,8 +188,8 @@ func _check_businesses_share_wood_with_households() -> void:
 		sim.advance_ticks(1)
 		for household_id in sim.households.keys():
 			var h = sim.households[household_id]
-			var demand: float = h.last_demand.get(Commodity.Type.TIMBER, 0.0)
-			var got: float = h.last_consumed.get(Commodity.Type.TIMBER, 0.0)
+			var demand: float = h.last_need_required.get(HENeed.Id.HEAT, 0.0)
+			var got: float = h.last_need_provided.get(HENeed.Id.HEAT, 0.0)
 			if day < 120:
 				early_demand += demand
 				early_got += got
