@@ -4,6 +4,7 @@ extends Node3D
 ## consumes snapshots from Simulation but never advances or mutates it.
 
 const Simulation = preload("res://scripts/sim/simulation.gd")
+const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 const Layout = preload("res://scripts/valley/river_valley_layout.gd")
@@ -39,6 +40,7 @@ var _building_clearance: Array[Rect2] = []
 var settlement_cluster_positions: Dictionary = {}
 
 func _ready() -> void:
+	EscapeMenu.attach_to(self)
 	if map_definition == null:
 		map_definition = Layout.create_map()
 	var errors := map_definition.validate_geometry()

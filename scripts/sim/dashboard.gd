@@ -10,6 +10,7 @@ extends Control
 ## lives here. The schematic route map (route_map.gd) is a sibling view of
 ## the same Simulation instance, not a separate authority.
 
+const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const MultiValleySeed = preload("res://scripts/sim/data/multivalley_seed.gd")
@@ -46,6 +47,7 @@ var _shipments_box: VBoxContainer
 var _settlement_rows: Dictionary = {}
 
 func _ready() -> void:
+	EscapeMenu.attach_to(self)
 	var graph_path := pending_graph_path
 	pending_graph_path = ""
 	for arg in OS.get_cmdline_user_args():

@@ -1,11 +1,24 @@
 extends CanvasLayer
 
+## Experimental scenes have nothing to save, so they hide the Save button.
+@export var show_save: bool = true
+
 @onready var _overlay: Control = $Overlay
 @onready var _saved_label: Label = $Overlay/Panel/VBox/SavedLabel
 @onready var _name_dialog: Panel = $Overlay/NameDialog
 @onready var _name_input: LineEdit = $Overlay/NameDialog/VBox/NameInput
 @onready var _confirm_dialog: Panel = $Overlay/ConfirmDialog
 @onready var _confirm_label: Label = $Overlay/ConfirmDialog/VBox/ConfirmLabel
+
+func _ready() -> void:
+	$Overlay/Panel/VBox/SaveButton.visible = show_save
+	_saved_label.visible = show_save
+
+## Adds a resume / back-to-main-menu escape menu (no save) to an experimental scene.
+static func attach_to(parent: Node) -> void:
+	var menu: CanvasLayer = load("res://scenes/ui/escape_menu.tscn").instantiate()
+	menu.show_save = false
+	parent.add_child(menu)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.keycode == KEY_ESCAPE and event.pressed and not event.is_echo():
@@ -66,4 +79,5 @@ func _do_save(save_name: String) -> void:
 	tween.tween_property(_saved_label, "modulate:a", 0.0, 1.5).set_delay(0.5)
 
 func _on_main_menu_pressed() -> void:
+	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")

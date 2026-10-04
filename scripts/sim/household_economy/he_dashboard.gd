@@ -7,6 +7,7 @@ extends Control
 ## into HESimulation's internal Dictionaries directly, and holds no
 ## economic rules of its own.
 
+const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
@@ -98,6 +99,10 @@ var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
 
 func _ready() -> void:
+	# The valley hosting an embedded view has its own menu. get() because
+	# embedded_mode only exists once the valley integration lands.
+	if not get("embedded_mode"):
+		EscapeMenu.attach_to(self)
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
