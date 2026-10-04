@@ -207,18 +207,34 @@ func _build_ui() -> void:
 	_city_stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
 	vbox.add_child(_city_stats_label)
 
+	# Businesses and Goods share one fixed-height tabbed area. Stacked, the
+	# business list grew with every new business and crowded out the
+	# households/detail row below; each tab scrolls internally instead.
+	var top_tabs := TabContainer.new()
+	top_tabs.custom_minimum_size = Vector2(0, 200)
+	vbox.add_child(top_tabs)
+
+	var business_scroll := ScrollContainer.new()
+	business_scroll.name = "Businesses"
+	# Scrolls both axes: the business table is wider than the window AND
+	# grows taller with every business. Wheel = vertical, Shift+wheel =
+	# horizontal. Also stops the wide grid from stretching the whole page.
+	business_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	business_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	top_tabs.add_child(business_scroll)
+	_business_list = VBoxContainer.new()
+	business_scroll.add_child(_business_list)
+
+	var goods_scroll := ScrollContainer.new()
+	goods_scroll.name = "Goods"
+	goods_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	top_tabs.add_child(goods_scroll)
 	_market_grid = GridContainer.new()
 	_market_grid.columns = 5
-	vbox.add_child(_market_grid)
+	_market_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
 	_known_market_commodities = _simulation.get_market_summary().keys()
-
-	var business_header := Label.new()
-	business_header.text = "Businesses"
-	business_header.add_theme_font_size_override("font_size", 16)
-	vbox.add_child(business_header)
-	_business_list = VBoxContainer.new()
-	vbox.add_child(_business_list)
 
 	var lower_row := HBoxContainer.new()
 	lower_row.add_theme_constant_override("separation", 16)
@@ -934,20 +950,14 @@ func _rebuild_business_rows() -> void:
 	_business_rows.clear()
 
 	# The field-model columns (Land, Next harvest, Cash runway, Wage
-	# shortfall) push this grid's natural width well past the window --
-	# without a ScrollContainer a plain child forces the whole page (and
-	# everything else sharing its VBoxContainer, like the top bar's speed
-	# buttons) to stretch to match it, shoving them off screen instead of
-	# just scrolling this one row.
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_business_list.add_child(scroll)
-
+	# shortfall) push this grid's natural width well past the window. The
+	# Businesses tab's ScrollContainer (see _build_ui) scrolls both axes, so
+	# the grid can just be a plain child here -- a second, nested horizontal
+	# ScrollContainer would eat the mouse wheel for sideways scrolling before
+	# handing it to the outer one for vertical.
 	var grid := GridContainer.new()
 	grid.columns = 14
-	scroll.add_child(grid)
+	_business_list.add_child(grid)
 	for col_label in ["Name", "Target", "Max", "Employed", "Land (ac)", "Status", "Revenue/worker (avg)", "Reference wage", "Stock", "Cash", "Cash runway", "Wage shortfall", "Wages", "Cash Δ"]:
 		var header := Label.new()
 		header.text = col_label
