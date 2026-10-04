@@ -374,6 +374,38 @@ static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
 	var farm := int(remainder * 0.2)
 	return _build_world(farm, remainder - farm, trader)
 
+## Player-chosen roster from the household economy config page. `included`
+## is an array of business ids (the *_BUSINESS_ID constants); anything absent
+## is built by _build_world and then dropped, so it never exists in the sim.
+## Trader/Bloomery/Iron Mine start with the same 8-worker slices the presets
+## use, and whatever is left splits evenly between Farm and Woodlot (or all
+## goes to whichever one is present). Ranches self-bootstrap, so they take no
+## day-one staff. Needs Farm or Woodlot -- nothing else makes grain or fuel.
+static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictionary:
+	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
+	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
+	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine
+	var has_farm := included.has(FARM_BUSINESS_ID)
+	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
+	var farm := 0
+	var woodlot := 0
+	if has_farm and has_woodlot:
+		farm = (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+		woodlot = remainder - farm
+	elif has_farm:
+		farm = remainder
+	elif has_woodlot:
+		woodlot = remainder
+	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine)
+	var businesses: Dictionary = world["businesses"]
+	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
+	for business_id in businesses.keys():
+		if not included.has(business_id):
+			businesses.erase(business_id)
+			settlement.business_ids.erase(business_id)
+	return world
+
 ## Small disconnected pair used to prove that settlement-local markets,
 ## employment pools, and summaries do not leak into one another.
 static func build_two_settlement_economy(_rng: RandomNumberGenerator) -> Dictionary:
