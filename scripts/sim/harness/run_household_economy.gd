@@ -25,6 +25,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_charcoal_burner_heats_households()
+	_check_businesses_share_wood_with_households()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
@@ -175,6 +176,37 @@ func _check_conservation() -> void:
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
+
+## No woodlot reserve for households: the Bloomery buys wood as a market
+## participant alongside them. Households may go short while the Woodlot's
+## workforce and price catch up, but over the long run both are served.
+func _check_businesses_share_wood_with_households() -> void:
+	print("\n=== Wood: businesses and households share the Woodlot's offer, no household reserve ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	var early_demand := 0.0
+	var early_got := 0.0
+	var late_demand := 0.0
+	var late_got := 0.0
+	var bloomery_wood_bought := 0.0
+	for day in 600:
+		sim.advance_ticks(1)
+		for household_id in sim.households.keys():
+			var h = sim.households[household_id]
+			var demand: float = h.last_need_required.get(HENeed.Id.HEAT, 0.0)
+			var got: float = h.last_need_provided.get(HENeed.Id.HEAT, 0.0)
+			if day < 120:
+				early_demand += demand
+				early_got += got
+			elif day >= 360:
+				late_demand += demand
+				late_got += got
+	for record in sim.get_daily_history(600):
+		bloomery_wood_bought += (record["consumed"] as Dictionary).get("Timber", 0.0)
+	print("  household wood fulfilment: days 0-120=%.0f%%, days 360-600=%.0f%% (Bloomery + households consumed %.1f timber)" % [
+		100.0 * early_got / maxf(early_demand, EPSILON), 100.0 * late_got / maxf(late_demand, EPSILON), bloomery_wood_bought])
+	_assert(late_got >= late_demand * 0.9,
+		"Households should get >=90%% of their wood in the long run without a reserve -- got %.1f of %.1f" % [late_got, late_demand])
+	_assert(early_got > 0.0, "Households should buy some wood even in the first 120 days")
 
 ## The detail tab's goods-flow charts: every production business reports a
 ## history per flow, and those histories must reconcile with its own storage
@@ -1190,14 +1222,14 @@ func _check_fuel_fallback() -> void:
 	_assert(timber_left > 1.0, "Test setup: the Woodlot should still hold stock after clearing (it paces its sales)")
 	_assert(paced_gap < EPSILON, "Households should top up from the baseline when the preferred seller's paced offer runs short, worst shortfall %.4f" % paced_gap)
 
-	# Bloomery: charcoal exists but is all inside the household reserve, so a
-	# business cannot buy any of it. Production must still run on timber.
+	# Bloomery: only a sliver of charcoal exists. There is no household reserve,
+	# so the Bloomery may take part of it, but never more than exists, and the
+	# rest of its heat must still come from timber.
 	var sim2 := _new_sim("build_economy_with_charcoal_burner")
 	var settlement_id2: int = sim2.get_settlement_ids()[0]
 	(sim2.markets[settlement_id2] as HEMarket).price[charcoal] = 3.0
 	var burner2: HEBusiness = sim2.businesses[HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID]
-	burner2.inventory = {charcoal: 1.0} # far below the household reserve
-	_assert(sim2._seller_surplus_above_reserve(burner2, settlement_id2, charcoal) <= 0.0001, "Test setup: the charcoal should sit entirely inside the reserve")
+	burner2.inventory = {charcoal: 1.0}
 	var bloomery: HEBusiness = sim2.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	bloomery.inventory = {}
 	bloomery.balance = 10000.0
@@ -1206,7 +1238,7 @@ func _check_fuel_fallback() -> void:
 	sim2.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
 	sim2._run_input_purchasing(sim2._new_daily_record())
 	print("  bloomery: timber bought=%.1f, charcoal bought=%.1f, input fulfilment=%.2f" % [bloomery.stock(timber), bloomery.stock(charcoal), bloomery.last_input_fulfillment_ratio])
-	_assert(bloomery.stock(charcoal) <= 0.0001, "A business cannot buy reserved charcoal")
+	_assert(bloomery.stock(charcoal) <= 1.0001, "A business cannot buy more charcoal than the burner holds, got %.3f" % bloomery.stock(charcoal))
 	_assert(bloomery.stock(timber) > 0.0, "The Bloomery should buy timber when the cheaper fuel is unavailable to it")
 	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "The Bloomery should not stall for fuel while timber is for sale")
 
