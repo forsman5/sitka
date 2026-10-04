@@ -100,6 +100,9 @@ var _selected_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
+## User toggle for the market chart's "Requested" series -- see
+## _add_market_detail_chart.
+var _market_chart_export_appetite := false
 var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
@@ -498,6 +501,14 @@ func _build_ui() -> void:
 	market_close.tooltip_text = "Close (back to household list)"
 	market_close.pressed.connect(_on_market_detail_close_pressed)
 	market_title_bar.add_child(market_close)
+	# Outside _market_detail_content on purpose: that content is rebuilt on
+	# every refresh, and recreating a checkbox mid-click would swallow it.
+	var export_toggle := CheckBox.new()
+	export_toggle.text = "Count Trader export capacity as demand"
+	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's remaining capacity, i.e. what it would take if the seller had the stock."
+	export_toggle.button_pressed = _market_chart_export_appetite
+	export_toggle.toggled.connect(_on_market_export_appetite_toggled)
+	market_detail_box.add_child(export_toggle)
 	var market_scroll := ScrollContainer.new()
 	market_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	market_detail_box.add_child(market_scroll)
@@ -754,11 +765,45 @@ func _refresh_market_detail() -> void:
 	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
 	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
 	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
 	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
+
+## Last 90 days of supplied (offered) vs. requested (affordable) quantity on
+## one shared axis, with a color-keyed legend. Rebuilt with the rest of the
+## detail content each refresh.
+func _add_market_detail_chart(report: Dictionary) -> void:
+	var supplied_color := HESparkline.color_for_series(0)
+	var requested_color := HESparkline.color_for_series(1)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	_market_detail_content.add_child(header)
+	var title := Label.new()
+	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
+	var requested_history: Array = report["demanded_with_export_history"] if _market_chart_export_appetite else report["demanded_history"]
+	for entry in [["Supplied", supplied_color], [requested_name, requested_color]]:
+		var legend := Label.new()
+		legend.text = entry[0]
+		legend.add_theme_color_override("font_color", entry[1])
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 60)
+	chart.show_max_label = true
+	chart.set_series([
+		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
+		{"name": "Requested", "values": requested_history, "color": requested_color},
+	])
+	_market_detail_content.add_child(chart)
+
+func _on_market_export_appetite_toggled(enabled: bool) -> void:
+	_market_chart_export_appetite = enabled
+	_refresh_market_detail()
 
 func _add_market_detail_line(value: String) -> void:
 	var label := Label.new()
