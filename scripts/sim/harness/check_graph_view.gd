@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## Run with the same --graph=PATH argument as the dashboard (or omit for five).
-const Dashboard = preload("res://scripts/sim/dashboard.gd")
+const DASHBOARD_PATH := "res://scripts/sim/dashboard.gd"
 var failures: int = 0
 
 func _initialize() -> void:
@@ -13,7 +13,7 @@ func check(condition: bool, message: String) -> void:
 		push_error(message)
 
 func _run() -> void:
-	var dashboard = Dashboard.new()
+	var dashboard = load(DASHBOARD_PATH).new()
 	root.add_child(dashboard)
 	dashboard._speed_multiplier = 0.0
 	await process_frame
@@ -94,6 +94,27 @@ func _run() -> void:
 		cargo[eid] = float(cargo.get(eid, 0.0)) + float(shipment["quantity"])
 	check(cargo == map._traffic, "Traffic overlay must equal in-flight cargo snapshots")
 	check(map._shipments == sim.get_active_shipments(), "Markers must reflect authoritative shipment snapshots")
+	if dashboard._valley_economy != null:
+		dashboard._open_household_detail(last_id)
+		await process_frame
+		var detail = dashboard._detail_view
+		check(detail != null and detail.external_simulation == sim.towns[last_id], "Detail must show the selected graph town's live economy")
+		check(not dashboard.visible, "Graph must hide behind town detail")
+		var detail_speed_buttons := {}
+		for node in detail.find_children("*", "Button", true, false):
+			if node.text in ["Pause", "1x", "10x", "100x"]:
+				detail_speed_buttons[node.text] = node
+		check(detail_speed_buttons.size() == 4, "Town detail must show all four speed controls")
+		if detail_speed_buttons.has("Pause") and detail_speed_buttons.has("10x"):
+			detail_speed_buttons["Pause"].pressed.emit()
+			check(dashboard._speed_multiplier == 0.0, "Detail Pause must pause the valley clock")
+			detail_speed_buttons["10x"].pressed.emit()
+			check(dashboard._speed_multiplier == 10.0, "Detail speed must control the valley clock")
+		sim.advance_ticks(1)
+		detail.refresh_external()
+		check(detail.external_simulation.day == sim.day, "Town detail must follow the graph clock")
+		dashboard._close_household_detail()
+		check(dashboard.visible, "Graph must return after closing town detail")
 	check(map.size.x > 0 and map.size.y >= 260, "Map needs visible layout space")
 	print("Graph view checks: %d settlements, %d failures" % [ids.size(), failures])
 	dashboard.queue_free()

@@ -14,6 +14,7 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
+const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 
 const SETTLEMENT_ID := 1
 const WORKER_CAPACITY := 2
@@ -212,16 +213,19 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## HESimulation._evaluate_business_capacity's zero-capacity-protection
 ## mechanic, since there is no such business id in `businesses` for that to
 ## apply to.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0) -> Dictionary:
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, household_count: int = HOUSEHOLD_COUNT) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
+	var town_scale := float(household_count) / float(HOUSEHOLD_COUNT)
+	var farm_land := FARM_LAND_AREA_ACRES * town_scale
+	var woodlot_land := WOODLOT_LAND_AREA_ACRES * town_scale
 
 	var farm := HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), 0, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
-	farm.configure_land(FARM_LAND_AREA_ACRES, _make_fields(FARM_FIELD_COUNT, FARM_LAND_AREA_ACRES, FARM_FIELD_START_DAYS, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
+	farm.configure_land(farm_land, _make_fields(FARM_FIELD_COUNT, farm_land, FARM_FIELD_START_DAYS, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 
 	var woodlot := HEBusiness.new(WOODLOT_BUSINESS_ID, "Woodlot", _woodlot_recipe(), 0, woodlot_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
-	woodlot.configure_land(WOODLOT_LAND_AREA_ACRES, _make_fields(WOODLOT_FIELD_COUNT, WOODLOT_LAND_AREA_ACRES, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
+	woodlot.configure_land(woodlot_land, _make_fields(WOODLOT_FIELD_COUNT, woodlot_land, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
 
-	var trader := HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, TRADER_MAX_CAPACITY, trader_capacity, HEBusiness.Kind.TRADER, SETTLEMENT_ID)
+	var trader := HEBusiness.new(TRADER_BUSINESS_ID, "Trader", null, maxi(TRADER_MAX_CAPACITY, ceili(TRADER_MAX_CAPACITY * town_scale)), trader_capacity, HEBusiness.Kind.TRADER, SETTLEMENT_ID)
 
 	# Ranches aren't seeded with any day-one employees (unlike Farm/Woodlot/
 	# Trader above) -- they self-bootstrap through the same zero-capacity
@@ -245,9 +249,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 
 	var farm_days_to_first_harvest: int = FARM_GROWTH_DAYS - FARM_FIELD_START_DAYS.max()
-	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	farm.add_stock(Commodity.Type.GRAIN, household_count * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 	var woodlot_days_to_first_harvest: int = WOODLOT_GROWTH_DAYS - WOODLOT_FIELD_START_DAYS.max()
-	woodlot.add_stock(Commodity.Type.TIMBER, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	woodlot.add_stock(Commodity.Type.TIMBER, household_count * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 
 	var businesses: Dictionary[int, HEBusiness] = {
 		FARM_BUSINESS_ID: farm,
@@ -264,7 +268,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
-		bloomery = HEBusiness.new(BLOOMERY_BUSINESS_ID, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, bloomery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		bloomery = HEBusiness.new(BLOOMERY_BUSINESS_ID, "Bloomery", _bloomery_recipe(), maxi(BLOOMERY_MAX_CAPACITY, ceili(BLOOMERY_MAX_CAPACITY * town_scale)), bloomery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
 		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
 		# Its timber input is the furnace's heat, which any heat fuel can supply.
 		bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
@@ -273,7 +277,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 
 	var iron_mine: HEBusiness = null
 	if iron_mine_capacity > 0:
-		iron_mine = HEBusiness.new(IRON_MINE_BUSINESS_ID, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, iron_mine_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		iron_mine = HEBusiness.new(IRON_MINE_BUSINESS_ID, "Iron Mine", _iron_mine_recipe(), maxi(IRON_MINE_MAX_CAPACITY, ceili(IRON_MINE_MAX_CAPACITY * town_scale)), iron_mine_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
 		iron_mine.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * iron_mine_capacity
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
@@ -288,7 +292,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
 	var trader_workers_assigned := 0
-	for i in HOUSEHOLD_COUNT:
+	for i in household_count:
 		var household_id := i + 1
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE, SETTLEMENT_ID)
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
@@ -373,6 +377,20 @@ static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
 	var farm := int(remainder * 0.2)
 	return _build_world(farm, remainder - farm, trader)
+
+## Valley towns reuse H1 businesses with acreage, starting stock and staffing
+## scaled to the authored valley's household counts. The profiles are still
+## experimental; local labor and market rules remain those of HESimulation.
+static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dictionary:
+	var household_count: int = ValleySeed.HOUSEHOLDS_PER_SETTLEMENT[town_id]
+	var scale := float(household_count) / float(HOUSEHOLD_COUNT)
+	var trader := maxi(8, int(round(4.0 * scale)) * 2)
+	var bloomery := int(round(4.0 * scale)) * 2 if town_id == ValleySeed.IRONBANK or town_id == ValleySeed.STAITHE else 0
+	var iron_mine := int(round(4.0 * scale)) * 2 if town_id == ValleySeed.IRONBANK else 0
+	var remainder := household_count * WORKER_CAPACITY - trader - bloomery - iron_mine
+	var farm_share := 0.2 if town_id == ValleySeed.HIGH_FELL else 0.5
+	var farm := int(round(float(remainder) * farm_share / 2.0)) * 2
+	return _build_world(farm, remainder - farm, trader, bloomery, iron_mine, household_count)
 
 ## Player-chosen roster from the household economy config page. `included`
 ## is an array of business ids (the *_BUSINESS_ID constants); anything absent

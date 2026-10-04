@@ -408,6 +408,9 @@ var day: int = 0
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
+## Valley mode routes exports through transport edges instead of the standalone outside market.
+var external_trade_enabled: bool = true
+var _pending_valley_transactions: Array[Dictionary] = []
 
 ## Named "emigrate" rather than "die" -- placeholder terminology until H1
 ## actually connects to the wider valley (see docs/river-valley-vertical-
@@ -1005,11 +1008,19 @@ func _daily_tick() -> void:
 		(market as HEMarket).last_clearing.clear()
 		(market as HEMarket).clear_daily_export()
 	var record := _new_daily_record()
+	if not external_trade_enabled:
+		for business in businesses.values():
+			var trader_business: HEBusiness = business
+			if trader_business.kind == HEBusiness.Kind.TRADER:
+				trader_business.last_exported = {}
+		record["trader_transactions"].append_array(_pending_valley_transactions)
+		_pending_valley_transactions.clear()
 	_pay_wages(record)
 	_run_input_purchasing(record)
 	_run_production(record)
 	_run_market(record)
-	_run_trade(record)
+	if external_trade_enabled:
+		_run_trade(record)
 	for market in markets.values():
 		(market as HEMarket).record_supply_demand_history()
 	_record_business_revenue_history()
@@ -1976,6 +1987,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	var local_market: HEMarket = markets[settlement_id]
 	var price: float = local_market.price[commodity]
 	var seller: HEBusiness = _business_selling(settlement_id, commodity)
+	var importer: HEBusiness = _settlement_trader(settlement_id)
 	var total_offer := 0.0
 	# Today's input purchases (_run_input_purchasing) already took their
 	# pro-rata share of this seller's paced offer; households clear against
@@ -1988,6 +2000,9 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			total_offer = _paced_offer(seller, commodity)
 		else:
 			total_offer = minf(seller.stock(commodity), maxf(0.0, b2b["offer"] - b2b_sold))
+	var local_offer: float = total_offer
+	if importer != null:
+		total_offer += importer.stock(commodity)
 
 	var requests_funded: Dictionary = {}
 	var total_funded_request := 0.0
@@ -2022,10 +2037,11 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			if scarcity_shortfall > 0.0001:
 				_accumulate(h.last_unmet_scarcity, commodity, scarcity_shortfall)
 
-		if seller != null:
-			seller.consume(commodity, quantity_traded)
-			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity_traded)
-			var revenue := quantity_traded * price
+		var local_sold: float = quantity_traded * local_offer / total_offer if total_offer > 0.0 else 0.0
+		if seller != null and local_sold > 0.0:
+			seller.consume(commodity, local_sold)
+			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, local_sold)
+			var revenue := local_sold * price
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
 			# tick, and _run_input_purchasing may have already added this
@@ -2034,6 +2050,14 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			# chance to buy any).
 			seller.last_revenue += revenue
 			seller.last_cash_change += revenue
+		var imported_sold: float = quantity_traded - local_sold
+		if importer != null and imported_sold > 0.0:
+			importer.consume(commodity, imported_sold)
+			importer.add_flow(HEBusiness.FLOW_SOLD, commodity, imported_sold)
+			var import_revenue := imported_sold * price
+			importer.balance += import_revenue
+			importer.last_revenue += import_revenue
+			importer.last_cash_change += import_revenue
 
 	# Records only the household pass; the business-to-business sales were
 	# already merged in _run_input_purchasing. The PRICE signal below sees both.
@@ -2075,6 +2099,81 @@ func _adjust_price(settlement_id: int, commodity: Commodity.Type, total_offer: f
 ## the same capacity_limit/remaining_capacity -- see HERD_EXPORT_PRICE's
 ## doc comment for why that pass has no local reserve and uses a flat price
 ## instead of a live one.
+## The valley coordinator uses the same staffed Trader and seller reserve as
+## standalone exports. The buyer pays on dispatch; goods arrive later.
+func get_valley_trade_offer(commodity: Commodity.Type) -> float:
+	var settlement_id := _resolve_settlement_id(-1)
+	var trader := _settlement_trader(settlement_id)
+	var seller := _business_selling(settlement_id, commodity)
+	if trader == null or seller == null:
+		return 0.0
+	if not _trader_export_enabled.get(trader.id, {}).get(commodity, false):
+		return 0.0
+	var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+	return minf(capacity, _exportable_surplus(seller, settlement_id, commodity))
+
+func get_valley_trader_capacity() -> float:
+	var trader := _settlement_trader(_resolve_settlement_id(-1))
+	return float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER if trader != null else 0.0
+
+func get_valley_trade_price(commodity: Commodity.Type) -> float:
+	var settlement_id := _resolve_settlement_id(-1)
+	return 0.5 * (markets[settlement_id] as HEMarket).price[commodity] + 0.5 * _average_price_history(settlement_id, commodity)
+
+func get_valley_market_prices() -> Dictionary:
+	var settlement_id := _resolve_settlement_id(-1)
+	var prices := {}
+	for commodity in BASE_PRICE:
+		prices[Commodity.name_of(commodity)] = (markets[settlement_id] as HEMarket).price[commodity]
+	return prices
+
+func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_price: float) -> float:
+	var quantity: float = minf(requested, get_valley_trade_offer(commodity))
+	if quantity <= 0.0001:
+		return 0.0
+	var settlement_id := _resolve_settlement_id(-1)
+	var trader := _settlement_trader(settlement_id)
+	var seller := _business_selling(settlement_id, commodity)
+	var pay_price: float = get_valley_trade_price(commodity) * TRADER_BUY_PRICE_FRACTION
+	seller.consume(commodity, quantity)
+	seller.balance += quantity * pay_price
+	seller.last_revenue += quantity * pay_price
+	trader.balance += quantity * (sale_price - pay_price)
+	trader.last_revenue += quantity * (sale_price - pay_price)
+	trader.last_exported[commodity] = trader.last_exported.get(commodity, 0.0) + quantity
+	_export_revenue_total += quantity * sale_price
+	return quantity
+
+func pay_for_valley_shipment(commodity: Commodity.Type, quantity: float, unit_price: float) -> void:
+	var trader := _settlement_trader(_resolve_settlement_id(-1))
+	if trader != null:
+		trader.balance -= quantity * unit_price
+		_import_cost_total += quantity * unit_price
+
+func receive_valley_shipment(commodity: Commodity.Type, quantity: float) -> void:
+	var trader := _settlement_trader(_resolve_settlement_id(-1))
+	if trader != null:
+		trader.add_stock(commodity, quantity)
+
+func record_valley_transaction(direction: String, commodity: Commodity.Type, quantity: float, unit_price: float, route: String, on_arrival: bool = false) -> void:
+	var trader := _settlement_trader(_resolve_settlement_id(-1))
+	if trader == null:
+		return
+	var transaction := {
+		"day": day + 1 if on_arrival else day,
+		"business_id": trader.id,
+		"direction": direction,
+		"commodity": Commodity.name_of(commodity),
+		"quantity": quantity,
+		"unit_price": unit_price,
+		"local_value": quantity * unit_price,
+		"route": route,
+	}
+	if on_arrival or _history.is_empty():
+		_pending_valley_transactions.append(transaction)
+	else:
+		(_history.back() as Dictionary)["trader_transactions"].append(transaction)
+
 func _run_trade(record: Dictionary) -> void:
 	var trader_ids: Array[int] = []
 	for business_id in businesses.keys():
@@ -2540,13 +2639,18 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var price: float = local_market.price[commodity]
 			total_cost_if_fully_supplied += requested * price
 			var seller := _business_selling(buyer.settlement_id, commodity)
+			if seller != null and not external_trade_enabled and _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity) <= 0.0001:
+				seller = null
 			var offer: float
 			if seller != null:
 				offer = _b2b_offer(seller, buyer.settlement_id, commodity, minf(requested, needed * TARGET_BUFFER_DAYS))
 			elif trader != null:
-				if not trader_import_capacity.has(trader.id):
-					trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
-				offer = trader_import_capacity[trader.id]
+				if external_trade_enabled:
+					if not trader_import_capacity.has(trader.id):
+						trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+					offer = trader_import_capacity[trader.id]
+				else:
+					offer = trader.stock(commodity)
 			else:
 				offer = 0.0
 
@@ -2574,6 +2678,8 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
 
 			var seller := _business_selling(buyer.settlement_id, commodity)
+			if seller != null and not external_trade_enabled and _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity) < bought - 0.0001:
+				seller = null
 			if seller != null:
 				var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
 				b2b["sold"] += bought
@@ -2589,6 +2695,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				var offer_before_sale: float = b2b["offer"]
 				local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
 			elif trader != null:
+				if not external_trade_enabled:
+					trader.consume(commodity, bought)
+					trader.balance += cost
+					trader.last_revenue += cost
+					trader.last_cash_change += cost
+					continue
 				var offer_before: float = trader_import_capacity[trader.id]
 				trader_import_capacity[trader.id] -= bought
 				var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION

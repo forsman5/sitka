@@ -1,20 +1,16 @@
 extends Control
 
-## Milestone 0.75/0.76/1/1.1: a live, speed-controllable read-out of the
-## simulation. This is a view only -- it holds one Simulation instance,
-## advances it by calling advance_ticks(), and re-renders from Simulation's
-## read-only query methods (get_settlement_ids/get_clock_summary/
-## get_settlement_summary/get_workplace_reports/get_settlement_prices/
-## get_active_shipments/get_transport_edge_ids/get_game_over_info). It never
-## reaches into Simulation's internal Dictionaries directly. No game logic
-## lives here. The schematic route map (route_map.gd) is a sibling view of
-## the same Simulation instance, not a separate authority.
+## The single valley graph reads the same ValleyEconomy as the 3D valley;
+## a loaded multi-valley graph still uses the older pooled Simulation.
+## RouteMap and the selected-town panel are views of whichever model is open.
 
 const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const Simulation = preload("res://scripts/sim/simulation.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const MultiValleySeed = preload("res://scripts/sim/data/multivalley_seed.gd")
 const RouteMap = preload("res://scripts/sim/route_map.gd")
+const ValleyEconomy = preload("res://scripts/valley/valley_economy.gd")
+const HEDashboardScene = preload("res://scenes/sim/he_dashboard.tscn")
 
 const SEED := 12345
 const SECONDS_PER_DAY_AT_1X := 1.0
@@ -31,7 +27,9 @@ var _graph: Dictionary = {}
 var _selected_id: int = -1
 var _settlement_list: VBoxContainer
 var _settlement_picker: OptionButton
-var _simulation: Simulation
+var _simulation
+var _valley_economy: ValleyEconomy
+var _detail_view
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 var _game_over_shown := false
@@ -66,7 +64,8 @@ func _ready() -> void:
 			return
 		_graph = _builder.graph
 	if _graph.is_empty():
-		_simulation = Simulation.new(SEED)
+		_valley_economy = ValleyEconomy.new()
+		_simulation = _valley_economy
 	else:
 		_simulation = Simulation.new(int(_graph["seed"]), Callable(_builder, "build"))
 		_speed_multiplier = 0.0
@@ -91,6 +90,8 @@ func _process(delta: float) -> void:
 		if Time.get_ticks_usec() - started_usec >= 12000:
 			break
 	_refresh()
+	if _detail_view != null:
+		_detail_view.refresh_external()
 
 	if not _simulation.get_game_over_info().is_empty() and not _game_over_shown:
 		_game_over_shown = true
@@ -201,7 +202,7 @@ func _build_ui() -> void:
 	scroll.add_child(_settlement_list)
 
 	_selected_id = _simulation.get_settlement_ids()[0]
-	_settlement_rows[_selected_id] = _build_settlement_panel(_settlement_list, _selected_id)
+	_settlement_rows[_selected_id] = _build_household_town_panel(_settlement_list, _selected_id) if _valley_economy != null else _build_settlement_panel(_settlement_list, _selected_id)
 	_route_map.selected_id = _selected_id
 
 	var shipments_scroll := ScrollContainer.new()
@@ -218,6 +219,48 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	btn.text = label
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
 	return btn
+
+func _build_household_town_panel(parent: VBoxContainer, town_id: int) -> Dictionary:
+	var panel := PanelContainer.new()
+	parent.add_child(panel)
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override("separation", 8)
+	panel.add_child(inner)
+	var header := Label.new()
+	header.add_theme_font_size_override("font_size", 20)
+	inner.add_child(header)
+	var stats := Label.new()
+	inner.add_child(stats)
+	var stock := Label.new()
+	stock.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inner.add_child(stock)
+	var prices := Label.new()
+	prices.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inner.add_child(prices)
+	var shipping := Label.new()
+	inner.add_child(shipping)
+	var detail := Button.new()
+	detail.text = "View household economy"
+	detail.pressed.connect(func() -> void: _open_household_detail(town_id))
+	inner.add_child(detail)
+	return {"header": header, "stats": stats, "stock": stock, "prices": prices, "shipping": shipping}
+
+func _open_household_detail(town_id: int) -> void:
+	if _valley_economy == null or _detail_view != null:
+		return
+	_detail_view = HEDashboardScene.instantiate()
+	_detail_view.external_simulation = _valley_economy.towns[town_id]
+	_detail_view.embedded_mode = true
+	_detail_view.back_requested.connect(_close_household_detail)
+	_detail_view.speed_requested.connect(func(speed: float) -> void: _speed_multiplier = speed)
+	get_tree().root.add_child(_detail_view)
+	visible = false
+
+func _close_household_detail() -> void:
+	if _detail_view != null:
+		_detail_view.queue_free()
+		_detail_view = null
+		visible = true
 
 func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dictionary:
 	var panel := PanelContainer.new()
@@ -290,10 +333,13 @@ func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dicti
 	}
 
 func _refresh() -> void:
-	var clock := _simulation.get_clock_summary()
+	if _valley_economy != null:
+		_refresh_household_valley()
+		return
+	var clock: Dictionary = _simulation.get_clock_summary()
 	_time_label.text = "Day %d  |  Year %d, %s" % [clock["day"], clock["year"], clock["season_name"]]
 
-	var game_over := _simulation.get_game_over_info()
+	var game_over: Dictionary = _simulation.get_game_over_info()
 	_game_over_label.visible = not game_over.is_empty()
 	if not game_over.is_empty():
 		_game_over_label.text = "GAME OVER -- " + str(game_over["summary"])
@@ -332,10 +378,36 @@ func _refresh() -> void:
 	_route_map.refresh_snapshot()
 	_update_map_legend()
 
+func _refresh_household_valley() -> void:
+	_time_label.text = "Day %d  |  Five town household economy" % _valley_economy.day
+	var summary: Dictionary = _valley_economy.get_settlement_summary(_selected_id)
+	var row: Dictionary = _settlement_rows[_selected_id]
+	(row["header"] as Label).text = summary["name"]
+	(row["stats"] as Label).text = "Population %d  |  Households %d  |  Unemployed %d  |  Short of goods %d  |  Food stress %.2f  |  Cash %.0f" % [
+		summary["population"], summary["household_count"], summary["unemployed_household_count"],
+		summary["households_short_of_goods"], summary["avg_food_stress"], summary["total_money"]]
+	var stock: Dictionary = summary["inventory"]
+	(row["stock"] as Label).text = "Town stock: Grain %.0f  |  Timber %.0f  |  Wool %.0f  |  Iron %.0f" % [
+		stock.get("Grain", 0.0), stock.get("Timber", 0.0), stock.get("Wool", 0.0), stock.get("Iron", 0.0)]
+	var prices: Dictionary = _valley_economy.get_settlement_prices(_selected_id)
+	(row["prices"] as Label).text = "Market prices: Grain %.2f  |  Timber %.2f  |  Wool %.2f  |  Iron %.2f" % [
+		prices.get("Grain", 0.0), prices.get("Timber", 0.0), prices.get("Wool", 0.0), prices.get("Iron", 0.0)]
+	var inbound := 0
+	var outbound := 0
+	for shipment in _valley_economy.get_active_shipments():
+		if shipment["destination_settlement_id"] == _selected_id:
+			inbound += 1
+		if shipment["origin_settlement_id"] == _selected_id:
+			outbound += 1
+	(row["shipping"] as Label).text = "Shipments in transit: %d inbound, %d outbound" % [inbound, outbound]
+	_refresh_shipments()
+	_route_map.refresh_snapshot()
+	_update_map_legend()
+
 func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 	var workplaces_box: VBoxContainer = row["workplaces_box"]
 	var workplace_labels: Dictionary = row["workplace_labels"]
-	var reports := _simulation.get_workplace_reports(settlement_id)
+	var reports: Array = _simulation.get_workplace_reports(settlement_id)
 
 	if workplace_labels.is_empty() and not reports.is_empty():
 		var header := Label.new()
@@ -378,7 +450,7 @@ func _refresh_workplace_rows(row: Dictionary, settlement_id: int) -> void:
 func _connected_settlement_names(settlement_id: int) -> String:
 	var names: Array[String] = []
 	for edge_id in _simulation.get_transport_edge_ids():
-		var edge := _simulation.get_transport_edge_summary(edge_id)
+		var edge: Dictionary = _simulation.get_transport_edge_summary(edge_id)
 		if edge["settlement_a_id"] == settlement_id:
 			names.append(edge["settlement_b_name"])
 		elif edge["settlement_b_id"] == settlement_id:
@@ -403,7 +475,8 @@ func _refresh_shipments() -> void:
 	for shipment in shipments:
 		var label := Label.new()
 		var days_remaining: int = shipment["days_remaining"]
-		label.text = "  Center #%d: %.1f %s, %s -> %s (arrives in %d day%s)" % [
+		label.text = "  %s #%d: %.1f %s, %s -> %s (arrives in %d day%s)" % [
+			"Trader" if _valley_economy != null else "Center",
 			shipment["origin_trade_center_workplace_id"],
 			shipment["quantity"], Commodity.name_of(shipment["commodity"]),
 			shipment["origin_name"], shipment["destination_name"],
@@ -419,7 +492,7 @@ func _select_settlement(settlement_id: int) -> void:
 		_settlement_list.remove_child(child)
 		child.queue_free()
 	_settlement_rows.clear()
-	_settlement_rows[settlement_id] = _build_settlement_panel(_settlement_list, settlement_id)
+	_settlement_rows[settlement_id] = _build_household_town_panel(_settlement_list, settlement_id) if _valley_economy != null else _build_settlement_panel(_settlement_list, settlement_id)
 	_refresh()
 
 func _update_map_legend() -> void:
