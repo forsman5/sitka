@@ -10,6 +10,8 @@ const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 
@@ -149,12 +151,12 @@ static func _bloomery_recipe() -> Recipe:
 
 ## Charcoal burner: 3 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
-## HEAT_VALUE_CHARCOAL = 4 heat against 3 heat of timber burned to make it,
-## so the burner nets heat. Per worker per day at full input supply: buys
-## 4.5 timber (4.5) and sells 1.5 charcoal at BASE_PRICE 3.8 (5.7) = ~1.2
-## net, just above the ~1.1 reference wage. Priced per heat unit that is
-## 3.8 / 4 = 0.95 against timber's 1.0, so households switch to it -- a slim
-## edge on purpose; the posted prices move with supply and demand.
+## 4 heat against 3 heat of timber burned to make it, so the burner nets heat.
+## Per worker per day at full input supply: buys 4.5 timber (4.5) and sells 1.5
+## charcoal at BASE_PRICE 3.8 (5.7) = ~1.2 net, just above the ~1.1 reference
+## wage. Priced per heat unit that is 3.8 / 4 = 0.95 against timber's 1.0, so
+## households switch to it -- a slim edge on purpose; the posted prices move
+## with supply and demand.
 static func _charcoal_burner_recipe() -> Recipe:
 	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 3.0}, {Commodity.Type.CHARCOAL: 1.5})
 
@@ -184,8 +186,8 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## the real _reference_wage_per_worker takes over.
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
-	var per_person_cost: float = HESimulation.BASE_PRICE[Commodity.Type.GRAIN] * HESimulation.GRAIN_PER_PERSON_PER_DAY \
-		+ HESimulation.BASE_PRICE[Commodity.Type.TIMBER] * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY
+	var per_person_cost: float = HESimulation.BASE_PRICE[Commodity.Type.GRAIN] * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) \
+		+ HESimulation.BASE_PRICE[Commodity.Type.TIMBER] * HENeeds.units_per_person_daily(Commodity.Type.TIMBER)
 	return dependency_ratio * per_person_cost
 
 ## Deterministic but spread-out starting ages (in days) for each household's
@@ -260,9 +262,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 
 	var farm_days_to_first_harvest: int = FARM_GROWTH_DAYS - FARM_FIELD_START_DAYS.max()
-	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 	var woodlot_days_to_first_harvest: int = WOODLOT_GROWTH_DAYS - WOODLOT_FIELD_START_DAYS.max()
-	woodlot.add_stock(Commodity.Type.TIMBER, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	woodlot.add_stock(Commodity.Type.TIMBER, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 
 	var businesses: Dictionary[int, HEBusiness] = {
 		FARM_BUSINESS_ID: farm,
@@ -281,7 +283,8 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	if bloomery_capacity > 0:
 		bloomery = HEBusiness.new(BLOOMERY_BUSINESS_ID, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, bloomery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
 		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
-		bloomery.burns_fuel = true
+		# Its timber input is the furnace's heat, which any heat fuel can supply.
+		bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
 
@@ -308,9 +311,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
 
-	var grain_buffer := HOUSEHOLD_SIZE * HESimulation.GRAIN_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
-	var timber_buffer := HOUSEHOLD_SIZE * HESimulation.FUEL_TIMBER_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
-	var wool_buffer := HOUSEHOLD_SIZE * HESimulation.WOOL_PER_PERSON_PER_DAY * STARTING_BUFFER_DAYS
+	var grain_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * STARTING_BUFFER_DAYS
+	var timber_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * STARTING_BUFFER_DAYS
+	var wool_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.WOOL) * STARTING_BUFFER_DAYS
 
 	var households: Dictionary[int, HEHousehold] = {}
 	var farm_workers_assigned := 0
@@ -399,8 +402,9 @@ static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerato
 
 ## Eight businesses: the Iron Mine scenario plus a Charcoal Burner that turns
 ## the Woodlot's timber into charcoal. Households switch to charcoal when it
-## is the cheaper way to heat a home (see HESimulation._preferred_fuel); the
-## Bloomery's heat is bought the same way.
+## is the cheaper way to heat a home (see HESimulation._satisfier_cascade);
+## the Bloomery's heat is bought the same way. The burner's own timber input
+## is raw material, not a need slot, so it stays timber.
 static func build_economy_with_charcoal_burner(_rng: RandomNumberGenerator) -> Dictionary:
 	var trader := 8
 	var bloomery := 8

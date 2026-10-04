@@ -77,6 +77,9 @@ var _trader_settings_list: VBoxContainer
 var _trader_settings_button: Button
 var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
+var _business_detail_production_section: VBoxContainer
+var _business_detail_production_legend: HBoxContainer
+var _business_detail_production_chart: HESparkline
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
@@ -98,6 +101,10 @@ var _selected_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
+var _selected_household_id: int = -1
+var _household_detail_panel: PanelContainer
+var _household_detail_title: Label
+var _household_detail_content: VBoxContainer
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -162,6 +169,9 @@ func _load_scenario(index: int) -> void:
 	_selected_market_commodity = -1
 	if _market_detail_panel != null:
 		_market_detail_panel.visible = false
+	_selected_household_id = -1
+	if _household_detail_panel != null:
+		_household_detail_panel.visible = false
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -336,6 +346,25 @@ func _build_ui() -> void:
 	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
 	detail_content.add_child(_business_detail_sparkline)
 
+	_business_detail_production_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_production_section)
+
+	var production_header := HBoxContainer.new()
+	production_header.add_theme_constant_override("separation", 12)
+	_business_detail_production_section.add_child(production_header)
+	var production_history_label := Label.new()
+	production_history_label.text = "Goods produced per day (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	production_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	production_header.add_child(production_history_label)
+	_business_detail_production_legend = HBoxContainer.new()
+	_business_detail_production_legend.add_theme_constant_override("separation", 12)
+	production_header.add_child(_business_detail_production_legend)
+
+	_business_detail_production_chart = HESparkline.new()
+	_business_detail_production_chart.custom_minimum_size = Vector2(0, 60)
+	_business_detail_production_chart.show_max_label = true
+	_business_detail_production_section.add_child(_business_detail_production_chart)
+
 	_business_detail_grid = GridContainer.new()
 	_business_detail_grid.columns = 2
 	detail_content.add_child(_business_detail_grid)
@@ -478,6 +507,34 @@ func _build_ui() -> void:
 	_market_detail_content.add_theme_constant_override("separation", 6)
 	market_scroll.add_child(_market_detail_content)
 
+	_household_detail_panel = PanelContainer.new()
+	_household_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_household_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_household_detail_panel.visible = false
+	content_area.add_child(_household_detail_panel)
+	var household_detail_box := VBoxContainer.new()
+	_household_detail_panel.add_child(household_detail_box)
+	var household_title_bar := HBoxContainer.new()
+	household_detail_box.add_child(household_title_bar)
+	_household_detail_title = Label.new()
+	_household_detail_title.add_theme_font_size_override("font_size", 16)
+	household_title_bar.add_child(_household_detail_title)
+	var household_title_spacer := Control.new()
+	household_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	household_title_bar.add_child(household_title_spacer)
+	var household_close := Button.new()
+	household_close.text = "X"
+	household_close.tooltip_text = "Close (back to household list)"
+	household_close.pressed.connect(_on_household_detail_close_pressed)
+	household_title_bar.add_child(household_close)
+	var household_scroll := ScrollContainer.new()
+	household_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	household_detail_box.add_child(household_scroll)
+	_household_detail_content = VBoxContainer.new()
+	_household_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_household_detail_content.add_theme_constant_override("separation", 6)
+	household_scroll.add_child(_household_detail_content)
+
 	_blotter_column = VBoxContainer.new()
 	lower_row.add_child(_blotter_column)
 
@@ -553,9 +610,67 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
+func _on_household_row_selected(household_id: int) -> void:
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+	_selected_household_id = household_id
+	_household_detail_panel.visible = true
+	_refresh_household_detail()
+
+func _on_household_detail_close_pressed() -> void:
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+
+## Rebuilt every refresh; the content is a handful of lines, so there's no
+## fixed schema worth updating in place.
+func _refresh_household_detail() -> void:
+	if _selected_household_id == -1:
+		return
+	if not _simulation.get_household_ids().has(_selected_household_id):
+		# The household died or the scenario reloaded.
+		_selected_household_id = -1
+		_household_detail_panel.visible = false
+		return
+	var h := _simulation.get_household_summary(_selected_household_id)
+	_household_detail_title.text = "Household %d" % _selected_household_id
+	for child in _household_detail_content.get_children():
+		_household_detail_content.remove_child(child)
+		child.queue_free()
+
+	_add_household_detail_heading("Inventory")
+	var inventory: Dictionary = h["inventory"]
+	for commodity_name in inventory.keys():
+		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
+
+	# One line per household need, straight from the sim's HENeeds -- no list
+	# of its own. Amounts are in the need's units; the goods that met it (heat
+	# from timber AND charcoal, say) are nested under it rather than each
+	# being listed as a separate requirement.
+	_add_household_detail_heading("Needs (today)")
+	for need in h["needs"]:
+		_add_household_detail_line("%s: needs %.2f, met %.2f" % [need["label"], need["required"], need["provided"]])
+		for satisfier in need["satisfiers"]:
+			if satisfier["consumed"] > 0.0001:
+				_add_household_detail_line("    %s used: %.2f" % [satisfier["name"], satisfier["consumed"]])
+
+func _add_household_detail_heading(value: String) -> void:
+	var heading := Label.new()
+	heading.text = value
+	heading.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_household_detail_content.add_child(heading)
+
+func _add_household_detail_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	_household_detail_content.add_child(label)
+
 func _on_business_row_selected(business_id: int) -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
 	_trader_settings_open = false
@@ -601,6 +716,11 @@ func _rebuild_trader_settings() -> void:
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
 		checkbox.text = option["name"]
+		var option_icon := Commodity.icon_of(option["commodity_id"])
+		if option_icon != null:
+			checkbox.icon = option_icon
+			checkbox.expand_icon = true
+			checkbox.add_theme_constant_override("icon_max_width", 18)
 		checkbox.button_pressed = option["enabled"]
 		checkbox.toggled.connect(_on_trader_export_toggled.bind(_selected_business_id, option["commodity_id"]))
 		_trader_settings_list.add_child(checkbox)
@@ -612,6 +732,8 @@ func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) 
 func _on_market_row_selected(commodity: int) -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
 	_selected_market_commodity = commodity
 	_market_detail_panel.visible = true
 	_refresh_market_detail()
@@ -701,6 +823,7 @@ func _refresh_business_detail() -> void:
 		_trader_settings_open = false
 	_update_trader_detail_page()
 	_business_detail_sparkline.set_data(report["balance_history"])
+	_refresh_business_production_chart(report)
 
 	for child in _business_detail_grid.get_children():
 		_business_detail_grid.remove_child(child)
@@ -712,15 +835,20 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
 	]
+	if report.has("herd_size"):
+		# A herd's last_actual_units is what the periodic review culled (once
+		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
+		rows.append(["Last review culled", [[report["output_commodity"], "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]]]])
+	else:
+		rows.append(["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]])
 	if report["kind"] != "trader":
-		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
+		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
-		var input_parts: Array[String] = []
+		var input_parts: Array = []
 		for commodity_name in (report["input_inventory"] as Dictionary).keys():
-			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
-		rows.append(["Input inventory", ", ".join(input_parts)])
+			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
+		rows.append(["Input inventory", input_parts])
 	rows.append_array([
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
@@ -736,14 +864,15 @@ func _refresh_business_detail() -> void:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
 	if report.has("herd_size"):
-		rows.append(["Species", report["species"]])
+		rows.append(["Species", [[report["species"], report["species"]]]])
 		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		# Wool is a sheep-only product; a cattle ranch has no wool to report.
 		if report["species"] == "Sheep":
-			rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
-			rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
+			var wool_name := Commodity.name_of(Commodity.Type.WOOL)
+			rows.append(["Wool in stock", [[wool_name, "%.1f" % report["wool_stock"]]]])
+			rows.append(["Last wool produced", [[wool_name, "%.2f" % report["last_wool_produced"]]]])
 		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
@@ -780,14 +909,97 @@ func _refresh_business_detail() -> void:
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
 
-func _add_detail_row(label_text: String, value_text: String) -> void:
+## Only PRODUCTION businesses report production_history (traders and herds
+## produce nothing through a recipe), so the section hides for the rest. One
+## line per output commodity on a shared axis, with a color-keyed legend.
+func _refresh_business_production_chart(report: Dictionary) -> void:
+	var production_history: Array = report.get("production_history", [])
+	_business_detail_production_section.visible = not production_history.is_empty()
+	for child in _business_detail_production_legend.get_children():
+		_business_detail_production_legend.remove_child(child)
+		child.queue_free()
+	if production_history.is_empty():
+		return
+	var series: Array = []
+	for i in production_history.size():
+		var entry: Dictionary = production_history[i]
+		var color := HESparkline.color_for_series(i)
+		series.append({"values": entry["values"], "color": color})
+		var legend_label := Label.new()
+		legend_label.text = entry["commodity"]
+		legend_label.add_theme_color_override("font_color", color)
+		_business_detail_production_legend.add_child(legend_label)
+	_business_detail_production_chart.set_series(series)
+
+## value is either plain text or an Array of [commodity_name, text] parts;
+## each part gets the good's icon in front of its text (the name stays in the
+## text so the icon is decoration, never the only identifier).
+func _add_detail_row(label_text: String, value) -> void:
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	_business_detail_grid.add_child(label)
-	var value := Label.new()
-	value.text = value_text
-	_business_detail_grid.add_child(value)
+	if value is Array:
+		var box := HBoxContainer.new()
+		box.add_theme_constant_override("separation", 12)
+		for part in value:
+			# A third element marks text that names several goods inline
+			# (the Trader's "Export (...) / Import (...)" summary).
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+		_business_detail_grid.add_child(box)
+		return
+	var value_label := Label.new()
+	value_label.text = value
+	_business_detail_grid.add_child(value_label)
+
+## Text that mentions goods by name; each mention gets its icon placed right
+## before it, e.g. "Export (Grain, Timber)" -> "Export ([icon]Grain, [icon]Timber)".
+func _inline_goods_cell(text: String) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+	# Longest names first so "Iron Ore" wins over "Iron".
+	var names: Array[String] = []
+	for t in Commodity.ALL:
+		names.append(Commodity.name_of(t))
+	names.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
+	var pattern := RegEx.new()
+	pattern.compile("|".join(names.map(func(n: String) -> String: return "\\b%s\\b" % n)))
+	var cursor := 0
+	for m in pattern.search_all(text):
+		var before := text.substr(cursor, m.get_start() - cursor)
+		if before != "":
+			box.add_child(_plain_label(before))
+		box.add_child(_goods_cell(m.get_string(), m.get_string()))
+		cursor = m.get_end()
+	var rest := text.substr(cursor)
+	if rest != "":
+		box.add_child(_plain_label(rest))
+	return box
+
+func _plain_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	return label
+
+## Icon (when the good is known and has one) + text label in one cell.
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.custom_minimum_size = Vector2(min_width, 0)
+	var commodity := Commodity.type_from_name(commodity_name)
+	var icon := Commodity.icon_of(commodity) if commodity != -1 else null
+	if icon != null:
+		var rect := TextureRect.new()
+		rect.texture = icon
+		rect.custom_minimum_size = Vector2(18, 18)
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		box.add_child(rect)
+	var label := Label.new()
+	label.text = text
+	box.add_child(label)
+	return box
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -814,6 +1026,9 @@ func _refresh_trader_transactions() -> void:
 			"%.1f" % transaction["local_value"],
 		]
 		for i in values.size():
+			if i == 2:
+				_business_detail_transaction_grid.add_child(_goods_cell(values[i], values[i], 120.0))
+				continue
 			var value := Label.new()
 			value.text = values[i]
 			if i == 1:
@@ -928,11 +1143,13 @@ func _rebuild_market_grid() -> void:
 		name_button.text = name
 		name_button.flat = true
 		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		name_button.custom_minimum_size = Vector2(70, 0)
-		for c in Commodity.ALL:
-			if Commodity.name_of(c) == name:
-				name_button.pressed.connect(_on_market_row_selected.bind(c))
-				break
+		name_button.custom_minimum_size = Vector2(90, 20)
+		var commodity := Commodity.type_from_name(name)
+		if commodity != -1:
+			name_button.pressed.connect(_on_market_row_selected.bind(commodity))
+			name_button.icon = Commodity.icon_of(commodity)
+			name_button.expand_icon = true
+			name_button.add_theme_constant_override("icon_max_width", 18)
 		_market_grid.add_child(name_button)
 
 		var labels := {}
@@ -1011,17 +1228,29 @@ func _rebuild_household_rows() -> void:
 	_household_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 12
+	# One stock column per good that satisfies a household need (HENeeds), so a
+	# new satisfier gets its column without a dashboard edit.
+	var goods_columns: Array[String] = []
+	for c in HESimulation.SUBSISTENCE_COMMODITIES:
+		goods_columns.append(Commodity.name_of(c))
+	var col_labels: Array[String] = ["ID", "Employer", "Workers", "Dependents"]
+	col_labels.append_array(goods_columns)
+	col_labels.append_array(["Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"])
+	grid.columns = col_labels.size()
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Charcoal", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in col_labels:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(header)
 
 	for household_id in _simulation.get_household_ids():
-		var id_label := Label.new()
+		var id_label := Button.new()
+		id_label.flat = true
+		id_label.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		id_label.custom_minimum_size = Vector2(30, 0)
+		id_label.tooltip_text = "Open household detail"
+		id_label.pressed.connect(_on_household_row_selected.bind(household_id))
 		grid.add_child(id_label)
 
 		var employer_label := Label.new()
@@ -1039,20 +1268,12 @@ func _rebuild_household_rows() -> void:
 		dependents_label.tooltip_text = "Age (in days) of each dependent still in this household; the oldest is next to come of age and split off on its own."
 		grid.add_child(dependents_label)
 
-		var grain_label := Label.new()
-		grain_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(grain_label)
-
-		var timber_label := Label.new()
-		timber_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(timber_label)
-		var charcoal_label := Label.new()
-		charcoal_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(charcoal_label)
-
-		var wool_label := Label.new()
-		wool_label.custom_minimum_size = Vector2(70, 0)
-		grid.add_child(wool_label)
+		var goods_labels := {}
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			var goods_label := Label.new()
+			goods_label.custom_minimum_size = Vector2(70, 0)
+			grid.add_child(goods_label)
+			goods_labels[c] = goods_label
 
 		var balance_label := Label.new()
 		balance_label.custom_minimum_size = Vector2(70, 0)
@@ -1074,7 +1295,7 @@ func _rebuild_household_rows() -> void:
 
 		_household_rows[household_id] = {
 			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
-			"grain": grain_label, "timber": timber_label, "charcoal": charcoal_label, "wool": wool_label, "balance": balance_label,
+			"goods": goods_labels, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
@@ -1174,14 +1395,10 @@ func _refresh() -> void:
 		_known_household_ids = current_ids
 		_rebuild_household_rows()
 
-	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
-	var timber_name := Commodity.name_of(Commodity.Type.TIMBER)
-	var charcoal_name := Commodity.name_of(Commodity.Type.CHARCOAL)
-	var wool_name := Commodity.name_of(Commodity.Type.WOOL)
 	for household_id in _household_rows.keys():
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
-		(row["id"] as Label).text = str(household_id)
+		(row["id"] as Button).text = str(household_id)
 		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
@@ -1198,10 +1415,8 @@ func _refresh() -> void:
 		else:
 			var oldest: int = dependent_ages.max()
 			dependents_label.text = "%d (oldest: %dd)" % [dependent_ages.size(), oldest]
-		(row["grain"] as Label).text = "%.1f" % h["inventory"][grain_name]
-		(row["timber"] as Label).text = "%.1f" % h["inventory"][timber_name]
-		(row["charcoal"] as Label).text = "%.1f" % h["inventory"][charcoal_name]
-		(row["wool"] as Label).text = "%.1f" % h["inventory"][wool_name]
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			(row["goods"][c] as Label).text = "%.1f" % h["inventory"][Commodity.name_of(c)]
 		(row["balance"] as Label).text = "%.1f" % h["balance"]
 		(row["stress"] as Label).text = "%.2f" % h["food_stress"]
 
@@ -1214,6 +1429,7 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
+	_refresh_household_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city

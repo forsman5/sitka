@@ -79,12 +79,13 @@ var capacity: int
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
 
-## Kind.PRODUCTION only: the recipe's TIMBER input is FUEL (heat for a
-## furnace), not feedstock, so any fuel may supply it -- see he_simulation.gd's
-## HEAT_VALUE_* and _run_input_purchasing. A charcoal burner leaves this false:
-## its timber is raw material that has to stay timber.
-## TODO: let a smelter require a minimum share of its heat from charcoal.
-var burns_fuel: bool = false
+## Kind.PRODUCTION only: recipe inputs that are really an HENeed rather than a
+## fixed feedstock, recipe input commodity -> HENeed.Id. The recipe quantity
+## is read in the need's units (a furnace's TIMBER input is heat), so any
+## satisfier of that need may fill it -- see he_simulation.gd's
+## _run_input_purchasing and _run_production. A business whose input must stay
+## that exact good (a charcoal burner's timber is raw material) leaves it empty.
+var need_inputs: Dictionary[Commodity.Type, int] = {}
 
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
@@ -158,6 +159,13 @@ var last_wage_shortfall: float = 0.0
 ## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
 ## below), read by nothing that affects simulation outcomes.
 var _balance_history: Array[float] = []
+
+## PRODUCTION only, reporting: rolling daily units produced per output
+## commodity, oldest first, each series capped at BALANCE_HISTORY_WINDOW_DAYS.
+## Keyed by commodity so a multi-output recipe just adds series; today every
+## recipe has exactly one. Field-model businesses show lumpy spikes on harvest
+## days, since last_output_produced is 0.0 on every other day.
+var _production_history: Dictionary[Commodity.Type, Array] = {}
 
 ## Set whenever a zero-capacity business gets its trial crew back (see
 ## he_simulation.gd's _evaluate_business_capacity) to the day that
@@ -255,6 +263,29 @@ func record_balance_day() -> void:
 ## not mutate simulation state through a query result.
 func balance_history() -> Array[float]:
 	return _balance_history.duplicate()
+
+## Called once per day alongside record_balance_day(). A commodity that has
+## produced before keeps getting a 0.0 on idle days so every series stays
+## aligned to the same calendar days.
+func record_production_day() -> void:
+	for commodity in last_output_produced.keys():
+		if not _production_history.has(commodity):
+			var backfill: Array[float] = []
+			backfill.resize(_balance_history.size() - 1)
+			backfill.fill(0.0)
+			_production_history[commodity] = backfill
+	for commodity in _production_history.keys():
+		var series: Array = _production_history[commodity]
+		series.append(last_output_produced.get(commodity, 0.0))
+		if series.size() > BALANCE_HISTORY_WINDOW_DAYS:
+			series.pop_front()
+
+## Duplicated like balance_history(). Returns {Commodity.Type: Array[float]}.
+func production_history() -> Dictionary:
+	var out := {}
+	for commodity in _production_history.keys():
+		out[commodity] = (_production_history[commodity] as Array).duplicate()
+	return out
 
 func record_wage_day(wage_per_worker: float) -> void:
 	_wage_history.append(wage_per_worker)
