@@ -600,6 +600,11 @@ func _rebuild_trader_settings() -> void:
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
 		checkbox.text = option["name"]
+		var option_icon := Commodity.icon_of(option["commodity_id"])
+		if option_icon != null:
+			checkbox.icon = option_icon
+			checkbox.expand_icon = true
+			checkbox.add_theme_constant_override("icon_max_width", 18)
 		checkbox.button_pressed = option["enabled"]
 		checkbox.toggled.connect(_on_trader_export_toggled.bind(_selected_business_id, option["commodity_id"]))
 		_trader_settings_list.add_child(checkbox)
@@ -711,15 +716,15 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
+		["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]]]],
 	]
 	if report["kind"] != "trader":
-		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
+		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
-		var input_parts: Array[String] = []
+		var input_parts: Array = []
 		for commodity_name in (report["input_inventory"] as Dictionary).keys():
-			input_parts.append("%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]])
-		rows.append(["Input inventory", ", ".join(input_parts)])
+			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
+		rows.append(["Input inventory", input_parts])
 	rows.append_array([
 		["Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
@@ -735,14 +740,15 @@ func _refresh_business_detail() -> void:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
 	if report.has("herd_size"):
-		rows.append(["Species", report["species"]])
+		rows.append(["Species", [[report["species"], report["species"]]]])
 		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		# Wool is a sheep-only product; a cattle ranch has no wool to report.
 		if report["species"] == "Sheep":
-			rows.append(["Wool in stock", "%.1f" % report["wool_stock"]])
-			rows.append(["Last wool produced", "%.2f" % report["last_wool_produced"]])
+			var wool_name := Commodity.name_of(Commodity.Type.WOOL)
+			rows.append(["Wool in stock", [[wool_name, "%.1f" % report["wool_stock"]]]])
+			rows.append(["Last wool produced", [[wool_name, "%.2f" % report["last_wool_produced"]]]])
 		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
@@ -779,14 +785,44 @@ func _refresh_business_detail() -> void:
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
 
-func _add_detail_row(label_text: String, value_text: String) -> void:
+## value is either plain text or an Array of [commodity_name, text] parts;
+## each part gets the good's icon in front of its text (the name stays in the
+## text so the icon is decoration, never the only identifier).
+func _add_detail_row(label_text: String, value) -> void:
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	_business_detail_grid.add_child(label)
-	var value := Label.new()
-	value.text = value_text
-	_business_detail_grid.add_child(value)
+	if value is Array:
+		var box := HBoxContainer.new()
+		box.add_theme_constant_override("separation", 12)
+		for part in value:
+			box.add_child(_goods_cell(part[0], part[1]))
+		_business_detail_grid.add_child(box)
+		return
+	var value_label := Label.new()
+	value_label.text = value
+	_business_detail_grid.add_child(value_label)
+
+## Icon (when the good is known and has one) + text label in one cell.
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.custom_minimum_size = Vector2(min_width, 0)
+	var commodity := Commodity.type_from_name(commodity_name)
+	var icon := Commodity.icon_of(commodity) if commodity != -1 else null
+	if icon != null:
+		var rect := TextureRect.new()
+		rect.texture = icon
+		rect.custom_minimum_size = Vector2(18, 18)
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		box.add_child(rect)
+	var label := Label.new()
+	label.text = text
+	box.add_child(label)
+	return box
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -813,6 +849,9 @@ func _refresh_trader_transactions() -> void:
 			"%.1f" % transaction["local_value"],
 		]
 		for i in values.size():
+			if i == 2:
+				_business_detail_transaction_grid.add_child(_goods_cell(values[i], values[i], 120.0))
+				continue
 			var value := Label.new()
 			value.text = values[i]
 			if i == 1:
