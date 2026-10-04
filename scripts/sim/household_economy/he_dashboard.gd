@@ -1,5 +1,8 @@
 extends Control
 
+signal back_requested
+signal speed_requested(speed: float)
+
 ## H1 equivalent of scripts/sim/dashboard.gd: a live, speed-controllable
 ## read-out of HESimulation. This is a view only -- it holds one
 ## HESimulation instance, advances it by calling advance_ticks(), and
@@ -42,6 +45,8 @@ const SCENARIOS := [
 ]
 
 var _simulation: HESimulation
+var external_simulation: HESimulation
+var embedded_mode := false
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
@@ -113,7 +118,12 @@ func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
-	_load_scenario(0)
+	if external_simulation != null:
+		_simulation = external_simulation
+		for report in _simulation.get_business_reports():
+			_business_names[report["business_id"]] = report["name"]
+	else:
+		_load_scenario(0)
 	_build_ui()
 	_refresh()
 
@@ -139,6 +149,8 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
+	if embedded_mode:
+		return
 	if _simulation == null or _speed_multiplier <= 0.0:
 		return
 	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
@@ -150,6 +162,10 @@ func _process(delta: float) -> void:
 		_simulation.advance_ticks(1)
 		_day_accumulator -= 1.0
 	_refresh()
+
+func refresh_external() -> void:
+	if embedded_mode and is_node_ready():
+		_refresh()
 
 func _load_scenario(index: int) -> void:
 	var scenario: Dictionary = SCENARIOS[index]
@@ -184,6 +200,10 @@ func _build_ui() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
+	var view_title := Label.new()
+	view_title.text = "%s household economy" % _simulation.get_city_summary()["name"] if external_simulation != null else "Default household economy"
+	view_title.add_theme_font_size_override("font_size", 28)
+	vbox.add_child(view_title)
 
 	var top_bar := HBoxContainer.new()
 	top_bar.add_theme_constant_override("separation", 8)
@@ -193,15 +213,21 @@ func _build_ui() -> void:
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
 
-	var scenario_picker := OptionButton.new()
-	for scenario in SCENARIOS:
-		scenario_picker.add_item(scenario["label"])
-	scenario_picker.item_selected.connect(func(index: int) -> void:
-		_load_scenario(index)
-		_rebuild_business_rows()
-		_rebuild_household_rows()
-		_refresh())
-	top_bar.add_child(scenario_picker)
+	if embedded_mode:
+		var back_button := Button.new()
+		back_button.text = "← Valley"
+		back_button.pressed.connect(func() -> void: back_requested.emit())
+		top_bar.add_child(back_button)
+	else:
+		var scenario_picker := OptionButton.new()
+		for scenario in SCENARIOS:
+			scenario_picker.add_item(scenario["label"])
+		scenario_picker.item_selected.connect(func(index: int) -> void:
+			_load_scenario(index)
+			_rebuild_business_rows()
+			_rebuild_household_rows()
+			_refresh())
+		top_bar.add_child(scenario_picker)
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -396,7 +422,7 @@ func _build_ui() -> void:
 	_business_detail_transaction_section.add_child(_business_detail_transaction_empty)
 
 	_business_detail_transaction_grid = GridContainer.new()
-	_business_detail_transaction_grid.columns = 5
+	_business_detail_transaction_grid.columns = 6
 	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
 
 	# Built once, shown for whichever herd business is selected (Cattle Ranch
@@ -573,7 +599,11 @@ func _build_ui() -> void:
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
-	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
+	btn.pressed.connect(func() -> void:
+		if embedded_mode:
+			speed_requested.emit(speed)
+		else:
+			_speed_multiplier = speed)
 	return btn
 
 func _on_blotter_toggle_pressed() -> void:
@@ -1002,7 +1032,7 @@ func _refresh_trader_transactions() -> void:
 		_business_detail_transaction_grid.remove_child(child)
 		child.queue_free()
 
-	for heading in ["Day", "Direction", "Commodity", "Quantity", "Local value"]:
+	for heading in ["Day", "Direction", "Route", "Commodity", "Quantity", "Local value"]:
 		var header := Label.new()
 		header.text = heading
 		header.custom_minimum_size = Vector2(80 if heading != "Commodity" else 120, 0)
@@ -1017,6 +1047,7 @@ func _refresh_trader_transactions() -> void:
 		var values := [
 			str(transaction["day"]),
 			direction.capitalize(),
+			transaction.get("route", "Outside"),
 			transaction["commodity"],
 			"%.1f" % transaction["quantity"],
 			"%.1f" % transaction["local_value"],

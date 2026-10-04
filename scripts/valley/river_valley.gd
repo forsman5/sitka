@@ -1,12 +1,12 @@
 extends Node3D
 
-## A static presentation of the five-settlement authored valley. This scene
-## consumes snapshots from Simulation but never advances or mutates it.
+## The authored valley and its five live household economies.
 
-const Simulation = preload("res://scripts/sim/simulation.gd")
 const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
+const ValleyEconomy = preload("res://scripts/valley/valley_economy.gd")
+const HEDashboardScene = preload("res://scenes/sim/he_dashboard.tscn")
 const Layout = preload("res://scripts/valley/river_valley_layout.gd")
 const AuthoredValleyTerrain = preload("res://scripts/valley/authored_valley_terrain.gd")
 const TerrainRibbonBuilder = preload("res://scripts/valley/terrain_ribbon_builder.gd")
@@ -20,14 +20,21 @@ const MapDefinition = preload("res://scripts/valley/valley_map_definition.gd")
 const RIVER_BANK_COLOR := Color("5f6244")
 const ROAD_SHOULDER_COLOR := Color("76684e")
 
-var _simulation: Simulation
+var _economy: ValleyEconomy
+var _detail_view
+var _day_label: Label
+var _day_accumulator := 0.0
+var _speed_multiplier := 1.0
 var _camera: Camera3D
+var _valley_canvas: CanvasLayer
 var _selection_panel: PanelContainer
 var _selection_title: Label
 var _selection_role: Label
 var _selection_stats: Label
 var _selection_inventory: Label
 var _selection_workplaces: Label
+var _detail_button: Button
+var _shipments_label: Label
 var _hint_label: Label
 var _selected_settlement_id := -1
 var _settlement_markers: Dictionary = {}
@@ -48,7 +55,7 @@ func _ready() -> void:
 		push_error("Invalid valley map: %s" % "; ".join(errors))
 		set_process(false)
 		return
-	_simulation = Simulation.new(12345)
+	_economy = ValleyEconomy.new()
 	_camera = $RTSCamera/Camera3D
 	call_deferred("_configure_camera")
 	_build_landscape()
@@ -65,7 +72,19 @@ func _configure_camera() -> void:
 	$RTSCamera.max_ground_height = AuthoredValleyTerrain.HEIGHT_MAX
 	$RTSCamera.center_on(Vector3(0.0, 0.0, 0.0))
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _speed_multiplier > 0.0:
+		_day_accumulator = minf(8.0, _day_accumulator + minf(delta, 0.25) * _speed_multiplier)
+		var days_to_advance := mini(4, int(_day_accumulator))
+		if days_to_advance > 0:
+			_economy.advance_ticks(days_to_advance)
+			_day_accumulator -= days_to_advance
+			if _selected_settlement_id != -1:
+				_select_settlement(_selected_settlement_id)
+			if _detail_view != null:
+				_detail_view.refresh_external()
+	if _day_label != null:
+		_day_label.text = "Day %d   |   %d shipments en route   |   %d delivered" % [_economy.day, _economy.shipments.size(), _economy.delivered_total]
 	# At valley scale labels and route geometry dominate. At settlement scale
 	# the physical clusters are still present and become the visual focus.
 	var valley_lens := _camera.size >= 78.0
@@ -73,6 +92,8 @@ func _process(_delta: float) -> void:
 		(marker as MeshInstance3D).visible = valley_lens or marker.get_meta("settlement_id") == _selected_settlement_id
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _detail_view != null:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		var point := _ground_point(event.position)
 		if point == Vector3.INF:
@@ -305,7 +326,7 @@ func _add_resource_region(center: Vector3, district: String, accent: Color) -> v
 
 func _add_label(settlement_id: int, position: Vector3) -> void:
 	var label := Label3D.new()
-	var summary := _simulation.get_settlement_summary(settlement_id)
+	var summary := _economy.towns[settlement_id].get_city_summary()
 	label.text = "%s\n%s" % [summary["name"], map_definition.settlements[settlement_id]["role"].split(",")[0]]
 	label.name = "Label%d" % settlement_id
 	label.position = position
@@ -316,13 +337,25 @@ func _add_label(settlement_id: int, position: Vector3) -> void:
 	add_child(label)
 
 func _build_interface() -> void:
-	var canvas := CanvasLayer.new()
-	add_child(canvas)
+	_valley_canvas = CanvasLayer.new()
+	add_child(_valley_canvas)
+	var canvas := _valley_canvas
 	_hint_label = Label.new()
 	_hint_label.text = "River Valley — wheel: zoom   |   middle drag / WASD: pan   |   Q/E: rotate   |   Alt + drag: tilt   |   click a settlement"
 	_hint_label.position = Vector2(18, 16)
 	_hint_label.add_theme_font_size_override("font_size", 15)
 	canvas.add_child(_hint_label)
+	_day_label = Label.new()
+	_day_label.position = Vector2(18, 37)
+	canvas.add_child(_day_label)
+	var speed_bar := HBoxContainer.new()
+	speed_bar.position = Vector2(18, 420)
+	canvas.add_child(speed_bar)
+	for speed in [0.0, 1.0, 10.0, 100.0]:
+		var button := Button.new()
+		button.text = "Pause" if speed == 0.0 else "%dx" % int(speed)
+		button.pressed.connect(func() -> void: _speed_multiplier = speed)
+		speed_bar.add_child(button)
 
 	_selection_panel = PanelContainer.new()
 	_selection_panel.position = Vector2(18, 54)
@@ -346,23 +379,56 @@ func _build_interface() -> void:
 	_selection_workplaces = Label.new()
 	_selection_workplaces.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(_selection_workplaces)
+	_shipments_label = Label.new()
+	_shipments_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(_shipments_label)
+	_detail_button = Button.new()
+	_detail_button.text = "View household economy"
+	_detail_button.pressed.connect(_open_detail_view)
+	content.add_child(_detail_button)
 
 func _select_settlement(settlement_id: int) -> void:
 	_selected_settlement_id = settlement_id
 	_selection_panel.visible = true
-	var summary := _simulation.get_settlement_summary(settlement_id)
-	_selection_title.text = "%s%s" % [summary["name"], "  •  Clan holding" if summary["is_player_holding"] else ""]
+	var town = _economy.towns[settlement_id]
+	var summary: Dictionary = town.get_city_summary()
+	_selection_title.text = "%s%s" % [summary["name"], "  •  Clan holding" if settlement_id == ValleySeed.ALDFORD else ""]
 	_selection_role.text = map_definition.settlements[settlement_id]["role"]
-	_selection_stats.text = "Population: %d   Households: %d\nWorkers: %d available   Status: %s" % [summary["population"], summary["household_count"], summary["available_workers"], summary["status"]]
+	_selection_stats.text = "Day %d   Population: %d\nHouseholds: %d   Unemployed: %d" % [summary["day"], summary["population"], summary["household_count"], summary["unemployed_household_count"]]
 	var stock_parts: Array[String] = []
-	for commodity in _simulation.get_modeled_commodities():
+	for commodity in [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL, Commodity.Type.IRON]:
 		var name := Commodity.name_of(commodity)
-		stock_parts.append("%s %.0f" % [name, summary["inventory"][name]])
-	_selection_inventory.text = "Seeded inventory\n" + ", ".join(stock_parts)
+		stock_parts.append("%s %.0f" % [name, summary["total_stock"].get(name, 0.0)])
+	_selection_inventory.text = "Town stock\n" + ", ".join(stock_parts)
 	var report_parts: Array[String] = []
-	for report in _simulation.get_workplace_reports(settlement_id):
-		report_parts.append(str(report["recipe_id"]).capitalize())
-	_selection_workplaces.text = "Workplaces: " + ", ".join(report_parts)
+	for report in town.get_business_reports():
+		report_parts.append(report["name"])
+	_selection_workplaces.text = "Businesses: " + ", ".join(report_parts)
+	var inbound := 0
+	var outbound := 0
+	for shipment in _economy.shipments.values():
+		if shipment.destination_settlement_id == settlement_id:
+			inbound += 1
+		if shipment.origin_settlement_id == settlement_id:
+			outbound += 1
+	_shipments_label.text = "Shipments: %d inbound, %d outbound" % [inbound, outbound]
+
+func _open_detail_view() -> void:
+	if _selected_settlement_id == -1 or _detail_view != null:
+		return
+	_detail_view = HEDashboardScene.instantiate()
+	_detail_view.external_simulation = _economy.towns[_selected_settlement_id]
+	_detail_view.embedded_mode = true
+	_detail_view.back_requested.connect(_close_detail_view)
+	_detail_view.speed_requested.connect(func(speed: float) -> void: _speed_multiplier = speed)
+	get_tree().root.add_child(_detail_view)
+	_valley_canvas.visible = false
+
+func _close_detail_view() -> void:
+	if _detail_view != null:
+		_detail_view.queue_free()
+		_detail_view = null
+		_valley_canvas.visible = true
 
 func _add_route(id: String) -> void:
 	var spec: Dictionary = map_definition.roads[id]
