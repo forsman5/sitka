@@ -621,11 +621,11 @@ func _refresh_household_detail() -> void:
 	for commodity_name in inventory.keys():
 		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
 
-	# Food (grain) and heat (timber) are the required consumption for now.
+	# Food (grain), heat (timber) and wool are the subsistence needs for now.
 	_add_household_detail_heading("Required consumption (today)")
 	var demand: Dictionary = h["demand_today"]
 	var consumed: Dictionary = h["consumed_today"]
-	for entry in [[Commodity.Type.GRAIN, "Food"], [Commodity.Type.TIMBER, "Heat"]]:
+	for entry in [[Commodity.Type.GRAIN, "Food"], [Commodity.Type.TIMBER, "Heat"], [Commodity.Type.WOOL, "Clothing"]]:
 		var commodity_name := Commodity.name_of(entry[0])
 		_add_household_detail_line("%s (%s): needs %.2f, consumed %.2f" % [
 			entry[1], commodity_name, demand[commodity_name], consumed[commodity_name]])
