@@ -1388,10 +1388,26 @@ func _satisfier_has_supply(settlement_id: int, need: HENeed, satisfier: Commodit
 	var trader := _settlement_trader(settlement_id)
 	return trader != null and trader.stock(satisfier) > 0.0001
 
+## How far a household's own judgement of a non-baseline satisfier's price may
+## sit from the posted one, as a fraction (+-35%). Households never all agree
+## that meat has just become cheaper than grain: without this, every
+## household switches on the same day the price crosses parity, and demand for
+## the substitute swings from everyone to no one as the price drifts back and
+## forth over it. With it, demand shifts gradually across the range.
+const HOUSEHOLD_TASTE_SPREAD := 0.35
+
+## A household's fixed, deterministic taste in [-1, 1) -- derived from its id
+## rather than drawn from the sim's RNG, so it neither perturbs other random
+## draws nor changes between runs.
+func _household_taste(h: HEHousehold) -> float:
+	return float((h.id * 2654435761) % 1000) / 500.0 - 1.0
+
 ## The satisfier with the lowest posted price per need-unit among those in
 ## supply. Ties, and the no-alternative case, fall back to the baseline. This
-## is the single seam for how households choose between substitutes.
-func _preferred_satisfier(settlement_id: int, need: HENeed) -> Commodity.Type:
+## is the single seam for how households choose between substitutes. `taste`
+## scales every non-baseline satisfier's price (a household that finds meat
+## dearer than posted passes a positive one); 0 compares posted prices as is.
+func _preferred_satisfier(settlement_id: int, need: HENeed, taste: float = 0.0) -> Commodity.Type:
 	var best := need.baseline
 	if need.unit_values.size() == 1:
 		return best
@@ -1400,7 +1416,7 @@ func _preferred_satisfier(settlement_id: int, need: HENeed) -> Commodity.Type:
 	for c in need.satisfiers():
 		if c == need.baseline or not _satisfier_has_supply(settlement_id, need, c):
 			continue
-		var cost: float = local_market.price[c] / need.value_of(c)
+		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
 		if cost < best_cost - 0.0001:
 			best = c
 			best_cost = cost
@@ -1412,7 +1428,7 @@ func _preferred_satisfier(settlement_id: int, need: HENeed) -> Commodity.Type:
 ## household stocked with one source doesn't also stock another on top.
 func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	if need == null or _preferred_satisfier(h.settlement_id, need) != commodity:
+	if need == null or _preferred_satisfier(h.settlement_id, need, _household_taste(h) * HOUSEHOLD_TASTE_SPREAD) != commodity:
 		return 0.0
 	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
@@ -2867,11 +2883,14 @@ func _input_held(buyer: HEBusiness, commodity: Commodity.Type, slot_needs: Dicti
 ## households will ever draw.
 func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	if need != null and commodity != need.baseline and _preferred_satisfier(settlement_id, need) != commodity:
-		return 0.0
+	var is_substitute: bool = need != null and commodity != need.baseline
 	var total := 0.0
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
-		total += _daily_need(households[household_id] as HEHousehold, commodity)
+		var h: HEHousehold = households[household_id]
+		# Only households that would actually buy a substitute count toward it.
+		if is_substitute and _preferred_satisfier(settlement_id, need, _household_taste(h) * HOUSEHOLD_TASTE_SPREAD) != commodity:
+			continue
+		total += _daily_need(h, commodity)
 	return total
 
 func _business_employed_worker_count(business_id: int) -> int:
