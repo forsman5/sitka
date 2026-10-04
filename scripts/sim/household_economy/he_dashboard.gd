@@ -103,6 +103,9 @@ var _trader_settings_open: bool = false
 var _business_detail_sparkline: HESparkline
 var _business_detail_flow_chart: Dictionary = {} # {"section", "legend", "chart"}, see _build_flow_chart
 var _business_flow_view := 0 # index into FLOW_VIEWS; kept across business selections
+var _business_flow_hidden: Dictionary = {} # series name -> true for lines toggled off in the legend
+var _flow_series_names: Array = [] # names of the current view's lines, set by _refresh_business_flow_chart
+var _flow_legend_key := "" # what the legend buttons were last built for
 var _business_detail_grid: GridContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
@@ -1005,31 +1008,81 @@ func _on_business_flow_view_pressed(view_index: int) -> void:
 
 ## Only PRODUCTION businesses report flow_history (traders and herds produce
 ## nothing through a recipe), so the chart hides for the rest. One line per
-## good on a shared axis, with a color-keyed legend.
+## good on a shared axis. The legend entries are buttons that hide or show
+## their line; colors are assigned over ALL of a view's lines so hiding one
+## never recolors the rest.
 func _refresh_business_flow_chart(report: Dictionary) -> void:
 	var flow_history: Dictionary = report.get("flow_history", {})
 	var view: Dictionary = FLOW_VIEWS[_business_flow_view]
-	var legend: Container = _business_detail_flow_chart["legend"]
-	for child in legend.get_children():
-		legend.remove_child(child)
-		child.queue_free()
-	var series: Array = []
+	var all_series: Array = []
+	_flow_series_names = []
 	for series_def in view["series"]:
 		for entry in flow_history.get(series_def[0], []):
-			var color := HESparkline.color_for_series(series.size())
 			var series_name := "%s %s" % [entry["commodity"], series_def[1]]
 			var details: Array = []
 			for detail_def in view.get("details", []):
 				for detail_entry in flow_history.get(detail_def[0], []):
 					if detail_entry["commodity"] == entry["commodity"]:
 						details.append({"name": detail_def[1], "values": detail_entry["values"]})
-			series.append({"name": series_name, "values": entry["values"], "color": color, "dashed": series_def[2], "details": details})
-			var legend_label := Label.new()
-			legend_label.text = series_name
-			legend_label.add_theme_color_override("font_color", color)
-			legend.add_child(legend_label)
-	(_business_detail_flow_chart["section"] as Control).visible = not flow_history.is_empty() and not series.is_empty()
-	(_business_detail_flow_chart["chart"] as HESparkline).set_series(series)
+			all_series.append({"name": series_name, "values": entry["values"], "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
+			_flow_series_names.append(series_name)
+
+	var hidden := _effective_hidden_flow_series()
+	var shown: Array = []
+	for s in all_series:
+		if not hidden.has(s["name"]):
+			shown.append(s)
+
+	# The legend is only rebuilt when it would actually change, never on a
+	# plain daily refresh -- recreating buttons mid-click would split the
+	# mouse-down and mouse-up across different instances (see the building
+	# upgrade buttons in hud.gd).
+	var legend: Container = _business_detail_flow_chart["legend"]
+	var legend_key := "|".join(_flow_series_names) + "#" + "|".join(hidden.keys())
+	if legend_key != _flow_legend_key:
+		_flow_legend_key = legend_key
+		for child in legend.get_children():
+			legend.remove_child(child)
+			child.queue_free()
+		for s in all_series:
+			var is_hidden: bool = hidden.has(s["name"])
+			var color: Color = s["color"]
+			var shown_color := color if not is_hidden else Color(color, 0.35)
+			var toggle := Button.new()
+			toggle.text = s["name"]
+			toggle.flat = true
+			toggle.tooltip_text = "Click to %s this line" % ("show" if is_hidden else "hide")
+			for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+				toggle.add_theme_color_override(color_name, shown_color)
+			# The only visible line can't be hidden: no empty chart.
+			if not is_hidden and shown.size() == 1:
+				toggle.disabled = true
+				toggle.tooltip_text = "At least one line stays visible"
+			toggle.pressed.connect(_on_business_flow_series_toggled.bind(s["name"]))
+			legend.add_child(toggle)
+
+	(_business_detail_flow_chart["section"] as Control).visible = not flow_history.is_empty() and not all_series.is_empty()
+	(_business_detail_flow_chart["chart"] as HESparkline).set_series(shown)
+
+## Names hidden in the current view. Hidden choices are remembered by series
+## name across business selections, but if they would hide every line of the
+## business being shown they're ignored, so the chart is never empty.
+func _effective_hidden_flow_series() -> Dictionary:
+	var hidden := {}
+	for series_name in _flow_series_names:
+		if _business_flow_hidden.has(series_name):
+			hidden[series_name] = true
+	if hidden.size() >= _flow_series_names.size():
+		return {}
+	return hidden
+
+func _on_business_flow_series_toggled(series_name: String) -> void:
+	var hidden := _effective_hidden_flow_series()
+	if hidden.has(series_name):
+		_business_flow_hidden.erase(series_name)
+	elif _flow_series_names.size() - hidden.size() > 1:
+		_business_flow_hidden[series_name] = true
+	_refresh_business_detail()
 
 ## value is either plain text or an Array of [commodity_name, text] parts;
 ## each part gets the good's icon in front of its text (the name stays in the
