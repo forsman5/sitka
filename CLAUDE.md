@@ -2,7 +2,7 @@
 
 Orthographic top-down RTS city builder prototype in Godot 4.6.2. Persons gather resources, deposit at buildings, sleep at night, and the player expands by building forest huts and purchasing upgrades.
 
-**NO COMMITTING BEFORE VERIFICATION** — always wait for the user to confirm a change works in-engine before committing.
+**WORKFLOW** — commit on a branch, push, and open a PR against `master`. The user reviews and verifies changes from the PR previews, so there is no need to wait for in-engine confirmation before committing. Never push directly to `master`.
 
 ---
 
