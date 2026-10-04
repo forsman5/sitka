@@ -916,6 +916,21 @@ func _check_needs_catalog() -> void:
 	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
 	print("  catalog shape and Bloomery heat slot as expected")
 
+	# The household detail page reads this: one entry per need, in need units.
+	sim.advance_ticks(3)
+	var h := sim.get_household_summary(sim.get_household_ids()[0])
+	var needs: Array = h["needs"]
+	_assert(needs.size() == HENeeds.all().size(), "A household summary should report every need")
+	for i in needs.size():
+		var need: HENeed = HENeeds.all()[i]
+		var entry: Dictionary = needs[i]
+		_assert(entry["label"] == need.label, "Summary needs should follow catalog order")
+		_assert(is_equal_approx(entry["required"], h["headcount"] * need.per_person_daily),
+			"%s required should be headcount x per-person daily need" % need.label)
+		_assert(entry["provided"] <= entry["required"] + EPSILON, "%s cannot be provided beyond what is required" % need.label)
+		_assert((entry["satisfiers"] as Array).size() == need.satisfiers().size(), "%s should list each of its satisfiers" % need.label)
+	print("  household summary reports each need's required/provided and its satisfiers")
+
 ## Today's catalog gives every need a single satisfier, so substitution can't
 ## show up in a scenario run. Exercise it with a fixture need -- timber (1
 ## unit) or a denser stand-in (4 units) -- so the next real satisfier (charcoal

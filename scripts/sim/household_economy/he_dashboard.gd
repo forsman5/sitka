@@ -643,13 +643,16 @@ func _refresh_household_detail() -> void:
 	for commodity_name in inventory.keys():
 		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
 
-	# Whatever the sim reports households as consuming -- no list of its own.
-	_add_household_detail_heading("Required consumption (today)")
-	var demand: Dictionary = h["demand_today"]
-	var consumed: Dictionary = h["consumed_today"]
-	for commodity_name in demand.keys():
-		_add_household_detail_line("%s: needs %.2f, consumed %.2f" % [
-			commodity_name, demand[commodity_name], consumed[commodity_name]])
+	# One line per household need, straight from the sim's HENeeds -- no list
+	# of its own. Amounts are in the need's units; the goods that met it (heat
+	# from timber AND charcoal, say) are nested under it rather than each
+	# being listed as a separate requirement.
+	_add_household_detail_heading("Needs (today)")
+	for need in h["needs"]:
+		_add_household_detail_line("%s: needs %.2f, met %.2f" % [need["label"], need["required"], need["provided"]])
+		for satisfier in need["satisfiers"]:
+			if satisfier["consumed"] > 0.0001:
+				_add_household_detail_line("    %s used: %.2f" % [satisfier["name"], satisfier["consumed"]])
 
 func _add_household_detail_heading(value: String) -> void:
 	var heading := Label.new()

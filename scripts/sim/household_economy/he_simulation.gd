@@ -531,17 +531,27 @@ func get_clock_summary() -> Dictionary:
 func get_household_summary(household_id: int) -> Dictionary:
 	var h: HEHousehold = households[household_id]
 	var inventory := {}
-	var demand := {}
-	var consumed := {}
 	var unmet_scarcity := {}
 	var unmet_unaffordable := {}
 	for c in SUBSISTENCE_COMMODITIES:
 		var name := Commodity.name_of(c)
 		inventory[name] = h.stock(c)
-		demand[name] = h.last_demand.get(c, 0.0)
-		consumed[name] = h.last_consumed.get(c, 0.0)
 		unmet_scarcity[name] = h.last_unmet_scarcity.get(c, 0.0)
 		unmet_unaffordable[name] = h.last_unmet_unaffordable.get(c, 0.0)
+
+	# Today's outcome per NEED, in need units, with the satisfier goods that
+	# met it. This -- not a per-good "demand" -- is what a household requires.
+	var needs: Array[Dictionary] = []
+	for need in HENeeds.all():
+		var satisfiers: Array[Dictionary] = []
+		for c in need.satisfiers():
+			satisfiers.append({"name": Commodity.name_of(c), "consumed": h.last_consumed.get(c, 0.0)})
+		needs.append({
+			"label": need.label,
+			"required": h.last_need_required.get(need.id, 0.0),
+			"provided": h.last_need_provided.get(need.id, 0.0),
+			"satisfiers": satisfiers,
+		})
 
 	return {
 		"id": h.id,
@@ -559,8 +569,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
 		"dependent_ages": h.dependent_ages(),
 		"worker_ages": h.worker_ages(),
-		"demand_today": demand,
-		"consumed_today": consumed,
+		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
 	}
@@ -1005,7 +1014,8 @@ func _daily_tick() -> void:
 func _reset_household_daily_records() -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
-		h.last_demand = {}
+		h.last_need_required = {}
+		h.last_need_provided = {}
 		h.last_consumed = {}
 		h.last_unmet_scarcity = {}
 		h.last_unmet_unaffordable = {}
@@ -1343,13 +1353,15 @@ func _run_consumption(record: Dictionary) -> void:
 
 ## One need for one household: spend satisfiers densest-first until the need
 ## is met. A shortfall is reported against the need's baseline satisfier, in
-## that good's units. last_demand is what each satisfier would have been
-## used at if it were the only source.
+## that good's units. The household's record is the need's own outcome
+## (required and provided, in need units) plus what each satisfier spent.
 func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	var needed := float(h.headcount()) * need.per_person_daily
 	var result := need.burn(h, needed)
 	var provided: float = result["provided"]
 	var burned: Dictionary = result["burned"]
+	h.last_need_required[need.id] = needed
+	h.last_need_provided[need.id] = provided
 
 	var shortfall_units := (needed - provided) / need.value_of(need.baseline)
 	if shortfall_units > 0.0001:
@@ -1357,7 +1369,6 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 
 	for c in need.satisfiers():
 		var taken: float = burned.get(c, 0.0)
-		h.last_demand[c] = needed / need.value_of(c)
 		h.last_consumed[c] = taken
 		var name := Commodity.name_of(c)
 		record["consumed"][name] = record["consumed"].get(name, 0.0) + taken
