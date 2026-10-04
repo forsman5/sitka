@@ -225,6 +225,21 @@ func _check_market_supply_demand_history() -> void:
 				any_activity = true
 	_assert(any_activity, "At least one market should show nonzero supply or demand over 100 days")
 
+	# Ore moves Iron Mine -> Bloomery directly (no Trader import), and that
+	# local business-to-business sale must still show up in the ore market.
+	var mine_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	mine_sim.advance_ticks(60)
+	var mine_settlement_id: int = mine_sim.get_settlement_ids()[0]
+	var ore_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	var ore_supplied := 0.0
+	var ore_requested := 0.0
+	for v in ore_report["supplied_history"]:
+		ore_supplied += v
+	for v in ore_report["demanded_history"]:
+		ore_requested += v
+	_assert(ore_supplied > 0.0, "Iron Mine -> Bloomery ore sales should appear as supplied in the ore market")
+	_assert(ore_requested > 0.0, "Bloomery ore purchases should appear as requested in the ore market")
+
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")
@@ -353,7 +368,12 @@ func _check_trader_export_settings() -> void:
 	for record in sim.get_daily_history(10):
 		_assert((record["exported"] as Dictionary).get("Iron Ore", 0.0) < EPSILON,
 			"Disabling ore export should stop new ore shipments")
-	_assert((sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"] as Dictionary).is_empty(),
+	# The Bloomery still buys ore from the Iron Mine locally, so the market
+	# legitimately clears; with export off, that clearing must be exactly the
+	# day's local purchases, not a leftover export.
+	var ore_clearing: Dictionary = sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"]
+	var last_day_ore_traded: float = (sim.get_daily_history(1)[0]["traded_quantity"] as Dictionary).get("Iron Ore", 0.0)
+	_assert(absf(ore_clearing.get("quantity_traded", 0.0) - last_day_ore_traded) < EPSILON,
 		"Disabled ore export should not keep displaying a stale clearing")
 	print("  enabled ore exported %.1f while Bloomery produced %.1f iron; disabling ore stopped exports" % [ore_exported, iron_produced])
 

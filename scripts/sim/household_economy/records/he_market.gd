@@ -19,6 +19,21 @@ var last_clearing: Dictionary[Commodity.Type, Dictionary] = {}
 func _init(starting_price: Dictionary) -> void:
 	price.assign(starting_price)
 
+## Folds one trade pass into today's last_clearing for `commodity`. A good can
+## clear several times a day (household purchases, each producer that buys it
+## as an input, then a Trader export), so passes accumulate instead of the
+## last one overwriting the rest. requested/traded add up; offered takes the
+## largest pool any pass saw (later passes see the same seller's stock after
+## earlier ones consumed it, so summing would double count).
+func merge_clearing(commodity: Commodity.Type, offered: float, requested_funded: float, traded: float, clearing_price: float) -> void:
+	var entry: Dictionary = last_clearing.get(commodity, {})
+	last_clearing[commodity] = {
+		"total_offered": maxf(entry.get("total_offered", 0.0), offered),
+		"total_requested_funded": entry.get("total_requested_funded", 0.0) + requested_funded,
+		"quantity_traded": entry.get("quantity_traded", 0.0) + traded,
+		"price": clearing_price,
+	}
+
 ## Rolling per-commodity history of each day's clearing, oldest first, capped
 ## at SUPPLY_DEMAND_HISTORY_WINDOW_DAYS. "supplied" is total_offered and
 ## "demanded" is total_requested_funded (the affordable request) from

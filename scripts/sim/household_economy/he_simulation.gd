@@ -1922,12 +1922,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			seller.last_revenue += revenue
 			seller.last_cash_change += revenue
 
-	local_market.last_clearing[commodity] = {
-		"total_offered": total_offer,
-		"total_requested_funded": total_funded_request,
-		"quantity_traded": quantity_traded,
-		"price": price,
-	}
+	local_market.merge_clearing(commodity, total_offer, total_funded_request, quantity_traded, price)
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + quantity_traded
 
 	if price_adjustment_enabled:
@@ -2036,12 +2031,7 @@ func _run_trade(record: Dictionary) -> void:
 			# so this is the only place its market grid row gets real
 			# offered/traded numbers and price drift.
 			if not SUBSISTENCE_COMMODITIES.has(commodity):
-				local_market.last_clearing[commodity] = {
-					"total_offered": surplus,
-					"total_requested_funded": quantity,
-					"quantity_traded": quantity,
-					"price": local_price,
-				}
+				local_market.merge_clearing(commodity, surplus, quantity, quantity, local_price)
 				if price_adjustment_enabled:
 					_adjust_price(trader.settlement_id, commodity, surplus, quantity)
 
@@ -2427,6 +2417,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				seller.balance += cost
 				seller.last_revenue += cost
 				seller.last_cash_change += cost
+				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
+				# household or Trader pass records it, so without this the
+				# good's market shows 0 supplied / 0 requested.
+				var offer_before_sale: float = _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity) + bought
+				local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
 			elif trader != null:
 				var offer_before: float = trader_import_capacity[trader.id]
 				trader_import_capacity[trader.id] -= bought
@@ -2449,12 +2444,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				record["import_cost"] += import_cost
 				_import_cost_total += import_cost
 
-				local_market.last_clearing[commodity] = {
-					"total_offered": offer_before,
-					"total_requested_funded": requested,
-					"quantity_traded": bought,
-					"price": price,
-				}
+				local_market.merge_clearing(commodity, offer_before, requested, bought, price)
 				if price_adjustment_enabled:
 					_adjust_price(buyer.settlement_id, commodity, offer_before, requested)
 
