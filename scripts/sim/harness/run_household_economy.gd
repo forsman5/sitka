@@ -5,8 +5,11 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
-const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
+const Commodity =preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
 ## H1 labor-market acceptance check. Run with:
 ##   godot --headless --script res://scripts/sim/harness/run_household_economy.gd
@@ -21,6 +24,8 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
+	_check_goods_flow_history_reconciles_with_stock()
+	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -37,6 +42,8 @@ func _init() -> void:
 	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_needs_catalog()
+	_check_need_substitutes()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -166,6 +173,119 @@ func _check_conservation() -> void:
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
 	_assert(min_household_balance >= -EPSILON, "Some household balance went negative: %.4f" % min_household_balance)
 	_assert(worst_business_floor_breach < EPSILON, "A business balance dropped below its own generous wage floor by %.4f" % worst_business_floor_breach)
+
+## The detail tab's goods-flow charts: every production business reports a
+## history per flow, and those histories must reconcile with its own storage
+## -- end stock = start stock + produced - sold for its output, and
+## + bought - consumed for each input. Run shorter than the history window
+## so nothing has been trimmed off the front yet.
+func _check_goods_flow_history_reconciles_with_stock() -> void:
+	print("\n=== Production business goods-flow histories reconcile with storage ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	var start_stock := {}
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		if b.kind != HEBusiness.Kind.PRODUCTION:
+			continue
+		start_stock[business_id] = {}
+		for commodity in b.recipe.outputs.keys() + b.recipe.inputs.keys():
+			start_stock[business_id][Commodity.name_of(commodity)] = b.stock(commodity)
+	var days := 60
+	sim.advance_ticks(days)
+
+	var checked := 0
+	for report in sim.get_business_reports():
+		if report["kind"] != "production":
+			_assert(not report.has("flow_history"), "%s is not a production business and should report no flow_history" % report["name"])
+			continue
+		var flows: Dictionary = report["flow_history"]
+		var output_name: String = report["output_commodity"]
+		_assert(flows[HEBusiness.FLOW_PRODUCED].size() == 1, "%s has one output good, expected 1 produced series" % report["name"])
+		_assert(flows[HEBusiness.FLOW_PRODUCED][0]["commodity"] == output_name, "%s produced series should be its output commodity" % report["name"])
+		_assert((flows[HEBusiness.FLOW_PRODUCED][0]["values"] as Array).size() == days, "%s produced series should have one entry per day" % report["name"])
+
+		# The inventory chart is the running total of the other two output
+		# lines: each day's change in stock is produced minus sold.
+		var stock_series: Array = flows[HEBusiness.LEVEL_STOCK]
+		_assert(stock_series.size() == 1 and stock_series[0]["commodity"] == output_name, "%s should report one stock series, its output good" % report["name"])
+		var stock_values: Array = stock_series[0]["values"]
+		_assert(stock_values.size() == days, "%s stock series should have one entry per day" % report["name"])
+		_assert(absf(stock_values[days - 1] - float(report["stock"])) < EPSILON, "%s last stock point %.3f should equal reported stock %.3f" % [report["name"], stock_values[days - 1], report["stock"]])
+		var sold_values: Array = flows[HEBusiness.FLOW_SOLD][0]["values"] if not (flows[HEBusiness.FLOW_SOLD] as Array).is_empty() else []
+		var worst_delta_gap := 0.0
+		for i in range(1, days):
+			var sold_today: float = sold_values[i] if i < sold_values.size() else 0.0
+			var delta: float = stock_values[i] - stock_values[i - 1]
+			worst_delta_gap = maxf(worst_delta_gap, absf(delta - (flows[HEBusiness.FLOW_PRODUCED][0]["values"][i] - sold_today)))
+		_assert(worst_delta_gap < EPSILON, "%s daily stock change should equal produced - sold, worst gap %.4f" % [report["name"], worst_delta_gap])
+
+		var closing := {output_name: report["stock"]}
+		for input_name in (report["input_inventory"] as Dictionary).keys():
+			closing[input_name] = report["input_inventory"][input_name]
+		var net := {}
+		for flow in HEBusiness.ALL_FLOWS:
+			var direction := 1.0 if flow in [HEBusiness.FLOW_PRODUCED, HEBusiness.FLOW_BOUGHT] else -1.0
+			for entry in flows[flow]:
+				_assert((entry["values"] as Array).size() == days, "%s %s/%s series should have one entry per day" % [report["name"], flow, entry["commodity"]])
+				for v in entry["values"]:
+					net[entry["commodity"]] = net.get(entry["commodity"], 0.0) + direction * v
+		for good in closing.keys():
+			var expected: float = start_stock[report["business_id"]][good] + net.get(good, 0.0)
+			_assert(absf(closing[good] - expected) < EPSILON, "%s %s stock %.3f should equal start + flows %.3f" % [report["name"], good, closing[good], expected])
+		_assert((flows[HEBusiness.FLOW_SOLD] as Array).size() > 0, "%s should have sold some %s in %d days" % [report["name"], output_name, days])
+		if not (report["input_inventory"] as Dictionary).is_empty():
+			_assert((flows[HEBusiness.FLOW_CONSUMED] as Array).size() > 0 and (flows[HEBusiness.FLOW_BOUGHT] as Array).size() > 0, "%s has inputs and should show both consumed and bought series" % report["name"])
+		checked += 1
+	_assert(checked > 0, "Scenario should contain at least one production business")
+
+func _check_market_supply_demand_history() -> void:
+	print("\n=== Market detail carries a rolling supplied/requested history ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	sim.advance_ticks(100)
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var window := HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	var any_activity := false
+	for commodity in sim.markets[settlement_id].price.keys():
+		var report := sim.get_market_detail(settlement_id, commodity)
+		var supplied: Array = report["supplied_history"]
+		var demanded: Array = report["demanded_history"]
+		_assert(supplied.size() == window and demanded.size() == window, "%s history should be capped at %d days, got %d/%d" % [Commodity.name_of(commodity), window, supplied.size(), demanded.size()])
+		for v in supplied + demanded:
+			if v > 0.0:
+				any_activity = true
+	_assert(any_activity, "At least one market should show nonzero supply or demand over 100 days")
+
+	# Ore moves Iron Mine -> Bloomery directly (no Trader import), and that
+	# local business-to-business sale must still show up in the ore market.
+	var mine_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	mine_sim.advance_ticks(60)
+	var mine_settlement_id: int = mine_sim.get_settlement_ids()[0]
+	var ore_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	var ore_supplied := 0.0
+	var ore_requested := 0.0
+	for v in ore_report["supplied_history"]:
+		ore_supplied += v
+	for v in ore_report["demanded_history"]:
+		ore_requested += v
+	_assert(ore_supplied > 0.0, "Iron Mine -> Bloomery ore sales should appear as supplied in the ore market")
+	_assert(ore_requested > 0.0, "Bloomery ore purchases should appear as requested in the ore market")
+
+	# Export appetite: the Trader's remaining capacity, not the amount shipped.
+	var export_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	export_sim.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.IRON_ORE, true)
+	export_sim.advance_ticks(60)
+	var export_report := export_sim.get_market_detail(export_sim.get_settlement_ids()[0], Commodity.Type.IRON_ORE)
+	var plain: Array = export_report["demanded_history"]
+	var with_appetite: Array = export_report["demanded_with_export_history"]
+	_assert(plain.size() == with_appetite.size(), "Both demand series should cover the same days")
+	var appetite_higher_somewhere := false
+	for i in plain.size():
+		_assert(with_appetite[i] >= plain[i] - EPSILON, "Export appetite series should never fall below executed demand (day index %d)" % i)
+		if with_appetite[i] > plain[i] + EPSILON:
+			appetite_higher_somewhere = true
+	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
+	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
@@ -304,7 +424,12 @@ func _check_trader_export_settings() -> void:
 	for record in sim.get_daily_history(10):
 		_assert((record["exported"] as Dictionary).get("Iron Ore", 0.0) < EPSILON,
 			"Disabling ore export should stop new ore shipments")
-	_assert((sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"] as Dictionary).is_empty(),
+	# The Bloomery still buys ore from the Iron Mine locally, so the market
+	# legitimately clears; with export off, that clearing must be exactly the
+	# day's local purchases, not a leftover export.
+	var ore_clearing: Dictionary = sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"]
+	var last_day_ore_traded: float = (sim.get_daily_history(1)[0]["traded_quantity"] as Dictionary).get("Iron Ore", 0.0)
+	_assert(absf(ore_clearing.get("quantity_traded", 0.0) - last_day_ore_traded) < EPSILON,
 		"Disabled ore export should not keep displaying a stale clearing")
 	print("  enabled ore exported %.1f while Bloomery produced %.1f iron; disabling ore stopped exports" % [ore_exported, iron_produced])
 
@@ -858,6 +983,79 @@ func _check_herd_monetization() -> void:
 	_assert(any_wool_traded, "Households should have actually bought wool from the Sheep Farm at least once in the run's final year")
 
 	_check_demographic_invariants(sim)
+
+## The catalog is what every consumption/market/reserve loop reads, so pin its
+## shape: the three needs, today's one satisfier each, and food alone driving
+## the lifecycle engine.
+func _check_needs_catalog() -> void:
+	print("\n=== Household needs: catalog ===")
+	var ids: Array = []
+	for need in HENeeds.all():
+		ids.append(need.id)
+	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL],
+		"Subsistence commodities should be the union of every need's satisfiers, in need order")
+	for need in HENeeds.all():
+		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
+		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
+	_assert(HENeeds.for_commodity(Commodity.Type.GRAIN).id == HENeed.Id.FOOD, "Grain should satisfy food")
+	_assert(HENeeds.for_commodity(Commodity.Type.IRON) == null, "Iron satisfies no household need")
+	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
+	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
+	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
+	print("  catalog shape and Bloomery heat slot as expected")
+
+	# The household detail page reads this: one entry per need, in need units.
+	sim.advance_ticks(3)
+	var h := sim.get_household_summary(sim.get_household_ids()[0])
+	var needs: Array = h["needs"]
+	_assert(needs.size() == HENeeds.all().size(), "A household summary should report every need")
+	for i in needs.size():
+		var need: HENeed = HENeeds.all()[i]
+		var entry: Dictionary = needs[i]
+		_assert(entry["label"] == need.label, "Summary needs should follow catalog order")
+		_assert(is_equal_approx(entry["required"], h["headcount"] * need.per_person_daily),
+			"%s required should be headcount x per-person daily need" % need.label)
+		_assert(entry["provided"] <= entry["required"] + EPSILON, "%s cannot be provided beyond what is required" % need.label)
+		_assert((entry["satisfiers"] as Array).size() == need.satisfiers().size(), "%s should list each of its satisfiers" % need.label)
+	print("  household summary reports each need's required/provided and its satisfiers")
+
+## Today's catalog gives every need a single satisfier, so substitution can't
+## show up in a scenario run. Exercise it with a fixture need -- timber (1
+## unit) or a denser stand-in (4 units) -- so the next real satisfier (charcoal
+## for heat, meat for food, ...) lands on logic that is already checked.
+func _check_need_substitutes() -> void:
+	print("\n=== Household needs: substitutable satisfiers ===")
+	var units: Dictionary[Commodity.Type, float] = {Commodity.Type.WOOL: 4.0, Commodity.Type.TIMBER: 1.0}
+	var need := HENeed.new(HENeed.Id.HEAT, "Fixture heat", 0.5, units, Commodity.Type.TIMBER)
+	_assert(is_equal_approx(need.units_per_person_daily(Commodity.Type.WOOL), 0.125), "A 4x-dense satisfier needs a quarter of the units")
+
+	var h := HEHousehold.new(1, 2, 0)
+	h.add_stock(Commodity.Type.WOOL, 2.0)
+	h.add_stock(Commodity.Type.TIMBER, 3.0)
+	_assert(is_equal_approx(need.held(h), 11.0), "Held should sum value-weighted stock across satisfiers: got %.2f" % need.held(h))
+
+	var burn := need.burn(h, 10.0)
+	_assert(is_equal_approx(burn["provided"], 10.0), "Burning 10 should be fully met")
+	_assert(is_equal_approx(burn["burned"].get(Commodity.Type.WOOL, 0.0), 2.0), "The denser satisfier should be spent first")
+	_assert(is_equal_approx(burn["burned"].get(Commodity.Type.TIMBER, 0.0), 2.0), "The remainder should come from the next satisfier")
+	_assert(is_equal_approx(h.stock(Commodity.Type.TIMBER), 1.0), "Timber should be left with only what was not burned")
+
+	var short := need.burn(h, 5.0)
+	_assert(is_equal_approx(short["provided"], 1.0), "A burn beyond what is held supplies only what exists: got %.2f" % short["provided"])
+	_assert(is_equal_approx(need.held(h), 0.0), "Everything held should be spent")
+
+	# Preferred satisfier: the baseline until an alternative is both in supply
+	# and cheaper per need-unit (wool 2.0 / 4 = 0.5 vs timber 1.0).
+	var sim := _new_sim("build_three_business_economy")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.TIMBER, "With no alternative in supply, the baseline should be preferred")
+	var trader: HEBusiness = sim._settlement_trader(settlement_id)
+	trader.add_stock(Commodity.Type.WOOL, 5.0)
+	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.WOOL, "A cheaper-per-unit satisfier in supply should be preferred")
+	print("  burn order, partial burns and preferred-satisfier choice behave as expected")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0
