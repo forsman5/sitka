@@ -39,6 +39,7 @@ const SCENARIOS := [
 	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start"},
 	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery"},
 	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine"},
+	{"label": "Eight businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner"},
 ]
 
 var _simulation: HESimulation
@@ -1010,9 +1011,9 @@ func _rebuild_household_rows() -> void:
 	_household_rows.clear()
 
 	var grid := GridContainer.new()
-	grid.columns = 11
+	grid.columns = 12
 	_household_list.add_child(grid)
-	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
+	for col_label in ["ID", "Employer", "Workers", "Dependents", "Grain", "Timber", "Charcoal", "Wool", "Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -1045,6 +1046,9 @@ func _rebuild_household_rows() -> void:
 		var timber_label := Label.new()
 		timber_label.custom_minimum_size = Vector2(70, 0)
 		grid.add_child(timber_label)
+		var charcoal_label := Label.new()
+		charcoal_label.custom_minimum_size = Vector2(70, 0)
+		grid.add_child(charcoal_label)
 
 		var wool_label := Label.new()
 		wool_label.custom_minimum_size = Vector2(70, 0)
@@ -1070,7 +1074,7 @@ func _rebuild_household_rows() -> void:
 
 		_household_rows[household_id] = {
 			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
-			"grain": grain_label, "timber": timber_label, "wool": wool_label, "balance": balance_label,
+			"grain": grain_label, "timber": timber_label, "charcoal": charcoal_label, "wool": wool_label, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
@@ -1172,6 +1176,7 @@ func _refresh() -> void:
 
 	var grain_name := Commodity.name_of(Commodity.Type.GRAIN)
 	var timber_name := Commodity.name_of(Commodity.Type.TIMBER)
+	var charcoal_name := Commodity.name_of(Commodity.Type.CHARCOAL)
 	var wool_name := Commodity.name_of(Commodity.Type.WOOL)
 	for household_id in _household_rows.keys():
 		var h := _simulation.get_household_summary(household_id)
@@ -1195,6 +1200,7 @@ func _refresh() -> void:
 			dependents_label.text = "%d (oldest: %dd)" % [dependent_ages.size(), oldest]
 		(row["grain"] as Label).text = "%.1f" % h["inventory"][grain_name]
 		(row["timber"] as Label).text = "%.1f" % h["inventory"][timber_name]
+		(row["charcoal"] as Label).text = "%.1f" % h["inventory"][charcoal_name]
 		(row["wool"] as Label).text = "%.1f" % h["inventory"][wool_name]
 		(row["balance"] as Label).text = "%.1f" % h["balance"]
 		(row["stress"] as Label).text = "%.2f" % h["food_stress"]

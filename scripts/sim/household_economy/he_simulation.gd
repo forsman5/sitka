@@ -54,10 +54,22 @@ const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.
 ## simulation.gd's WOOL_PER_PERSON_PER_DAY) while cattle/sheep themselves are
 ## NOT -- see HERD_EXPORT_PRICE's doc comment for why those two stay
 ## Trader-export-only instead of joining this list.
-const SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL]
+const SUBSISTENCE_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.WOOL]
 
 const GRAIN_PER_PERSON_PER_DAY := 0.4 # matches Simulation.GRAIN_PER_PERSON_PER_DAY
-const FUEL_TIMBER_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tuned
+## Heating is an abstract need measured in heat units, met by any fuel in
+## FUEL_COMMODITIES. One timber is 1 heat, so the per-person need below is
+## numerically the old timber-only rate and existing calibration is unchanged;
+## charcoal packs HEAT_VALUE_CHARCOAL into one unit, which is why it can
+## cost more per unit and still be the cheaper way to heat a house.
+const HEAT_PER_PERSON_PER_DAY := 0.1 # authored placeholder, not yet tuned
+const HEAT_VALUE_TIMBER := 1.0
+const HEAT_VALUE_CHARCOAL := 4.0
+## Burn order: densest fuel first, so a household or smelter holding both
+## uses up its charcoal before touching its timber.
+const FUEL_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CHARCOAL, Commodity.Type.TIMBER]
+## Timber-equivalent of the heat need, kept so seeds can size timber buffers.
+const FUEL_TIMBER_PER_PERSON_PER_DAY := HEAT_PER_PERSON_PER_DAY / HEAT_VALUE_TIMBER
 const WOOL_PER_PERSON_PER_DAY := 0.01 # matches Simulation.WOOL_PER_PERSON_PER_DAY
 
 ## A household requests up to this many days' worth of buffer; there is no
@@ -79,6 +91,10 @@ const PRODUCTION_INPUT_BUFFER_DAYS := 14.0
 const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.GRAIN: 1.0,
 	Commodity.Type.TIMBER: 1.0,
+	## 3.8 / 4 heat = 0.95 per heat unit, just under timber's 1.0, so
+	## households switch once a burner exists. See he_scenario_seeds.gd's
+	## _charcoal_burner_recipe for the worked-out burner economics.
+	Commodity.Type.CHARCOAL: 3.8,
 	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
 	## Priced high enough that the Bloomery clears the reference wage even
@@ -108,10 +124,10 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## exactly that early window, well before its own weekly capacity
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
-const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER]
+const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL]
 ## Priority is fixed so changing checkboxes never silently reorders which
 ## good gets first use of shared Trader capacity. Ore starts disabled.
-const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.IRON_ORE]
+const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.IRON_ORE]
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -787,7 +803,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 		if stock > 0.0001:
 			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
 		if SUBSISTENCE_COMMODITIES.has(commodity):
-			var desired: float = maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - stock)
+			var desired: float = _desired_purchase(h, commodity)
 			if desired > 0.0001:
 				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
@@ -1180,6 +1196,14 @@ func _run_production(record: Dictionary) -> void:
 		var planned: float = float(employed) * rate
 		var units: float = planned * b.last_input_fulfillment_ratio
 		for input_commodity in b.recipe.inputs.keys():
+			if b.burns_fuel and input_commodity == Commodity.Type.TIMBER:
+				var burn := _burn_heat(b, units * b.recipe.inputs[input_commodity] * HEAT_VALUE_TIMBER)
+				for fuel in burn["burned"].keys():
+					var burned_units: float = burn["burned"][fuel]
+					var fuel_name := Commodity.name_of(fuel)
+					record["consumed"][fuel_name] = record["consumed"].get(fuel_name, 0.0) + burned_units
+					b.last_revenue -= burned_units * (markets[b.settlement_id] as HEMarket).price[fuel]
+				continue
 			var consumed: float = units * b.recipe.inputs[input_commodity]
 			b.consume(input_commodity, consumed)
 			var input_name := Commodity.name_of(input_commodity)
@@ -1258,22 +1282,93 @@ func _record_business_revenue_history() -> void:
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
 
+static func heat_value(commodity: Commodity.Type) -> float:
+	match commodity:
+		Commodity.Type.TIMBER:
+			return HEAT_VALUE_TIMBER
+		Commodity.Type.CHARCOAL:
+			return HEAT_VALUE_CHARCOAL
+	return 0.0
+
 ## Shared by _daily_need (times a household's headcount) and
 ## _reference_wage_per_worker (times a settlement's average price) -- the
 ## one place a commodity's per-person daily rate is defined, so the two
-## can never drift apart.
+## can never drift apart. A fuel's rate is the heat need expressed in units
+## of THAT fuel, i.e. what a household would use if it burned only that fuel.
 func _per_person_daily_rate(commodity: Commodity.Type) -> float:
 	match commodity:
 		Commodity.Type.GRAIN:
 			return GRAIN_PER_PERSON_PER_DAY
-		Commodity.Type.TIMBER:
-			return FUEL_TIMBER_PER_PERSON_PER_DAY
+		Commodity.Type.TIMBER, Commodity.Type.CHARCOAL:
+			return HEAT_PER_PERSON_PER_DAY / heat_value(commodity)
 		Commodity.Type.WOOL:
 			return WOOL_PER_PERSON_PER_DAY
 	return 0.0
 
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * _per_person_daily_rate(commodity)
+
+## Whether `commodity` can actually be bought in this settlement today.
+## Timber is the always-available baseline fuel; any other fuel needs a
+## local seller or Trader holding stock, so a settlement with no charcoal
+## burner behaves exactly as it did when timber was the only fuel.
+func _fuel_has_supply(settlement_id: int, commodity: Commodity.Type) -> bool:
+	if commodity == Commodity.Type.TIMBER:
+		return true
+	var seller := _business_selling(settlement_id, commodity)
+	if seller != null and seller.stock(commodity) > 0.0001:
+		return true
+	var trader := _settlement_trader(settlement_id)
+	return trader != null and trader.stock(commodity) > 0.0001
+
+## The fuel with the lowest posted price per heat unit among those in
+## supply. Ties and the no-alternative case fall back to timber.
+func _preferred_fuel(settlement_id: int) -> Commodity.Type:
+	var local_market: HEMarket = markets[settlement_id]
+	var best := Commodity.Type.TIMBER
+	var best_cost: float = local_market.price[best] / heat_value(best)
+	for c in FUEL_COMMODITIES:
+		if c == Commodity.Type.TIMBER or not _fuel_has_supply(settlement_id, c):
+			continue
+		var cost: float = local_market.price[c] / heat_value(c)
+		if cost < best_cost - 0.0001:
+			best = c
+			best_cost = cost
+	return best
+
+## Heat held across every fuel in `owner`'s inventory (household or business).
+func _heat_held(owner) -> float:
+	var total := 0.0
+	for c in FUEL_COMMODITIES:
+		total += owner.stock(c) * heat_value(c)
+	return total
+
+## Burns up to `heat` from `owner`, densest fuel first. Returns
+## {"heat": heat actually produced, "burned": {commodity: units}}.
+func _burn_heat(owner, heat: float) -> Dictionary:
+	var remaining := heat
+	var burned := {}
+	for c in FUEL_COMMODITIES:
+		if remaining <= 0.0:
+			break
+		var units: float = owner.consume(c, remaining / heat_value(c))
+		if units > 0.0:
+			burned[c] = units
+			remaining -= units * heat_value(c)
+	return {"heat": heat - maxf(0.0, remaining), "burned": burned}
+
+## How much of `commodity` a household asks for today. Non-fuels: the usual
+## need-days buffer. Fuels: the buffer is measured in HEAT across every
+## fuel already held, and the whole shortfall is requested in the single
+## preferred fuel, so a household stocked with timber doesn't also stock
+## charcoal on top.
+func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
+	if not FUEL_COMMODITIES.has(commodity):
+		return maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - h.stock(commodity))
+	if _preferred_fuel(h.settlement_id) != commodity:
+		return 0.0
+	var heat_target := float(h.headcount()) * HEAT_PER_PERSON_PER_DAY * TARGET_BUFFER_DAYS
+	return maxf(0.0, heat_target - _heat_held(h)) / heat_value(commodity)
 
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only grain drives food_stress/migration-
@@ -1283,7 +1378,10 @@ func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 func _run_consumption(record: Dictionary) -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
+		_consume_heat(h, record)
 		for commodity in SUBSISTENCE_COMMODITIES:
+			if FUEL_COMMODITIES.has(commodity):
+				continue
 			var demand := _daily_need(h, commodity)
 			var taken := h.consume(commodity, demand)
 			var shortfall := demand - taken
@@ -1304,6 +1402,24 @@ func _run_consumption(record: Dictionary) -> void:
 				var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
 				h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
 				h.advance_day_for_lifecycle(rolling)
+
+## Heating: burn charcoal first, then timber, until the household's heat
+## need is met. A shortfall is reported against timber (in timber units),
+## the baseline fuel, and, like all fuel shortfall, doesn't feed food stress.
+func _consume_heat(h: HEHousehold, record: Dictionary) -> void:
+	var heat_needed := float(h.headcount()) * HEAT_PER_PERSON_PER_DAY
+	var result := _burn_heat(h, heat_needed)
+	var burned: Dictionary = result["burned"]
+	var shortfall_heat: float = heat_needed - result["heat"]
+	if shortfall_heat > 0.0001:
+		_accumulate(h.last_unmet_scarcity, Commodity.Type.TIMBER, shortfall_heat / HEAT_VALUE_TIMBER)
+	for c in FUEL_COMMODITIES:
+		h.last_demand[c] = heat_needed / heat_value(c)
+		h.last_consumed[c] = burned.get(c, 0.0)
+		var name := Commodity.name_of(c)
+		record["consumed"][name] = record["consumed"].get(name, 0.0) + burned.get(c, 0.0)
+		record["unmet_scarcity"][name] = record["unmet_scarcity"].get(name, 0.0) + h.last_unmet_scarcity.get(c, 0.0)
+		record["unmet_unaffordable"][name] = record["unmet_unaffordable"].get(name, 0.0) + h.last_unmet_unaffordable.get(c, 0.0)
 
 ## Reporting only, exactly like the pooled model's migration pressure --
 ## does NOT move or remove anyone.
@@ -1866,11 +1982,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
-		var daily_need := _daily_need(h, commodity)
-		var target_stock := daily_need * TARGET_BUFFER_DAYS
-		var stock := h.stock(commodity)
-
-		var desired_qty: float = max(0.0, target_stock - stock)
+		var desired_qty: float = _desired_purchase(h, commodity)
 		if desired_qty > 0.0001:
 			var available_balance: float = starting_balance[household_id] - reserved_spend.get(household_id, 0.0)
 			var affordable_qty: float = (available_balance / price) if price > 0.0 else 0.0
@@ -2355,6 +2467,19 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		var trader := _settlement_trader(buyer.settlement_id)
 		var local_market: HEMarket = markets[buyer.settlement_id]
 		var purchase_ratio := 1.0
+
+		# A fuel-burning business's timber input is really a heat requirement:
+		# buy whichever fuel is cheapest per heat unit, and count heat already
+		# held in ANY fuel against the buffer.
+		var heat_fuel := _preferred_fuel(buyer.settlement_id)
+		var heat_per_output := 0.0
+		var purchase_inputs: Dictionary[Commodity.Type, float] = {}
+		for commodity in buyer.recipe.inputs.keys():
+			if buyer.burns_fuel and commodity == Commodity.Type.TIMBER:
+				heat_per_output = buyer.recipe.inputs[commodity] * HEAT_VALUE_TIMBER
+				purchase_inputs[heat_fuel] = heat_per_output / heat_value(heat_fuel)
+			else:
+				purchase_inputs[commodity] = buyer.recipe.inputs[commodity]
 		var needed_by_commodity: Dictionary[Commodity.Type, float] = {}
 		var requested_by_commodity: Dictionary[Commodity.Type, float] = {}
 		var total_cost_if_fully_supplied := 0.0
@@ -2366,11 +2491,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# per-input (checking it here too would let the same balance count
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
-		for commodity in buyer.recipe.inputs.keys():
-			var needed: float = planned_units * buyer.recipe.inputs[commodity]
+		for commodity in purchase_inputs.keys():
+			var needed: float = planned_units * purchase_inputs[commodity]
 			needed_by_commodity[commodity] = needed
 			var target: float = needed * PRODUCTION_INPUT_BUFFER_DAYS
-			var requested: float = max(0.0, target - buyer.stock(commodity))
+			var held: float = _heat_held(buyer) / heat_value(commodity) if heat_per_output > 0.0 and commodity == heat_fuel else buyer.stock(commodity)
+			var requested: float = max(0.0, target - held)
 			requested_by_commodity[commodity] = requested
 			if requested <= 0.0001:
 				continue
@@ -2396,7 +2522,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var affordable_ratio: float = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
-		for commodity in buyer.recipe.inputs.keys():
+		for commodity in purchase_inputs.keys():
 			var requested: float = requested_by_commodity.get(commodity, 0.0)
 			if requested <= 0.0001 or purchase_ratio <= 0.0:
 				continue
@@ -2447,10 +2573,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 					_adjust_price(buyer.settlement_id, commodity, offer_before, requested)
 
 		var production_ratio := 1.0
-		for commodity in buyer.recipe.inputs.keys():
+		for commodity in purchase_inputs.keys():
 			var needed: float = needed_by_commodity.get(commodity, 0.0)
 			if needed > 0.0001:
-				production_ratio = minf(production_ratio, minf(needed, buyer.stock(commodity)) / needed)
+				var held: float = _heat_held(buyer) / heat_value(commodity) if heat_per_output > 0.0 and commodity == heat_fuel else buyer.stock(commodity)
+				production_ratio = minf(production_ratio, minf(needed, held) / needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
 
 ## Total daily need for `commodity` across every household right now -- the
@@ -2543,8 +2670,15 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 		return 0.0
 	var dependency_ratio := float(total_population) / float(total_workers)
 	var per_person_cost := 0.0
+	var cheapest_heat_cost := INF
 	for c in SUBSISTENCE_COMMODITIES:
+		if FUEL_COMMODITIES.has(c):
+			# Heating is priced at the cheapest fuel actually on offer.
+			if _fuel_has_supply(settlement_id, c):
+				cheapest_heat_cost = minf(cheapest_heat_cost, _average_price_history(settlement_id, c) / heat_value(c))
+			continue
 		per_person_cost += _average_price_history(settlement_id, c) * _per_person_daily_rate(c)
+	per_person_cost += cheapest_heat_cost * HEAT_PER_PERSON_PER_DAY
 	return dependency_ratio * per_person_cost
 
 ## BASE_PRICE.keys(), not just SUBSISTENCE_COMMODITIES -- every commodity

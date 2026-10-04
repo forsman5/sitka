@@ -79,6 +79,13 @@ var capacity: int
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
 
+## Kind.PRODUCTION only: the recipe's TIMBER input is FUEL (heat for a
+## furnace), not feedstock, so any fuel may supply it -- see he_simulation.gd's
+## HEAT_VALUE_* and _run_input_purchasing. A charcoal burner leaves this false:
+## its timber is raw material that has to stay timber.
+## TODO: let a smelter require a minimum share of its heat from charcoal.
+var burns_fuel: bool = false
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0

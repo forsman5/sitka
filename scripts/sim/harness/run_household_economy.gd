@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
+	_check_charcoal_burner_heats_households()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -176,6 +177,47 @@ func _check_conservation() -> void:
 ## check for iron's own goods conservation (opening + produced - exported,
 ## no consumed/written_off term since no household or emigration ever
 ## touches iron).
+func _check_charcoal_burner_heats_households() -> void:
+	print("
+=== Charcoal Burner: timber becomes charcoal, households and the Bloomery heat with it ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	sim.advance_ticks(365)
+	var history := sim.get_daily_history(365)
+
+	var charcoal_produced := 0.0
+	var charcoal_burned := 0.0
+	var timber_burned := 0.0
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for record in history:
+		charcoal_produced += (record["produced"] as Dictionary).get("Charcoal", 0.0)
+		charcoal_burned += (record["consumed"] as Dictionary).get("Charcoal", 0.0)
+		timber_burned += (record["consumed"] as Dictionary).get("Timber", 0.0)
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			var name := Commodity.name_of(c)
+			var expected: float = record["opening_stock"][name] + (record["produced"] as Dictionary).get(name, 0.0) 				- (record["consumed"] as Dictionary).get(name, 0.0) - (record["exported"] as Dictionary).get(name, 0.0) 				- (record["goods_written_off"] as Dictionary).get(c, 0.0)
+			worst_stock_gap = max(worst_stock_gap, abs(record["closing_stock"][name] - expected))
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
+
+	print("  over 365 days: charcoal produced=%.1f, charcoal burned=%.1f, timber burned/used=%.1f" % [charcoal_produced, charcoal_burned, timber_burned])
+	print("  worst stock reconciliation gap: %.4f, worst money gap: %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(charcoal_produced > 0.0, "Charcoal Burner should have produced charcoal")
+	_assert(charcoal_burned > 0.0, "Households or the Bloomery should have burned charcoal as fuel")
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with charcoal in play, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with charcoal in play, worst gap %.4f" % worst_money_gap)
+
+	# Households start with weeks of timber in hand, so check the first
+	# couple of months of a fresh run for the switch rather than year-end.
+	var fresh := _new_sim("build_economy_with_charcoal_burner")
+	var household_charcoal := 0.0
+	for day in 60:
+		fresh.advance_ticks(1)
+		for household_id in fresh.get_household_ids():
+			household_charcoal += fresh.get_household_summary(household_id)["consumed_today"]["Charcoal"]
+	print("  charcoal burned by households over the first 60 days: %.2f" % household_charcoal)
+	_assert(household_charcoal > 0.0, "Households should be heating with charcoal once the burner is selling")
+
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")
