@@ -1065,6 +1065,8 @@ func _finalize_daily_record(record: Dictionary) -> void:
 	record["closing_stock"] = _total_stock_snapshot()
 	record["closing_money"] = _total_money()
 	record["population"] = _total_population()
+	record["households"] = households.size()
+	record["unemployed_households"] = _unemployed_household_count()
 	_history.append(record)
 	if _history.size() > HISTORY_MAX_DAYS:
 		_history.pop_front()
@@ -2773,6 +2775,13 @@ func _total_money(settlement_id: int = -1) -> float:
 		var b: HEBusiness = businesses[business_id]
 		if settlement_id == -1 or b.settlement_id == settlement_id:
 			total += b.balance
+	return total
+
+func _unemployed_household_count() -> int:
+	var total := 0
+	for h in households.values():
+		if not (h as HEHousehold).is_employed():
+			total += 1
 	return total
 
 func _total_population(settlement_id: int = -1) -> int:
