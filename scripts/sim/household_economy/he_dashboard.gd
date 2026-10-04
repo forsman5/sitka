@@ -711,8 +711,13 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]],
 	]
+	if report.has("herd_size"):
+		# A herd's last_actual_units is what the periodic review culled (once
+		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
+		rows.append(["Last review culled", "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]])
+	else:
+		rows.append(["Activity" if report["kind"] == "trader" else "Output", "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]])
 	if report["kind"] != "trader":
 		rows.append(["Output inventory", "%.1f %s" % [report["stock"], report["output_commodity"]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
