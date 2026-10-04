@@ -43,11 +43,34 @@ const SUPPLY_DEMAND_HISTORY_WINDOW_DAYS := 90
 var _supplied_history: Dictionary[Commodity.Type, Array] = {}
 var _demanded_history: Dictionary[Commodity.Type, Array] = {}
 
+## Today's Trader export appetite per commodity: how much the Trader could
+## and would take (its remaining handling capacity when this good's turn in
+## the export priority came), as opposed to what it actually shipped. Cleared
+## daily with last_clearing. Kept apart from last_clearing so price drift and
+## the "executed" numbers are untouched.
+var _export_appetite: Dictionary[Commodity.Type, float] = {}
+## The part of today's executed export already counted in last_clearing's
+## requested total (only goods with no household clearing of their own), so
+## the appetite series can swap it out rather than double count.
+var _export_in_clearing: Dictionary[Commodity.Type, float] = {}
+var _demanded_with_export_history: Dictionary[Commodity.Type, Array] = {}
+
+func clear_daily_export() -> void:
+	_export_appetite.clear()
+	_export_in_clearing.clear()
+
+func record_export(commodity: Commodity.Type, appetite: float, executed_in_clearing: float) -> void:
+	_export_appetite[commodity] = _export_appetite.get(commodity, 0.0) + appetite
+	_export_in_clearing[commodity] = _export_in_clearing.get(commodity, 0.0) + executed_in_clearing
+
 func record_supply_demand_history() -> void:
 	for commodity in price.keys():
 		var clearing: Dictionary = last_clearing.get(commodity, {})
+		var requested: float = clearing.get("total_requested_funded", 0.0)
 		_push_history(_supplied_history, commodity, clearing.get("total_offered", 0.0))
-		_push_history(_demanded_history, commodity, clearing.get("total_requested_funded", 0.0))
+		_push_history(_demanded_history, commodity, requested)
+		_push_history(_demanded_with_export_history, commodity,
+			maxf(0.0, requested - _export_in_clearing.get(commodity, 0.0)) + _export_appetite.get(commodity, 0.0))
 
 func _push_history(store: Dictionary, commodity: Commodity.Type, value: float) -> void:
 	var series: Array = store.get(commodity, [])
@@ -61,3 +84,8 @@ func supplied_history(commodity: Commodity.Type) -> Array:
 
 func demanded_history(commodity: Commodity.Type) -> Array:
 	return (_demanded_history.get(commodity, []) as Array).duplicate()
+
+## Same as demanded_history, but Trader exports count at the Trader's
+## appetite (remaining capacity) instead of the quantity actually shipped.
+func demanded_with_export_history(commodity: Commodity.Type) -> Array:
+	return (_demanded_with_export_history.get(commodity, []) as Array).duplicate()

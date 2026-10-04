@@ -240,6 +240,23 @@ func _check_market_supply_demand_history() -> void:
 	_assert(ore_supplied > 0.0, "Iron Mine -> Bloomery ore sales should appear as supplied in the ore market")
 	_assert(ore_requested > 0.0, "Bloomery ore purchases should appear as requested in the ore market")
 
+	# Export appetite: the Trader's remaining capacity, not the amount shipped.
+	var export_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	export_sim.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.IRON_ORE, true)
+	export_sim.advance_ticks(60)
+	var export_report := export_sim.get_market_detail(export_sim.get_settlement_ids()[0], Commodity.Type.IRON_ORE)
+	var plain: Array = export_report["demanded_history"]
+	var with_appetite: Array = export_report["demanded_with_export_history"]
+	_assert(plain.size() == with_appetite.size(), "Both demand series should cover the same days")
+	var appetite_higher_somewhere := false
+	for i in plain.size():
+		_assert(with_appetite[i] >= plain[i] - EPSILON, "Export appetite series should never fall below executed demand (day index %d)" % i)
+		if with_appetite[i] > plain[i] + EPSILON:
+			appetite_higher_somewhere = true
+	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
+	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
+
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")

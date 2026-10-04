@@ -765,6 +765,7 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
 		"supplied_history": local_market.supplied_history(commodity),
 		"demanded_history": local_market.demanded_history(commodity),
+		"demanded_with_export_history": local_market.demanded_with_export_history(commodity),
 	}
 
 func get_trader_export_settings(business_id: int) -> Array:
@@ -984,6 +985,7 @@ func _daily_tick() -> void:
 	# its export checkbox is disabled or its seller runs out of stock.
 	for market in markets.values():
 		(market as HEMarket).last_clearing.clear()
+		(market as HEMarket).clear_daily_export()
 	var record := _new_daily_record()
 	_pay_wages(record)
 	_run_input_purchasing(record)
@@ -1985,10 +1987,14 @@ func _run_trade(record: Dictionary) -> void:
 				continue
 			var surplus := _exportable_surplus(seller, trader.settlement_id, commodity)
 			var quantity: float = min(surplus, remaining_capacity)
+			var local_market: HEMarket = markets[trader.settlement_id]
+			# Appetite is recorded even on a day nothing ships, so the market
+			# chart can show demand the seller's stock didn't cover.
+			local_market.record_export(commodity, remaining_capacity,
+				quantity if not SUBSISTENCE_COMMODITIES.has(commodity) and quantity > 0.0001 else 0.0)
 			if quantity <= 0.0001:
 				continue
 
-			var local_market: HEMarket = markets[trader.settlement_id]
 			var local_price: float = local_market.price[commodity]
 			var pay_price: float = local_price * TRADER_BUY_PRICE_FRACTION
 			seller.consume(commodity, quantity)
