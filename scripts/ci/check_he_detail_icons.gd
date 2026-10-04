@@ -9,11 +9,15 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var sim = dash._simulation
+	dash._speed_multiplier = 0.0 # drive the sim by hand
+	sim.advance_ticks(60) # let the Trader actually move goods
 	var icon_total := 0
 	for r in sim.get_business_reports():
 		dash._on_business_row_selected(r["business_id"])
 		if r["kind"] == "trader":
 			dash._on_trader_settings_pressed()
+		if r["kind"] == "trader":
+			print("  Trader activity text: %s -> grid icons: %d" % [r["output_commodity"], _count(dash._business_detail_grid)])
 		var found := _count(dash._business_detail_panel) + _count(dash._trader_settings_list)
 		print("%s (%s): %d icons" % [r["name"], r["kind"], found])
 		icon_total += found

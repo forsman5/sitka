@@ -716,7 +716,7 @@ func _refresh_business_detail() -> void:
 		["Kind", (report["kind"] as String).capitalize()],
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
-		["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]]]]],
+		["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]],
 	]
 	if report["kind"] != "trader":
 		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
@@ -797,12 +797,43 @@ func _add_detail_row(label_text: String, value) -> void:
 		var box := HBoxContainer.new()
 		box.add_theme_constant_override("separation", 12)
 		for part in value:
-			box.add_child(_goods_cell(part[0], part[1]))
+			# A third element marks text that names several goods inline
+			# (the Trader's "Export (...) / Import (...)" summary).
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
 		_business_detail_grid.add_child(box)
 		return
 	var value_label := Label.new()
 	value_label.text = value
 	_business_detail_grid.add_child(value_label)
+
+## Text that mentions goods by name; each mention gets its icon placed right
+## before it, e.g. "Export (Grain, Timber)" -> "Export ([icon]Grain, [icon]Timber)".
+func _inline_goods_cell(text: String) -> HBoxContainer:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+	# Longest names first so "Iron Ore" wins over "Iron".
+	var names: Array[String] = []
+	for t in Commodity.ALL:
+		names.append(Commodity.name_of(t))
+	names.sort_custom(func(a: String, b: String) -> bool: return a.length() > b.length())
+	var pattern := RegEx.new()
+	pattern.compile("|".join(names.map(func(n: String) -> String: return "\\b%s\\b" % n)))
+	var cursor := 0
+	for m in pattern.search_all(text):
+		var before := text.substr(cursor, m.get_start() - cursor)
+		if before != "":
+			box.add_child(_plain_label(before))
+		box.add_child(_goods_cell(m.get_string(), m.get_string()))
+		cursor = m.get_end()
+	var rest := text.substr(cursor)
+	if rest != "":
+		box.add_child(_plain_label(rest))
+	return box
+
+func _plain_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	return label
 
 ## Icon (when the good is known and has one) + text label in one cell.
 func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
