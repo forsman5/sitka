@@ -446,6 +446,13 @@ var _export_revenue_total := 0.0
 ## explicitly for the same "stays honest about where money went" reason.
 var _import_cost_total := 0.0
 
+## Today's business-to-business purchases from local sellers, rebuilt every
+## tick by _run_input_purchasing: settlement_id -> commodity -> {offer: the
+## seller's paced offer BEFORE any B2B buy, sold: units bought from it,
+## requested: cash-funded units asked for}. _clear_market_for reads it so
+## households clear against what's left of the same offer.
+var _b2b_today: Dictionary = {}
+
 ## Trailing per-settlement, per-commodity price history, oldest first, capped to the SAME
 ## window a business's own wage is smoothed over
 ## (HEBusiness.WAGE_ROLLING_WINDOW_DAYS, referenced directly rather than
@@ -787,7 +794,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 		if stock > 0.0001:
 			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
 		if SUBSISTENCE_COMMODITIES.has(commodity):
-			var desired: float = maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - stock)
+			var desired: float = _desired_purchase(h, commodity)
 			if desired > 0.0001:
 				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
@@ -1274,6 +1281,12 @@ func _per_person_daily_rate(commodity: Commodity.Type) -> float:
 
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * _per_person_daily_rate(commodity)
+
+## How much of `commodity` a household asks for today: enough to top its
+## inventory back up to TARGET_BUFFER_DAYS of need. The one definition shared
+## by market clearing, the B2B fair-share estimate and the market detail view.
+func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
+	return maxf(0.0, _daily_need(h, commodity) * TARGET_BUFFER_DAYS - h.stock(commodity))
 
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only grain drives food_stress/migration-
@@ -1832,6 +1845,31 @@ func _run_market(record: Dictionary) -> void:
 		for commodity in SUBSISTENCE_COMMODITIES:
 			_clear_market_for(settlement_id, commodity, record, starting_balance, reserved_spend)
 
+## What `seller` puts up for local sale today. A legacy (non-field) business
+## offers its ENTIRE current stock -- it has no reason to hold any back. A
+## field-model (or herd) business offers stock / days_until_next_harvest (with
+## a little SELL_PACE_HEADROOM) so a lump harvest sells down evenly until the
+## next one. Households and input-buying businesses share this one offer.
+func _paced_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
+	var stock := seller.stock(commodity)
+	if seller.has_long_cycle():
+		var days_until: int = maxi(1, seller.days_until_next_harvest())
+		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
+	return stock
+
+## Cash-funded household demand for `commodity` right now -- what households
+## would ask for in today's market, used only to size a business buyer's
+## fair share of the seller's offer before households have cleared.
+func _household_funded_demand(settlement_id: int, commodity: Commodity.Type) -> float:
+	var price: float = (markets[settlement_id] as HEMarket).price[commodity]
+	if price <= 0.0:
+		return 0.0
+	var total := 0.0
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+		var h: HEHousehold = households[household_id]
+		total += minf(_desired_purchase(h, commodity), maxf(0.0, h.balance / price))
+	return total
+
 ## One commodity's daily clearing. The seller side is now a single business
 ## (whichever one's recipe outputs this commodity, or none). A legacy
 ## (non-field) business still offers its ENTIRE current stock -- it has no
@@ -1853,24 +1891,24 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	var price: float = local_market.price[commodity]
 	var seller: HEBusiness = _business_selling(settlement_id, commodity)
 	var total_offer := 0.0
+	# Today's input purchases (_run_input_purchasing) already took their
+	# pro-rata share of this seller's paced offer; households clear against
+	# what's left of it, and the price signal below sees both sides' demand.
+	var b2b: Dictionary = _b2b_today.get(settlement_id, {}).get(commodity, {})
+	var b2b_sold: float = b2b.get("sold", 0.0)
+	var b2b_requested: float = b2b.get("requested", 0.0)
 	if seller != null:
-		var stock := seller.stock(commodity)
-		if seller.has_long_cycle():
-			var days_until: int = maxi(1, seller.days_until_next_harvest())
-			total_offer = minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
+		if b2b.is_empty():
+			total_offer = _paced_offer(seller, commodity)
 		else:
-			total_offer = stock
+			total_offer = minf(seller.stock(commodity), maxf(0.0, b2b["offer"] - b2b_sold))
 
 	var requests_funded: Dictionary = {}
 	var total_funded_request := 0.0
 
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
-		var daily_need := _daily_need(h, commodity)
-		var target_stock := daily_need * TARGET_BUFFER_DAYS
-		var stock := h.stock(commodity)
-
-		var desired_qty: float = max(0.0, target_stock - stock)
+		var desired_qty: float = _desired_purchase(h, commodity)
 		if desired_qty > 0.0001:
 			var available_balance: float = starting_balance[household_id] - reserved_spend.get(household_id, 0.0)
 			var affordable_qty: float = (available_balance / price) if price > 0.0 else 0.0
@@ -1910,16 +1948,18 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			seller.last_revenue += revenue
 			seller.last_cash_change += revenue
 
+	# Price and the market grid answer to ALL of today's demand and supply
+	# for this good, not just the household slice that was left over.
 	local_market.last_clearing[commodity] = {
-		"total_offered": total_offer,
-		"total_requested_funded": total_funded_request,
-		"quantity_traded": quantity_traded,
+		"total_offered": total_offer + b2b_sold,
+		"total_requested_funded": total_funded_request + b2b_requested,
+		"quantity_traded": quantity_traded + b2b_sold,
 		"price": price,
 	}
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + quantity_traded
 
 	if price_adjustment_enabled:
-		_adjust_price(settlement_id, commodity, total_offer, total_funded_request)
+		_adjust_price(settlement_id, commodity, total_offer + b2b_sold, total_funded_request + b2b_requested)
 
 ## Bounded, gradual next-day price drift from today's offered supply vs.
 ## affordable requested quantity -- frozen during today's clearing (this
@@ -2274,12 +2314,12 @@ func _settlement_trader(settlement_id: int) -> HEBusiness:
 			return b
 	return null
 
-## The stock a PRODUCTION business can sell to a buyer OTHER than its own
-## settlement's households right now, above the reserve that protects local
-## subsistence demand -- shared by _run_trade's export step and
-## _run_input_purchasing's business-to-business purchases, so neither an
-## exporting Trader nor an input-hungry business like the Bloomery can ever
-## outbid a household for a good it needs to survive, by construction. A
+## The stock a PRODUCTION business can sell to a buyer OUTSIDE the settlement
+## right now (_run_trade's export step), above the reserve that protects local
+## subsistence demand -- so an exporting Trader can never outbid a household
+## for a good it needs to survive, by construction. Local businesses buying
+## inputs do NOT use this: they compete with households in the market itself
+## (see _b2b_offer). A
 ## field-model (or herd -- see HEBusiness.has_long_cycle()) seller's own
 ## next harvest is a known, dated relief -- the reserve only needs to cover
 ## local demand until THEN, not a flat buffer that ignores how close (or
@@ -2289,6 +2329,32 @@ func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commo
 	var reserve_days: float = float(seller.days_until_next_harvest()) if seller.has_long_cycle() else TRADER_RESERVE_BUFFER_DAYS
 	var reserve: float = _settlement_daily_demand(settlement_id, commodity) * reserve_days
 	return max(0.0, seller.stock(commodity) - reserve)
+
+## The `_b2b_today` entry for this seller/commodity, created on first use
+## with the seller's paced offer as it stood before any business bought from it.
+func _b2b_entry(settlement_id: int, commodity: Commodity.Type, seller: HEBusiness) -> Dictionary:
+	if not _b2b_today.has(settlement_id):
+		_b2b_today[settlement_id] = {}
+	if not _b2b_today[settlement_id].has(commodity):
+		_b2b_today[settlement_id][commodity] = {"offer": _paced_offer(seller, commodity), "sold": 0.0, "requested": 0.0}
+	return _b2b_today[settlement_id][commodity]
+
+## How much of a local seller's output a business buyer can claim today.
+## There is NO reserve held back for households: the buyer and the
+## settlement's households split the seller's paced offer in proportion to
+## what each asks for (`claim`: the buyer's request, which callers cap at the
+## same TARGET_BUFFER_DAYS horizon households ask over, so a business's
+## larger working buffer doesn't let it crowd them out), and the buyer's purchase feeds the same price signal
+## households' do (see _clear_market_for), so a scarce good gets dearer until
+## whoever values it least drops out. Nothing here knows which commodity it
+## is -- wood, charcoal or any future burnable goes through the same path.
+func _b2b_offer(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type, claim: float) -> float:
+	var entry := _b2b_entry(settlement_id, commodity, seller)
+	var remaining: float = maxf(0.0, entry["offer"] - entry["sold"])
+	var household_demand := _household_funded_demand(settlement_id, commodity)
+	if claim <= 0.0001 or claim + household_demand <= 0.0001:
+		return remaining
+	return minf(remaining, seller.stock(commodity)) * claim / (claim + household_demand)
 
 ## Export happens after local input purchases and production. Leave enough
 ## at the seller for staffed local businesses to buy their next day's input
@@ -2317,9 +2383,8 @@ func _exportable_surplus(seller: HEBusiness, settlement_id: int, commodity: Comm
 ## price, the same mechanism grain/timber use to sell to households, just
 ## with another business as the buyer. An input some local PRODUCTION
 ## business already sells (wood, from the Woodlot) is bought straight from
-## its stock, respecting the same reserve a Trader export would
-## (_seller_surplus_above_reserve) so this can never outbid a household for
-## a good it needs to survive. An input nothing local produces (iron ore)
+## its stock, sharing the seller's offer with local households pro rata
+## (_b2b_offer) rather than behind a household reserve. An input nothing local produces (iron ore)
 ## has no such seller; the settlement's Trader supplies it instead,
 ## importing it from outside on the spot at TRADER_BUY_PRICE_FRACTION of
 ## the local price and reselling it at that same local price -- it never
@@ -2336,6 +2401,7 @@ func _exportable_surplus(seller: HEBusiness, settlement_id: int, commodity: Comm
 ## scarcest, so no input can be consumed without its recipe partners.
 func _run_input_purchasing(record: Dictionary) -> void:
 	var trader_import_capacity: Dictionary = {} # trader business_id -> units still importable today
+	_b2b_today = {}
 	for business_id in businesses.keys():
 		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER:
 			(businesses[business_id] as HEBusiness).last_imported = {}
@@ -2380,7 +2446,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var seller := _business_selling(buyer.settlement_id, commodity)
 			var offer: float
 			if seller != null:
-				offer = _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity)
+				offer = _b2b_offer(seller, buyer.settlement_id, commodity, minf(requested, needed * TARGET_BUFFER_DAYS))
 			elif trader != null:
 				if not trader_import_capacity.has(trader.id):
 					trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
@@ -2392,8 +2458,9 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 		# Pass 1b: fold in the single shared cash constraint across every
 		# input at once.
+		var affordable_ratio := 1.0
 		if total_cost_if_fully_supplied > 0.0001:
-			var affordable_ratio: float = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
+			affordable_ratio = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		for commodity in buyer.recipe.inputs.keys():
@@ -2411,6 +2478,9 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 			var seller := _business_selling(buyer.settlement_id, commodity)
 			if seller != null:
+				var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
+				b2b["sold"] += bought
+				b2b["requested"] += requested * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.balance += cost
 				seller.last_revenue += cost
