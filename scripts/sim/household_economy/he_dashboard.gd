@@ -621,14 +621,13 @@ func _refresh_household_detail() -> void:
 	for commodity_name in inventory.keys():
 		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
 
-	# Food (grain), heat (timber) and wool are the subsistence needs for now.
+	# Whatever the sim reports households as consuming -- no list of its own.
 	_add_household_detail_heading("Required consumption (today)")
 	var demand: Dictionary = h["demand_today"]
 	var consumed: Dictionary = h["consumed_today"]
-	for entry in [[Commodity.Type.GRAIN, "Food"], [Commodity.Type.TIMBER, "Heat"], [Commodity.Type.WOOL, "Clothing"]]:
-		var commodity_name := Commodity.name_of(entry[0])
-		_add_household_detail_line("%s (%s): needs %.2f, consumed %.2f" % [
-			entry[1], commodity_name, demand[commodity_name], consumed[commodity_name]])
+	for commodity_name in demand.keys():
+		_add_household_detail_line("%s: needs %.2f, consumed %.2f" % [
+			commodity_name, demand[commodity_name], consumed[commodity_name]])
 
 func _add_household_detail_heading(value: String) -> void:
 	var heading := Label.new()
