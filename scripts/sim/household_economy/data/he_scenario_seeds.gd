@@ -25,6 +25,8 @@ const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
 const BLOOMERY_BUSINESS_ID := 4
 const IRON_MINE_BUSINESS_ID := 5
+const MILL_BUSINESS_ID := 8
+const BAKERY_BUSINESS_ID := 9
 ## Shifted to 6/7 to leave room for the opt-in Bloomery (4) and Iron Mine (5)
 ## -- the opt-in scenarios and the ranches can all be present at once.
 const CATTLE_RANCH_BUSINESS_ID := 6
@@ -96,6 +98,11 @@ static func herd_max_capacity(species: HEBusiness.Species) -> int:
 ## legacy (daily-output) production site rather than a land/field business.
 const IRON_MINE_MAX_CAPACITY := 20
 
+## Opt-in food-processing chain (Farm -> Mill -> Bakery), same shape as the
+## Bloomery/Iron Mine pair: compact legacy production sites.
+const MILL_MAX_CAPACITY := 20
+const BAKERY_MAX_CAPACITY := 20
+
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
 ## exercise the wage-driven labor market and starvation, not to prove a
@@ -145,6 +152,21 @@ static func _bloomery_recipe() -> Recipe:
 
 static func _iron_mine_recipe() -> Recipe:
 	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
+
+## Grain -> flour, 1:1 (a grain is 0.5 hunger points, a flour 1.0, so milling
+## doubles what the same grain feeds). Per worker per day at full supply:
+## 2.0 flour sold at 1.8 minus 2.0 grain bought at 1.0 = ~1.6 net, against a
+## reference wage of roughly 1.0.
+static func _mill_recipe() -> Recipe:
+	return Recipe.new("mill", {Commodity.Type.GRAIN: 1.0}, {Commodity.Type.FLOUR: 2.0})
+
+## Flour + heat -> bread: 2 flour and 1 heat unit per loaf (a bread is 4
+## hunger points, 2 flour only 2). Heat is a need-input slot (see _build_world),
+## so timber -- or any future heat fuel -- fills it. Per worker per day at
+## full supply: 1.0 bread sold at 6.0 minus 2 flour (3.6) and 1 timber (1.0)
+## = ~1.4 net against a reference wage of roughly 1.0.
+static func _bakery_recipe() -> Recipe:
+	return Recipe.new("bakery", {Commodity.Type.FLOUR: 2.0, Commodity.Type.TIMBER: 1.0}, {Commodity.Type.BREAD: 1.0})
 
 ## A field's labor_applied is seeded as if it had been fully staffed for
 ## every day it's already grown before day 0 -- otherwise a field seeded
@@ -212,7 +234,7 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## HESimulation._evaluate_business_capacity's zero-capacity-protection
 ## mechanic, since there is no such business id in `businesses` for that to
 ## apply to.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0) -> Dictionary:
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, mill_capacity: int = 0, bakery_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
 	var farm := HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), 0, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
@@ -278,6 +300,22 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
 
+	var mill: HEBusiness = null
+	if mill_capacity > 0:
+		mill = HEBusiness.new(MILL_BUSINESS_ID, "Mill", _mill_recipe(), MILL_MAX_CAPACITY, mill_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		mill.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * mill_capacity
+		businesses[MILL_BUSINESS_ID] = mill
+		settlement.business_ids.append(MILL_BUSINESS_ID)
+
+	var bakery: HEBusiness = null
+	if bakery_capacity > 0:
+		bakery = HEBusiness.new(BAKERY_BUSINESS_ID, "Bakery", _bakery_recipe(), BAKERY_MAX_CAPACITY, bakery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		bakery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bakery_capacity
+		# Its timber input is the oven's heat, which any heat fuel can supply.
+		bakery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
+		businesses[BAKERY_BUSINESS_ID] = bakery
+		settlement.business_ids.append(BAKERY_BUSINESS_ID)
+
 	var grain_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * STARTING_BUFFER_DAYS
 	var wool_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.WOOL) * STARTING_BUFFER_DAYS
@@ -287,6 +325,8 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var woodlot_workers_assigned := 0
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
+	var mill_workers_assigned := 0
+	var bakery_workers_assigned := 0
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
@@ -309,6 +349,12 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		elif iron_mine != null and iron_mine_workers_assigned < iron_mine_capacity:
 			household.employer_business_id = IRON_MINE_BUSINESS_ID
 			iron_mine_workers_assigned += WORKER_CAPACITY
+		elif mill != null and mill_workers_assigned < mill_capacity:
+			household.employer_business_id = MILL_BUSINESS_ID
+			mill_workers_assigned += WORKER_CAPACITY
+		elif bakery != null and bakery_workers_assigned < bakery_capacity:
+			household.employer_business_id = BAKERY_BUSINESS_ID
+			bakery_workers_assigned += WORKER_CAPACITY
 		elif trader_workers_assigned < trader_capacity:
 			household.employer_business_id = TRADER_BUSINESS_ID
 			trader_workers_assigned += WORKER_CAPACITY
@@ -363,6 +409,17 @@ static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerato
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader, bloomery, iron_mine)
 
+## Food-chain variant: Farm grain is milled into flour, which the Bakery
+## (with timber for heat) turns into bread. Households switch to whichever
+## of grain/flour/bread is cheapest per hunger point (see HENeeds).
+static func build_economy_with_mill_and_bakery(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var mill := 4
+	var bakery := 4
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - mill - bakery
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader, 0, 0, mill, bakery)
+
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather
 ## than waiting for the balanced scenario's slower drift. The Trader starts
@@ -385,7 +442,9 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine
+	var mill: int = 4 if included.has(MILL_BUSINESS_ID) else 0
+	var bakery: int = 4 if included.has(BAKERY_BUSINESS_ID) else 0
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - mill - bakery
 	var has_farm := included.has(FARM_BUSINESS_ID)
 	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
 	var farm := 0
@@ -397,7 +456,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 		farm = remainder
 	elif has_woodlot:
 		woodlot = remainder
-	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine)
+	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine, mill, bakery)
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
 	for business_id in businesses.keys():

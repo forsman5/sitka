@@ -7,7 +7,8 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## Today each need has a single satisfier. Planned additions are one-line
+## FOOD has three satisfiers (bread 4, flour 1, grain 0.5 hunger points per
+## unit); HEAT and CLOTHING have one. Planned additions are one-line
 ## entries: charcoal for HEAT; meat for FOOD; leather and cloth for CLOTHING
 ## (wool stays as the raw-fibre stand-in until a tailor exists).
 static var _all: Array[HENeed] = []
@@ -15,9 +16,13 @@ static var _all: Array[HENeed] = []
 static func all() -> Array[HENeed]:
 	if _all.is_empty():
 		_all = [
-			# Grain per person matches Simulation.GRAIN_PER_PERSON_PER_DAY.
+			# Hunger points: bread 4, flour 1, grain 0.5 (densest first, so a
+			# household holding several eats bread before flour before grain).
+			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
+			# person -- Simulation.GRAIN_PER_PERSON_PER_DAY -- exactly as when
+			# grain was worth 1.0 and the need was 0.4.
 			# Food is the one need whose shortfall drives starvation.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true),
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.FLOUR: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true),
 			# Authored placeholder, not yet tuned.
 			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER),
 			# Matches Simulation.WOOL_PER_PERSON_PER_DAY.

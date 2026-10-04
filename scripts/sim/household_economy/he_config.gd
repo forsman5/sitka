@@ -17,6 +17,8 @@ const BUSINESSES := [
 	{"id": HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID, "label": "Sheep Farm", "hint": "Herd and wool; starts with no staff."},
 	{"id": HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore."},
 	{"id": HEScenarioSeeds.IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery."},
+	{"id": HEScenarioSeeds.MILL_BUSINESS_ID, "label": "Mill", "hint": "Grinds grain into flour."},
+	{"id": HEScenarioSeeds.BAKERY_BUSINESS_ID, "label": "Bakery", "hint": "Bakes bread from flour and heat."},
 ]
 
 ## "include" mirrors which businesses each builder in HEScenarioSeeds creates,
@@ -26,6 +28,7 @@ const PRESETS := [
 	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7]},
 	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7]},
 	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7]},
+	{"label": "Seven businesses, with Mill and Bakery", "builder": "build_economy_with_mill_and_bakery", "include": [1, 2, 3, 6, 7, 8, 9]},
 ]
 
 var _preset_picker: OptionButton

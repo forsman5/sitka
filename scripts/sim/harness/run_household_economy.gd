@@ -45,6 +45,7 @@ func _init() -> void:
 	_check_herd_monetization()
 	_check_needs_catalog()
 	_check_need_substitutes()
+	_check_mill_and_bakery_chain()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -1025,8 +1026,11 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.FLOUR, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.WOOL],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
+	var food := HENeeds.get_need(HENeed.Id.FOOD)
+	_assert(food.value_of(Commodity.Type.BREAD) == 4.0 and food.value_of(Commodity.Type.FLOUR) == 1.0 and food.value_of(Commodity.Type.GRAIN) == 0.5,
+		"Food points should be bread 4, flour 1, grain 0.5")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
 		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
@@ -1088,6 +1092,34 @@ func _check_need_substitutes() -> void:
 	trader.add_stock(Commodity.Type.WOOL, 5.0)
 	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.WOOL, "A cheaper-per-unit satisfier in supply should be preferred")
 	print("  burn order, partial burns and preferred-satisfier choice behave as expected")
+
+## Farm grain -> Mill flour -> Bakery bread (flour + timber heat), and
+## households actually eating the result.
+func _check_mill_and_bakery_chain() -> void:
+	print("\n=== Mill and Bakery: grain -> flour -> bread feeds households ===")
+	var plain := _new_sim("build_three_business_economy")
+	_assert(not plain.businesses.has(HEScenarioSeeds.MILL_BUSINESS_ID) and not plain.businesses.has(HEScenarioSeeds.BAKERY_BUSINESS_ID),
+		"Mill and Bakery should not exist in a scenario that never built them")
+
+	var sim := _new_sim("build_economy_with_mill_and_bakery")
+	var bakery: HEBusiness = sim.businesses[HEScenarioSeeds.BAKERY_BUSINESS_ID]
+	_assert(bakery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bakery's timber input should be a heat slot")
+	sim.advance_ticks(360)
+	var flour_made := 0.0
+	var bread_made := 0.0
+	for record in sim.get_daily_history(360):
+		flour_made += (record["produced"] as Dictionary).get("Flour", 0.0)
+		bread_made += (record["produced"] as Dictionary).get("Bread", 0.0)
+	var city := sim.get_city_summary()
+	print("  360 days: flour made=%.1f bread made=%.1f population=%d avg_food_stress=%.3f" % [flour_made, bread_made, city["population"], city["avg_food_stress"]])
+	_assert(flour_made > 0.0, "The Mill should have milled some flour")
+	_assert(bread_made > 0.0, "The Bakery should have baked some bread")
+	_assert(city["market"].has("Bread") and city["market"].has("Flour"), "Bread and Flour should have market rows once their producers exist")
+	var bread_traded := 0.0
+	for record in sim.get_daily_history(360):
+		bread_traded += (record["traded_quantity"] as Dictionary).get("Bread", 0.0)
+	_assert(bread_traded > 0.0, "Households should have bought bread (it is cheaper per hunger point than grain)")
+	_check_demographic_invariants(sim)
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

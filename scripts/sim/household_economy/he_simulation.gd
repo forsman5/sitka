@@ -80,6 +80,12 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.TIMBER: 1.0,
 	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
+	## Households pick the cheapest satisfier per hunger point (grain 1.0/0.5
+	## = 2.0, flour 1.8/1 = 1.8, bread 6.0/4 = 1.5), so processed food wins
+	## once it is on sale. See he_scenario_seeds.gd's _mill_recipe/_bakery_recipe
+	## for the margins these prices leave the businesses.
+	Commodity.Type.FLOUR: 1.8,
+	Commodity.Type.BREAD: 6.0,
 	## Priced high enough that the Bloomery clears the reference wage even
 	## though EVERY unit it sells goes through the Trader's discounted
 	## export channel (TRADER_BUY_PRICE_FRACTION) -- unlike Farm/Woodlot,
