@@ -100,6 +100,10 @@ var _selected_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
+var _selected_household_id: int = -1
+var _household_detail_panel: PanelContainer
+var _household_detail_title: Label
+var _household_detail_content: VBoxContainer
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -164,6 +168,9 @@ func _load_scenario(index: int) -> void:
 	_selected_market_commodity = -1
 	if _market_detail_panel != null:
 		_market_detail_panel.visible = false
+	_selected_household_id = -1
+	if _household_detail_panel != null:
+		_household_detail_panel.visible = false
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -499,6 +506,34 @@ func _build_ui() -> void:
 	_market_detail_content.add_theme_constant_override("separation", 6)
 	market_scroll.add_child(_market_detail_content)
 
+	_household_detail_panel = PanelContainer.new()
+	_household_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_household_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_household_detail_panel.visible = false
+	content_area.add_child(_household_detail_panel)
+	var household_detail_box := VBoxContainer.new()
+	_household_detail_panel.add_child(household_detail_box)
+	var household_title_bar := HBoxContainer.new()
+	household_detail_box.add_child(household_title_bar)
+	_household_detail_title = Label.new()
+	_household_detail_title.add_theme_font_size_override("font_size", 16)
+	household_title_bar.add_child(_household_detail_title)
+	var household_title_spacer := Control.new()
+	household_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	household_title_bar.add_child(household_title_spacer)
+	var household_close := Button.new()
+	household_close.text = "X"
+	household_close.tooltip_text = "Close (back to household list)"
+	household_close.pressed.connect(_on_household_detail_close_pressed)
+	household_title_bar.add_child(household_close)
+	var household_scroll := ScrollContainer.new()
+	household_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	household_detail_box.add_child(household_scroll)
+	_household_detail_content = VBoxContainer.new()
+	_household_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_household_detail_content.add_theme_constant_override("separation", 6)
+	household_scroll.add_child(_household_detail_content)
+
 	_blotter_column = VBoxContainer.new()
 	lower_row.add_child(_blotter_column)
 
@@ -574,9 +609,64 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
+func _on_household_row_selected(household_id: int) -> void:
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+	_selected_household_id = household_id
+	_household_detail_panel.visible = true
+	_refresh_household_detail()
+
+func _on_household_detail_close_pressed() -> void:
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+
+## Rebuilt every refresh; the content is a handful of lines, so there's no
+## fixed schema worth updating in place.
+func _refresh_household_detail() -> void:
+	if _selected_household_id == -1:
+		return
+	if not _simulation.get_household_ids().has(_selected_household_id):
+		# The household died or the scenario reloaded.
+		_selected_household_id = -1
+		_household_detail_panel.visible = false
+		return
+	var h := _simulation.get_household_summary(_selected_household_id)
+	_household_detail_title.text = "Household %d" % _selected_household_id
+	for child in _household_detail_content.get_children():
+		_household_detail_content.remove_child(child)
+		child.queue_free()
+
+	_add_household_detail_heading("Inventory")
+	var inventory: Dictionary = h["inventory"]
+	for commodity_name in inventory.keys():
+		_add_household_detail_line("%s: %.1f" % [commodity_name, inventory[commodity_name]])
+
+	# Whatever the sim reports households as consuming -- no list of its own.
+	_add_household_detail_heading("Required consumption (today)")
+	var demand: Dictionary = h["demand_today"]
+	var consumed: Dictionary = h["consumed_today"]
+	for commodity_name in demand.keys():
+		_add_household_detail_line("%s: needs %.2f, consumed %.2f" % [
+			commodity_name, demand[commodity_name], consumed[commodity_name]])
+
+func _add_household_detail_heading(value: String) -> void:
+	var heading := Label.new()
+	heading.text = value
+	heading.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_household_detail_content.add_child(heading)
+
+func _add_household_detail_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	_household_detail_content.add_child(label)
+
 func _on_business_row_selected(business_id: int) -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
 	_trader_settings_open = false
@@ -638,6 +728,8 @@ func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) 
 func _on_market_row_selected(commodity: int) -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
 	_selected_market_commodity = commodity
 	_market_detail_panel.visible = true
 	_refresh_market_detail()
@@ -1141,8 +1233,12 @@ func _rebuild_household_rows() -> void:
 		grid.add_child(header)
 
 	for household_id in _simulation.get_household_ids():
-		var id_label := Label.new()
+		var id_label := Button.new()
+		id_label.flat = true
+		id_label.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		id_label.custom_minimum_size = Vector2(30, 0)
+		id_label.tooltip_text = "Open household detail"
+		id_label.pressed.connect(_on_household_row_selected.bind(household_id))
 		grid.add_child(id_label)
 
 		var employer_label := Label.new()
@@ -1298,7 +1394,7 @@ func _refresh() -> void:
 	for household_id in _household_rows.keys():
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
-		(row["id"] as Label).text = str(household_id)
+		(row["id"] as Button).text = str(household_id)
 		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
@@ -1330,6 +1426,7 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
+	_refresh_household_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city
