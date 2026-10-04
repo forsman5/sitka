@@ -53,6 +53,10 @@ var _known_market_commodities: Array = [] # rebuild trigger -- see _refresh()
 var _business_list: VBoxContainer
 var _business_rows: Dictionary = {} # business_id -> {row labels...}
 var _household_list: VBoxContainer
+var _jobs_list: VBoxContainer
+var _job_rows: Dictionary = {} # business_id -> {name, capacity, max_capacity, employed, open}
+var _job_totals: Dictionary = {}
+var _unemployed_label: Label
 var _household_rows: Dictionary = {} # household_id -> {row labels...}
 var _known_household_ids: Array[int] = [] # rebuild trigger -- see _refresh()
 var _business_names: Dictionary = {} # business_id -> name, for the household table's Employer column
@@ -259,11 +263,6 @@ func _build_ui() -> void:
 	household_column.size_flags_stretch_ratio = 2.0
 	lower_row.add_child(household_column)
 
-	var household_header := Label.new()
-	household_header.text = "Households"
-	household_header.add_theme_font_size_override("font_size", 16)
-	household_column.add_child(household_header)
-
 	# Plain Control, not another box container -- both children below are
 	# anchored to fill it completely, so whichever one is .visible occupies
 	# the WHOLE area rather than the two sharing it top-to-bottom. That's
@@ -275,9 +274,23 @@ func _build_ui() -> void:
 	content_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	household_column.add_child(content_area)
 
+	# Jobs (index 0) is a collapsed one-row-per-business view; Households
+	# (index 1) is the per-household table. The detail panels added below sit
+	# over the whole tab container, so they still override whichever is showing.
+	var list_tabs := TabContainer.new()
+	list_tabs.set_anchors_preset(Control.PRESET_FULL_RECT)
+	content_area.add_child(list_tabs)
+
+	var jobs_scroll := ScrollContainer.new()
+	jobs_scroll.name = "Jobs"
+	list_tabs.add_child(jobs_scroll)
+	_jobs_list = VBoxContainer.new()
+	_jobs_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	jobs_scroll.add_child(_jobs_list)
+
 	var scroll := ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-	content_area.add_child(scroll)
+	scroll.name = "Households"
+	list_tabs.add_child(scroll)
 
 	_household_list = VBoxContainer.new()
 	_household_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1263,6 +1276,94 @@ func _rebuild_business_rows() -> void:
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels
+	_rebuild_job_rows()
+
+## One row per business (not per household): target capacity, max capacity and
+## how many workers are employed. Filled in by _refresh_job_rows.
+func _rebuild_job_rows() -> void:
+	for child in _jobs_list.get_children():
+		_jobs_list.remove_child(child)
+		child.queue_free()
+	_job_rows.clear()
+	_job_totals.clear()
+
+	var grid := GridContainer.new()
+	grid.columns = 5
+	_jobs_list.add_child(grid)
+	for col_label in ["Business", "Employed", "Target", "Max capacity", "Open (vs max)"]:
+		var header := Label.new()
+		header.text = col_label
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(header)
+
+	for report in _simulation.get_business_reports():
+		var business_id: int = report["business_id"]
+		var name_button := Button.new()
+		name_button.custom_minimum_size = Vector2(110, 0)
+		name_button.flat = true
+		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_button.pressed.connect(_on_business_row_selected.bind(business_id))
+		grid.add_child(name_button)
+		var labels := {"name": name_button}
+		for key in ["employed", "capacity", "max_capacity", "open"]:
+			var label := Label.new()
+			label.custom_minimum_size = Vector2(90, 0)
+			grid.add_child(label)
+			labels[key] = label
+		_job_rows[business_id] = labels
+
+	var total_name := Label.new()
+	total_name.text = "Total"
+	total_name.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	grid.add_child(total_name)
+	for key in ["employed", "capacity", "max_capacity", "open"]:
+		var label := Label.new()
+		label.custom_minimum_size = Vector2(90, 0)
+		label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(label)
+		_job_totals[key] = label
+
+	_unemployed_label = Label.new()
+	_unemployed_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_jobs_list.add_child(_unemployed_label)
+
+func _refresh_job_rows() -> void:
+	var total_employed := 0
+	var total_capacity := 0
+	var total_max := 0
+	for report in _simulation.get_business_reports():
+		total_employed += report["employed_workers"]
+		total_capacity += report["capacity"]
+		total_max += report["max_capacity"]
+		var row: Dictionary = _job_rows.get(report["business_id"], {})
+		if row.is_empty():
+			continue
+		(row["name"] as Button).text = report["name"]
+		(row["employed"] as Label).text = str(report["employed_workers"])
+		(row["capacity"] as Label).text = str(report["capacity"])
+		(row["max_capacity"] as Label).text = str(report["max_capacity"])
+		(row["open"] as Label).text = str(maxi(report["max_capacity"] - report["employed_workers"], 0))
+	if _job_totals.is_empty():
+		return
+	(_job_totals["employed"] as Label).text = str(total_employed)
+	(_job_totals["capacity"] as Label).text = str(total_capacity)
+	(_job_totals["max_capacity"] as Label).text = str(total_max)
+	(_job_totals["open"] as Label).text = str(maxi(total_max - total_employed, 0))
+
+	# Workers in households with no employer, against the jobs businesses are
+	# currently trying to fill (target minus employed). Red when both exist at
+	# once -- people without work while jobs sit open.
+	var unemployed_workers := 0
+	var unemployed_households := 0
+	for household_id in _simulation.get_household_ids():
+		var h := _simulation.get_household_summary(household_id)
+		if _business_names.has(h["employer_business_id"]):
+			continue
+		unemployed_households += 1
+		unemployed_workers += h["worker_capacity"]
+	var open_targets := maxi(total_capacity - total_employed, 0)
+	_unemployed_label.text = "Unemployed: %d workers (%d households)  |  %d openings at current targets" % [unemployed_workers, unemployed_households, open_targets]
+	_unemployed_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.5) if unemployed_workers > 0 and open_targets > 0 else Color(0.75, 0.75, 0.8))
 
 func _rebuild_household_rows() -> void:
 	_known_household_ids = _simulation.get_household_ids()
@@ -1424,6 +1525,8 @@ func _refresh() -> void:
 		var cash_change_label := row["cash_change"] as Label
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
+
+	_refresh_job_rows()
 
 	if _selected_business_id != -1:
 		_refresh_business_detail()
