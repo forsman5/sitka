@@ -20,6 +20,9 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
 const BLOTTER_HISTORY_DAYS := 30
+## Household detail looks back as far as the sim retains events
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
@@ -667,9 +670,9 @@ func _refresh_household_detail() -> void:
 		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
 		member_index += 1
 
-	_add_household_detail_heading("Events (last %d days)" % BLOTTER_HISTORY_DAYS)
+	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
-	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
+	var events := _simulation.get_event_log_days(HOUSEHOLD_EVENT_HISTORY_DAYS)
 	for i in range(events.size() - 1, -1, -1):
 		if _is_household_event(events[i], _selected_household_id):
 			event_lines.append(_format_event(events[i]))
