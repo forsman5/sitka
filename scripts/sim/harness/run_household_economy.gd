@@ -5,7 +5,8 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
-const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
+const Commodity =preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
@@ -24,6 +25,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_production_history_matches_daily_record()
+	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -210,6 +212,55 @@ func _check_production_history_matches_daily_record() -> void:
 		checked += 1
 	_assert(checked > 0, "Scenario should contain at least one production business")
 
+func _check_market_supply_demand_history() -> void:
+	print("\n=== Market detail carries a rolling supplied/requested history ===")
+	var sim := _new_sim("build_three_business_economy_with_bloomery")
+	sim.advance_ticks(100)
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var window := HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	var any_activity := false
+	for commodity in sim.markets[settlement_id].price.keys():
+		var report := sim.get_market_detail(settlement_id, commodity)
+		var supplied: Array = report["supplied_history"]
+		var demanded: Array = report["demanded_history"]
+		_assert(supplied.size() == window and demanded.size() == window, "%s history should be capped at %d days, got %d/%d" % [Commodity.name_of(commodity), window, supplied.size(), demanded.size()])
+		for v in supplied + demanded:
+			if v > 0.0:
+				any_activity = true
+	_assert(any_activity, "At least one market should show nonzero supply or demand over 100 days")
+
+	# Ore moves Iron Mine -> Bloomery directly (no Trader import), and that
+	# local business-to-business sale must still show up in the ore market.
+	var mine_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	mine_sim.advance_ticks(60)
+	var mine_settlement_id: int = mine_sim.get_settlement_ids()[0]
+	var ore_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	var ore_supplied := 0.0
+	var ore_requested := 0.0
+	for v in ore_report["supplied_history"]:
+		ore_supplied += v
+	for v in ore_report["demanded_history"]:
+		ore_requested += v
+	_assert(ore_supplied > 0.0, "Iron Mine -> Bloomery ore sales should appear as supplied in the ore market")
+	_assert(ore_requested > 0.0, "Bloomery ore purchases should appear as requested in the ore market")
+
+	# Export appetite: the Trader's remaining capacity, not the amount shipped.
+	var export_sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	export_sim.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.IRON_ORE, true)
+	export_sim.advance_ticks(60)
+	var export_report := export_sim.get_market_detail(export_sim.get_settlement_ids()[0], Commodity.Type.IRON_ORE)
+	var plain: Array = export_report["demanded_history"]
+	var with_appetite: Array = export_report["demanded_with_export_history"]
+	_assert(plain.size() == with_appetite.size(), "Both demand series should cover the same days")
+	var appetite_higher_somewhere := false
+	for i in plain.size():
+		_assert(with_appetite[i] >= plain[i] - EPSILON, "Export appetite series should never fall below executed demand (day index %d)" % i)
+		if with_appetite[i] > plain[i] + EPSILON:
+			appetite_higher_somewhere = true
+	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
+	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
+	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
+
 func _check_bloomery_smelting() -> void:
 	print("\n=== Bloomery: smelts wood + imported ore into iron, which the Trader exports ===")
 	var sim := _new_sim("build_three_business_economy_with_bloomery")
@@ -338,7 +389,12 @@ func _check_trader_export_settings() -> void:
 	for record in sim.get_daily_history(10):
 		_assert((record["exported"] as Dictionary).get("Iron Ore", 0.0) < EPSILON,
 			"Disabling ore export should stop new ore shipments")
-	_assert((sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"] as Dictionary).is_empty(),
+	# The Bloomery still buys ore from the Iron Mine locally, so the market
+	# legitimately clears; with export off, that clearing must be exactly the
+	# day's local purchases, not a leftover export.
+	var ore_clearing: Dictionary = sim.get_market_report(1, Commodity.Type.IRON_ORE)["last_clearing"]
+	var last_day_ore_traded: float = (sim.get_daily_history(1)[0]["traded_quantity"] as Dictionary).get("Iron Ore", 0.0)
+	_assert(absf(ore_clearing.get("quantity_traded", 0.0) - last_day_ore_traded) < EPSILON,
 		"Disabled ore export should not keep displaying a stale clearing")
 	print("  enabled ore exported %.1f while Bloomery produced %.1f iron; disabling ore stopped exports" % [ore_exported, iron_produced])
 

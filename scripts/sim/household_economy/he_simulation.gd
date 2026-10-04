@@ -774,6 +774,9 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"commodity_id": commodity,
 		"price": local_market.price[commodity],
 		"last_clearing": (local_market.last_clearing.get(commodity, {}) as Dictionary).duplicate(true),
+		"supplied_history": local_market.supplied_history(commodity),
+		"demanded_history": local_market.demanded_history(commodity),
+		"demanded_with_export_history": local_market.demanded_with_export_history(commodity),
 	}
 
 func get_trader_export_settings(business_id: int) -> Array:
@@ -993,6 +996,7 @@ func _daily_tick() -> void:
 	# its export checkbox is disabled or its seller runs out of stock.
 	for market in markets.values():
 		(market as HEMarket).last_clearing.clear()
+		(market as HEMarket).clear_daily_export()
 	var record := _new_daily_record()
 	if not external_trade_enabled:
 		for business in businesses.values():
@@ -1007,6 +1011,8 @@ func _daily_tick() -> void:
 	_run_market(record)
 	if external_trade_enabled:
 		_run_trade(record)
+	for market in markets.values():
+		(market as HEMarket).record_supply_demand_history()
 	_record_business_revenue_history()
 	_run_consumption(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
@@ -2007,12 +2013,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			importer.last_revenue += import_revenue
 			importer.last_cash_change += import_revenue
 
-	local_market.last_clearing[commodity] = {
-		"total_offered": total_offer,
-		"total_requested_funded": total_funded_request,
-		"quantity_traded": quantity_traded,
-		"price": price,
-	}
+	local_market.merge_clearing(commodity, total_offer, total_funded_request, quantity_traded, price)
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + quantity_traded
 
 	if price_adjustment_enabled:
@@ -2150,10 +2151,14 @@ func _run_trade(record: Dictionary) -> void:
 				continue
 			var surplus := _exportable_surplus(seller, trader.settlement_id, commodity)
 			var quantity: float = min(surplus, remaining_capacity)
+			var local_market: HEMarket = markets[trader.settlement_id]
+			# Appetite is recorded even on a day nothing ships, so the market
+			# chart can show demand the seller's stock didn't cover.
+			local_market.record_export(commodity, remaining_capacity,
+				quantity if not SUBSISTENCE_COMMODITIES.has(commodity) and quantity > 0.0001 else 0.0)
 			if quantity <= 0.0001:
 				continue
 
-			var local_market: HEMarket = markets[trader.settlement_id]
 			var local_price: float = local_market.price[commodity]
 			var pay_price: float = local_price * TRADER_BUY_PRICE_FRACTION
 			seller.consume(commodity, quantity)
@@ -2196,12 +2201,7 @@ func _run_trade(record: Dictionary) -> void:
 			# so this is the only place its market grid row gets real
 			# offered/traded numbers and price drift.
 			if not SUBSISTENCE_COMMODITIES.has(commodity):
-				local_market.last_clearing[commodity] = {
-					"total_offered": surplus,
-					"total_requested_funded": quantity,
-					"quantity_traded": quantity,
-					"price": local_price,
-				}
+				local_market.merge_clearing(commodity, surplus, quantity, quantity, local_price)
 				if price_adjustment_enabled:
 					_adjust_price(trader.settlement_id, commodity, surplus, quantity)
 
@@ -2608,6 +2608,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				seller.balance += cost
 				seller.last_revenue += cost
 				seller.last_cash_change += cost
+				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
+				# household or Trader pass records it, so without this the
+				# good's market shows 0 supplied / 0 requested.
+				var offer_before_sale: float = _seller_surplus_above_reserve(seller, buyer.settlement_id, commodity) + bought
+				local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
 			elif trader != null:
 				if not external_trade_enabled:
 					trader.consume(commodity, bought)
@@ -2636,12 +2641,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				record["import_cost"] += import_cost
 				_import_cost_total += import_cost
 
-				local_market.last_clearing[commodity] = {
-					"total_offered": offer_before,
-					"total_requested_funded": requested,
-					"quantity_traded": bought,
-					"price": price,
-				}
+				local_market.merge_clearing(commodity, offer_before, requested, bought, price)
 				if price_adjustment_enabled:
 					_adjust_price(buyer.settlement_id, commodity, offer_before, requested)
 
