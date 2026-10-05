@@ -2087,5 +2087,9 @@ func _format_event(event: Dictionary) -> String:
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
 			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
+		"business_failed":
+			var failed_plural := "s" if event["households_laid_off"] != 1 else ""
+			return "[color=#e07070]%s - %s failed: credit limit reached, %.1f debt written off, %d household%s laid off[/color]" % [
+				day, event["name"], event["debt"], event["households_laid_off"], failed_plural]
 		_:
 			return "%s - %s" % [day, event["type"]]
