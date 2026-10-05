@@ -722,6 +722,8 @@ func _build_ui() -> void:
 	_blotter_filter_button.text = "Filters"
 	_blotter_filter_button.tooltip_text = "Choose which notification types appear in the blotter"
 	var blotter_filter_popup := _blotter_filter_button.get_popup()
+	# Keep the menu open so several filters can be toggled in one visit.
+	blotter_filter_popup.hide_on_checkable_item_selection = false
 	for i in BLOTTER_FILTERS.size():
 		blotter_filter_popup.add_check_item(BLOTTER_FILTERS[i]["label"], i)
 		blotter_filter_popup.set_item_checked(blotter_filter_popup.get_item_index(i), true)
