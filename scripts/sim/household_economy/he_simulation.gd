@@ -446,6 +446,17 @@ const EVENT_LOG_RETENTION_DAYS := 360
 ## still shows the last change after a long quiet period.
 const EMPLOYMENT_EVENTS_PER_TYPE := 100
 
+## Government: a flat sales tax on every DOMESTIC sale (household purchases
+## and business-to-business input purchases, local or Trader-supplied),
+## remitted by the seller to the settlement's Kind.GOVERNMENT business -- see
+## _collect_sales_tax. Exports are deliberately untaxed for now (a future
+## export duty), and a settlement with no government taxes nothing, so
+## scenarios that don't seed one behave exactly as before. Authored
+## placeholder: tuned (see run_household_economy.gd's government check) so a
+## ~30-household town's tax comfortably covers its one administrator's wage
+## with a modest surplus left over for the (stubbed) builder jobs.
+const SALES_TAX_RATE := 0.05
+
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
@@ -458,6 +469,10 @@ var day: int = 0
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
+
+## Sales tax fraction, a plain variable (not the const) so harnesses and a
+## future player policy can change it per sim. 0.0 turns the tax off.
+var sales_tax_rate: float = SALES_TAX_RATE
 
 ## Named "emigrate" rather than "die" -- placeholder terminology until H1
 ## actually connects to the wider valley (see docs/river-valley-vertical-
@@ -677,6 +692,17 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
 			report["stock"] = 0.0 # exports convert straight to money; the Trader never holds inventory
+		elif b.kind == HEBusiness.Kind.GOVERNMENT:
+			# Same keys the production branch fills, so detail pages that
+			# read them need no government special case.
+			report["recipe_id"] = "government"
+			report["output_commodity"] = "Public administration"
+			report["stock"] = 0.0
+			report["treasury"] = b.balance
+			report["last_tax_collected"] = b.last_tax_collected
+			report["tax_collected_total"] = b.tax_collected_total
+			report["sales_tax_rate"] = sales_tax_rate
+			report["builder_slots"] = b.builder_slots
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
@@ -724,6 +750,7 @@ func _kind_name(kind: HEBusiness.Kind) -> String:
 	match kind:
 		HEBusiness.Kind.TRADER: return "trader"
 		HEBusiness.Kind.HERD: return "herd"
+		HEBusiness.Kind.GOVERNMENT: return "government"
 		_: return "production"
 
 ## "Export (Grain, Timber) / Import (Iron Ore)" -- whichever commodities the
@@ -1140,6 +1167,7 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_cash_change = 0.0
 		b.last_wage_shortfall = 0.0
 		b.todays_flows = {}
+		b.last_tax_collected = 0.0
 		# Single reset point for the day, since not every business's
 		# last_revenue gets overwritten later the same tick the way a
 		# SUBSISTENCE_COMMODITIES seller's does in _clear_market_for --
@@ -1156,7 +1184,9 @@ func _pay_wages(record: Dictionary) -> void:
 			continue
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		var total_needed: float = reference_wage * employed
-		var floor: float = -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		# A government pays only out of what its treasury actually holds -- no
+		# overdraft allowance, unlike a business that expects to earn it back.
+		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
@@ -1774,6 +1804,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 		var b: HEBusiness = businesses[business_id]
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		reference_wages[b.settlement_id] = reference_wage
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			# Staffed by the seed / _ensure_administrator, not by revenue
+			# signals -- it has no revenue per worker to judge.
+			continue
 		if b.capacity == 0:
 			# A business at zero capacity has had no employed workers, so
 			# rolling_average_revenue_per_worker() reads a flat 0 --
@@ -1939,6 +1973,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
 		for household_id in households.keys():
 			if (households[household_id] as HEHousehold).employer_business_id == business_id:
@@ -1968,6 +2004,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			i -= 1
 
 	for settlement_id in get_settlement_ids():
+		_ensure_administrator(settlement_id)
 		var available: Array[int] = []
 		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 			if (households[household_id] as HEHousehold).employer_business_id == -1:
@@ -1978,6 +2015,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		local_business_ids.sort()
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
+			if b.kind == HEBusiness.Kind.GOVERNMENT:
+				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _business_employed_worker_count(business_id)
 			while employed_workers < b.capacity and pool_index < available.size():
 				var household_id: int = available[pool_index]
@@ -2100,6 +2139,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			seller.consume(commodity, quantity_traded)
 			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity_traded)
 			var revenue := quantity_traded * price
+			revenue -= _collect_sales_tax(settlement_id, revenue)
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
 			# tick, and _run_input_purchasing may have already added this
@@ -2658,9 +2698,10 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				b2b["requested"] += requested * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
-				seller.balance += cost
-				seller.last_revenue += cost
-				seller.last_cash_change += cost
+				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)
+				seller.balance += net_cost
+				seller.last_revenue += net_cost
+				seller.last_cash_change += net_cost
 				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
 				# household or Trader pass records it, so without this the
 				# good's market shows 0 supplied / 0 requested.
@@ -2670,7 +2711,10 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				var offer_before: float = trader_import_capacity[trader.id]
 				trader_import_capacity[trader.id] -= bought
 				var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
-				var margin: float = cost - import_cost
+				# The sale to the local buyer is taxed; the Trader, as seller,
+				# bears it out of its import margin (never out of import_cost,
+				# which leaves the closed system).
+				var margin: float = cost - import_cost - _collect_sales_tax(buyer.settlement_id, cost)
 				trader.balance += margin
 				trader.last_revenue += margin
 				trader.last_cash_change += margin
@@ -2744,9 +2788,10 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				var cost: float = head * price
 				herd.consume(commodity, head)
 				herd.add_flow(HEBusiness.FLOW_SOLD, commodity, head)
-				herd.balance += cost
-				herd.last_revenue += cost
-				herd.last_cash_change += cost
+				var net_cost := cost - _collect_sales_tax(butcher.settlement_id, cost)
+				herd.balance += net_cost
+				herd.last_revenue += net_cost
+				herd.last_cash_change += net_cost
 				butcher.balance -= cost
 				butcher.last_cash_change -= cost
 				butcher.add_stock(commodity, head)
@@ -2828,6 +2873,90 @@ func _input_held(buyer: HEBusiness, commodity: Commodity.Type, slot_needs: Dicti
 		var need: HENeed = slot_needs[commodity]
 		return need.held(buyer) / need.value_of(commodity)
 	return buyer.stock(commodity)
+
+## The settlement's Kind.GOVERNMENT business, or null (a scenario that never
+## seeded one -- then nothing is taxed there).
+func _settlement_government(settlement_id: int) -> HEBusiness:
+	for business_id in (settlements[settlement_id] as HESettlement).business_ids:
+		var b: HEBusiness = businesses.get(business_id)
+		if b != null and b.kind == HEBusiness.Kind.GOVERNMENT:
+			return b
+	return null
+
+## Sales tax on one domestic sale of gross value `gross` in `settlement_id`:
+## moves sales_tax_rate * gross into that settlement's government treasury and
+## returns the amount, which the CALLER must deduct from what the seller keeps
+## (seller-remitted, so a buyer's price/affordability math is untouched).
+## Returns 0.0 -- taxing nothing -- when there is no government or the rate is
+## zero. A pure internal transfer, so total money is conserved.
+func _collect_sales_tax(settlement_id: int, gross: float) -> float:
+	if sales_tax_rate <= 0.0 or gross <= 0.0:
+		return 0.0
+	var gov := _settlement_government(settlement_id)
+	if gov == null:
+		return 0.0
+	var tax := gross * sales_tax_rate
+	gov.balance += tax
+	gov.last_tax_collected += tax
+	gov.last_revenue += tax
+	gov.last_cash_change += tax
+	gov.tax_collected_total += tax
+	return tax
+
+## Keeps a government's administrator permanent: if no household is employed
+## by it (the seeded one died of old age, left, etc.), hire a replacement --
+## an unemployed household with workers first, else poach a worker household
+## from the lowest-id other employer. Called each _reconcile_employment, ahead
+## of ordinary hiring so the post gets first pick. No-op without a government
+## or when it is already staffed. TODO(builders): the same upkeep for the
+## builder_slots once those exist.
+func _ensure_administrator(settlement_id: int) -> void:
+	var gov := _settlement_government(settlement_id)
+	if gov == null or _business_employed_household_count(gov.id) > 0:
+		return
+	var pick: HEHousehold = null
+	var household_ids: Array[int] = []
+	household_ids.assign((settlements[settlement_id] as HESettlement).household_ids)
+	household_ids.sort()
+	for household_id in household_ids:
+		var h: HEHousehold = households[household_id]
+		if h.worker_capacity() > 0 and h.employer_business_id == -1:
+			pick = h
+			break
+	if pick == null:
+		for household_id in household_ids:
+			var h: HEHousehold = households[household_id]
+			if h.worker_capacity() > 0:
+				pick = h
+				break
+	if pick == null:
+		return
+	pick.employer_business_id = gov.id
+	_log_event("job", {"household_id": pick.id, "business_id": gov.id, "settlement_id": settlement_id, "workers": pick.worker_capacity()})
+
+## Read-only treasury view for UI / player actions (build costs will draw on
+## it): {} when the settlement has no government.
+func get_government_summary(settlement_id: int) -> Dictionary:
+	if not settlements.has(settlement_id):
+		return {}
+	var gov := _settlement_government(settlement_id)
+	if gov == null:
+		return {}
+	var admin_ids: Array[int] = []
+	for household_id in households.keys():
+		if (households[household_id] as HEHousehold).employer_business_id == gov.id:
+			admin_ids.append(household_id)
+	admin_ids.sort()
+	return {
+		"business_id": gov.id,
+		"treasury": gov.balance,
+		"sales_tax_rate": sales_tax_rate,
+		"last_tax_collected": gov.last_tax_collected,
+		"tax_collected_total": gov.tax_collected_total,
+		"last_wages_paid": gov.last_wages_paid,
+		"administrator_household_ids": admin_ids,
+		"builder_slots": gov.builder_slots,
+	}
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of

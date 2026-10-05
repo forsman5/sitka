@@ -46,6 +46,7 @@ func _init() -> void:
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
+	_check_government_taxes()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -700,7 +701,10 @@ func _check_trader_employment_does_not_churn_between_harvests() -> void:
 		# settles (5 days here vs 2 without ranches). Still a "settles, not
 		# thrashes" bound -- the unfixed bug this guards against laid off
 		# roughly every three weeks (11+ days).
-		_assert(late_layoff_days <= 5, "Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
+		# Now 6, not 5, with the 5% sales tax on: sellers keep a little less
+		# revenue per worker, so the Trader trims once more while it settles
+		# (probed: 4 layoff days at 0% tax, 5 at 2%, 6 at 5%).
+		_assert(late_layoff_days <= 6,"Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)
@@ -1165,6 +1169,79 @@ func _check_need_substitutes() -> void:
 	trader.add_stock(Commodity.Type.WOOL, 5.0)
 	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.WOOL, "A cheaper-per-unit satisfier in supply should be preferred")
 	print("  burn order, partial burns and preferred-satisfier choice behave as expected")
+
+## Government + sales tax: every domestic sale remits a slice to the town
+## treasury, which pays one permanent administrator and never overdrafts.
+## Sweeps the tax rate so the printout answers "is a sales tax alone enough,
+## or do we also need a resident/property tax?" -- see HESimulation.SALES_TAX_RATE.
+func _check_government_taxes() -> void:
+	print("\n=== Government: sales tax funds a permanent administrator ===")
+	var gov_id := HEScenarioSeeds.GOVERNMENT_BUSINESS_ID
+	var sim := _new_sim("build_three_business_economy")
+	var summary := sim.get_government_summary(1)
+	_assert(not summary.is_empty(), "Seeded town should have a government")
+	_assert((summary["administrator_household_ids"] as Array).size() == 1, "Government should start with exactly one administrator household")
+	_assert(summary["builder_slots"] == 0, "Builder jobs are a stub: no slots yet")
+
+	var days := 730
+	var worst_treasury := INF
+	var late_shortfall_days := 0
+	var capacity_start := 0
+	for report in sim.get_business_reports():
+		if report["business_id"] == gov_id:
+			capacity_start = report["capacity"]
+			_assert(report["kind"] == "government", "Government report should be kind=government")
+	for d in days:
+		sim.advance_ticks(1)
+		worst_treasury = minf(worst_treasury, sim.get_government_summary(1)["treasury"])
+		if d >= 30:
+			for report in sim.get_business_reports(1):
+				if report["business_id"] == gov_id and report["wage_shortfall"] > EPSILON:
+					late_shortfall_days += 1
+	summary = sim.get_government_summary(1)
+	var wage_per_day := 0.0
+	for report in sim.get_business_reports(1):
+		if report["business_id"] == gov_id:
+			wage_per_day = report["last_wages_paid"]
+			_assert(report["capacity"] == capacity_start, "Government capacity must not self-tune")
+	print("  default rate %.0f%%: tax collected=%.1f (%.2f/day) vs administrator wage %.2f/day, treasury=%.1f, wage-shortfall days after day 30: %d" % [sim.sales_tax_rate * 100.0, summary["tax_collected_total"], summary["tax_collected_total"] / days, wage_per_day, summary["treasury"], late_shortfall_days])
+	_assert(summary["tax_collected_total"] > 0.0, "Sales tax should collect something")
+	_assert(worst_treasury >= -EPSILON, "Treasury must never overdraft (worst %.4f)" % worst_treasury)
+	_assert(late_shortfall_days == 0, "Sales tax alone should sustain the administrator's wage after the first month (%d short days)" % late_shortfall_days)
+	_assert(summary["tax_collected_total"] / days >= wage_per_day, "Average tax income should cover the administrator's daily wage")
+
+	# Tax is a transfer: same-day money reconciliation must still hold with it on.
+	var worst_money_gap := 0.0
+	for record in sim.get_daily_history(days):
+		var expected: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected))
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with sales tax on, worst gap %.4f" % worst_money_gap)
+
+	# Rate sweep (information + a monotonicity guard).
+	var previous_tax := -1.0
+	for rate in [0.0, 0.03, 0.05, 0.08]:
+		var swept := _new_sim("build_three_business_economy")
+		swept.sales_tax_rate = rate
+		swept.advance_ticks(365)
+		var s := swept.get_government_summary(1)
+		print("  rate %.0f%%: year-1 tax=%.1f treasury=%.1f" % [rate * 100.0, s["tax_collected_total"], s["treasury"]])
+		if rate == 0.0:
+			_assert(s["tax_collected_total"] == 0.0, "Rate 0 must collect nothing")
+		_assert(s["tax_collected_total"] >= previous_tax, "A higher rate should not collect less tax")
+		previous_tax = s["tax_collected_total"]
+
+	# The post is permanent: lose the administrator and the next weekly
+	# reconcile fills it again.
+	var staffed := _new_sim("build_three_business_economy")
+	var admin_id: int = (staffed.get_government_summary(1)["administrator_household_ids"] as Array)[0]
+	staffed.households[admin_id].employer_business_id = -1
+	staffed.advance_ticks(HESimulation.CAPACITY_EVAL_INTERVAL_DAYS)
+	_assert((staffed.get_government_summary(1)["administrator_household_ids"] as Array).size() >= 1, "Administrator post should be refilled after the holder leaves")
+
+	# A town with no government taxes nothing and reports none.
+	var bare := _new_sim("build_two_settlement_economy")
+	bare.advance_ticks(60)
+	_assert(bare.get_government_summary(1).is_empty(), "A scenario without a government should report none")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0
