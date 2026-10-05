@@ -166,6 +166,9 @@ var _business_detail_employment_empty: Label
 var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
 var _selected_market_commodity: int = -1
+## Set when a business detail was opened from a market's buyer/seller list, so
+## closing it returns to that market. In memory only; -1 means close to the list.
+var _return_to_market_commodity: int = -1
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
@@ -243,6 +246,7 @@ func _load_scenario() -> void:
 	# guarded null check because this runs once before _build_ui() ever
 	# creates the panel (see _ready()).
 	_selected_business_id = -1
+	_return_to_market_commodity = -1
 	_trader_settings_open = false
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
@@ -873,6 +877,7 @@ func _add_household_detail_line(value: String) -> void:
 	_household_detail_content.add_child(label)
 
 func _on_business_row_selected(business_id: int) -> void:
+	_return_to_market_commodity = -1
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
 	_selected_need_id = -1
@@ -894,9 +899,20 @@ func _on_cull_target_changed(value: float) -> void:
 		_business_detail_cull_target_box.set_value_no_signal(applied)
 		_refresh_business_detail()
 
+## Opens a business's detail from the market panel; closing it comes back to
+## that market (no visual stacking, the market just reappears).
+func _on_market_business_pressed(business_id: int) -> void:
+	var commodity := _selected_market_commodity
+	_on_business_row_selected(business_id)
+	_return_to_market_commodity = commodity
+
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	if _return_to_market_commodity != -1:
+		var commodity := _return_to_market_commodity
+		_return_to_market_commodity = -1
+		_on_market_row_selected(commodity)
 
 func _on_trader_settings_pressed() -> void:
 	_trader_settings_open = not _trader_settings_open
@@ -1057,6 +1073,7 @@ func _add_need_detail_line(value: String) -> void:
 	_need_detail_content.add_child(label)
 
 func _on_market_row_selected(commodity: int) -> void:
+	_return_to_market_commodity = -1
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_need_id = -1
@@ -1132,6 +1149,24 @@ func _add_market_detail_line(value: String) -> void:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_market_detail_content.add_child(label)
 
+## A name that opens the business's detail pane when the row has a business_id,
+## otherwise plain text.
+func _add_market_owner_line(row: Dictionary, text_after_owner: String) -> void:
+	if not row.has("business_id"):
+		_add_market_detail_line("%s%s" % [row["owner"], text_after_owner])
+		return
+	var line := HBoxContainer.new()
+	var link := Button.new()
+	link.text = row["owner"]
+	link.flat = true
+	link.tooltip_text = "Open this business's detail"
+	link.pressed.connect(_on_market_business_pressed.bind(row["business_id"]))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = text_after_owner
+	line.add_child(rest)
+	_market_detail_content.add_child(line)
+
 func _add_market_detail_section(title: String, rows: Array, quantity_key: String, secondary_key: String) -> void:
 	var heading := Label.new()
 	heading.text = "%s (%d)" % [title, rows.size()]
@@ -1147,18 +1182,17 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 		if row.get("kind", "") == "household":
 			continue
 		if row.get("kind", "") == "export":
-			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
-				row["owner"], row["capacity"], row["available"]])
+			_add_market_owner_line(row, ": up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
+				row["capacity"], row["available"]])
 			continue
 		if row.get("kind", "") == "import":
-			_add_market_detail_line("%s: up to %.1f shared import capacity  |  no stored stock" % [
-				row["owner"], row["capacity"]])
+			_add_market_owner_line(row, ": up to %.1f shared import capacity  |  no stored stock" % row["capacity"])
 			continue
-		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
+		var line := ": %.1f %s" % [row[quantity_key], quantity_key]
 		if secondary_key != "":
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
-		_add_market_detail_line(line)
+		_add_market_owner_line(row, line)
 
 ## One line standing in for every household row: count, average quantity, and
 ## (for buyers) average affordable plus how many can't afford their full request.
