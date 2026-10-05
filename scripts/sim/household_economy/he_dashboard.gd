@@ -112,6 +112,8 @@ var _day_label: Label
 var _treasury_margin: Control
 var _treasury_box: HBoxContainer
 var _treasury_label: Label
+var _treasury_tip: PanelContainer
+var _treasury_tip_label: Label
 var _town_stat_labels: Dictionary = {} # city-summary key -> Label
 var _town_population_chart: HESparkline
 var _town_flow_chart: HESparkline
@@ -305,6 +307,20 @@ func _build_ui() -> void:
 	treasury_margin.add_child(_treasury_box)
 	top_bar.add_child(treasury_margin)
 	_treasury_margin = treasury_margin
+
+	# A built-in tooltip is frozen once shown, so the 30-day change would stop
+	# updating while hovered (sim speed can be 100x). This popup is refreshed
+	# by _refresh_treasury() every tick instead.
+	_treasury_tip = PanelContainer.new()
+	_treasury_tip.top_level = true
+	_treasury_tip.visible = false
+	_treasury_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip_label = Label.new()
+	_treasury_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip.add_child(_treasury_tip_label)
+	add_child(_treasury_tip)
+	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
+	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1901,6 +1917,7 @@ func _refresh_treasury() -> void:
 	var summary := _simulation.get_treasury_summary(TREASURY_TREND_DAYS)
 	_treasury_margin.visible = summary["has_government"]
 	if not summary["has_government"]:
+		_treasury_tip.visible = false
 		return
 	_treasury_label.text = "%.0f gold" % summary["treasury"]
 	var covered: int = summary["days_covered"]
@@ -1911,7 +1928,14 @@ func _refresh_treasury() -> void:
 		var change: float = summary["change"]
 		tip += "\n%+.1f gold over the last %d days" % [change, covered]
 		tip += "\n(%.1f -> %.1f)" % [summary["then"], summary["treasury"]]
-	_treasury_box.tooltip_text = tip
+	_treasury_tip_label.text = tip
+	_treasury_tip.reset_size() # shrink back to fit when the text gets shorter
+
+func _on_treasury_hover(hovering: bool) -> void:
+	_treasury_tip.visible = hovering
+	if hovering:
+		_refresh_treasury()
+		_treasury_tip.global_position = _treasury_box.global_position + Vector2(0, _treasury_box.size.y + 6)
 
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
