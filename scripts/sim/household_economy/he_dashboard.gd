@@ -31,6 +31,8 @@ const BLOTTER_HISTORY_DAYS := 30
 const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
+## Window for the top-line treasury's hover change.
+const TREASURY_TREND_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
 ## Views of the goods chart on a production business's detail tab, switched
 ## by tabs above it. Each series is [series id, legend suffix, dashed]: outputs
@@ -107,6 +109,9 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _day_label: Label
+var _treasury_margin: Control
+var _treasury_box: HBoxContainer
+var _treasury_label: Label
 var _town_stat_labels: Dictionary = {} # city-summary key -> Label
 var _town_population_chart: HESparkline
 var _town_flow_chart: HESparkline
@@ -276,6 +281,30 @@ func _build_ui() -> void:
 	_day_label = Label.new()
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
+
+	# Government treasury: "<gold icon> 99 gold", hover for the 30-day change.
+	# Hidden when the scenario has no government.
+	_treasury_box = HBoxContainer.new()
+	_treasury_box.add_theme_constant_override("separation", 4)
+	_treasury_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	var treasury_icon := TextureRect.new()
+	treasury_icon.texture = Commodity.gold_icon()
+	treasury_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	treasury_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	treasury_icon.custom_minimum_size = Vector2(24, 24)
+	treasury_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	treasury_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(treasury_icon)
+	_treasury_label = Label.new()
+	_treasury_label.add_theme_font_size_override("font_size", 22)
+	_treasury_label.add_theme_color_override("font_color", Commodity.GOLD_COLOR)
+	_treasury_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(_treasury_label)
+	var treasury_margin := MarginContainer.new()
+	treasury_margin.add_theme_constant_override("margin_left", 16)
+	treasury_margin.add_child(_treasury_box)
+	top_bar.add_child(treasury_margin)
+	_treasury_margin = treasury_margin
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1867,9 +1896,27 @@ func _rebuild_household_rows() -> void:
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
+## Top-line government treasury and its 30-day movement (tooltip).
+func _refresh_treasury() -> void:
+	var summary := _simulation.get_treasury_summary(TREASURY_TREND_DAYS)
+	_treasury_margin.visible = summary["has_government"]
+	if not summary["has_government"]:
+		return
+	_treasury_label.text = "%.0f gold" % summary["treasury"]
+	var covered: int = summary["days_covered"]
+	var tip := "Government treasury"
+	if covered <= 0:
+		tip += "\nNo history yet."
+	else:
+		var change: float = summary["change"]
+		tip += "\n%+.1f gold over the last %d days" % [change, covered]
+		tip += "\n(%.1f -> %.1f)" % [summary["then"], summary["treasury"]]
+	_treasury_box.tooltip_text = tip
+
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
+	_refresh_treasury()
 
 	_refresh_town()
 
