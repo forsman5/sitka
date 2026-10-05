@@ -14,6 +14,12 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+
+## Row order of the Needs tab.
+const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
+const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
@@ -166,6 +172,13 @@ var _market_detail_content: VBoxContainer
 ## User toggle for the market chart's "Requested" series -- see
 ## _add_market_detail_chart.
 var _market_chart_export_appetite := false
+## -1 means no need is selected; otherwise a HENeed.Id whose detail panel is
+## stacked over the household list like the market and household panels.
+var _selected_need_id: int = -1
+var _need_detail_panel: PanelContainer
+var _need_detail_title: Label
+var _need_detail_content: VBoxContainer
+var _need_labels: Dictionary = {} # HENeed.Id -> {"met","unmet","unmet_demand"} Labels on the Needs tab
 var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
@@ -236,6 +249,9 @@ func _load_scenario() -> void:
 	_selected_market_commodity = -1
 	if _market_detail_panel != null:
 		_market_detail_panel.visible = false
+	_selected_need_id = -1
+	if _need_detail_panel != null:
+		_need_detail_panel.visible = false
 	_selected_household_id = -1
 	if _household_detail_panel != null:
 		_household_detail_panel.visible = false
@@ -289,6 +305,8 @@ func _build_ui() -> void:
 	top_tabs.add_child(business_scroll)
 	_business_list = VBoxContainer.new()
 	business_scroll.add_child(_business_list)
+
+	_build_needs_tab(top_tabs)
 
 	var goods_scroll := ScrollContainer.new()
 	goods_scroll.name = "Goods"
@@ -561,6 +579,34 @@ func _build_ui() -> void:
 	_market_detail_content.add_theme_constant_override("separation", 6)
 	market_scroll.add_child(_market_detail_content)
 
+	_need_detail_panel = PanelContainer.new()
+	_need_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_need_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_need_detail_panel.visible = false
+	content_area.add_child(_need_detail_panel)
+	var need_detail_box := VBoxContainer.new()
+	_need_detail_panel.add_child(need_detail_box)
+	var need_title_bar := HBoxContainer.new()
+	need_detail_box.add_child(need_title_bar)
+	_need_detail_title = Label.new()
+	_need_detail_title.add_theme_font_size_override("font_size", 16)
+	need_title_bar.add_child(_need_detail_title)
+	var need_title_spacer := Control.new()
+	need_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	need_title_bar.add_child(need_title_spacer)
+	var need_close := Button.new()
+	need_close.text = "X"
+	need_close.tooltip_text = "Close (back to household list)"
+	need_close.pressed.connect(_on_need_detail_close_pressed)
+	need_title_bar.add_child(need_close)
+	var need_scroll := ScrollContainer.new()
+	need_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	need_detail_box.add_child(need_scroll)
+	_need_detail_content = VBoxContainer.new()
+	_need_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_need_detail_content.add_theme_constant_override("separation", 6)
+	need_scroll.add_child(_need_detail_content)
+
 	_household_detail_panel = PanelContainer.new()
 	_household_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_household_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
@@ -750,6 +796,8 @@ func _on_household_row_selected(household_id: int) -> void:
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_household_id = household_id
 	_household_detail_panel.visible = true
 	_refresh_household_detail()
@@ -827,6 +875,8 @@ func _add_household_detail_line(value: String) -> void:
 func _on_business_row_selected(business_id: int) -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
 	_selected_business_id = business_id
@@ -887,11 +937,134 @@ func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) 
 	_simulation.set_trader_export_enabled(business_id, commodity, enabled)
 	_refresh()
 
+## Needs tab (just before Goods): one row per household need, in the order
+## the player thinks of them. Clicking a name opens that need's detail panel.
+func _build_needs_tab(top_tabs: TabContainer) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.name = "Needs"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	top_tabs.add_child(scroll)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
+	for col_label in ["Need", "Households met", "Households unmet", "Demand unmet"]:
+		var header := Label.new()
+		header.text = col_label
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(header)
+	for need_id in NEEDS_TAB_ORDER:
+		var need := HENeeds.get_need(need_id)
+		var name_button := Button.new()
+		name_button.text = need.label
+		name_button.flat = true
+		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_button.custom_minimum_size = Vector2(90, 20)
+		name_button.pressed.connect(_on_need_row_selected.bind(need_id))
+		grid.add_child(name_button)
+		var labels := {}
+		for key in ["met", "unmet", "unmet_demand"]:
+			var value_label := Label.new()
+			value_label.custom_minimum_size = Vector2(130, 0)
+			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
+			grid.add_child(value_label)
+			labels[key] = value_label
+		_need_labels[need_id] = labels
+
+func _refresh_needs_tab() -> void:
+	for need_id in _need_labels.keys():
+		var detail := _simulation.get_need_detail(need_id, 0)
+		var labels: Dictionary = _need_labels[need_id]
+		(labels["met"] as Label).text = "%d" % detail["households_met"]
+		(labels["unmet"] as Label).text = "%d" % detail["households_unmet"]
+		(labels["unmet_demand"] as Label).text = "%.1f" % detail["unmet"]
+
+func _on_need_row_selected(need_id: int) -> void:
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+	_selected_need_id = need_id
+	_need_detail_panel.visible = true
+	_refresh_need_detail()
+
+func _on_need_detail_close_pressed() -> void:
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
+
+## Rebuilt every refresh, like the market detail. Reports households meeting
+## vs missing the need, the stress/emigration risk (food only -- the other
+## needs don't feed the lifecycle engine yet), and a chart of demand met per
+## satisfier against demand left unmet.
+func _refresh_need_detail() -> void:
+	if _selected_need_id == -1:
+		return
+	var detail := _simulation.get_need_detail(_selected_need_id, HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS)
+	_need_detail_title.text = "%s need" % detail["label"]
+	for child in _need_detail_content.get_children():
+		_need_detail_content.remove_child(child)
+		child.queue_free()
+
+	var household_count: int = detail["households_met"] + detail["households_unmet"]
+	_add_need_detail_line("Households satisfying this need: %d of %d  |  unable to: %d" % [
+		detail["households_met"], household_count, detail["households_unmet"]])
+	if detail["drives_lifecycle"]:
+		_add_need_detail_line("Stress among unsatisfied households: %.2f (0-1)  |  with migration pressure: %d  |  at risk of emigrating: %d (%.0f%% of households)" % [
+			detail["avg_stress_unmet"], detail["households_with_migration_pressure"],
+			detail["households_emigration_candidates"], detail["emigration_likelihood"] * 100.0])
+	else:
+		_add_need_detail_line("Stress and emigration: not modelled -- only food shortfalls currently cause stress or emigration.")
+
+	var required: float = detail["required"]
+	_add_need_detail_line("Demand today: %.2f need units" % required)
+	for name in detail["met_by"].keys():
+		_add_need_detail_line("   Met by %s: %.2f (%s)" % [name, detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
+	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
+
+	var series: Array = []
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	_need_detail_content.add_child(header)
+	var title := Label.new()
+	title.text = "Demand met and unmet (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	var index := 0
+	for name in detail["met_history"].keys():
+		series.append({"name": name, "values": detail["met_history"][name], "color": HESparkline.color_for_series(index)})
+		index += 1
+	series.append({"name": "Unmet", "values": detail["unmet_history"], "color": NEED_UNMET_COLOR})
+	for entry in series:
+		var legend := Label.new()
+		legend.text = entry["name"]
+		legend.add_theme_color_override("font_color", entry["color"])
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 80)
+	chart.show_max_label = true
+	chart.set_series(series)
+	_need_detail_content.add_child(chart)
+
+func _percent_of(part: float, whole: float) -> String:
+	return "%.0f%%" % (part / whole * 100.0) if whole > 0.0 else "-"
+
+func _add_need_detail_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_need_detail_content.add_child(label)
+
 func _on_market_row_selected(commodity: int) -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_market_commodity = commodity
 	_market_detail_panel.visible = true
 	_refresh_market_detail()
@@ -1714,6 +1887,8 @@ func _refresh() -> void:
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
 	_refresh_market_detail()
+	_refresh_needs_tab()
+	_refresh_need_detail()
 
 	for report in _simulation.get_business_reports():
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
