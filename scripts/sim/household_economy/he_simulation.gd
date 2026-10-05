@@ -146,8 +146,7 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 ## i.e. just `price` at the 0.5 fraction above. That has to clear the
 ## reference wage with real room to spare even once oversupply has pushed
 ## price all the way down to its floor, or the Trader never grows past a
-## knife-edge break-even (and a bad week tips it into capacity 0, see
-## _evaluate_business_capacity's zero-capacity trial hire). A trader moving
+## knife-edge break-even (and a bad week tips it into capacity 0). A trader moving
 ## goods should scale per worker far better than a farmhand growing food by
 ## hand, hence the large jump from the first authored guess of 2.0.
 const TRADER_CAPACITY_PER_WORKER := 8.0
@@ -386,15 +385,14 @@ const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 ## seen in long (4000+ day) runs. CAPACITY_STEP_MAX_WORKERS is the ceiling on
 ## that proportional move (reached once the wage is WAGE_RATIO_CLAMP-or-more
 ## away from reference, so a single unusually noisy week can't cause an
-## unbounded lurch); CAPACITY_TRIAL_HIRE_WORKERS is a separate, same-valued-
-## today-but-conceptually-distinct constant for the zero-capacity recovery
-## case below, which has no wage signal to be proportional to at all.
+## unbounded lurch).
 const CAPACITY_EVAL_INTERVAL_DAYS := 7
 ## Trader revenue arrives in batches after supplier harvests; one decision
 ## per roughly farm-harvest interval avoids reacting to the same gap weekly.
 const TRADER_CAPACITY_EVAL_INTERVAL_DAYS := 21
 const CAPACITY_STEP_MAX_WORKERS := 4
-const CAPACITY_TRIAL_HIRE_WORKERS := 4
+## The cash-runway guard only forces a shrink on a crew bigger than this.
+const CASH_RUNWAY_GUARD_MIN_CAPACITY := 4
 const WAGE_PROFIT_MARGIN := 0.1
 ## How far avg_wage can be from reference_wage, as a fraction of
 ## reference_wage, before the proportional step maxes out at
@@ -1167,8 +1165,11 @@ func _finalize_daily_record(record: Dictionary) -> void:
 ## wage long-term is no longer this function's problem -- it always pays as
 ## much of the full bill as its (generous) cash allowance covers, and the
 ## weekly cash-runway guard in _evaluate_business_capacity is what actually
-## shrinks a business that can't keep this up (see its doc comment).
+## shrinks a business that can't keep this up (see its doc comment). A
+## business whose wage bill can't be covered even down to that floor has
+## exhausted its credit and is deleted (see _fail_business).
 func _pay_wages(record: Dictionary) -> void:
+	var failed_ids: Array[int] = []
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		b.last_wages_paid = 0.0
@@ -1219,6 +1220,48 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_wages_paid = total_paid
 		b.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
+		if shortfall > 0.0001 and b.kind != HEBusiness.Kind.GOVERNMENT:
+			failed_ids.append(business_id)
+	for business_id in failed_ids:
+		_fail_business(business_id, record)
+
+## A business that has used up its whole credit line (the wage floor, see
+## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) fails outright: it is deleted, its
+## employees go back to the unemployed pool, and its debt and leftover stock
+## are written off through the same closed-economy accounting households use
+## (money_written_off / goods_written_off). There is deliberately no revival
+## path -- a failed business stays gone, and recreating one is the player's
+## job (see add_business). A business may sit at zero workers indefinitely;
+## only running out of credit kills it.
+func _fail_business(business_id: int, record: Dictionary) -> void:
+	var b: HEBusiness = businesses[business_id]
+	var laid_off := 0
+	for household_id in households.keys():
+		var h: HEHousehold = households[household_id]
+		if h.employer_business_id == business_id:
+			h.employer_business_id = -1
+			laid_off += 1
+	var commodities: Array[Commodity.Type] = BASE_PRICE.keys()
+	commodities.append_array(HERD_COMMODITIES)
+	var goods_written_off: Dictionary[Commodity.Type, float] = {}
+	for c in commodities:
+		var amount := b.stock(c)
+		if amount > 0.0:
+			goods_written_off[c] = amount
+			_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + amount
+	_money_written_off_total += b.balance
+	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + b.balance
+	_merge_goods_written_off(record, goods_written_off)
+	_log_event("business_failed", {
+		"business_id": business_id,
+		"name": b.name,
+		"settlement_id": b.settlement_id,
+		"debt": -b.balance,
+		"households_laid_off": laid_off,
+	})
+	(settlements[b.settlement_id] as HESettlement).business_ids.erase(business_id)
+	_employment_event_log.erase(business_id)
+	businesses.erase(business_id)
 
 ## Kind.HERD only, called from _pay_wages before its cash allowance is
 ## computed: if this ranch can't cover today's wage bill even with its
@@ -1873,19 +1916,11 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 ## DAYS) -- only the FORECAST of running out of runway forces a downsize,
 ## not the negative balance itself.
 ##
-## Only fires above CAPACITY_TRIAL_HIRE_WORKERS: below that there's no
-## meaningful crew left to cut, so forcing MORE shrinkage doesn't fix
-## anything -- it just guarantees the debt that triggered it can never be
-## earned back. This is the same trap the zero-capacity protection above
-## exists for, one step earlier: a small crew carrying legacy debt from a
-## bad patch (e.g. a price spike inflating the reference wage it was paid
-## at) will have a tiny wage bill and therefore an alarming-looking runway
-## ratio for as long as that debt sits on the books, even once the spike
-## that caused it has long passed and the business is otherwise fine --
-## this guard would otherwise keep grinding it back down every week it
-## re-fires, and it has nowhere left to go but 0. Once genuinely at 0, the
-## ordinary trial-hire/protection cycle above is what gives it room to
-## actually earn that debt down instead.
+## Only fires above CASH_RUNWAY_GUARD_MIN_CAPACITY: a small crew's wage bill
+## is tiny, so legacy debt makes its runway ratio look alarming long after
+## whatever caused it has passed. A business that truly can't keep up is not
+## handled here but by running out of credit (see _fail_business), and a
+## business that reaches zero workers stays at zero (no trial rehire).
 func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
@@ -1897,47 +1932,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# signals -- it has no revenue per worker to judge.
 			continue
 		if b.capacity == 0:
-			# A business at zero capacity has had no employed workers, so
-			# rolling_average_revenue_per_worker() reads a flat 0 --
-			# indistinguishable from "genuinely unprofitable" even once
-			# whatever shut it down (no surplus to trade, a bad price,
-			# anything) has long since passed. Left alone this is a
-			# one-way trap: nobody ever gets hired back in to generate real
-			# evidence to re-evaluate. Give it a small trial crew instead
-			# so next week's revenue is actual evidence, not silence --
-			# worst case it's genuinely still unprofitable and shrinks
-			# right back to 0 next week. There's no revenue signal at all
-			# here, so this can't be made proportional the way the branch
-			# below is -- it's a fixed-size probe by necessity, not a
-			# control response.
-			# A field-model trial crew has NO real evidence behind it until
-			# its nearest field's harvest actually lands -- which, for a
-			# multi-month growth cycle, can be far longer than one
-			# CAPACITY_EVAL_INTERVAL_DAYS week. Judging it before then (on
-			# either the revenue signal below or the cash guard, both of
-			# which would see nothing but a flat/near-flat 0.0 average and
-			# read that as failure) would revert the trial hire before it
-			# ever gets a chance to prove out -- a permanent trap. Protect
-			# it until the harvest date instead; the field keeps growing
-			# every day regardless of this protection (see
-			# _run_field_growth), so this costs nothing but time and
-			# (generously floored) wages while it waits. A non-field
-			# business has no such lag -- its output is instant -- so it
-			# only needs a couple of weeks' grace to accumulate a real
-			# revenue signal at all.
-			# Deliberately uses_field_model(), not the broader has_long_cycle():
-			# a field is GUARANTEED to harvest something every growth_days, so
-			# trusting it that long is safe. A herd's cull is conditional on
-			# herd_size actually crossing HERD_CULL_TARGET, which (especially
-			# on a fresh or just-culled herd) can take many multiples of
-			# HERD_EVAL_INTERVAL_DAYS -- protecting it for a full cycle on that
-			# same trust was verified to let a ranch hire and bleed wages for
-			# 700+ days on zero revenue before ever being judged. A herd gets
-			# the same short, evidence-based leash as Trader/legacy instead.
-			b.protected_until_day = day + (b.days_until_next_harvest() if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS)
-			b.capacity = mini(CAPACITY_TRIAL_HIRE_WORKERS, b.max_capacity)
-			continue
-		if day < b.protected_until_day:
+			# Zero workers is allowed and stable: the business just sits idle
+			# until it is recreated or fails on its credit limit. It is no longer
+			# given a trial crew -- a failing business should be visibly failing
+			# (see _fail_business), not quietly resurrected.
 			continue
 		if (day + 1) % _capacity_eval_interval_days(b) != 0:
 			# A field-model business's output doesn't respond to a capacity
@@ -1959,11 +1957,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 				change_reason = "low_revenue" if delta < 0 else "high_revenue"
 		var cash_runway := INF
 		var required_runway := 0.0
-		if b.capacity > CAPACITY_TRIAL_HIRE_WORKERS:
-			# See protected_until_day's doc comment above for why this stays
-			# uses_field_model(), not has_long_cycle() -- same guaranteed-payoff
-			# reasoning applies to how long a shrink-worthy herd gets to prove
-			# itself before the runway guard forces a bigger cut.
+		if b.capacity > CASH_RUNWAY_GUARD_MIN_CAPACITY:
+			# uses_field_model(), not has_long_cycle(): only a field is
+			# guaranteed to pay off within its growth cycle, so only a field
+			# gets that long a runway before the guard forces a bigger cut.
 			required_runway = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
 			cash_runway = _business_cash_runway_days(b)
 			if cash_runway < required_runway:
@@ -1996,8 +1993,8 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 func _capacity_eval_interval_days(b: HEBusiness) -> int:
 	if b.kind == HEBusiness.Kind.TRADER:
 		return TRADER_CAPACITY_EVAL_INTERVAL_DAYS
-	# uses_field_model(), not has_long_cycle() -- see protected_until_day's
-	# doc comment in _evaluate_business_capacity.
+	# uses_field_model(), not has_long_cycle() -- only a field is guaranteed to
+	# pay off within its growth cycle.
 	if not b.uses_field_model():
 		return CAPACITY_EVAL_INTERVAL_DAYS
 	var weeks: int = maxi(1, roundi(float(b.growth_days) / 6.0 / float(CAPACITY_EVAL_INTERVAL_DAYS)))
@@ -2011,12 +2008,7 @@ func _capacity_eval_interval_days(b: HEBusiness) -> int:
 ## headcount) only has to cover what it's ACTUALLY paying today, not a
 ## hypothetical full crew it doesn't have -- comparing against max_capacity
 ## would force a perfectly solvent, merely-underutilized business to shrink
-## for no reason other than having land to spare. A recovering trial crew
-## isn't at risk from this despite its small `employed`: it's shielded from
-## this guard entirely until its own first harvest lands (see
-## _evaluate_business_capacity's protected_until_day check), so this
-## function is never even called for it during the window where a shrinking
-## `employed` used to spiral into a permanent trap. Used only by
+## for no reason other than having land to spare. Used only by
 ## _evaluate_business_capacity's cash-runway guard; never mutates anything.
 func _business_cash_runway_days(b: HEBusiness) -> float:
 	var employed := _business_employed_worker_count(b.id)

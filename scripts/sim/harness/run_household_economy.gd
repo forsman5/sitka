@@ -48,12 +48,53 @@ func _init() -> void:
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_government_taxes()
+	_check_business_fails_at_credit_limit()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
 	else:
 		print("\nH1 acceptance: FAIL")
 	quit(0 if _ok else 1)
+
+## A business past its credit line is deleted (debt written off, staff laid
+## off, no revival); one at zero workers is NOT, and stays at zero.
+func _check_business_fails_at_credit_limit() -> void:
+	print("\n=== Business failure: credit limit exhausted -> deleted, debt written off ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.advance_ticks(5)
+	var woodlot_id := HEScenarioSeeds.WOODLOT_BUSINESS_ID
+	var woodlot: HEBusiness = sim.businesses[woodlot_id]
+	var employed := 0
+	for h in sim.households.values():
+		if (h as HEHousehold).employer_business_id == woodlot_id:
+			employed += 1
+	_assert(employed > 0, "Woodlot should have staff before failing")
+	woodlot.balance = -1000000.0
+	var debt := woodlot.balance
+	sim.advance_ticks(1)
+	_assert(not sim.businesses.has(woodlot_id), "A business past its credit limit should be deleted")
+	_assert(not (sim.settlements[HEScenarioSeeds.SETTLEMENT_ID] as HESettlement).business_ids.has(woodlot_id), "Failed business should leave its settlement")
+	for h in sim.households.values():
+		_assert((h as HEHousehold).employer_business_id != woodlot_id, "No household should keep a deleted employer")
+	var record: Dictionary = sim.get_daily_history(1)[0]
+	_assert(absf(float(record["money_written_off"]) - debt) < EPSILON, "The debt should be written off (got %.1f)" % float(record["money_written_off"]))
+	var expected: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+	_assert(absf(record["closing_money"] - expected) < EPSILON, "Money should still reconcile through a business failure")
+	var failed_events := 0
+	for event in sim.get_event_log_days(1):
+		if event["type"] == "business_failed" and event["business_id"] == woodlot_id:
+			failed_events += 1
+	_assert(failed_events == 1, "A business failure should be logged exactly once")
+
+	# Zero workers alone never kills a business or brings staff back.
+	var idle := _new_sim("build_three_business_economy")
+	var idle_trader: HEBusiness = idle.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	idle_trader.capacity = 0
+	idle_trader.max_capacity = 0
+	idle.advance_ticks(120)
+	_assert(idle.businesses.has(HEScenarioSeeds.TRADER_BUSINESS_ID), "A zero-worker business should not fail without debt")
+	_assert(idle_trader.capacity == 0, "A zero-capacity business should not get a trial hire")
+	print("  woodlot deleted at the credit limit with %.0f written off; a zero-worker Trader stayed at zero" % -debt)
 
 func _new_sim(builder_method: String, price_adjustment_enabled: bool = true) -> HESimulation:
 	return HESimulation.new(SEED, Callable(HEScenarioSeeds, builder_method), price_adjustment_enabled)
@@ -744,6 +785,12 @@ func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	var out := {}
 	for report in sim.get_business_reports():
 		out[report["name"].to_lower()] = report
+	# A business that exhausted its credit is deleted, so it has no report;
+	# stand in an all-zero one so share/capacity checks read it as gone.
+	for key in ["farm", "woodlot", "trader"]:
+		if not out.has(key):
+			out[key] = {"capacity": 0, "employed_workers": 0, "rolling_average_revenue_per_worker": 0.0,
+				"reference_wage_per_worker": out.values()[0]["reference_wage_per_worker"]}
 	return out
 
 ## Starvation is no longer just a reported signal -- a business that can
@@ -993,7 +1040,7 @@ func _check_herd_cull_target_is_configurable() -> void:
 ## capacity tuner has no stable staffing level to find (it churned the Sheep
 ## Farm ~400 times in 10 years when staffing changed nothing). Same seed, two
 ## worlds: ranches with no workers allowed vs. ranches pinned fully staffed
-## (protected from the tuner so the comparison isn't muddied by hiring noise).
+## (pinned by min_capacity so the comparison isn't muddied by hiring noise).
 func _check_herd_staffing_matters() -> void:
 	print("\n=== Herds: staffing a ranch actually changes how its herd and wool do ===")
 	var unstaffed := _new_sim("build_three_business_economy")
@@ -1004,7 +1051,7 @@ func _check_herd_staffing_matters() -> void:
 		u.capacity = 0
 		var s: HEBusiness = staffed.businesses[business_id]
 		s.capacity = s.max_capacity
-		s.protected_until_day = 1000000
+		s.min_capacity = s.max_capacity
 	unstaffed.advance_ticks(360)
 	staffed.advance_ticks(360)
 

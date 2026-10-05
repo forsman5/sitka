@@ -38,8 +38,7 @@ extends RefCounted
 ## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
 ## pass). It DOES hire and pay wages like any other business -- `growth_days`
 ## is set to HERD_EVAL_INTERVAL_DAYS (see he_scenario_seeds.gd) purely so it
-## gets the same cycle-aware treatment (has_long_cycle(), protected trial
-## hires, revenue smoothed over its own cycle rather than a flat week) a
+## gets the same cycle-aware treatment (has_long_cycle(), revenue smoothed over its own cycle rather than a flat week) a
 ## field-model business gets, even though it has no `fields` of its own --
 ## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
 ##
@@ -219,14 +218,6 @@ var todays_flows: Dictionary = {}
 ## adds series. Field-model businesses show lumpy PRODUCED spikes on harvest
 ## days, since last_output_produced is 0.0 on every other day.
 var _flow_history: Dictionary = {}
-
-## Set whenever a zero-capacity business gets its trial crew back (see
-## he_simulation.gd's _evaluate_business_capacity) to the day that
-## protection should end -- until then, capacity evaluation leaves this
-## business alone entirely, growth and shrink signals both, regardless of
-## how its average revenue reads. -1 (the initial value) means "not
-## currently protected".
-var protected_until_day: int = -1
 
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See
