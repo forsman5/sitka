@@ -21,8 +21,47 @@ class_name OnFootPlayer extends CharacterBody3D
 
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
 
-const MODEL_SCENE := preload("res://assets/models/people/Casual_Male.fbx")
-const ANIM_PREFIX := "CharacterArmature|"
+## Which character the next OnFootPlayer spawns as (set by the chooser scene).
+static var selected_character: String = "person"
+
+## Per-character body, camera and animation settings. Models face +Z at identity,
+## so they are rotated half a turn to face the -Z movement direction.
+const CHARACTERS := {
+	"person": {
+		"model": preload("res://assets/models/people/Casual_Male.fbx"),
+		"model_scale": 0.54,
+		"capsule_radius": 0.35,
+		"capsule_height": 1.8,
+		"eye_height": 1.65,
+		"third_person_distance": 3.2,
+		"walk_speed": 5.0,
+		"sprint_speed": 8.5,
+		"jump_height": 1.2,
+		"anim": {
+			"idle": "CharacterArmature|Idle",
+			"walk": "CharacterArmature|Walk",
+			"run": "CharacterArmature|Run",
+			"jump": "CharacterArmature|Jump",
+		},
+	},
+	"dog": {
+		"model": preload("res://assets/models/animals/Husky.fbx"),
+		"model_scale": 0.25,
+		"capsule_radius": 0.3,
+		"capsule_height": 0.8,
+		"eye_height": 0.6,
+		"third_person_distance": 2.2,
+		"walk_speed": 3.5,
+		"sprint_speed": 8.0,
+		"jump_height": 0.9,
+		"anim": {
+			"idle": "AnimalArmature|Idle",
+			"walk": "AnimalArmature|Walk",
+			"run": "AnimalArmature|Gallop",
+			"jump": "AnimalArmature|Gallop_Jump",
+		},
+	},
+}
 
 var _head: Node3D
 var _arm: SpringArm3D
@@ -37,16 +76,23 @@ var _bob_t: float = 0.0
 var _was_on_floor: bool = true
 var _land_dip: float = 0.0
 var _gravity: float
+var _character: Dictionary
 
 func _ready() -> void:
+	_character = CHARACTERS[selected_character]
+	walk_speed = _character["walk_speed"]
+	sprint_speed = _character["sprint_speed"]
+	jump_height = _character["jump_height"]
+	eye_height = _character["eye_height"]
+	third_person_distance = _character["third_person_distance"]
 	_gravity = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8) * gravity_scale
 
 	var shape := CapsuleShape3D.new()
-	shape.radius = 0.35
-	shape.height = 1.8
+	shape.radius = _character["capsule_radius"]
+	shape.height = _character["capsule_height"]
 	var col := CollisionShape3D.new()
 	col.shape = shape
-	col.position.y = 0.9
+	col.position.y = shape.height * 0.5
 	add_child(col)
 
 	_head = Node3D.new()
@@ -66,10 +112,9 @@ func _ready() -> void:
 	_camera.current = true
 	_arm.add_child(_camera)
 
-	# Same placement as the Person scene: rotated so the model faces -Z.
-	_model = MODEL_SCENE.instantiate()
+	_model = (_character["model"] as PackedScene).instantiate()
 	_model.rotation_degrees = Vector3(0, 180, 0)
-	_model.scale = Vector3(0.54, 0.54, 0.54)
+	_model.scale = Vector3.ONE * float(_character["model_scale"])
 	add_child(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 
@@ -161,13 +206,13 @@ func _update_animation() -> void:
 	if _anim == null or not _model.visible:
 		return
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
-	var clip := "Idle"
+	var anims: Dictionary = _character["anim"]
+	var clip: String = anims["idle"]
 	if not is_on_floor():
-		clip = "Jump"
+		clip = anims["jump"]
 	elif horiz_speed > walk_speed + 0.5:
-		clip = "Run"
+		clip = anims["run"]
 	elif horiz_speed > 0.5:
-		clip = "Walk"
-	clip = ANIM_PREFIX + clip
+		clip = anims["walk"]
 	if _anim.current_animation != clip:
 		_anim.play(clip, 0.15)
