@@ -21,7 +21,7 @@ func _ready() -> void:
 	add_child(player)
 
 	var hint := Label.new()
-	hint.text = "WASD move · Shift sprint · Space jump · Esc menu"
+	hint.text = "WASD move · Shift sprint · Space jump · F5 camera view · Esc menu"
 	hint.position = Vector2(12, 8)
 	var layer := CanvasLayer.new()
 	layer.add_child(hint)
