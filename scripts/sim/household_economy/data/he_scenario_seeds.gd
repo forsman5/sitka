@@ -129,6 +129,14 @@ const STARTING_BUFFER_DAYS := 10.0
 ## he_simulation.gd's WAGE_NEGATIVE_BALANCE_FLOOR_DAYS for what happens once
 ## it's gone).
 const STARTING_CASH_RESERVE_DAYS := 30.0
+## Startup cash for a field business covers its whole production cycle of
+## wages, times this safety factor. The credit line only covers 60 days of the
+## wage bill and the reference wage can swing several-fold, so a bare cycle's
+## worth runs out before the first harvest (measured: a recreated Farm needs
+## ~90 and a Woodlot ~275 for a crew of 4 with the wage at its seed value).
+const STARTUP_CASH_SAFETY_FACTOR := 2.0
+## Crew a player-created business is authorized to hire.
+const NEW_BUSINESS_STARTING_CAPACITY := 4
 
 ## A field business also starts with enough of its own product already in
 ## stock to cover local demand until ITS OWN first harvest lands (see
@@ -250,6 +258,14 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## wage_per_worker. Used only to size each business's STARTING_CASH_RESERVE_
 ## DAYS cushion (see _build_world) -- once the simulation is running,
 ## the real _reference_wage_per_worker takes over.
+## Cash a business needs to pay `crew` workers through one production cycle
+## (growth_days, or STARTING_CASH_RESERVE_DAYS if it has no cycle) at the seed
+## wage, with a safety margin. Used for the day-one Farm/Woodlot and for
+## player-created businesses (HESimulation.add_new_business).
+static func startup_cash(b: HEBusiness, crew: int) -> float:
+	var days := maxf(float(b.growth_days), STARTING_CASH_RESERVE_DAYS)
+	return STARTUP_CASH_SAFETY_FACTOR * days * _estimated_starting_reference_wage() * crew
+
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
 	var per_person_cost: float = HESimulation.BASE_PRICE[Commodity.Type.GRAIN] * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) \
@@ -310,8 +326,8 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var butcher := make_butcher(BUTCHER_BUSINESS_ID, SETTLEMENT_ID)
 
 	var estimated_wage := _estimated_starting_reference_wage()
-	farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * farm_capacity
-	woodlot.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * woodlot_capacity
+	farm.balance = startup_cash(farm, farm_capacity)
+	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY

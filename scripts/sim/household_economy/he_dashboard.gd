@@ -1970,7 +1970,7 @@ func _on_create_business_pressed(index: int) -> void:
 		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
 		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
 		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
-	_simulation.add_business(business)
+	_simulation.add_new_business(business)
 	_business_names[business.id] = business.name
 	_rebuild_business_rows()
 	_refresh()

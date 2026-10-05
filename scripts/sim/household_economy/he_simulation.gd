@@ -590,6 +590,20 @@ func add_business(b: HEBusiness) -> void:
 			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
 		_trader_export_enabled[b.id] = enabled
 
+## Adds a business the player created mid-run, with a startup allowance so it
+## can actually get going (see HEScenarioSeeds.startup_cash): a starting crew,
+## seed cash, and a grace period until its first harvest (or
+## CASH_RUNWAY_DANGER_DAYS if it has no cycle) before the tuner judges it.
+## TODO creation cost: the seed cash is free money injected into the economy
+## (it shows up in next day's opening money), and should be paid for by the
+## player or the treasury.
+func add_new_business(b: HEBusiness) -> void:
+	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, b.min_capacity, b.max_capacity)
+	b.capacity = crew
+	b.balance += HEScenarioSeeds.startup_cash(b, crew)
+	b.startup_grace_until_day = day + (b.growth_days if b.growth_days > 0 else int(CASH_RUNWAY_DANGER_DAYS))
+	add_business(b)
+
 func next_business_id() -> int:
 	var next_id := 1
 	for business_id in businesses.keys():
@@ -1965,6 +1979,8 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# until it is recreated or fails on its credit limit. It is no longer
 			# given a trial crew -- a failing business should be visibly failing
 			# (see _fail_business), not quietly resurrected.
+			continue
+		if day < b.startup_grace_until_day:
 			continue
 		if (day + 1) % _capacity_eval_interval_days(b) != 0:
 			# A field-model business's output doesn't respond to a capacity

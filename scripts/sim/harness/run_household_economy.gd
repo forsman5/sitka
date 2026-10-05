@@ -86,6 +86,24 @@ func _check_business_fails_at_credit_limit() -> void:
 			failed_events += 1
 	_assert(failed_events == 1, "A business failure should be logged exactly once")
 
+	# A business recreated after closing gets a startup allowance (crew, cash,
+	# grace) and must make it through its first harvest and keep staff.
+	for kind in ["farm", "woodlot"]:
+		var recreate := _new_sim("build_three_business_economy")
+		recreate.advance_ticks(30)
+		var old_id: int = HEScenarioSeeds.FARM_BUSINESS_ID if kind == "farm" else HEScenarioSeeds.WOODLOT_BUSINESS_ID
+		(recreate.businesses[old_id] as HEBusiness).balance = -1000000.0
+		recreate.advance_ticks(1)
+		_assert(not recreate.businesses.has(old_id), "%s should have closed" % kind)
+		var new_id := recreate.next_business_id()
+		var fresh: HEBusiness = HEScenarioSeeds.make_farm(new_id, HEScenarioSeeds.SETTLEMENT_ID) if kind == "farm" else HEScenarioSeeds.make_woodlot(new_id, HEScenarioSeeds.SETTLEMENT_ID)
+		recreate.add_new_business(fresh)
+		recreate.advance_ticks(fresh.growth_days + 150)
+		_assert(recreate.businesses.has(new_id), "A recreated %s should survive to and past its first harvest" % kind)
+		if recreate.businesses.has(new_id):
+			_assert(recreate._business_employed_worker_count(new_id) > 0, "A recreated %s should be staffed" % kind)
+		print("  recreated %s: alive=%s employed=%d" % [kind, recreate.businesses.has(new_id), recreate._business_employed_worker_count(new_id) if recreate.businesses.has(new_id) else 0])
+
 	# Zero workers alone never kills a business or brings staff back.
 	var idle := _new_sim("build_three_business_economy")
 	var idle_trader: HEBusiness = idle.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]

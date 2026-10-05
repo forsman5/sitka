@@ -203,6 +203,13 @@ var last_cash_change: float = 0.0
 ## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
 
+## Capacity self-tuning leaves this business alone until this day -- a newly
+## created business earns nothing until its first harvest, so judging it on
+## revenue before then would shrink its crew to zero. It can still fail on its
+## credit limit during the grace period. -1 = no grace. Set by
+## HESimulation.add_new_business.
+var startup_grace_until_day: int = -1
+
 ## Rolling daily balance, oldest first, capped at BALANCE_HISTORY_WINDOW_
 ## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
 ## below), read by nothing that affects simulation outcomes.
