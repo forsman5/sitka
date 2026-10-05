@@ -57,16 +57,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
 		_head.rotation.x = _pitch
-	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode == KEY_ESCAPE:
-			if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-			else:
-				get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
-		elif event.physical_keycode == KEY_SPACE:
-			_buffer_left = jump_buffer_time
+	elif event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_SPACE:
+		_buffer_left = jump_buffer_time
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()

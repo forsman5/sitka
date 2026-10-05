@@ -3,6 +3,8 @@ extends Node3D
 
 const PLANE_SIZE := 200.0
 
+var _pause_layer: CanvasLayer
+
 func _ready() -> void:
 	_build_ground()
 	_build_markers()
@@ -14,11 +16,63 @@ func _ready() -> void:
 	add_child(player)
 
 	var hint := Label.new()
-	hint.text = "WASD move · Shift sprint · Space jump · Esc release mouse / back to menu"
+	hint.text = "WASD move · Shift sprint · Space jump · Esc menu"
 	hint.position = Vector2(12, 8)
 	var layer := CanvasLayer.new()
 	layer.add_child(hint)
 	add_child(layer)
+	_build_pause_menu()
+
+func _build_pause_menu() -> void:
+	_pause_layer = CanvasLayer.new()
+	_pause_layer.layer = 20
+	_pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_pause_layer.visible = false
+	add_child(_pause_layer)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.5)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pause_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_pause_layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(220, 0)
+	box.add_theme_constant_override("separation", 12)
+	center.add_child(box)
+
+	var title := Label.new()
+	title.text = "Paused"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	box.add_child(title)
+
+	var resume := Button.new()
+	resume.text = "Resume"
+	resume.pressed.connect(_set_paused.bind(false))
+	box.add_child(resume)
+
+	var quit := Button.new()
+	quit.text = "Main Menu"
+	quit.pressed.connect(_to_main_menu)
+	box.add_child(quit)
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+		_set_paused(not get_tree().paused)
+		get_viewport().set_input_as_handled()
+
+func _set_paused(paused: bool) -> void:
+	get_tree().paused = paused
+	_pause_layer.visible = paused
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED
+
+func _to_main_menu() -> void:
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
