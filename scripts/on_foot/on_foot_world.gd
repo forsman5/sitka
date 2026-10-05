@@ -3,7 +3,12 @@ extends Node3D
 
 const PLANE_SIZE := 200.0
 
+## Esc often releases mouse capture itself (browser pointer lock, embedded game
+## window) before the game sees a key press, so a lost capture also opens the menu.
+const ESC_DEBOUNCE_MSEC := 250
+
 var _pause_layer: CanvasLayer
+var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 
 func _ready() -> void:
 	_build_ground()
@@ -60,10 +65,18 @@ func _build_pause_menu() -> void:
 	quit.pressed.connect(_to_main_menu)
 	box.add_child(quit)
 
+func _process(_delta: float) -> void:
+	if not get_tree().paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		_auto_paused_at = Time.get_ticks_msec()
+		_set_paused(true)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
-		_set_paused(not get_tree().paused)
 		get_viewport().set_input_as_handled()
+		# The same Esc press may already have opened the menu via lost capture.
+		if Time.get_ticks_msec() - _auto_paused_at < ESC_DEBOUNCE_MSEC:
+			return
+		_set_paused(not get_tree().paused)
 
 func _set_paused(paused: bool) -> void:
 	get_tree().paused = paused
