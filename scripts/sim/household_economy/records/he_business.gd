@@ -107,6 +107,10 @@ var id: int
 var settlement_id: int
 var name: String
 var kind: Kind
+## Which buildable business this is ("farm", "trader", ...), set by the
+## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
+## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
+var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int

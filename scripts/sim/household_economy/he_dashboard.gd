@@ -21,9 +21,14 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 ## Offered by the Businesses tab's "Create business" menu. Each kind is unique
-## per town (matched by recipe id) and costs nothing -- both may change later.
+## per town (matched by HEBusiness.type_key) and costs nothing -- both may change later.
 const BUILDABLE_BUSINESSES := [
-	{"label": "Farm", "recipe_id": "farm"},
+	{"label": "Farm", "type_key": "farm"},
+	{"label": "Woodlot", "type_key": "woodlot"},
+	{"label": "Trader", "type_key": "trader"},
+	{"label": "Cattle Ranch", "type_key": "cattle_ranch"},
+	{"label": "Sheep Farm", "type_key": "sheep_farm"},
+	{"label": "Butcher", "type_key": "butcher"},
 ]
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
@@ -1713,7 +1718,7 @@ func _rebuild_business_rows() -> void:
 	var create_popup := create_button.get_popup()
 	for i in BUILDABLE_BUSINESSES.size():
 		var option: Dictionary = BUILDABLE_BUSINESSES[i]
-		var already_built := _simulation.has_business_with_recipe(_town_settlement_id(), option["recipe_id"])
+		var already_built := _simulation.has_business_of_type(_town_settlement_id(), option["type_key"])
 		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
 		create_popup.set_item_disabled(i, already_built)
 	create_popup.id_pressed.connect(_on_create_business_pressed)
@@ -1726,12 +1731,17 @@ func _town_settlement_id() -> int:
 func _on_create_business_pressed(index: int) -> void:
 	var option: Dictionary = BUILDABLE_BUSINESSES[index]
 	var settlement_id := _town_settlement_id()
-	if _simulation.has_business_with_recipe(settlement_id, option["recipe_id"]):
+	if _simulation.has_business_of_type(settlement_id, option["type_key"]):
 		return
 	var business: HEBusiness
-	match option["recipe_id"]:
-		"farm":
-			business = HEScenarioSeeds.make_farm(_simulation.next_business_id(), settlement_id)
+	var id := _simulation.next_business_id()
+	match option["type_key"]:
+		"farm": business = HEScenarioSeeds.make_farm(id, settlement_id)
+		"woodlot": business = HEScenarioSeeds.make_woodlot(id, settlement_id)
+		"trader": business = HEScenarioSeeds.make_trader(id, settlement_id)
+		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
+		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
+		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
 	_simulation.add_business(business)
 	_business_names[business.id] = business.name
 	_rebuild_business_rows()

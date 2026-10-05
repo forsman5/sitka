@@ -586,6 +586,11 @@ func add_business(b: HEBusiness) -> void:
 	assert(settlements.has(b.settlement_id), "Unknown settlement %d" % b.settlement_id)
 	businesses[b.id] = b
 	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
+	if b.kind == HEBusiness.Kind.TRADER:
+		var enabled := {}
+		for commodity in EXPORT_PRIORITY:
+			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+		_trader_export_enabled[b.id] = enabled
 
 func next_business_id() -> int:
 	var next_id := 1
@@ -593,12 +598,12 @@ func next_business_id() -> int:
 		next_id = maxi(next_id, business_id + 1)
 	return next_id
 
-## Whether `settlement_id` already has a business making `recipe_id` -- how
-## "unique building" limits are checked.
-func has_business_with_recipe(settlement_id: int, recipe_id: String) -> bool:
+## Whether `settlement_id` already has a business of buildable kind
+## `type_key` (see HEBusiness.type_key) -- how "unique building" limits are checked.
+func has_business_of_type(settlement_id: int, type_key: String) -> bool:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
-		if b.settlement_id == settlement_id and b.recipe != null and b.recipe.id == recipe_id:
+		if b.settlement_id == settlement_id and b.type_key == type_key:
 			return true
 	return false
 
