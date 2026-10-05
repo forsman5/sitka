@@ -2205,7 +2205,17 @@ func _refresh() -> void:
 	if not mouse_down:
 		_refresh_need_detail()
 
-	for report in _simulation.get_business_reports():
+	# A business that failed (or was created) changes the set of rows and the
+	# Create business menu's "already built" state; rebuild rather than leave a
+	# frozen row for a business that no longer exists.
+	var reports := _simulation.get_business_reports()
+	var rows_stale := reports.size() != _business_rows.size()
+	for report in reports:
+		if not _business_rows.has(report["business_id"]):
+			rows_stale = true
+	if rows_stale:
+		_rebuild_business_rows()
+	for report in reports:
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
 		if row.is_empty():
 			continue
