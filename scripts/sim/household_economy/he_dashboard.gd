@@ -567,7 +567,7 @@ func _build_ui() -> void:
 	# every refresh, and recreating a checkbox mid-click would swallow it.
 	var export_toggle := CheckBox.new()
 	export_toggle.text = "Count Trader export capacity as demand"
-	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's remaining capacity, i.e. what it would take if the seller had the stock."
+	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's handling capacity, i.e. what it would take if the seller had the stock."
 	export_toggle.button_pressed = _market_chart_export_appetite
 	export_toggle.toggled.connect(_on_market_export_appetite_toggled)
 	market_detail_box.add_child(export_toggle)

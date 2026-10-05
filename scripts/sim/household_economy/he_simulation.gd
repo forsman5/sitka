@@ -2293,8 +2293,6 @@ func _run_trade(record: Dictionary) -> void:
 		var total_exported := 0.0
 
 		for commodity in EXPORT_PRIORITY:
-			if remaining_capacity <= 0.0001:
-				break
 			if not _trader_export_enabled[trader_id].get(commodity, false):
 				continue
 			var seller := _business_selling(trader.settlement_id, commodity)
@@ -2303,9 +2301,12 @@ func _run_trade(record: Dictionary) -> void:
 			var surplus := _exportable_surplus(seller, trader.settlement_id, commodity)
 			var quantity: float = min(surplus, remaining_capacity)
 			var local_market: HEMarket = markets[trader.settlement_id]
-			# Appetite is recorded even on a day nothing ships, so the market
-			# chart can show demand the seller's stock didn't cover.
-			local_market.record_export(commodity, remaining_capacity,
+			# Appetite is the Trader's full handling capacity, whatever earlier
+			# priority goods already used today and even on a day nothing ships,
+			# so the market chart shows demand for every enabled good rather than
+			# going blank for the lower-priority ones (meat, leather) once a
+			# higher-priority good has filled the shared capacity.
+			local_market.record_export(commodity, capacity_limit,
 				quantity if not SUBSISTENCE_COMMODITIES.has(commodity) and quantity > 0.0001 else 0.0)
 			if quantity <= 0.0001:
 				continue

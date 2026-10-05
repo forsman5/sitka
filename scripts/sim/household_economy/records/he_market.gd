@@ -44,8 +44,8 @@ var _supplied_history: Dictionary[Commodity.Type, Array] = {}
 var _demanded_history: Dictionary[Commodity.Type, Array] = {}
 
 ## Today's Trader export appetite per commodity: how much the Trader could
-## and would take (its remaining handling capacity when this good's turn in
-## the export priority came), as opposed to what it actually shipped. Cleared
+## and would take (its full handling capacity, regardless of export priority),
+## as opposed to what it actually shipped. Cleared
 ## daily with last_clearing. Kept apart from last_clearing so price drift and
 ## the "executed" numbers are untouched.
 var _export_appetite: Dictionary[Commodity.Type, float] = {}
@@ -86,6 +86,6 @@ func demanded_history(commodity: Commodity.Type) -> Array:
 	return (_demanded_history.get(commodity, []) as Array).duplicate()
 
 ## Same as demanded_history, but Trader exports count at the Trader's
-## appetite (remaining capacity) instead of the quantity actually shipped.
+## appetite (handling capacity) instead of the quantity actually shipped.
 func demanded_with_export_history(commodity: Commodity.Type) -> Array:
 	return (_demanded_with_export_history.get(commodity, []) as Array).duplicate()
