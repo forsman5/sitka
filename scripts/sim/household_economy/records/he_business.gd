@@ -82,7 +82,7 @@ const TRADER_REVENUE_WINDOW_DAYS := 45
 ## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
 ## which reads better over a longer stretch than the weekly self-tuning
 ## signal needs.
-const BALANCE_HISTORY_WINDOW_DAYS := 90
+const BALANCE_HISTORY_WINDOW_DAYS := 730
 
 ## Goods flows tracked for the detail panel's charts. PRODUCED/CONSUMED are
 ## what the production step actually made and used up; SOLD/BOUGHT are what
