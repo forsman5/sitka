@@ -43,11 +43,30 @@ extends RefCounted
 ## field-model business gets, even though it has no `fields` of its own --
 ## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
 ##
+## A PRODUCTION business with `processes_livestock` set (the Butcher) is a
+## fourth shape: its recipe has outputs only (MEAT and LEATHER), and its
+## input is whichever live CATTLE/SHEEP the settlement's ranches hold. It
+## buys culled head from the ranches locally -- a better price than the
+## Trader's discounted export -- and turns them into goods, limited by labor
+## (see he_simulation.gd's BUTCHERY_* constants, _run_livestock_purchasing
+## and _run_butchery). It is staffed by individual workers and self-tunes
+## its capacity like any other PRODUCTION business.
+##
 ## A PRODUCTION business's `recipe.inputs` (e.g. the Bloomery: wood +
 ## iron ore -> iron) are bought business-to-business and retained in its
 ## inventory until production consumes them. An input nothing local
 ## produces is supplied by the settlement's Trader, importing it from
 ## outside the settlement; see he_simulation.gd's _run_input_purchasing.
+##
+## Kind.GOVERNMENT (the settlement's "Government") is a fourth odd one out:
+## no recipe, no stock, no sales. Its `balance` is the town treasury, filled
+## by the sales tax every domestic transaction remits to it (see
+## he_simulation.gd's _collect_sales_tax) and drained only by wages. It does
+## not self-tune: its permanent administrator household is assigned by the
+## scenario seed (and re-assigned if that household ever leaves the
+## workforce), and it never goes into debt to pay anyone -- an empty
+## treasury means a rationed wage, not an overdraft. `builder_slots` is the
+## (not yet modeled) number of builder jobs it will fund; see its comment.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -81,7 +100,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
 enum Species { CATTLE, SHEEP }
 
 var id: int
@@ -91,6 +110,11 @@ var kind: Kind
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int
+## Capacity self-tuning never lays this business below this many employee
+## slots. 0 (the default) lets any business shut down; the Butcher keeps a
+## skeleton crew because its work arrives in lumps (a ranch's cull), so a
+## business tuned to zero between culls would miss the next one entirely.
+var min_capacity: int = 0
 
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
@@ -102,6 +126,11 @@ var balance: float = 0.0
 ## _run_input_purchasing and _run_production. A business whose input must stay
 ## that exact good (a charcoal burner's timber is raw material) leaves it empty.
 var need_inputs: Dictionary[Commodity.Type, int] = {}
+
+## Kind.PRODUCTION only: this business converts live CATTLE/SHEEP bought from
+## local ranches into its recipe outputs (the Butcher) instead of drawing on
+## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
+var processes_livestock: bool = false
 
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
@@ -211,6 +240,19 @@ var _wage_history: Array[float] = []
 ## decide growth/shrink, per he_simulation.gd's doc comment there.
 var _revenue_per_worker_history: Array[float] = []
 
+## Kind.GOVERNMENT only: sales tax remitted to the treasury today / ever, for
+## reporting -- see he_simulation.gd._collect_sales_tax.
+var last_tax_collected: float = 0.0
+var tax_collected_total: float = 0.0
+
+## Kind.GOVERNMENT only: how many builder jobs the government should employ.
+## TODO(builders): not modeled yet. Nothing hires into these slots and
+## _reconcile_employment leaves a government's staffing alone; when builders
+## land they should draw wages from the treasury like the administrator and
+## spend labor on player-ordered construction (new businesses). Kept as a
+## plain variable now so the UI and player actions have a stable name to bind.
+var builder_slots: int = 0
+
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
 var last_output_produced: Dictionary[Commodity.Type, float] = {}
@@ -249,19 +291,29 @@ func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_i
 	species = p_species
 	herd_size = p_herd_size
 
-## H1's PRODUCTION businesses each have exactly one recipe output (Farm ->
-## grain, Woodlot -> timber); a business with a multi-output recipe isn't
-## supported by this single-commodity assumption. Never called on a
-## Kind.TRADER or Kind.HERD business, neither of which has a recipe.
+## The primary recipe output (Farm -> grain, Woodlot -> timber, Butcher ->
+## meat). Most PRODUCTION businesses have exactly one; for a multi-output
+## recipe use sells() to ask about the others. Never called on a Kind.TRADER
+## or Kind.HERD business, neither of which has a recipe.
 func output_commodity() -> Commodity.Type:
 	return recipe.outputs.keys()[0]
+
+## Whether this PRODUCTION business sells `commodity`. A multi-output recipe
+## (the Butcher's meat and leather) sells every output; output_commodity() is
+## only the primary one, used for single-good reporting.
+func sells(commodity: Commodity.Type) -> bool:
+	return kind == Kind.PRODUCTION and recipe != null and recipe.outputs.has(commodity)
+
+## The commodity a live animal of `p_species` is held and traded as.
+static func livestock_commodity(p_species: Species) -> Commodity.Type:
+	return Commodity.Type.CATTLE if p_species == Species.CATTLE else Commodity.Type.SHEEP
 
 ## Kind.HERD only: which commodity this ranch's live herd converts into when
 ## culled (see he_simulation.gd's _run_herds). Sheep also produce WOOL, but
 ## that's a passive trickle from herd_size, not this herd's "primary" output,
 ## so it isn't returned here.
 func herd_commodity() -> Commodity.Type:
-	return Commodity.Type.CATTLE if species == Species.CATTLE else Commodity.Type.SHEEP
+	return livestock_commodity(species)
 
 func stock(commodity: Commodity.Type) -> float:
 	return inventory.get(commodity, 0.0)

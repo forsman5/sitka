@@ -91,6 +91,15 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## only route surplus through that same discount. See he_scenario_
 	## seeds.gd's _bloomery_recipe doc comment for the worked-out numbers.
 	Commodity.Type.IRON: 15.0,
+	## Meat packs twice grain's food into a unit (see he_needs.gd) and leather
+	## is a one-for-one substitute for wool's clothing, so households compare
+	## each by price per need-unit. Both start a little under parity (grain
+	## and wool are 1.0 and 2.0 per unit; meat is 1.6 for two units' worth),
+	## and their price floor (a quarter of this) sits below grain's and wool's,
+	## so even when a glut has pushed the baseline to its floor the newcomer
+	## can still win on price rather than tie and go unbought.
+	Commodity.Type.MEAT: 1.6,
+	Commodity.Type.LEATHER: 1.6,
 }
 const PRICE_ADJUST_STEP := 0.05
 const PRICE_MULTIPLIER_MIN := 0.25
@@ -113,8 +122,10 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## build_three_business_economy_with_bloomery.
 const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL]
 ## Priority is fixed so changing checkboxes never silently reorders which
-## good gets first use of shared Trader capacity. Ore starts disabled.
-const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.IRON_ORE]
+## good gets first use of shared Trader capacity. Ore, meat and leather start
+## disabled: the Butcher's output is for the settlement's own households, and
+## a Trader dumping it at half price would only undercut them.
+const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER, Commodity.Type.IRON_ORE]
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -298,6 +309,45 @@ const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
 ## like any other commodity a business can hold and export.
 const HERD_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
 
+## The Butcher (HEBusiness.processes_livestock) buys culled head from the
+## settlement's ranches and turns each into MEAT and LEATHER. A local sale
+## replaces the Trader's discounted raw export, so the ranch is paid
+## BUTCHERY_PURCHASE_PRICE_FRACTION of HERD_EXPORT_PRICE: more than the
+## Trader's TRADER_BUY_PRICE_FRACTION, less than the full reference price,
+## which leaves the Butcher the margin for the value it adds (meat that feeds
+## households, leather that clothes them).
+##
+## Labor is the Butcher's constraint: each head costs worker-days, a cow far
+## more than a sheep. A day's crew works through whatever livestock it holds,
+## cattle first. Yields are authored placeholders, not yet tuned: a cow gives
+## roughly ten times a sheep's meat, while a hide is a small amount of
+## leather either way.
+const BUTCHERY_PURCHASE_PRICE_FRACTION := 0.75
+const BUTCHERY_WORKER_DAYS_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 3.0,
+	HEBusiness.Species.SHEEP: 0.5,
+}
+const BUTCHERY_MEAT_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 120.0,
+	HEBusiness.Species.SHEEP: 12.0,
+}
+const BUTCHERY_LEATHER_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 6.0,
+	HEBusiness.Species.SHEEP: 1.0,
+}
+## Species the Butcher works through, in order. Cattle first: more meat per
+## worker-day and a far higher price, so a crew short of time does the most
+## valuable work.
+const BUTCHERY_SPECIES_ORDER: Array[HEBusiness.Species] = [HEBusiness.Species.CATTLE, HEBusiness.Species.SHEEP]
+## Days of work the Butcher stocks livestock for. A ranch's cull arrives in
+## one lump every HERD_EVAL_INTERVAL_DAYS, far more than a crew handles in a
+## day, so the Butcher holds live animals and works through them.
+const BUTCHERY_INPUT_BUFFER_DAYS := 30.0
+## How far into the red the Butcher may go to buy a cull. A cull is a lump
+## bought up front and paid back as meat sells over the following weeks, the
+## same way a wage bill may run negative (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS).
+const BUTCHERY_CREDIT_LIMIT := 2000.0
+
 ## Hardship butchering (see _hardship_butcher_if_needed): a herd has no
 ## guaranteed near-term payoff the way a field does -- its cull can be many
 ## HERD_EVAL_INTERVAL_DAYS cycles away from a fresh or just-culled herd, far
@@ -371,6 +421,11 @@ const WAGE_RATIO_CLAMP := 1.0
 ## not by rationing take-home pay day to day.
 const WAGE_NEGATIVE_BALANCE_FLOOR_DAYS := 60.0
 
+## Inputs may be bought on credit beyond cash, up to this many days of the
+## business's own input cost (and never below the wage floor above). Matches
+## the input buffer it tries to hold, see PRODUCTION_INPUT_BUFFER_DAYS.
+const INPUT_CREDIT_DAYS := 14.0
+
 ## Weekly cash-runway guard (see _evaluate_business_capacity): a business
 ## whose balance plus its current stock's market value can't cover its own
 ## daily wage bill for this many more days gets forced to shrink, on top of
@@ -400,6 +455,17 @@ const EVENT_LOG_RETENTION_DAYS := 360
 ## still shows the last change after a long quiet period.
 const EMPLOYMENT_EVENTS_PER_TYPE := 100
 
+## Government: a flat sales tax on every DOMESTIC sale (household purchases
+## and business-to-business input purchases, local or Trader-supplied),
+## remitted by the seller to the settlement's Kind.GOVERNMENT business -- see
+## _collect_sales_tax. Exports are deliberately untaxed for now (a future
+## export duty), and a settlement with no government taxes nothing, so
+## scenarios that don't seed one behave exactly as before. Authored
+## placeholder: tuned (see run_household_economy.gd's government check) so a
+## ~30-household town's tax comfortably covers its one administrator's wage
+## with a modest surplus left over for the (stubbed) builder jobs.
+const SALES_TAX_RATE := 0.05
+
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
@@ -412,6 +478,10 @@ var day: int = 0
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
+
+## Sales tax fraction, a plain variable (not the const) so harnesses and a
+## future player policy can change it per sim. 0.0 turns the tax off.
+var sales_tax_rate: float = SALES_TAX_RATE
 
 ## Named "emigrate" rather than "die" -- placeholder terminology until H1
 ## actually connects to the wider valley (see docs/river-valley-vertical-
@@ -631,6 +701,17 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
 			report["stock"] = 0.0 # exports convert straight to money; the Trader never holds inventory
+		elif b.kind == HEBusiness.Kind.GOVERNMENT:
+			# Same keys the production branch fills, so detail pages that
+			# read them need no government special case.
+			report["recipe_id"] = "government"
+			report["output_commodity"] = "Public administration"
+			report["stock"] = 0.0
+			report["treasury"] = b.balance
+			report["last_tax_collected"] = b.last_tax_collected
+			report["tax_collected_total"] = b.tax_collected_total
+			report["sales_tax_rate"] = sales_tax_rate
+			report["builder_slots"] = b.builder_slots
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
@@ -678,6 +759,7 @@ func _kind_name(kind: HEBusiness.Kind) -> String:
 	match kind:
 		HEBusiness.Kind.TRADER: return "trader"
 		HEBusiness.Kind.HERD: return "herd"
+		HEBusiness.Kind.GOVERNMENT: return "government"
 		_: return "production"
 
 ## "Export (Grain, Timber) / Import (Iron Ore)" -- whichever commodities the
@@ -772,7 +854,7 @@ func _commodity_active_in_market(settlement_id: int, commodity: Commodity.Type) 
 			return true
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
-		if b.output_commodity() == commodity:
+		if b.sells(commodity):
 			return true
 		if b.recipe.inputs.has(commodity):
 			return true
@@ -817,11 +899,11 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 		var h: HEHousehold = households[household_id]
 		var stock := h.stock(commodity)
 		if stock > 0.0001:
-			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
+			holdings.append({"owner": "Household %d" % household_id, "kind": "household", "quantity": stock})
 		if SUBSISTENCE_COMMODITIES.has(commodity):
 			var desired: float = _desired_purchase(h, commodity)
 			if desired > 0.0001:
-				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
+				buyers.append({"owner": "Household %d" % household_id, "kind": "household", "requested": desired,
 					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
 	var business_ids := businesses.keys()
@@ -835,7 +917,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			holdings.append({"owner": b.name, "quantity": stock})
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
-		if b.output_commodity() == commodity:
+		if b.sells(commodity):
 			var offered := stock
 			if SUBSISTENCE_COMMODITIES.has(commodity) and b.uses_field_model():
 				offered = minf(stock, stock / float(maxi(1, b.days_until_next_harvest())) * SELL_PACE_HEADROOM)
@@ -1011,6 +1093,7 @@ func _daily_tick() -> void:
 	var record := _new_daily_record()
 	_pay_wages(record)
 	_run_input_purchasing(record)
+	_run_livestock_purchasing(record)
 	_run_production(record)
 	_run_market(record)
 	_run_trade(record)
@@ -1069,6 +1152,8 @@ func _finalize_daily_record(record: Dictionary) -> void:
 	record["closing_stock"] = _total_stock_snapshot()
 	record["closing_money"] = _total_money()
 	record["population"] = _total_population()
+	record["households"] = households.size()
+	record["unemployed_households"] = _unemployed_household_count()
 	_history.append(record)
 	if _history.size() > HISTORY_MAX_DAYS:
 		_history.pop_front()
@@ -1091,6 +1176,7 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_cash_change = 0.0
 		b.last_wage_shortfall = 0.0
 		b.todays_flows = {}
+		b.last_tax_collected = 0.0
 		# Single reset point for the day, since not every business's
 		# last_revenue gets overwritten later the same tick the way a
 		# SUBSISTENCE_COMMODITIES seller's does in _clear_market_for --
@@ -1107,7 +1193,9 @@ func _pay_wages(record: Dictionary) -> void:
 			continue
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		var total_needed: float = reference_wage * employed
-		var floor: float = -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		# A government pays only out of what its treasury actually holds -- no
+		# overdraft allowance, unlike a business that expects to earn it back.
+		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
@@ -1210,6 +1298,9 @@ func _run_production(record: Dictionary) -> void:
 			continue
 		if b.uses_field_model():
 			_run_field_growth(b, record)
+			continue
+		if b.processes_livestock:
+			_run_butchery(b, record)
 			continue
 		var employed := _business_employed_worker_count(business_id)
 		var output_commodity := b.output_commodity()
@@ -1396,6 +1487,39 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 				order.append(c)
 	return order
 
+## How far a household's own judgement of a non-baseline satisfier's price may
+## sit from the posted one, as a fraction (+-35%). Households never all agree
+## that meat has just become cheaper than grain: without this, every
+## household switches on the same day the price crosses parity, and demand for
+## the substitute swings from everyone to no one as the price drifts back and
+## forth over it. With it, demand shifts gradually across the range.
+const HOUSEHOLD_TASTE_SPREAD := 0.35
+
+## A household's fixed, deterministic taste in [-1, 1) -- derived from its id
+## rather than drawn from the sim's RNG, so it neither perturbs other random
+## draws nor changes between runs.
+func _household_taste(h: HEHousehold) -> float:
+	return float((h.id * 2654435761) % 1000) / 500.0 - 1.0
+
+## The member of `cascade` this household would reach for first: the lowest
+## price per need-unit as the household judges it, i.e. every non-baseline
+## satisfier's posted price scaled by its taste (`_household_taste`). Near-ties
+## go to the baseline, as in _satisfier_cascade. With a taste of 0 this is just
+## the cheapest posted satisfier, the cascade's first entry.
+func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity.Type]) -> Commodity.Type:
+	var local_market: HEMarket = markets[h.settlement_id]
+	var taste := _household_taste(h) * HOUSEHOLD_TASTE_SPREAD
+	var best := need.baseline
+	var best_cost: float = local_market.price[best] / need.value_of(best)
+	for c in cascade:
+		if c == need.baseline:
+			continue
+		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
+		if cost < best_cost - 0.0001:
+			best = c
+			best_cost = cost
+	return best
+
 ## How much of `commodity` a household asks for today. The buffer is
 ## measured in the need's units across every satisfier already held --
 ## including whatever it bought earlier in today's clearing -- and the shortfall
@@ -1407,8 +1531,17 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
 	if need == null:
 		return 0.0
-	if need.unit_values.size() > 1 and not _household_cascade(h.settlement_id, need).has(commodity):
-		return 0.0
+	if need.unit_values.size() > 1:
+		# Households clear a need's satisfiers in cascade order (cheapest posted
+		# first). Each reaches for its own favourite (see _household_favourite)
+		# and anything after it in that order as a fallback; goods that clear
+		# BEFORE the favourite are skipped, so a household that finds meat
+		# dearer than posted keeps buying grain until meat is clearly cheaper.
+		var cascade := _household_cascade(h.settlement_id, need)
+		if not cascade.has(commodity):
+			return 0.0
+		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
+			return 0.0
 	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
@@ -1651,7 +1784,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		var promoted := h.evaluate_aging()
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
-			new_households.append(_split_off_new_household(h, pre_split_headcount - i))
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
 		if h.evaluate_birth():
 			births += 1
@@ -1675,7 +1808,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 ## left, since evaluate_aging() may have promoted several at once this same
 ## period) -- a plain transfer, not a gift from nowhere, so total city
 ## money/goods are unaffected by a household splitting.
-func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int) -> HEHousehold:
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int) -> HEHousehold:
 	var new_id := _next_household_id
 	_next_household_id += 1
 	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
@@ -1691,7 +1824,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 
 	_log_event("split", {
 		"parent_household_id": parent.id, "new_household_id": new_id,
-		"starting_balance": starting_balance,
+		"starting_balance": starting_balance, "member_number": member_number,
 	})
 	return new_household
 
@@ -1755,6 +1888,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 		var b: HEBusiness = businesses[business_id]
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		reference_wages[b.settlement_id] = reference_wage
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			# Staffed by the seed / _ensure_administrator, not by revenue
+			# signals -- it has no revenue per worker to judge.
+			continue
 		if b.capacity == 0:
 			# A business at zero capacity has had no employed workers, so
 			# rolling_average_revenue_per_worker() reads a flat 0 --
@@ -1830,7 +1967,7 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 				change_reason = "cash_runway"
 		if delta != 0:
 			var old_capacity := b.capacity
-			b.capacity = clampi(b.capacity + delta, 0, b.max_capacity)
+			b.capacity = clampi(b.capacity + delta, b.min_capacity, b.max_capacity)
 			if b.capacity != old_capacity:
 				record["capacity_changes"][business_id] = {
 					"reason": change_reason,
@@ -1886,8 +2023,12 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 		return INF
 	var stock_value := 0.0
 	if b.kind == HEBusiness.Kind.PRODUCTION:
-		var oc := b.output_commodity()
-		stock_value = b.stock(oc) * (markets[b.settlement_id] as HEMarket).price[oc]
+		for oc in b.recipe.outputs.keys():
+			stock_value += b.stock(oc) * (markets[b.settlement_id] as HEMarket).price[oc]
+		if b.processes_livestock:
+			# Live animals the Butcher holds are worth what it paid for them.
+			for species in BUTCHERY_SPECIES_ORDER:
+				stock_value += b.stock(HEBusiness.livestock_commodity(species)) * _butchery_head_price(species)
 	elif b.kind == HEBusiness.Kind.HERD:
 		# The culled animal itself has no local price (see HERD_EXPORT_PRICE's
 		# doc comment) -- value it at what the Trader would actually pay for
@@ -1916,6 +2057,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
 		for household_id in households.keys():
 			if (households[household_id] as HEHousehold).employer_business_id == business_id:
@@ -1945,6 +2088,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			i -= 1
 
 	for settlement_id in get_settlement_ids():
+		_ensure_administrator(settlement_id)
 		var available: Array[int] = []
 		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 			if (households[household_id] as HEHousehold).employer_business_id == -1:
@@ -1955,6 +2099,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		local_business_ids.sort()
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
+			if b.kind == HEBusiness.Kind.GOVERNMENT:
+				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _business_employed_worker_count(business_id)
 			while employed_workers < b.capacity and pool_index < available.size():
 				var household_id: int = available[pool_index]
@@ -2083,6 +2229,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			seller.consume(commodity, quantity_traded)
 			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity_traded)
 			var revenue := quantity_traded * price
+			revenue -= _collect_sales_tax(settlement_id, revenue)
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
 			# tick, and _run_input_purchasing may have already added this
@@ -2226,7 +2373,10 @@ func _run_trade(record: Dictionary) -> void:
 				break
 			var herd: HEBusiness = businesses[herd_id]
 			var herd_commodity := herd.herd_commodity()
-			var herd_quantity: float = min(herd.stock(herd_commodity), remaining_capacity)
+			# A staffed Butcher gets first call on the cull (see
+			# _run_livestock_purchasing); only what it won't stock is exported.
+			var exportable_head: float = maxf(0.0, herd.stock(herd_commodity) - _butchery_reserved_head(herd.settlement_id, herd.species))
+			var herd_quantity: float = min(exportable_head, remaining_capacity)
 			if herd_quantity <= 0.0001:
 				continue
 
@@ -2413,16 +2563,17 @@ func _log_herd_event(b: HEBusiness, type: String, data: Dictionary) -> void:
 		b.herd_events.pop_front()
 
 ## Resolves whichever business sells `commodity` locally -- a PRODUCTION
-## business's one recipe output, or (WOOL only) whichever Sheep Farm holds
+## business whose recipe outputs it, or (WOOL only) whichever Sheep Farm holds
 ## it. Cattle Ranches/Sheep Farms' herd_commodity() (the animal itself) is
-## deliberately NOT resolved here -- see HERD_EXPORT_PRICE's doc comment for
-## why that stays Trader-export-only with no local seller at all.
+## deliberately NOT resolved here: no household buys a live animal, so it
+## never joins the local market. Ranches sell it to a Butcher directly (see
+## _run_livestock_purchasing) or to the Trader (see HERD_EXPORT_PRICE).
 func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		if b.settlement_id != settlement_id:
 			continue
-		if b.kind == HEBusiness.Kind.PRODUCTION and b.output_commodity() == commodity:
+		if b.sells(commodity):
 			return b
 		if b.kind == HEBusiness.Kind.HERD and b.species == HEBusiness.Species.SHEEP and commodity == Commodity.Type.WOOL:
 			return b
@@ -2598,6 +2749,9 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# per-input (checking it here too would let the same balance count
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
+		var daily_input_cost := 0.0
+		for commodity in daily_need_by_commodity.keys():
+			daily_input_cost += daily_need_by_commodity[commodity] * local_market.price[commodity]
 		for commodity in requested_by_commodity.keys():
 			var requested: float = requested_by_commodity[commodity]
 			if requested <= 0.0001:
@@ -2614,10 +2768,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			purchase_ratio = minf(purchase_ratio, min(requested, offer) / requested)
 
 		# Pass 1b: fold in the single shared cash constraint across every
-		# input at once.
+		# input at once. The budget is cash plus a bounded credit line (see
+		# _input_budget), so a business already in debt can still restock.
 		var affordable_ratio := 1.0
 		if total_cost_if_fully_supplied > 0.0001:
-			affordable_ratio = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
+			var budget := _input_budget(buyer, employed, daily_input_cost)
+			affordable_ratio = clampf(budget / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		for commodity in requested_by_commodity.keys():
@@ -2641,9 +2797,10 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				b2b["requested"] += requested * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
-				seller.balance += cost
-				seller.last_revenue += cost
-				seller.last_cash_change += cost
+				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)
+				seller.balance += net_cost
+				seller.last_revenue += net_cost
+				seller.last_cash_change += net_cost
 				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
 				# household or Trader pass records it, so without this the
 				# good's market shows 0 supplied / 0 requested.
@@ -2653,7 +2810,10 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				var offer_before: float = trader_import_capacity[trader.id]
 				trader_import_capacity[trader.id] -= bought
 				var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
-				var margin: float = cost - import_cost
+				# The sale to the local buyer is taxed; the Trader, as seller,
+				# bears it out of its import margin (never out of import_cost,
+				# which leaves the closed system).
+				var margin: float = cost - import_cost - _collect_sales_tax(buyer.settlement_id, cost)
 				trader.balance += margin
 				trader.last_revenue += margin
 				trader.last_cash_change += margin
@@ -2689,8 +2849,8 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 ## Splits a business's missing `shortfall` of a need (in need units) across
 ## the satisfiers it can actually obtain today, cheapest per unit first --
-## "obtain" meaning what _business_offer says, so stock that exists but is held
-## in the household reserve does not count, and a cheaper good with nothing
+## "obtain" meaning what _business_offer says, so stock that exists but is
+## already spoken for by households does not count, and a cheaper good with nothing
 ## available to this buyer simply isn't asked for. Only the baseline may come
 ## from the Trader's imports. Returns {satisfier: units to request}.
 ##
@@ -2720,6 +2880,227 @@ func _allocate_need_purchase(settlement_id: int, need: HENeed, shortfall: float,
 			remaining -= units * need.value_of(c)
 	return allocation
 
+## What an input buyer can spend today: its cash plus a bounded credit line.
+## Wages already run on credit (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS), but inputs
+## were capped at the cash balance, so a staffed business whose balance had
+## gone even slightly negative could pay its crew and never restock -- it
+## produced nothing, earned nothing, and stayed in debt for good. Inputs are
+## the working capital that makes the wages productive, so they draw on the
+## same credit line: down to the wage floor, and no more than INPUT_CREDIT_DAYS
+## of today's input cost beyond cash. That keeps credit bounded to the
+## buffer the business would hold anyway, and a business with no cash and no
+## headroom (at its wage floor) is still locked out.
+func _input_budget(buyer: HEBusiness, employed: int, daily_input_cost: float) -> float:
+	var wage_floor := -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * _reference_wage_per_worker(buyer.settlement_id) * employed
+	var headroom := maxf(0.0, buyer.balance - wage_floor)
+	return maxf(buyer.balance, 0.0) + minf(headroom, INPUT_CREDIT_DAYS * daily_input_cost)
+
+## What the Butcher pays a ranch for one head of `species`.
+func _butchery_head_price(species: HEBusiness.Species) -> float:
+	return HERD_EXPORT_PRICE[species] * BUTCHERY_PURCHASE_PRICE_FRACTION
+
+## Worker-days of processing the livestock `b` holds represents.
+func _butchery_held_worker_days(b: HEBusiness) -> float:
+	var total := 0.0
+	for species in BUTCHERY_SPECIES_ORDER:
+		total += b.stock(HEBusiness.livestock_commodity(species)) * BUTCHERY_WORKER_DAYS_PER_HEAD[species]
+	return total
+
+## Runs right after _run_input_purchasing: each staffed Butcher tops its
+## livestock up to BUTCHERY_INPUT_BUFFER_DAYS of work from the settlement's
+## ranches, cattle first, paying each ranch _butchery_head_price. This is a plain
+## business-to-business transfer -- no money or animals enter or leave the
+## system -- and it happens before _run_trade's herd export, so the Butcher
+## always gets first call on a cull.
+func _run_livestock_purchasing(record: Dictionary) -> void:
+	var business_ids := businesses.keys()
+	business_ids.sort()
+	for business_id in business_ids:
+		var butcher: HEBusiness = businesses[business_id]
+		if not butcher.processes_livestock:
+			continue
+		var workers := _business_employed_worker_count(business_id)
+		if workers <= 0:
+			continue
+		var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+		for species in BUTCHERY_SPECIES_ORDER:
+			if wanted_worker_days <= 0.0001:
+				break
+			var commodity := HEBusiness.livestock_commodity(species)
+			var price: float = _butchery_head_price(species)
+			var worker_days_per_head: float = BUTCHERY_WORKER_DAYS_PER_HEAD[species]
+			for herd_id in _herd_business_ids(butcher.settlement_id):
+				var herd: HEBusiness = businesses[herd_id]
+				if herd.species != species:
+					continue
+				var affordable: float = maxf(0.0, butcher.balance + BUTCHERY_CREDIT_LIMIT) / price
+				var head: float = minf(minf(herd.stock(commodity), wanted_worker_days / worker_days_per_head), affordable)
+				if head <= 0.0001:
+					continue
+				var cost: float = head * price
+				herd.consume(commodity, head)
+				herd.add_flow(HEBusiness.FLOW_SOLD, commodity, head)
+				var net_cost := cost - _collect_sales_tax(butcher.settlement_id, cost)
+				herd.balance += net_cost
+				herd.last_revenue += net_cost
+				herd.last_cash_change += net_cost
+				butcher.balance -= cost
+				butcher.last_cash_change -= cost
+				butcher.add_stock(commodity, head)
+				butcher.add_flow(HEBusiness.FLOW_BOUGHT, commodity, head)
+				var name := Commodity.name_of(commodity)
+				record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + head
+				wanted_worker_days -= head * worker_days_per_head
+
+## Livestock the Trader must leave in `settlement_id`'s ranches for staffed
+## Butchers to buy tomorrow: what their crews would still stock up on, cattle
+## first. An unstaffed Butcher reserves nothing, so a settlement whose Butcher
+## has not been hired yet exports its cull raw exactly as before.
+func _butchery_reserved_head(settlement_id: int, species: HEBusiness.Species) -> float:
+	var reserved := 0.0
+	var business_ids := businesses.keys()
+	business_ids.sort()
+	for business_id in business_ids:
+		var butcher: HEBusiness = businesses[business_id]
+		if not butcher.processes_livestock or butcher.settlement_id != settlement_id:
+			continue
+		var workers := _business_employed_worker_count(business_id)
+		if workers <= 0:
+			continue
+		var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+		for candidate in BUTCHERY_SPECIES_ORDER:
+			if wanted_worker_days <= 0.0001:
+				break
+			var available: float = 0.0
+			for herd_id in _herd_business_ids(settlement_id):
+				var herd: HEBusiness = businesses[herd_id]
+				if herd.species == candidate:
+					available += herd.stock(HEBusiness.livestock_commodity(candidate))
+			var worker_days_per_head: float = BUTCHERY_WORKER_DAYS_PER_HEAD[candidate]
+			var taken_worker_days: float = minf(wanted_worker_days, available * worker_days_per_head)
+			if candidate == species:
+				reserved += taken_worker_days / worker_days_per_head
+			wanted_worker_days -= taken_worker_days
+	return reserved
+
+## One day of butchery: the crew's worker-days go to the livestock the Butcher
+## holds, cattle first, and each head becomes meat and leather at once. The
+## animals are booked as a cost at what the Butcher paid for them (the same
+## way a recipe input is costed when consumed), so capacity tuning sees the
+## net revenue the work really earns.
+func _run_butchery(b: HEBusiness, record: Dictionary) -> void:
+	var workers := _business_employed_worker_count(b.id)
+	var worker_days_left := float(workers)
+	var cattle_meat_per_worker_day: float = BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE] / BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
+	var produced: Dictionary[Commodity.Type, float] = {Commodity.Type.MEAT: 0.0, Commodity.Type.LEATHER: 0.0}
+	for species in BUTCHERY_SPECIES_ORDER:
+		if worker_days_left <= 0.0001:
+			break
+		var commodity := HEBusiness.livestock_commodity(species)
+		var worker_days_per_head: float = BUTCHERY_WORKER_DAYS_PER_HEAD[species]
+		var head: float = minf(b.stock(commodity), worker_days_left / worker_days_per_head)
+		if head <= 0.0001:
+			continue
+		b.consume(commodity, head)
+		b.add_flow(HEBusiness.FLOW_CONSUMED, commodity, head)
+		var animal_name := Commodity.name_of(commodity)
+		record["consumed"][animal_name] = record["consumed"].get(animal_name, 0.0) + head
+		b.last_revenue -= head * _butchery_head_price(species)
+		worker_days_left -= head * worker_days_per_head
+		produced[Commodity.Type.MEAT] += head * BUTCHERY_MEAT_PER_HEAD[species]
+		produced[Commodity.Type.LEATHER] += head * BUTCHERY_LEATHER_PER_HEAD[species]
+	for commodity in produced.keys():
+		b.add_stock(commodity, produced[commodity])
+		var name := Commodity.name_of(commodity)
+		record["produced"][name] = record["produced"].get(name, 0.0) + produced[commodity]
+	b.last_planned_units = float(workers) * cattle_meat_per_worker_day
+	b.last_actual_units = produced[Commodity.Type.MEAT]
+	b.last_output_produced = produced
+
+## The settlement's Kind.GOVERNMENT business, or null (a scenario that never
+## seeded one -- then nothing is taxed there).
+func _settlement_government(settlement_id: int) -> HEBusiness:
+	for business_id in (settlements[settlement_id] as HESettlement).business_ids:
+		var b: HEBusiness = businesses.get(business_id)
+		if b != null and b.kind == HEBusiness.Kind.GOVERNMENT:
+			return b
+	return null
+
+## Sales tax on one domestic sale of gross value `gross` in `settlement_id`:
+## moves sales_tax_rate * gross into that settlement's government treasury and
+## returns the amount, which the CALLER must deduct from what the seller keeps
+## (seller-remitted, so a buyer's price/affordability math is untouched).
+## Returns 0.0 -- taxing nothing -- when there is no government or the rate is
+## zero. A pure internal transfer, so total money is conserved.
+func _collect_sales_tax(settlement_id: int, gross: float) -> float:
+	if sales_tax_rate <= 0.0 or gross <= 0.0:
+		return 0.0
+	var gov := _settlement_government(settlement_id)
+	if gov == null:
+		return 0.0
+	var tax := gross * sales_tax_rate
+	gov.balance += tax
+	gov.last_tax_collected += tax
+	gov.last_revenue += tax
+	gov.last_cash_change += tax
+	gov.tax_collected_total += tax
+	return tax
+
+## Keeps a government's administrator permanent: if no household is employed
+## by it (the seeded one died of old age, left, etc.), hire a replacement --
+## an unemployed household with workers first, else poach a worker household
+## from the lowest-id other employer. Called each _reconcile_employment, ahead
+## of ordinary hiring so the post gets first pick. No-op without a government
+## or when it is already staffed. TODO(builders): the same upkeep for the
+## builder_slots once those exist.
+func _ensure_administrator(settlement_id: int) -> void:
+	var gov := _settlement_government(settlement_id)
+	if gov == null or _business_employed_household_count(gov.id) > 0:
+		return
+	var pick: HEHousehold = null
+	var household_ids: Array[int] = []
+	household_ids.assign((settlements[settlement_id] as HESettlement).household_ids)
+	household_ids.sort()
+	for household_id in household_ids:
+		var h: HEHousehold = households[household_id]
+		if h.worker_capacity() > 0 and h.employer_business_id == -1:
+			pick = h
+			break
+	if pick == null:
+		for household_id in household_ids:
+			var h: HEHousehold = households[household_id]
+			if h.worker_capacity() > 0:
+				pick = h
+				break
+	if pick == null:
+		return
+	pick.employer_business_id = gov.id
+	_log_event("job", {"household_id": pick.id, "business_id": gov.id, "settlement_id": settlement_id, "workers": pick.worker_capacity()})
+
+## Read-only treasury view for UI / player actions (build costs will draw on
+## it): {} when the settlement has no government.
+func get_government_summary(settlement_id: int) -> Dictionary:
+	if not settlements.has(settlement_id):
+		return {}
+	var gov := _settlement_government(settlement_id)
+	if gov == null:
+		return {}
+	var admin_ids: Array[int] = []
+	for household_id in households.keys():
+		if (households[household_id] as HEHousehold).employer_business_id == gov.id:
+			admin_ids.append(household_id)
+	admin_ids.sort()
+	return {
+		"business_id": gov.id,
+		"treasury": gov.balance,
+		"sales_tax_rate": sales_tax_rate,
+		"last_tax_collected": gov.last_tax_collected,
+		"tax_collected_total": gov.tax_collected_total,
+		"last_wages_paid": gov.last_wages_paid,
+		"administrator_household_ids": admin_ids,
+		"builder_slots": gov.builder_slots,
+	}
+
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
 ## this), so the reserve tracks the settlement's actual size/composition
@@ -2732,9 +3113,18 @@ func _allocate_need_purchase(settlement_id: int, need: HENeed, shortfall: float,
 ## also keeps this free of the market state _satisfier_cascade reads, which
 ## itself depends on reserves.)
 func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> float:
+	var need := HENeeds.for_commodity(commodity)
+	var is_substitute: bool = need != null and commodity != need.baseline
+	var cascade: Array[Commodity.Type] = []
+	if is_substitute:
+		cascade = _household_cascade(settlement_id, need)
 	var total := 0.0
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
-		total += _daily_need(households[household_id] as HEHousehold, commodity)
+		var h: HEHousehold = households[household_id]
+		# Only households whose favourite is a substitute count toward it.
+		if is_substitute and _household_favourite(h, need, cascade) != commodity:
+			continue
+		total += _daily_need(h, commodity)
 	return total
 
 func _business_employed_worker_count(business_id: int) -> int:
@@ -2862,6 +3252,13 @@ func _total_money(settlement_id: int = -1) -> float:
 		var b: HEBusiness = businesses[business_id]
 		if settlement_id == -1 or b.settlement_id == settlement_id:
 			total += b.balance
+	return total
+
+func _unemployed_household_count() -> int:
+	var total := 0
+	for h in households.values():
+		if not (h as HEHousehold).is_employed():
+			total += 1
 	return total
 
 func _total_population(settlement_id: int = -1) -> int:

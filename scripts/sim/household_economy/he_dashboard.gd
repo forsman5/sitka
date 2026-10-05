@@ -20,6 +20,9 @@ const WAGE_TOOLTIP := "A business paying above the reference wage grows (green);
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
 const BLOTTER_HISTORY_DAYS := 30
+## Household detail looks back as far as the sim retains events
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
@@ -44,6 +47,40 @@ const FLOW_VIEWS := [
 		],
 	},
 ]
+## Town tab read-outs: [label, city-summary key, format].
+const TOWN_STATS := [
+	["Households", "household_count", "%d"],
+	["Population", "population", "%d"],
+	["Unemployed households", "unemployed_household_count", "%d"],
+	["Avg stress", "avg_food_stress", "%.2f"],
+	["Short of goods", "households_short_of_goods", "%d"],
+	["Short of funds", "households_short_of_funds", "%d"],
+	["Total money", "total_money", "%.1f"],
+	["Emigrations (lifetime)", "emigrations_total", "%d"],
+	["Old age deaths (lifetime)", "old_age_deaths_total", "%d"],
+	["Births (lifetime)", "births_total", "%d"],
+	["Worker promotions (lifetime)", "worker_promotions_total", "%d"],
+	["Money written off", "money_written_off_total", "%.1f"],
+	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
+	["Import cost (lifetime)", "import_cost_total", "%.1f"],
+]
+const TOWN_CHART_DAYS := 90
+## Births, emigrations and deaths are evaluated monthly, so the daily record is
+## mostly zeros with a spike every 30 days; the flow chart plots a trailing
+## sum over this many days instead so the lines are readable.
+const TOWN_FLOW_WINDOW_DAYS := 30
+## [series name, daily-record key]
+const TOWN_POPULATION_SERIES := [
+	["Population", "population"],
+	["Households", "households"],
+	["Unemployed households", "unemployed_households"],
+]
+const TOWN_FLOW_SERIES := [
+	["Births", "births"],
+	["Emigrations", "emigrations"],
+	["Old-age deaths", "old_age_deaths"],
+]
+
 const BLOTTER_FILTERS := [
 	{"type": "birth", "label": "Births"},
 	{"type": "emigrate", "label": "Starvation emigration"},
@@ -64,7 +101,9 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _day_label: Label
-var _city_stats_label: Label
+var _town_stat_labels: Dictionary = {} # city-summary key -> Label
+var _town_population_chart: HESparkline
+var _town_flow_chart: HESparkline
 var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
 var _known_market_commodities: Array = [] # rebuild trigger -- see _refresh()
@@ -231,17 +270,14 @@ func _build_ui() -> void:
 	top_bar.add_child(_make_speed_button("10x", 10.0))
 	top_bar.add_child(_make_speed_button("100x", 100.0))
 
-	_city_stats_label = Label.new()
-	_city_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_city_stats_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
-	vbox.add_child(_city_stats_label)
-
-	# Businesses and Goods share one fixed-height tabbed area. Stacked, the
+	# Town, Businesses and Goods share one fixed-height tabbed area. Stacked, the
 	# business list grew with every new business and crowded out the
 	# households/detail row below; each tab scrolls internally instead.
 	var top_tabs := TabContainer.new()
-	top_tabs.custom_minimum_size = Vector2(0, 200)
+	top_tabs.custom_minimum_size = Vector2(0, 250)
 	vbox.add_child(top_tabs)
+
+	_build_town_tab(top_tabs)
 
 	var business_scroll := ScrollContainer.new()
 	business_scroll.name = "Businesses"
@@ -589,6 +625,87 @@ func _build_ui() -> void:
 	_rebuild_business_rows()
 	_rebuild_household_rows()
 
+## Town tab (index 0): the city-wide indicators on the left, and two charts on
+## the right -- population levels, and births/emigrations/deaths.
+func _build_town_tab(top_tabs: TabContainer) -> void:
+	var row := HBoxContainer.new()
+	row.name = "Town"
+	row.add_theme_constant_override("separation", 16)
+	top_tabs.add_child(row)
+
+	var stats_scroll := ScrollContainer.new()
+	stats_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.size_flags_stretch_ratio = 1.0
+	stats_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(stats_scroll)
+	var stats_grid := GridContainer.new()
+	stats_grid.columns = 2
+	stats_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.add_child(stats_grid)
+	for stat in TOWN_STATS:
+		var name_label := Label.new()
+		name_label.text = stat[0]
+		name_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stats_grid.add_child(name_label)
+		var value_label := Label.new()
+		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		stats_grid.add_child(value_label)
+		_town_stat_labels[stat[1]] = value_label
+
+	var charts := VBoxContainer.new()
+	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	charts.size_flags_stretch_ratio = 2.0
+	row.add_child(charts)
+	_town_population_chart = _add_town_chart(charts, "Population (last %d days)" % TOWN_CHART_DAYS, TOWN_POPULATION_SERIES)
+	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
+
+## A title row with a color-keyed legend above a hoverable chart.
+func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	parent.add_child(header)
+	var title := Label.new()
+	title.text = title_text
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	for i in series_defs.size():
+		var legend := Label.new()
+		legend.text = series_defs[i][0]
+		legend.add_theme_color_override("font_color", HESparkline.color_for_series(i))
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 60)
+	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	chart.show_max_label = true
+	parent.add_child(chart)
+	return chart
+
+func _refresh_town() -> void:
+	var city := _simulation.get_city_summary()
+	for stat in TOWN_STATS:
+		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
+	# Extra leading days so the trailing flow sums are full from the first point.
+	var history := _simulation.get_daily_history(TOWN_CHART_DAYS + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - TOWN_CHART_DAYS)
+	var population_series: Array = []
+	for i in TOWN_POPULATION_SERIES.size():
+		var values: Array[float] = []
+		for d in range(shown_from, history.size()):
+			values.append(float(history[d][TOWN_POPULATION_SERIES[i][1]]))
+		population_series.append({"name": TOWN_POPULATION_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
+	_town_population_chart.set_series(population_series)
+	var flow_series: Array = []
+	for i in TOWN_FLOW_SERIES.size():
+		var values: Array[float] = []
+		for d in range(shown_from, history.size()):
+			var total := 0.0
+			for k in range(maxi(0, d - TOWN_FLOW_WINDOW_DAYS + 1), d + 1):
+				total += float(history[k][TOWN_FLOW_SERIES[i][1]])
+			values.append(total)
+		flow_series.append({"name": TOWN_FLOW_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
+	_town_flow_chart.set_series(flow_series)
+
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
@@ -656,6 +773,29 @@ func _refresh_household_detail() -> void:
 	for child in _household_detail_content.get_children():
 		_household_detail_content.remove_child(child)
 		child.queue_free()
+
+	# TODO: pull names -- members are just numbered by index for now.
+	_add_household_detail_heading("Members (%d)" % h["headcount"])
+	var member_index := 1
+	for age in h["worker_ages"]:
+		_add_household_detail_line("Member %d: worker, age %s" % [member_index, _format_age(age)])
+		member_index += 1
+	for age in h["dependent_ages"]:
+		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
+		member_index += 1
+
+	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
+	var event_lines: Array[String] = []
+	var events := _simulation.get_event_log_days(HOUSEHOLD_EVENT_HISTORY_DAYS)
+	for i in range(events.size() - 1, -1, -1):
+		if _is_household_event(events[i], _selected_household_id):
+			event_lines.append(_format_event(events[i]))
+	var events_display := RichTextLabel.new()
+	events_display.bbcode_enabled = true
+	events_display.fit_content = true
+	events_display.scroll_active = false
+	events_display.text = "\n".join(event_lines) if not event_lines.is_empty() else "[i]No events in this window.[/i]"
+	_household_detail_content.add_child(events_display)
 
 	_add_household_detail_heading("Inventory")
 	var inventory: Dictionary = h["inventory"]
@@ -827,7 +967,12 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 	if rows.is_empty():
 		_add_market_detail_line("None")
 		return
+	var household_rows: Array = rows.filter(func(r): return r.get("kind", "") == "household")
+	if not household_rows.is_empty():
+		_add_market_detail_line(_household_summary_line(household_rows, quantity_key, secondary_key))
 	for row in rows:
+		if row.get("kind", "") == "household":
+			continue
 		if row.get("kind", "") == "export":
 			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
 				row["owner"], row["capacity"], row["available"]])
@@ -841,6 +986,26 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
 		_add_market_detail_line(line)
+
+## One line standing in for every household row: count, average quantity, and
+## (for buyers) average affordable plus how many can't afford their full request.
+func _household_summary_line(rows: Array, quantity_key: String, secondary_key: String) -> String:
+	var count := rows.size()
+	var total := 0.0
+	var total_secondary := 0.0
+	var unaffordable := 0
+	for row in rows:
+		total += row[quantity_key]
+		if secondary_key != "":
+			total_secondary += row[secondary_key]
+			if secondary_key == "funded" and row[secondary_key] < row[quantity_key] - 0.0001:
+				unaffordable += 1
+	var line := "%d households: avg %.1f %s" % [count, total / count, quantity_key]
+	if secondary_key == "funded":
+		line += "  |  avg %.1f affordable  |  %d cannot afford full request" % [total_secondary / count, unaffordable]
+	elif secondary_key != "":
+		line += "  |  avg %.1f %s" % [total_secondary / count, secondary_key]
+	return line
 
 func _on_trader_transaction_filter_pressed(filter: String) -> void:
 	_trader_transaction_filter = filter
@@ -1533,11 +1698,7 @@ func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
 
-	var city := _simulation.get_city_summary()
-	_city_stats_label.text = "households=%d  population=%d  unemployed households=%d  avg stress=%.2f  short of goods=%d  short of funds=%d  total money=%.1f  emigrations (lifetime)=%d  old age deaths (lifetime)=%d  births (lifetime)=%d  worker promotions (lifetime)=%d  money written off=%.1f  export revenue (lifetime)=%.1f  import cost (lifetime)=%.1f" % [
-		city["household_count"], city["population"], city["unemployed_household_count"], city["avg_food_stress"],
-		city["households_short_of_goods"], city["households_short_of_funds"], city["total_money"],
-		city["emigrations_total"], city["old_age_deaths_total"], city["births_total"], city["worker_promotions_total"], city["money_written_off_total"], city["export_revenue_total"], city["import_cost_total"]]
+	_refresh_town()
 
 	var market := _simulation.get_market_summary()
 	var current_market_commodities := market.keys()
@@ -1584,6 +1745,10 @@ func _refresh() -> void:
 			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
 			status_label.text = status_text
 			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
+		elif report["kind"] == "government":
+			var gov_text := "Treasury %.1f · tax today %.2f (%.0f%% sales tax)" % [report["treasury"], report["last_tax_collected"], report["sales_tax_rate"] * 100.0]
+			status_label.text = gov_text
+			status_label.tooltip_text = "%s\n\nSales tax on every local sale pays the administrator; builder jobs are not modeled yet." % gov_text
 		elif report["kind"] == "trader":
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
@@ -1685,6 +1850,23 @@ func _format_day(day: int) -> String:
 		return "Day %d" % day
 	return "Year %d, Day %d" % [year, day % 365]
 
+## 456 days -> "1 years 91 days". Ages are durations, so unlike _format_day
+## the year is always shown.
+func _format_age(age_days: int) -> String:
+	return "%d years %d days" % [age_days / 365, age_days % 365]
+
+## Household-detail events: life events only (births, deaths, leaving, splits,
+## adoptions); hiring/firing and herd events stay on the main blotter.
+func _is_household_event(event: Dictionary, household_id: int) -> bool:
+	match event["type"]:
+		"birth", "old_age", "emigrate":
+			return event["household_id"] == household_id
+		"split":
+			return event["parent_household_id"] == household_id or event["new_household_id"] == household_id
+		"adopted":
+			return event["household_id"] == household_id or event["adopting_household_id"] == household_id
+	return false
+
 func _format_event(event: Dictionary) -> String:
 	var day: String = _format_day(event["day"])
 	match event["type"]:
@@ -1702,7 +1884,7 @@ func _format_event(event: Dictionary) -> String:
 			var dep_plural := "s" if dep_count != 1 else ""
 			return "[color=#a0a0a0]%s - Household %d dissolved: %d dependent%s adopted by Household %d[/color]" % [day, event["household_id"], dep_count, dep_plural, event["adopting_household_id"]]
 		"split":
-			return "[color=#8db4e0]%s - Household %d split: Household %d founded[/color]" % [day, event["parent_household_id"], event["new_household_id"]]
+			return "[color=#8db4e0]%s - Household %d split: Member %d left to found Household %d[/color]" % [day, event["parent_household_id"], event["member_number"], event["new_household_id"]]
 		"coming_of_age":
 			return "[color=#d9c98f]%s - Household %d: member came of age[/color]" % [day, event["household_id"]]
 		"job":

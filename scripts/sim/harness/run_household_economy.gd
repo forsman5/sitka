@@ -26,6 +26,7 @@ func _init() -> void:
 	_check_bloomery_smelting()
 	_check_charcoal_burner_heats_households()
 	_check_businesses_share_wood_with_households()
+	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
@@ -44,9 +45,11 @@ func _init() -> void:
 	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
+	_check_government_taxes()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -208,6 +211,38 @@ func _check_businesses_share_wood_with_households() -> void:
 		"Households should get >=90%% of their wood in the long run without a reserve -- got %.1f of %.1f" % [late_got, late_demand])
 	_assert(early_got > 0.0, "Households should buy some wood even in the first 120 days")
 
+## Wages run on credit down to a floor, so inputs must too: a staffed business
+## whose balance dipped below zero used to be unable to buy anything, so it
+## produced nothing and never earned its way back. Credit stops at the same
+## wage floor, so a business at the floor is still locked out.
+func _check_input_purchases_on_credit() -> void:
+	print("\n=== Inputs on credit: a business in debt can restock, but not past its wage floor ===")
+	var timber := Commodity.Type.TIMBER
+	var in_debt := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var bloomery: HEBusiness = in_debt.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	var settlement_id: int = in_debt.get_settlement_ids()[0]
+	var employed := in_debt._business_employed_worker_count(bloomery.id)
+	var wage_floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * in_debt._reference_wage_per_worker(settlement_id) * employed
+	in_debt.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
+	in_debt.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
+	bloomery.inventory = {}
+	bloomery.balance = -10.0
+	in_debt._run_input_purchasing(in_debt._new_daily_record())
+	print("  in debt (-10, floor %.0f): bought %.1f timber, balance now %.1f, input fulfilment %.2f" % [wage_floor, bloomery.stock(timber), bloomery.balance, bloomery.last_input_fulfillment_ratio])
+	_assert(bloomery.stock(timber) > 0.0, "A staffed business in debt should still be able to buy inputs on credit")
+	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "A business restocked on credit should be able to produce")
+	_assert(bloomery.balance >= wage_floor - EPSILON, "Credit must stop at the wage floor %.1f, balance reached %.1f" % [wage_floor, bloomery.balance])
+
+	var at_floor := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var stuck: HEBusiness = at_floor.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	at_floor.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
+	at_floor.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
+	stuck.inventory = {}
+	stuck.balance = wage_floor
+	at_floor._run_input_purchasing(at_floor._new_daily_record())
+	print("  at the floor: bought %.2f timber" % stuck.stock(timber))
+	_assert(stuck.stock(timber) <= 0.0001, "A business at its wage floor has no credit left to buy inputs with")
+
 ## The detail tab's goods-flow charts: every production business reports a
 ## history per flow, and those histories must reconcile with its own storage
 ## -- end stock = start stock + produced - sold for its output, and
@@ -231,6 +266,11 @@ func _check_goods_flow_history_reconciles_with_stock() -> void:
 	for report in sim.get_business_reports():
 		if report["kind"] != "production":
 			_assert(not report.has("flow_history"), "%s is not a production business and should report no flow_history" % report["name"])
+			continue
+		# This check assumes one output good and recipe inputs; the Butcher has
+		# two outputs and live-animal inputs, and is checked in
+		# _check_butcher_processes_livestock.
+		if (sim.businesses[report["business_id"]] as HEBusiness).processes_livestock:
 			continue
 		var flows: Dictionary = report["flow_history"]
 		var output_name: String = report["output_commodity"]
@@ -751,7 +791,10 @@ func _check_trader_employment_does_not_churn_between_harvests() -> void:
 		# settles (5 days here vs 2 without ranches). Still a "settles, not
 		# thrashes" bound -- the unfixed bug this guards against laid off
 		# roughly every three weeks (11+ days).
-		_assert(late_layoff_days <= 5, "Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
+		# Now 6, not 5, with the 5% sales tax on: sellers keep a little less
+		# revenue per worker, so the Trader trims once more while it settles
+		# (probed: 4 layoff days at 0% tax, 5 at 2%, 6 at 5%).
+		_assert(late_layoff_days <= 6,"Trader repeatedly laid off staff between supplier harvests in %s (%d layoff days)" % [scenario, late_layoff_days])
 
 func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	sim.advance_ticks(day - sim.day)
@@ -1073,6 +1116,67 @@ func _check_herd_monetization() -> void:
 
 	_check_demographic_invariants(sim)
 
+## The Butcher turns a ranch's cull into meat and leather instead of the Trader
+## exporting it raw, and households eat the meat (twice grain's food value) and
+## may wear the leather. Run for four years so both ranches have culled
+## several times, reconciling goods and money every single day.
+func _check_butcher_processes_livestock() -> void:
+	print("\n=== Butcher: ranch culls become meat and leather, which households eat ===")
+	var sim := _new_sim("build_three_business_economy")
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	_assert(butcher.processes_livestock and butcher.sells(Commodity.Type.MEAT) and butcher.sells(Commodity.Type.LEATHER),
+		"The seeded Butcher should process livestock into meat and leather")
+	_assert(sim._business_selling(sim.get_settlement_ids()[0], Commodity.Type.LEATHER) == butcher,
+		"The Butcher should be the local seller of its secondary output too")
+
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	var produced := {}
+	var consumed := {}
+	var exported := {}
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for window in 4:
+		sim.advance_ticks(360)
+		for record in sim.get_daily_history(360):
+			for c in reconciled_commodities:
+				var name := Commodity.name_of(c)
+				var day_produced: float = record["produced"].get(name, 0.0)
+				var day_consumed: float = record["consumed"].get(name, 0.0)
+				var day_exported: float = (record["exported"] as Dictionary).get(name, 0.0)
+				var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				var expected: float = record["opening_stock"][name] + day_produced - day_consumed - day_exported - written_off
+				worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+				produced[name] = produced.get(name, 0.0) + day_produced
+				consumed[name] = consumed.get(name, 0.0) + day_consumed
+				exported[name] = exported.get(name, 0.0) + day_exported
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+
+	var butchered: float = consumed.get("Cattle", 0.0) + consumed.get("Sheep", 0.0)
+	var exported_raw: float = exported.get("Cattle", 0.0) + exported.get("Sheep", 0.0)
+	print("  over 4 years: butchered %.0f head (exported raw: %.0f) -> meat %.0f, leather %.0f | households ate %.0f meat" % [
+		butchered, exported_raw, produced.get("Meat", 0.0), produced.get("Leather", 0.0), consumed.get("Meat", 0.0)])
+	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(butchered > 0.0, "The Butcher should have processed some livestock in four years")
+	_assert(produced.get("Meat", 0.0) > 0.0 and produced.get("Leather", 0.0) > 0.0, "The Butcher should have made both meat and leather")
+	_assert(butchered > exported_raw, "Most of the cull should go to the Butcher rather than leave raw (%.0f butchered vs %.0f exported)" % [butchered, exported_raw])
+	_assert(consumed.get("Meat", 0.0) > 0.0, "Households should have eaten some of the meat")
+	# Meat sits near price parity with grain. Households judge that price a
+	# little differently, so demand shifts gradually across it; if they all
+	# agreed, every household would flip together each time the price crossed
+	# parity and demand would alternate between everyone and no one.
+	var demanded: Array = sim.get_market_report(sim.get_settlement_ids()[0], Commodity.Type.MEAT)["demanded_history"]
+	var zero_demand_days := 0
+	for v in demanded:
+		if v <= 0.0001:
+			zero_demand_days += 1
+	print("  meat demand: %d zero-demand days in the last %d" % [zero_demand_days, demanded.size()])
+	_assert(zero_demand_days <= 5, "Meat demand should not swing to zero as households all flip satisfier together: %d zero days of %d" % [zero_demand_days, demanded.size()])
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Butcher present, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
+	_check_demographic_invariants(sim)
+
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
 ## the lifecycle engine.
@@ -1082,13 +1186,23 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.WOOL],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
 		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
 	_assert(HENeeds.for_commodity(Commodity.Type.GRAIN).id == HENeed.Id.FOOD, "Grain should satisfy food")
 	_assert(HENeeds.for_commodity(Commodity.Type.IRON) == null, "Iron satisfies no household need")
+	_assert(HENeeds.for_commodity(Commodity.Type.MEAT).id == HENeed.Id.FOOD, "Meat should satisfy food")
+	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.MEAT), 2.0 * HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.GRAIN)),
+		"Meat should be worth twice grain as food")
+	_assert(HENeeds.get_need(HENeed.Id.FOOD).satisfiers()[0] == Commodity.Type.MEAT, "Meat is the denser food, so it should burn before grain")
+	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.MEAT), 0.2), "A person needs half as much meat as grain")
+	_assert(HENeeds.for_commodity(Commodity.Type.LEATHER).id == HENeed.Id.CLOTHING, "Leather should satisfy clothing")
+	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.LEATHER), HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.WOOL)),
+		"Leather and wool should clothe one-for-one")
+	_assert(HENeeds.get_need(HENeed.Id.CLOTHING).baseline == Commodity.Type.WOOL and HENeeds.get_need(HENeed.Id.FOOD).baseline == Commodity.Type.GRAIN,
+		"Baselines should stay wool and grain")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
 	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
@@ -1241,6 +1355,79 @@ func _check_fuel_fallback() -> void:
 	_assert(bloomery.stock(charcoal) <= 1.0001, "A business cannot buy more charcoal than the burner holds, got %.3f" % bloomery.stock(charcoal))
 	_assert(bloomery.stock(timber) > 0.0, "The Bloomery should buy timber when the cheaper fuel is unavailable to it")
 	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "The Bloomery should not stall for fuel while timber is for sale")
+
+## Government + sales tax: every domestic sale remits a slice to the town
+## treasury, which pays one permanent administrator and never overdrafts.
+## Sweeps the tax rate so the printout answers "is a sales tax alone enough,
+## or do we also need a resident/property tax?" -- see HESimulation.SALES_TAX_RATE.
+func _check_government_taxes() -> void:
+	print("\n=== Government: sales tax funds a permanent administrator ===")
+	var gov_id := HEScenarioSeeds.GOVERNMENT_BUSINESS_ID
+	var sim := _new_sim("build_three_business_economy")
+	var summary := sim.get_government_summary(1)
+	_assert(not summary.is_empty(), "Seeded town should have a government")
+	_assert((summary["administrator_household_ids"] as Array).size() == 1, "Government should start with exactly one administrator household")
+	_assert(summary["builder_slots"] == 0, "Builder jobs are a stub: no slots yet")
+
+	var days := 730
+	var worst_treasury := INF
+	var late_shortfall_days := 0
+	var capacity_start := 0
+	for report in sim.get_business_reports():
+		if report["business_id"] == gov_id:
+			capacity_start = report["capacity"]
+			_assert(report["kind"] == "government", "Government report should be kind=government")
+	for d in days:
+		sim.advance_ticks(1)
+		worst_treasury = minf(worst_treasury, sim.get_government_summary(1)["treasury"])
+		if d >= 30:
+			for report in sim.get_business_reports(1):
+				if report["business_id"] == gov_id and report["wage_shortfall"] > EPSILON:
+					late_shortfall_days += 1
+	summary = sim.get_government_summary(1)
+	var wage_per_day := 0.0
+	for report in sim.get_business_reports(1):
+		if report["business_id"] == gov_id:
+			wage_per_day = report["last_wages_paid"]
+			_assert(report["capacity"] == capacity_start, "Government capacity must not self-tune")
+	print("  default rate %.0f%%: tax collected=%.1f (%.2f/day) vs administrator wage %.2f/day, treasury=%.1f, wage-shortfall days after day 30: %d" % [sim.sales_tax_rate * 100.0, summary["tax_collected_total"], summary["tax_collected_total"] / days, wage_per_day, summary["treasury"], late_shortfall_days])
+	_assert(summary["tax_collected_total"] > 0.0, "Sales tax should collect something")
+	_assert(worst_treasury >= -EPSILON, "Treasury must never overdraft (worst %.4f)" % worst_treasury)
+	_assert(late_shortfall_days == 0, "Sales tax alone should sustain the administrator's wage after the first month (%d short days)" % late_shortfall_days)
+	_assert(summary["tax_collected_total"] / days >= wage_per_day, "Average tax income should cover the administrator's daily wage")
+
+	# Tax is a transfer: same-day money reconciliation must still hold with it on.
+	var worst_money_gap := 0.0
+	for record in sim.get_daily_history(days):
+		var expected: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected))
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with sales tax on, worst gap %.4f" % worst_money_gap)
+
+	# Rate sweep (information + a monotonicity guard).
+	var previous_tax := -1.0
+	for rate in [0.0, 0.03, 0.05, 0.08]:
+		var swept := _new_sim("build_three_business_economy")
+		swept.sales_tax_rate = rate
+		swept.advance_ticks(365)
+		var s := swept.get_government_summary(1)
+		print("  rate %.0f%%: year-1 tax=%.1f treasury=%.1f" % [rate * 100.0, s["tax_collected_total"], s["treasury"]])
+		if rate == 0.0:
+			_assert(s["tax_collected_total"] == 0.0, "Rate 0 must collect nothing")
+		_assert(s["tax_collected_total"] >= previous_tax, "A higher rate should not collect less tax")
+		previous_tax = s["tax_collected_total"]
+
+	# The post is permanent: lose the administrator and the next weekly
+	# reconcile fills it again.
+	var staffed := _new_sim("build_three_business_economy")
+	var admin_id: int = (staffed.get_government_summary(1)["administrator_household_ids"] as Array)[0]
+	staffed.households[admin_id].employer_business_id = -1
+	staffed.advance_ticks(HESimulation.CAPACITY_EVAL_INTERVAL_DAYS)
+	_assert((staffed.get_government_summary(1)["administrator_household_ids"] as Array).size() >= 1, "Administrator post should be refilled after the holder leaves")
+
+	# A town with no government taxes nothing and reports none.
+	var bare := _new_sim("build_two_settlement_economy")
+	bare.advance_ticks(60)
+	_assert(bare.get_government_summary(1).is_empty(), "A scenario without a government should report none")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

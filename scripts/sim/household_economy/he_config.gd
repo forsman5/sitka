@@ -15,6 +15,7 @@ const BUSINESSES := [
 	{"id": HEScenarioSeeds.TRADER_BUSINESS_ID, "label": "Trader", "hint": "Imports and exports surplus."},
 	{"id": HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID, "label": "Cattle Ranch", "hint": "Herd; starts with no staff."},
 	{"id": HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID, "label": "Sheep Farm", "hint": "Herd and wool; starts with no staff."},
+	{"id": HEScenarioSeeds.BUTCHER_BUSINESS_ID, "label": "Butcher", "hint": "Turns ranch livestock into meat and leather."},
 	{"id": HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore."},
 	{"id": HEScenarioSeeds.IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery."},
 	{"id": HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID, "label": "Charcoal Burner", "hint": "Turns timber into charcoal, a denser fuel for heating."},
@@ -23,11 +24,11 @@ const BUSINESSES := [
 ## "include" mirrors which businesses each builder in HEScenarioSeeds creates,
 ## so choosing a preset ticks the matching boxes.
 const PRESETS := [
-	{"label": "Five businesses, evenly staffed", "builder": "build_three_business_economy", "include": [1, 2, 3, 6, 7]},
-	{"label": "Five businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7]},
-	{"label": "Six businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7]},
-	{"label": "Seven businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7]},
-	{"label": "Eight businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
+	{"label": "Six businesses, evenly staffed", "builder": "build_three_business_economy", "include": [1, 2, 3, 6, 7, 8]},
+	{"label": "Six businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7, 8]},
+	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
+	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
+	{"label": "Nine businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8, 10]},
 ]
 
 var _preset_picker: OptionButton

@@ -100,6 +100,21 @@ def tools() -> str:
     )
 
 
+def meat() -> str:
+    return svg(
+        '<path d="M12 36c0-12 10-20 22-20s18 8 18 18-8 16-20 16-20-4-20-14z" fill="#c4524a"/>'
+        '<circle cx="26" cy="32" r="6" fill="#f1d9c8"/>'
+        '<path d="M40 22c4 2 6 6 6 10" fill="none" stroke="#f1d9c8" stroke-width="2.5"/>'
+    )
+
+
+def leather() -> str:
+    return svg(
+        '<path d="M10 20l10-6 6 4h12l6-4 10 6-6 10-6-2v22H22V28l-6 2z" fill="#8a5a3a"/>'
+        '<path d="M24 34h16M24 42h16" fill="none" stroke="#c99a6e" stroke-width="2" stroke-dasharray="3 3"/>'
+    )
+
+
 def gold() -> str:
     return svg(
         '<circle cx="32" cy="32" r="24" fill="#f2c230"/>'
@@ -110,7 +125,7 @@ def gold() -> str:
 
 ICONS = {
     "grain": grain, "cattle": cattle, "sheep": sheep, "wool": wool, "timber": timber,
-    "charcoal": charcoal, "iron_ore": iron_ore, "iron_ingot": iron_ingot, "tools": tools, "gold": gold,
+    "charcoal": charcoal, "iron_ore": iron_ore, "iron_ingot": iron_ingot, "tools": tools, "meat": meat, "leather": leather, "gold": gold,
 }
 
 if __name__ == "__main__":
