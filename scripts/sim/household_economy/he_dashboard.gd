@@ -937,6 +937,8 @@ func _open_linked(open_view: Callable) -> void:
 		stack.append(_on_business_row_selected.bind(_selected_business_id))
 	elif _household_detail_panel.visible:
 		stack.append(_on_household_row_selected.bind(_selected_household_id))
+	elif _need_detail_panel.visible:
+		stack.append(_on_need_row_selected.bind(_selected_need_id))
 	open_view.call()
 	_return_stack.assign(stack)
 
@@ -1050,6 +1052,7 @@ func _on_need_row_selected(need_id: int) -> void:
 func _on_need_detail_close_pressed() -> void:
 	_selected_need_id = -1
 	_need_detail_panel.visible = false
+	_return_to_previous_view()
 
 ## Rebuilt every refresh, like the market detail. Reports households meeting
 ## vs missing the need, the stress/emigration risk (food only -- the other
@@ -1077,7 +1080,7 @@ func _refresh_need_detail() -> void:
 	var required: float = detail["required"]
 	_add_need_detail_line("Demand today: %.2f need units" % required)
 	for name in detail["met_by"].keys():
-		_add_need_detail_line("   Met by %s: %.2f (%s)" % [name, detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
+		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
 
 	var series: Array = []
@@ -1103,6 +1106,28 @@ func _refresh_need_detail() -> void:
 	chart.show_max_label = true
 	chart.set_series(series)
 	_need_detail_content.add_child(chart)
+
+## "Met by <good>: ..." with the good's name opening its market detail when it
+## has one.
+func _add_need_met_by_line(good_name: String, amount_text: String) -> void:
+	var commodity := Commodity.type_from_name(good_name)
+	if commodity == -1 or not _known_market_commodities.has(good_name):
+		_add_need_detail_line("   Met by %s: %s" % [good_name, amount_text])
+		return
+	var line := HBoxContainer.new()
+	var prefix := Label.new()
+	prefix.text = "   Met by"
+	line.add_child(prefix)
+	var link := Button.new()
+	link.text = good_name
+	link.flat = true
+	link.tooltip_text = "Open %s market" % good_name
+	link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = ": " + amount_text
+	line.add_child(rest)
+	_need_detail_content.add_child(line)
 
 func _percent_of(part: float, whole: float) -> String:
 	return "%.0f%%" % (part / whole * 100.0) if whole > 0.0 else "-"
@@ -1998,7 +2023,8 @@ func _refresh() -> void:
 	if not mouse_down:
 		_refresh_market_detail()
 	_refresh_needs_tab()
-	_refresh_need_detail()
+	if not mouse_down:
+		_refresh_need_detail()
 
 	for report in _simulation.get_business_reports():
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
