@@ -25,6 +25,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_businesses_share_wood_with_households()
+	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
 	_check_local_iron_mine_supplies_bloomery_first()
@@ -208,6 +209,38 @@ func _check_businesses_share_wood_with_households() -> void:
 	_assert(late_got >= late_demand * 0.9,
 		"Households should get >=90%% of their wood in the long run without a reserve -- got %.1f of %.1f" % [late_got, late_demand])
 	_assert(early_got > 0.0, "Households should buy some wood even in the first 120 days")
+
+## Wages run on credit down to a floor, so inputs must too: a staffed business
+## whose balance dipped below zero used to be unable to buy anything, so it
+## produced nothing and never earned its way back. Credit stops at the same
+## wage floor, so a business at the floor is still locked out.
+func _check_input_purchases_on_credit() -> void:
+	print("\n=== Inputs on credit: a business in debt can restock, but not past its wage floor ===")
+	var timber := Commodity.Type.TIMBER
+	var in_debt := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var bloomery: HEBusiness = in_debt.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	var settlement_id: int = in_debt.get_settlement_ids()[0]
+	var employed := in_debt._business_employed_worker_count(bloomery.id)
+	var wage_floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * in_debt._reference_wage_per_worker(settlement_id) * employed
+	in_debt.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
+	in_debt.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
+	bloomery.inventory = {}
+	bloomery.balance = -10.0
+	in_debt._run_input_purchasing(in_debt._new_daily_record())
+	print("  in debt (-10, floor %.0f): bought %.1f timber, balance now %.1f, input fulfilment %.2f" % [wage_floor, bloomery.stock(timber), bloomery.balance, bloomery.last_input_fulfillment_ratio])
+	_assert(bloomery.stock(timber) > 0.0, "A staffed business in debt should still be able to buy inputs on credit")
+	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "A business restocked on credit should be able to produce")
+	_assert(bloomery.balance >= wage_floor - EPSILON, "Credit must stop at the wage floor %.1f, balance reached %.1f" % [wage_floor, bloomery.balance])
+
+	var at_floor := _new_sim("build_economy_with_bloomery_and_iron_mine")
+	var stuck: HEBusiness = at_floor.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	at_floor.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
+	at_floor.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
+	stuck.inventory = {}
+	stuck.balance = wage_floor
+	at_floor._run_input_purchasing(at_floor._new_daily_record())
+	print("  at the floor: bought %.2f timber" % stuck.stock(timber))
+	_assert(stuck.stock(timber) <= 0.0001, "A business at its wage floor has no credit left to buy inputs with")
 
 ## The detail tab's goods-flow charts: every production business reports a
 ## history per flow, and those histories must reconcile with its own storage

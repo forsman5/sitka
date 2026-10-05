@@ -423,6 +423,11 @@ const WAGE_RATIO_CLAMP := 1.0
 ## not by rationing take-home pay day to day.
 const WAGE_NEGATIVE_BALANCE_FLOOR_DAYS := 60.0
 
+## Inputs may be bought on credit beyond cash, up to this many days of the
+## business's own input cost (and never below the wage floor above). Matches
+## the input buffer it tries to hold, see PRODUCTION_INPUT_BUFFER_DAYS.
+const INPUT_CREDIT_DAYS := 14.0
+
 ## Weekly cash-runway guard (see _evaluate_business_capacity): a business
 ## whose balance plus its current stock's market value can't cover its own
 ## daily wage bill for this many more days gets forced to shrink, on top of
@@ -1129,6 +1134,9 @@ func _new_daily_record() -> Dictionary:
 		"consumed": {},
 		"unmet_scarcity": {},
 		"unmet_unaffordable": {},
+		# need id -> {required, provided, met_by: {good name: need units},
+		# households_met, households_unmet} -- see _consume_need.
+		"needs": {},
 		"traded_quantity": {},
 		"exported": {},
 		"export_revenue": 0.0,
@@ -1478,6 +1486,76 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
+## A household whose need shortfall is below this counts as having met it.
+const NEED_MET_EPSILON := 0.0001
+
+## Today's picture of one need across the settlement, for the Needs detail
+## view: how many households met or missed it, the stress and emigration
+## risk among them, the demand met by each satisfier (need units) versus the
+## demand left unmet, plus `days` of daily history. Only needs flagged
+## drives_lifecycle (food) feed stress and emigration -- check
+## "drives_lifecycle" before presenting those fields for any other need.
+func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> Dictionary:
+	var need := HENeeds.get_need(need_id)
+	assert(need != null, "Unknown need id %d" % need_id)
+	var s: HESettlement = settlements[_resolve_settlement_id(settlement_id)]
+	var met := 0
+	var unmet := 0
+	var unmet_stress_total := 0.0
+	var pressure := 0
+	var starving := 0
+	var required := 0.0
+	var provided := 0.0
+	var met_by := {}
+	for c in need.satisfiers():
+		met_by[Commodity.name_of(c)] = 0.0
+	for household_id in s.household_ids:
+		var h: HEHousehold = households[household_id]
+		var h_required: float = h.last_need_required.get(need.id, 0.0)
+		var h_provided: float = h.last_need_provided.get(need.id, 0.0)
+		required += h_required
+		provided += h_provided
+		for c in need.satisfiers():
+			met_by[Commodity.name_of(c)] += h.last_consumed.get(c, 0.0) * need.value_of(c)
+		if h_required - h_provided > NEED_MET_EPSILON:
+			unmet += 1
+			unmet_stress_total += h.demographics.food_stress
+		else:
+			met += 1
+		if h.demographics.has_migration_pressure:
+			pressure += 1
+		if h.demographics.is_starvation_candidate():
+			starving += 1
+
+	var met_history := {}
+	for c in need.satisfiers():
+		met_history[Commodity.name_of(c)] = []
+	var unmet_history: Array = []
+	for record in get_daily_history(days):
+		var entry: Dictionary = record["needs"].get(need.id, {})
+		for name in met_history.keys():
+			met_history[name].append(entry.get("met_by", {}).get(name, 0.0))
+		unmet_history.append(maxf(0.0, entry.get("required", 0.0) - entry.get("provided", 0.0)))
+
+	var household_count := met + unmet
+	return {
+		"id": need.id,
+		"label": need.label,
+		"drives_lifecycle": need.drives_lifecycle,
+		"households_met": met,
+		"households_unmet": unmet,
+		"required": required,
+		"provided": provided,
+		"unmet": maxf(0.0, required - provided),
+		"met_by": met_by,
+		"avg_stress_unmet": (unmet_stress_total / unmet) if unmet > 0 else 0.0,
+		"households_with_migration_pressure": pressure,
+		"households_emigration_candidates": starving,
+		"emigration_likelihood": (float(starving) / household_count) if household_count > 0 else 0.0,
+		"met_history": met_history,
+		"unmet_history": unmet_history,
+	}
+
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only needs flagged drives_lifecycle (food)
 ## drive food_stress/migration-pressure/starvation-candidacy (everything
@@ -1505,10 +1583,20 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	if shortfall_units > 0.0001:
 		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
 
+	var need_record: Dictionary = record["needs"].get_or_add(need.id, {
+		"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
+	need_record["required"] += needed
+	need_record["provided"] += provided
+	if needed - provided > NEED_MET_EPSILON:
+		need_record["households_unmet"] += 1
+	else:
+		need_record["households_met"] += 1
+
 	for c in need.satisfiers():
 		var taken: float = burned.get(c, 0.0)
 		h.last_consumed[c] = taken
 		var name := Commodity.name_of(c)
+		need_record["met_by"][name] = need_record["met_by"].get(name, 0.0) + taken * need.value_of(c)
 		record["consumed"][name] = record["consumed"].get(name, 0.0) + taken
 		record["unmet_scarcity"][name] = record["unmet_scarcity"].get(name, 0.0) + h.last_unmet_scarcity.get(c, 0.0)
 		record["unmet_unaffordable"][name] = record["unmet_unaffordable"].get(name, 0.0) + h.last_unmet_unaffordable.get(c, 0.0)
@@ -2663,9 +2751,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# per-input (checking it here too would let the same balance count
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
+		var daily_input_cost := 0.0
 		for commodity in purchase_inputs.keys():
 			var needed: float = planned_units * purchase_inputs[commodity]
 			needed_by_commodity[commodity] = needed
+			daily_input_cost += needed * local_market.price[commodity]
 			var target: float = needed * PRODUCTION_INPUT_BUFFER_DAYS
 			var requested: float = max(0.0, target - _input_held(buyer, commodity, slot_needs))
 			requested_by_commodity[commodity] = requested
@@ -2688,10 +2778,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			purchase_ratio = minf(purchase_ratio, min(requested, offer) / requested)
 
 		# Pass 1b: fold in the single shared cash constraint across every
-		# input at once.
+		# input at once. The budget is cash plus a bounded credit line (see
+		# _input_budget), so a business already in debt can still restock.
 		var affordable_ratio := 1.0
 		if total_cost_if_fully_supplied > 0.0001:
-			affordable_ratio = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
+			var budget := _input_budget(buyer, employed, daily_input_cost)
+			affordable_ratio = clampf(budget / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		for commodity in purchase_inputs.keys():
@@ -2765,6 +2857,21 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if needed > 0.0001:
 				production_ratio = minf(production_ratio, minf(needed, _input_held(buyer, commodity, slot_needs)) / needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+## What an input buyer can spend today: its cash plus a bounded credit line.
+## Wages already run on credit (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS), but inputs
+## were capped at the cash balance, so a staffed business whose balance had
+## gone even slightly negative could pay its crew and never restock -- it
+## produced nothing, earned nothing, and stayed in debt for good. Inputs are
+## the working capital that makes the wages productive, so they draw on the
+## same credit line: down to the wage floor, and no more than INPUT_CREDIT_DAYS
+## of today's input cost beyond cash. That keeps credit bounded to the
+## buffer the business would hold anyway, and a business with no cash and no
+## headroom (at its wage floor) is still locked out.
+func _input_budget(buyer: HEBusiness, employed: int, daily_input_cost: float) -> float:
+	var wage_floor := -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * _reference_wage_per_worker(buyer.settlement_id) * employed
+	var headroom := maxf(0.0, buyer.balance - wage_floor)
+	return maxf(buyer.balance, 0.0) + minf(headroom, INPUT_CREDIT_DAYS * daily_input_cost)
 
 ## What the Butcher pays a ranch for one head of `species`.
 func _butchery_head_price(species: HEBusiness.Species) -> float:
