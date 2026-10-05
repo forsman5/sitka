@@ -417,6 +417,11 @@ const WAGE_RATIO_CLAMP := 1.0
 ## not by rationing take-home pay day to day.
 const WAGE_NEGATIVE_BALANCE_FLOOR_DAYS := 60.0
 
+## Inputs may be bought on credit beyond cash, up to this many days of the
+## business's own input cost (and never below the wage floor above). Matches
+## the input buffer it tries to hold, see PRODUCTION_INPUT_BUFFER_DAYS.
+const INPUT_CREDIT_DAYS := 14.0
+
 ## Weekly cash-runway guard (see _evaluate_business_capacity): a business
 ## whose balance plus its current stock's market value can't cover its own
 ## daily wage bill for this many more days gets forced to shrink, on top of
@@ -2646,9 +2651,11 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# per-input (checking it here too would let the same balance count
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
+		var daily_input_cost := 0.0
 		for commodity in purchase_inputs.keys():
 			var needed: float = planned_units * purchase_inputs[commodity]
 			needed_by_commodity[commodity] = needed
+			daily_input_cost += needed * local_market.price[commodity]
 			var target: float = needed * PRODUCTION_INPUT_BUFFER_DAYS
 			var requested: float = max(0.0, target - _input_held(buyer, commodity, slot_needs))
 			requested_by_commodity[commodity] = requested
@@ -2671,10 +2678,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			purchase_ratio = minf(purchase_ratio, min(requested, offer) / requested)
 
 		# Pass 1b: fold in the single shared cash constraint across every
-		# input at once.
+		# input at once. The budget is cash plus a bounded credit line (see
+		# _input_budget), so a business already in debt can still restock.
 		var affordable_ratio := 1.0
 		if total_cost_if_fully_supplied > 0.0001:
-			affordable_ratio = clampf(buyer.balance / total_cost_if_fully_supplied, 0.0, 1.0)
+			var budget := _input_budget(buyer, employed, daily_input_cost)
+			affordable_ratio = clampf(budget / total_cost_if_fully_supplied, 0.0, 1.0)
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		for commodity in purchase_inputs.keys():
@@ -2742,6 +2751,21 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if needed > 0.0001:
 				production_ratio = minf(production_ratio, minf(needed, _input_held(buyer, commodity, slot_needs)) / needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+## What an input buyer can spend today: its cash plus a bounded credit line.
+## Wages already run on credit (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS), but inputs
+## were capped at the cash balance, so a staffed business whose balance had
+## gone even slightly negative could pay its crew and never restock -- it
+## produced nothing, earned nothing, and stayed in debt for good. Inputs are
+## the working capital that makes the wages productive, so they draw on the
+## same credit line: down to the wage floor, and no more than INPUT_CREDIT_DAYS
+## of today's input cost beyond cash. That keeps credit bounded to the
+## buffer the business would hold anyway, and a business with no cash and no
+## headroom (at its wage floor) is still locked out.
+func _input_budget(buyer: HEBusiness, employed: int, daily_input_cost: float) -> float:
+	var wage_floor := -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * _reference_wage_per_worker(buyer.settlement_id) * employed
+	var headroom := maxf(0.0, buyer.balance - wage_floor)
+	return maxf(buyer.balance, 0.0) + minf(headroom, INPUT_CREDIT_DAYS * daily_input_cost)
 
 ## What the Butcher pays a ranch for one head of `species`.
 func _butchery_head_price(species: HEBusiness.Species) -> float:
