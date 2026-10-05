@@ -166,6 +166,11 @@ var _business_detail_employment_empty: Label
 var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
 var _selected_market_commodity: int = -1
+## Reopen callables for the detail views the player navigated through via
+## links (market -> business -> household ...); closing a detail pops one.
+## In memory only; empty means close back to the list. Opening a detail from
+## a list row clears it.
+var _return_stack: Array[Callable] = []
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
@@ -243,6 +248,7 @@ func _load_scenario() -> void:
 	# guarded null check because this runs once before _build_ui() ever
 	# creates the panel (see _ready()).
 	_selected_business_id = -1
+	_return_stack.clear()
 	_trader_settings_open = false
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
@@ -792,6 +798,7 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
 func _on_household_row_selected(household_id: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -805,6 +812,7 @@ func _on_household_row_selected(household_id: int) -> void:
 func _on_household_detail_close_pressed() -> void:
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_return_to_previous_view()
 
 ## Rebuilt every refresh; the content is a handful of lines, so there's no
 ## fixed schema worth updating in place.
@@ -821,6 +829,24 @@ func _refresh_household_detail() -> void:
 	for child in _household_detail_content.get_children():
 		_household_detail_content.remove_child(child)
 		child.queue_free()
+
+	var employer_id: int = h["employer_business_id"]
+	var employer_row := HBoxContainer.new()
+	var employer_caption := Label.new()
+	employer_caption.text = "Employer:"
+	employer_row.add_child(employer_caption)
+	if _business_names.has(employer_id):
+		var employer_link := Button.new()
+		employer_link.text = _business_names[employer_id]
+		employer_link.flat = true
+		employer_link.tooltip_text = "Open employer detail"
+		employer_link.pressed.connect(_on_linked_business_pressed.bind(employer_id))
+		employer_row.add_child(employer_link)
+	else:
+		var unemployed := Label.new()
+		unemployed.text = "Unemployed"
+		employer_row.add_child(unemployed)
+	_household_detail_content.add_child(employer_row)
 
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
@@ -873,6 +899,7 @@ func _add_household_detail_line(value: String) -> void:
 	_household_detail_content.add_child(label)
 
 func _on_business_row_selected(business_id: int) -> void:
+	_return_stack.clear()
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
 	_selected_need_id = -1
@@ -894,9 +921,40 @@ func _on_cull_target_changed(value: float) -> void:
 		_business_detail_cull_target_box.set_value_no_signal(applied)
 		_refresh_business_detail()
 
+## Link handlers: open a detail view from inside another one, remembering the
+## current view so closing returns to it (no visual stacking).
+func _on_linked_business_pressed(business_id: int) -> void:
+	_open_linked(_on_business_row_selected.bind(business_id))
+
+func _on_linked_household_pressed(household_id: int) -> void:
+	_open_linked(_on_household_row_selected.bind(household_id))
+
+func _open_linked(open_view: Callable) -> void:
+	var stack := _return_stack.duplicate()
+	if _market_detail_panel.visible:
+		stack.append(_on_market_row_selected.bind(_selected_market_commodity))
+	elif _business_detail_panel.visible:
+		stack.append(_on_business_row_selected.bind(_selected_business_id))
+	elif _household_detail_panel.visible:
+		stack.append(_on_household_row_selected.bind(_selected_household_id))
+	elif _need_detail_panel.visible:
+		stack.append(_on_need_row_selected.bind(_selected_need_id))
+	open_view.call()
+	_return_stack.assign(stack)
+
+## After a detail panel closes: reopen the view it was linked from, if any.
+func _return_to_previous_view() -> void:
+	if _return_stack.is_empty():
+		return
+	var back: Callable = _return_stack.pop_back()
+	var rest := _return_stack.duplicate()
+	back.call()
+	_return_stack.assign(rest)
+
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _on_trader_settings_pressed() -> void:
 	_trader_settings_open = not _trader_settings_open
@@ -980,6 +1038,7 @@ func _refresh_needs_tab() -> void:
 		(labels["unmet_demand"] as Label).text = "%.1f" % detail["unmet"]
 
 func _on_need_row_selected(need_id: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -993,6 +1052,7 @@ func _on_need_row_selected(need_id: int) -> void:
 func _on_need_detail_close_pressed() -> void:
 	_selected_need_id = -1
 	_need_detail_panel.visible = false
+	_return_to_previous_view()
 
 ## Rebuilt every refresh, like the market detail. Reports households meeting
 ## vs missing the need, the stress/emigration risk (food only -- the other
@@ -1020,7 +1080,7 @@ func _refresh_need_detail() -> void:
 	var required: float = detail["required"]
 	_add_need_detail_line("Demand today: %.2f need units" % required)
 	for name in detail["met_by"].keys():
-		_add_need_detail_line("   Met by %s: %.2f (%s)" % [name, detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
+		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
 
 	var series: Array = []
@@ -1047,6 +1107,28 @@ func _refresh_need_detail() -> void:
 	chart.set_series(series)
 	_need_detail_content.add_child(chart)
 
+## "Met by <good>: ..." with the good's name opening its market detail when it
+## has one.
+func _add_need_met_by_line(good_name: String, amount_text: String) -> void:
+	var commodity := Commodity.type_from_name(good_name)
+	if commodity == -1 or not _known_market_commodities.has(good_name):
+		_add_need_detail_line("   Met by %s: %s" % [good_name, amount_text])
+		return
+	var line := HBoxContainer.new()
+	var prefix := Label.new()
+	prefix.text = "   Met by"
+	line.add_child(prefix)
+	var link := Button.new()
+	link.text = good_name
+	link.flat = true
+	link.tooltip_text = "Open %s market" % good_name
+	link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = ": " + amount_text
+	line.add_child(rest)
+	_need_detail_content.add_child(line)
+
 func _percent_of(part: float, whole: float) -> String:
 	return "%.0f%%" % (part / whole * 100.0) if whole > 0.0 else "-"
 
@@ -1057,6 +1139,7 @@ func _add_need_detail_line(value: String) -> void:
 	_need_detail_content.add_child(label)
 
 func _on_market_row_selected(commodity: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_need_id = -1
@@ -1072,6 +1155,7 @@ func _on_market_row_selected(commodity: int) -> void:
 func _on_market_detail_close_pressed() -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _refresh_market_detail() -> void:
 	if _selected_market_commodity == -1:
@@ -1132,6 +1216,24 @@ func _add_market_detail_line(value: String) -> void:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_market_detail_content.add_child(label)
 
+## A name that opens the business's detail pane when the row has a business_id,
+## otherwise plain text.
+func _add_market_owner_line(row: Dictionary, text_after_owner: String) -> void:
+	if not row.has("business_id"):
+		_add_market_detail_line("%s%s" % [row["owner"], text_after_owner])
+		return
+	var line := HBoxContainer.new()
+	var link := Button.new()
+	link.text = row["owner"]
+	link.flat = true
+	link.tooltip_text = "Open this business's detail"
+	link.pressed.connect(_on_linked_business_pressed.bind(row["business_id"]))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = text_after_owner
+	line.add_child(rest)
+	_market_detail_content.add_child(line)
+
 func _add_market_detail_section(title: String, rows: Array, quantity_key: String, secondary_key: String) -> void:
 	var heading := Label.new()
 	heading.text = "%s (%d)" % [title, rows.size()]
@@ -1147,18 +1249,17 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 		if row.get("kind", "") == "household":
 			continue
 		if row.get("kind", "") == "export":
-			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
-				row["owner"], row["capacity"], row["available"]])
+			_add_market_owner_line(row, ": up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
+				row["capacity"], row["available"]])
 			continue
 		if row.get("kind", "") == "import":
-			_add_market_detail_line("%s: up to %.1f shared import capacity  |  no stored stock" % [
-				row["owner"], row["capacity"]])
+			_add_market_owner_line(row, ": up to %.1f shared import capacity  |  no stored stock" % row["capacity"])
 			continue
-		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
+		var line := ": %.1f %s" % [row[quantity_key], quantity_key]
 		if secondary_key != "":
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
-		_add_market_detail_line(line)
+		_add_market_owner_line(row, line)
 
 ## One line standing in for every household row: count, average quantity, and
 ## (for buyers) average affordable plus how many can't afford their full request.
@@ -1425,7 +1526,7 @@ func _add_detail_row(label_text: String, value) -> void:
 		for part in value:
 			# A third element marks text that names several goods inline
 			# (the Trader's "Export (...) / Import (...)" summary).
-			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1], 0.0, true))
 		_business_detail_grid.add_child(box)
 		return
 	var value_label := Label.new()
@@ -1462,7 +1563,9 @@ func _plain_label(text: String) -> Label:
 	return label
 
 ## Icon (when the good is known and has one) + text label in one cell.
-func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+## link_to_market makes the text a button opening that good's market detail
+## (only when the good actually has a market).
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, link_to_market: bool = false) -> HBoxContainer:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
 	box.custom_minimum_size = Vector2(min_width, 0)
@@ -1476,10 +1579,22 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -
 		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		box.add_child(rect)
+	if link_to_market and commodity != -1 and _known_market_commodities.has(commodity_name):
+		var link := Button.new()
+		link.text = text
+		link.flat = true
+		link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		link.tooltip_text = "Open %s market" % commodity_name
+		link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+		box.add_child(link)
+		return box
 	var label := Label.new()
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_market_pressed(commodity: int) -> void:
+	_open_linked(_on_market_row_selected.bind(commodity))
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -1582,7 +1697,13 @@ func _refresh_business_detail_employees() -> void:
 		if h["employer_business_id"] != _selected_business_id:
 			continue
 		employee_count += 1
-		_add_employee_cell(str(household_id))
+		var household_link := Button.new()
+		household_link.text = str(household_id)
+		household_link.flat = true
+		household_link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		household_link.tooltip_text = "Open household detail"
+		household_link.pressed.connect(_on_linked_household_pressed.bind(household_id))
+		_business_detail_employee_grid.add_child(household_link)
 		_add_employee_cell(str(h["worker_capacity"]))
 		_add_employee_cell(str(h["dependents"]))
 		_add_employee_cell("%.1f" % h["balance"])
@@ -1821,8 +1942,11 @@ func _rebuild_household_rows() -> void:
 		id_label.pressed.connect(_on_household_row_selected.bind(household_id))
 		grid.add_child(id_label)
 
-		var employer_label := Label.new()
+		var employer_label := Button.new()
+		employer_label.flat = true
+		employer_label.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		employer_label.custom_minimum_size = Vector2(80, 0)
+		employer_label.pressed.connect(_on_household_employer_pressed.bind(household_id))
 		grid.add_child(employer_label)
 
 		var workers_label := Label.new()
@@ -1867,6 +1991,11 @@ func _rebuild_household_rows() -> void:
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
+func _on_household_employer_pressed(household_id: int) -> void:
+	var employer_id: int = _simulation.get_household_summary(household_id)["employer_business_id"]
+	if _business_names.has(employer_id):
+		_on_business_row_selected(employer_id)
+
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
@@ -1886,9 +2015,16 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
-	_refresh_market_detail()
+	# The detail panels below are rebuilt from scratch, link buttons included. At
+	# high speed this runs nearly every frame, which would swap a button out
+	# between mouse-down and mouse-up and eat the click, so hold off while a
+	# mouse button is down; the next refresh catches up.
+	var mouse_down := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not mouse_down:
+		_refresh_market_detail()
 	_refresh_needs_tab()
-	_refresh_need_detail()
+	if not mouse_down:
+		_refresh_need_detail()
 
 	for report in _simulation.get_business_reports():
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
@@ -1953,7 +2089,7 @@ func _refresh() -> void:
 
 	_refresh_job_rows()
 
-	if _selected_business_id != -1:
+	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
 
 	var current_ids := _simulation.get_household_ids()
@@ -1971,7 +2107,10 @@ func _refresh() -> void:
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Button).text = str(household_id)
-		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
+		var employer_button := row["employer"] as Button
+		employer_button.text = _business_names.get(h["employer_business_id"], "Unemployed")
+		employer_button.disabled = not _business_names.has(h["employer_business_id"])
+		employer_button.tooltip_text = "Open employer detail" if not employer_button.disabled else ""
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
 		if worker_ages.is_empty():
@@ -2001,7 +2140,8 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
-	_refresh_household_detail()
+	if not mouse_down:
+		_refresh_household_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city

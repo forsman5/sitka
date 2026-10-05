@@ -910,7 +910,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			continue
 		var stock := b.stock(commodity)
 		if stock > 0.0001:
-			holdings.append({"owner": b.name, "quantity": stock})
+			holdings.append({"owner": b.name, "business_id": b.id, "quantity": stock})
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.sells(commodity):
@@ -919,23 +919,23 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 				offered = minf(stock, stock / float(maxi(1, b.days_until_next_harvest())) * SELL_PACE_HEADROOM)
 			elif not SUBSISTENCE_COMMODITIES.has(commodity):
 				offered = _seller_surplus_above_reserve(b, settlement_id, commodity)
-			sellers.append({"owner": b.name, "offered": offered, "stock": stock})
+			sellers.append({"owner": b.name, "business_id": b.id, "offered": offered, "stock": stock})
 		if b.recipe.inputs.has(commodity):
 			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
 			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
 			if desired > 0.0001:
-				buyers.append({"owner": b.name, "requested": desired,
+				buyers.append({"owner": b.name, "business_id": b.id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
 	var trader := _settlement_trader(settlement_id)
 	if trader != null:
 		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
 		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
-			sellers.append({"owner": "%s (imports)" % trader.name,
+			sellers.append({"owner": "%s (imports)" % trader.name, "business_id": trader.id,
 				"kind": "import", "capacity": capacity})
 		elif _trader_export_enabled[trader.id].get(commodity, false) and _business_selling(settlement_id, commodity) != null:
 			var export_seller := _business_selling(settlement_id, commodity)
-			buyers.append({"owner": "%s (exports)" % trader.name, "kind": "export",
+			buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
 				"capacity": capacity,
 				"available": minf(capacity, _exportable_surplus(export_seller, settlement_id, commodity))})
 	report["buyers"] = buyers
