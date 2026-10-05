@@ -20,17 +20,28 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## Row order of the Needs tab.
 const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
+## Offered by the Businesses tab's "Create business" menu. Each kind is unique
+## per town (matched by HEBusiness.type_key) and costs nothing -- both may change later.
+const BUILDABLE_BUSINESSES := [
+	{"label": "Farm", "type_key": "farm"},
+	{"label": "Woodlot", "type_key": "woodlot"},
+	{"label": "Trader", "type_key": "trader"},
+	{"label": "Cattle Ranch", "type_key": "cattle_ranch"},
+	{"label": "Sheep Farm", "type_key": "sheep_farm"},
+	{"label": "Butcher", "type_key": "butcher"},
+]
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
-const BLOTTER_HISTORY_DAYS := 30
 ## Household detail looks back as far as the sim retains events
-## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter follows GameState.blotter_days.
 const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
+## Window for the top-line treasury's hover change.
+const TREASURY_TREND_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
 ## Views of the goods chart on a production business's detail tab, switched
 ## by tabs above it. Each series is [series id, legend suffix, dashed]: outputs
@@ -70,7 +81,6 @@ const TOWN_STATS := [
 	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
 	["Import cost (lifetime)", "import_cost_total", "%.1f"],
 ]
-const TOWN_CHART_DAYS := 90
 ## Births, emigrations and deaths are evaluated monthly, so the daily record is
 ## mostly zeros with a spike every 30 days; the flow chart plots a trailing
 ## sum over this many days instead so the lines are readable.
@@ -96,6 +106,7 @@ const BLOTTER_FILTERS := [
 	{"type": "coming_of_age", "label": "Coming of age"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
+	{"type": "business_failed", "label": "Business closures"},
 ]
 
 ## Set by the config page (he_config.gd) before it switches to this scene.
@@ -107,8 +118,16 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _day_label: Label
+var _treasury_margin: Control
+var _treasury_box: HBoxContainer
+var _treasury_label: Label
+var _treasury_tip: PanelContainer
+var _treasury_tip_label: Label
 var _town_stat_labels: Dictionary = {} # city-summary key -> Label
 var _town_population_chart: HESparkline
+var _town_population_title: Label
+var _cash_history_label: Label
+var _goods_title_label: Label
 var _town_flow_chart: HESparkline
 var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
@@ -166,6 +185,11 @@ var _business_detail_employment_empty: Label
 var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
 var _selected_market_commodity: int = -1
+## Reopen callables for the detail views the player navigated through via
+## links (market -> business -> household ...); closing a detail pops one.
+## In memory only; empty means close back to the list. Opening a detail from
+## a list row clears it.
+var _return_stack: Array[Callable] = []
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
@@ -192,8 +216,10 @@ func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
+	GameState.settings_changed.connect(_on_history_settings_changed)
 	_load_scenario()
 	_build_ui()
+	_update_history_titles()
 	_refresh()
 
 func _configure_tooltip_theme() -> void:
@@ -243,6 +269,7 @@ func _load_scenario() -> void:
 	# guarded null check because this runs once before _build_ui() ever
 	# creates the panel (see _ready()).
 	_selected_business_id = -1
+	_return_stack.clear()
 	_trader_settings_open = false
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
@@ -277,10 +304,49 @@ func _build_ui() -> void:
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
 
+	# Government treasury: "<gold icon> 99 gold", hover for the 30-day change.
+	# Hidden when the scenario has no government.
+	_treasury_box = HBoxContainer.new()
+	_treasury_box.add_theme_constant_override("separation", 4)
+	_treasury_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	var treasury_icon := TextureRect.new()
+	treasury_icon.texture = Commodity.gold_icon()
+	treasury_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	treasury_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	treasury_icon.custom_minimum_size = Vector2(24, 24)
+	treasury_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	treasury_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(treasury_icon)
+	_treasury_label = Label.new()
+	_treasury_label.add_theme_font_size_override("font_size", 22)
+	_treasury_label.add_theme_color_override("font_color", Commodity.GOLD_COLOR)
+	_treasury_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(_treasury_label)
+	var treasury_margin := MarginContainer.new()
+	treasury_margin.add_theme_constant_override("margin_left", 16)
+	treasury_margin.add_child(_treasury_box)
+	top_bar.add_child(treasury_margin)
+	_treasury_margin = treasury_margin
+
+	# A built-in tooltip is frozen once shown, so the 30-day change would stop
+	# updating while hovered (sim speed can be 100x). This popup is refreshed
+	# by _refresh_treasury() every tick instead.
+	_treasury_tip = PanelContainer.new()
+	_treasury_tip.top_level = true
+	_treasury_tip.visible = false
+	_treasury_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip_label = Label.new()
+	_treasury_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip.add_child(_treasury_tip_label)
+	add_child(_treasury_tip)
+	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
+	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
 
+	top_bar.add_child(_make_settings_button())
 	top_bar.add_child(_make_speed_button("Pause", 0.0))
 	top_bar.add_child(_make_speed_button("1x", 1.0))
 	top_bar.add_child(_make_speed_button("10x", 10.0))
@@ -419,7 +485,7 @@ func _build_ui() -> void:
 	_business_detail_overview_scroll.add_child(detail_content)
 
 	var cash_history_label := Label.new()
-	cash_history_label.text = "Cash (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_cash_history_label = cash_history_label
 	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	detail_content.add_child(cash_history_label)
 
@@ -703,7 +769,8 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	charts.size_flags_stretch_ratio = 2.0
 	row.add_child(charts)
-	_town_population_chart = _add_town_chart(charts, "Population (last %d days)" % TOWN_CHART_DAYS, TOWN_POPULATION_SERIES)
+	_town_population_chart = _add_town_chart(charts, "", TOWN_POPULATION_SERIES)
+	_town_population_title = _town_population_chart.get_meta("title_label")
 	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
 
 ## A title row with a color-keyed legend above a hoverable chart.
@@ -721,6 +788,7 @@ func _add_town_chart(parent: Control, title_text: String, series_defs: Array) ->
 		legend.add_theme_color_override("font_color", HESparkline.color_for_series(i))
 		header.add_child(legend)
 	var chart := HESparkline.new()
+	chart.set_meta("title_label", title)
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	chart.show_max_label = true
@@ -732,8 +800,8 @@ func _refresh_town() -> void:
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
 	# Extra leading days so the trailing flow sums are full from the first point.
-	var history := _simulation.get_daily_history(TOWN_CHART_DAYS + TOWN_FLOW_WINDOW_DAYS - 1)
-	var shown_from := maxi(0, history.size() - TOWN_CHART_DAYS)
+	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
 	var population_series: Array = []
 	for i in TOWN_POPULATION_SERIES.size():
 		var values: Array[float] = []
@@ -751,6 +819,61 @@ func _refresh_town() -> void:
 			values.append(total)
 		flow_series.append({"name": TOWN_FLOW_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
 	_town_flow_chart.set_series(flow_series)
+
+## Settings button left of Pause: one popup holding the history-length settings.
+func _make_settings_button() -> Button:
+	var btn := Button.new()
+	btn.text = "Settings"
+	btn.pressed.connect(_open_settings_dialog)
+	return btn
+
+func _open_settings_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Settings"
+	dialog.ok_button_text = "Close"
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 8)
+	dialog.add_child(grid)
+	var sparkline_box := _add_days_setting(grid, "Sparkline history (days)", GameState.sparkline_days, GameState.MAX_SPARKLINE_DAYS)
+	var blotter_box := _add_days_setting(grid, "Blotter history (days)", GameState.blotter_days, GameState.MAX_BLOTTER_DAYS)
+	var apply := func(_value: float) -> void:
+		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
+	sparkline_box.value_changed.connect(apply)
+	blotter_box.value_changed.connect(apply)
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _add_days_setting(grid: GridContainer, label_text: String, value: int, max_value: int) -> SpinBox:
+	var label := Label.new()
+	label.text = label_text
+	grid.add_child(label)
+	var box := SpinBox.new()
+	box.min_value = 1
+	box.max_value = max_value
+	box.value = value
+	grid.add_child(box)
+	return box
+
+## The last GameState.sparkline_days entries of a retained history.
+func _tail(values: Array) -> Array:
+	var keep := GameState.sparkline_days
+	return values.slice(values.size() - keep) if values.size() > keep else values
+
+func _on_history_settings_changed() -> void:
+	_update_history_titles()
+	_set_blotter_minimized(_blotter_minimized)
+	_refresh()
+	_refresh_blotter()
+
+func _update_history_titles() -> void:
+	var days := GameState.sparkline_days
+	_town_population_title.text = "Population (last %d days)" % days
+	_cash_history_label.text = "Cash (last %d days)" % days
+	_goods_title_label.text = "Goods (last %d days)" % days
 
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
@@ -785,13 +908,14 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.custom_minimum_size = Vector2(32, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_SHRINK_END
 	else:
-		_blotter_toggle_button.text = "Blotter (%dd) ▸" % BLOTTER_HISTORY_DAYS
+		_blotter_toggle_button.text = "Blotter (%dd) ▸" % GameState.blotter_days
 		_blotter_toggle_button.tooltip_text = "Minimize the blotter"
 		_blotter_column.custom_minimum_size = Vector2(0, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
 func _on_household_row_selected(household_id: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -805,6 +929,7 @@ func _on_household_row_selected(household_id: int) -> void:
 func _on_household_detail_close_pressed() -> void:
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_return_to_previous_view()
 
 ## Rebuilt every refresh; the content is a handful of lines, so there's no
 ## fixed schema worth updating in place.
@@ -821,6 +946,24 @@ func _refresh_household_detail() -> void:
 	for child in _household_detail_content.get_children():
 		_household_detail_content.remove_child(child)
 		child.queue_free()
+
+	var employer_id: int = h["employer_business_id"]
+	var employer_row := HBoxContainer.new()
+	var employer_caption := Label.new()
+	employer_caption.text = "Employer:"
+	employer_row.add_child(employer_caption)
+	if _business_names.has(employer_id):
+		var employer_link := Button.new()
+		employer_link.text = _business_names[employer_id]
+		employer_link.flat = true
+		employer_link.tooltip_text = "Open employer detail"
+		employer_link.pressed.connect(_on_linked_business_pressed.bind(employer_id))
+		employer_row.add_child(employer_link)
+	else:
+		var unemployed := Label.new()
+		unemployed.text = "Unemployed"
+		employer_row.add_child(unemployed)
+	_household_detail_content.add_child(employer_row)
 
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
@@ -873,6 +1016,7 @@ func _add_household_detail_line(value: String) -> void:
 	_household_detail_content.add_child(label)
 
 func _on_business_row_selected(business_id: int) -> void:
+	_return_stack.clear()
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
 	_selected_need_id = -1
@@ -894,9 +1038,40 @@ func _on_cull_target_changed(value: float) -> void:
 		_business_detail_cull_target_box.set_value_no_signal(applied)
 		_refresh_business_detail()
 
+## Link handlers: open a detail view from inside another one, remembering the
+## current view so closing returns to it (no visual stacking).
+func _on_linked_business_pressed(business_id: int) -> void:
+	_open_linked(_on_business_row_selected.bind(business_id))
+
+func _on_linked_household_pressed(household_id: int) -> void:
+	_open_linked(_on_household_row_selected.bind(household_id))
+
+func _open_linked(open_view: Callable) -> void:
+	var stack := _return_stack.duplicate()
+	if _market_detail_panel.visible:
+		stack.append(_on_market_row_selected.bind(_selected_market_commodity))
+	elif _business_detail_panel.visible:
+		stack.append(_on_business_row_selected.bind(_selected_business_id))
+	elif _household_detail_panel.visible:
+		stack.append(_on_household_row_selected.bind(_selected_household_id))
+	elif _need_detail_panel.visible:
+		stack.append(_on_need_row_selected.bind(_selected_need_id))
+	open_view.call()
+	_return_stack.assign(stack)
+
+## After a detail panel closes: reopen the view it was linked from, if any.
+func _return_to_previous_view() -> void:
+	if _return_stack.is_empty():
+		return
+	var back: Callable = _return_stack.pop_back()
+	var rest := _return_stack.duplicate()
+	back.call()
+	_return_stack.assign(rest)
+
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _on_trader_settings_pressed() -> void:
 	_trader_settings_open = not _trader_settings_open
@@ -980,6 +1155,7 @@ func _refresh_needs_tab() -> void:
 		(labels["unmet_demand"] as Label).text = "%.1f" % detail["unmet"]
 
 func _on_need_row_selected(need_id: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -993,6 +1169,7 @@ func _on_need_row_selected(need_id: int) -> void:
 func _on_need_detail_close_pressed() -> void:
 	_selected_need_id = -1
 	_need_detail_panel.visible = false
+	_return_to_previous_view()
 
 ## Rebuilt every refresh, like the market detail. Reports households meeting
 ## vs missing the need, the stress/emigration risk (food only -- the other
@@ -1001,7 +1178,7 @@ func _on_need_detail_close_pressed() -> void:
 func _refresh_need_detail() -> void:
 	if _selected_need_id == -1:
 		return
-	var detail := _simulation.get_need_detail(_selected_need_id, HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS)
+	var detail := _simulation.get_need_detail(_selected_need_id, GameState.sparkline_days)
 	_need_detail_title.text = "%s need" % detail["label"]
 	for child in _need_detail_content.get_children():
 		_need_detail_content.remove_child(child)
@@ -1020,7 +1197,7 @@ func _refresh_need_detail() -> void:
 	var required: float = detail["required"]
 	_add_need_detail_line("Demand today: %.2f need units" % required)
 	for name in detail["met_by"].keys():
-		_add_need_detail_line("   Met by %s: %.2f (%s)" % [name, detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
+		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
 
 	var series: Array = []
@@ -1028,7 +1205,7 @@ func _refresh_need_detail() -> void:
 	header.add_theme_constant_override("separation", 12)
 	_need_detail_content.add_child(header)
 	var title := Label.new()
-	title.text = "Demand met and unmet (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.text = "Demand met and unmet (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
 	var index := 0
@@ -1047,6 +1224,28 @@ func _refresh_need_detail() -> void:
 	chart.set_series(series)
 	_need_detail_content.add_child(chart)
 
+## "Met by <good>: ..." with the good's name opening its market detail when it
+## has one.
+func _add_need_met_by_line(good_name: String, amount_text: String) -> void:
+	var commodity := Commodity.type_from_name(good_name)
+	if commodity == -1 or not _known_market_commodities.has(good_name):
+		_add_need_detail_line("   Met by %s: %s" % [good_name, amount_text])
+		return
+	var line := HBoxContainer.new()
+	var prefix := Label.new()
+	prefix.text = "   Met by"
+	line.add_child(prefix)
+	var link := Button.new()
+	link.text = good_name
+	link.flat = true
+	link.tooltip_text = "Open %s market" % good_name
+	link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = ": " + amount_text
+	line.add_child(rest)
+	_need_detail_content.add_child(line)
+
 func _percent_of(part: float, whole: float) -> String:
 	return "%.0f%%" % (part / whole * 100.0) if whole > 0.0 else "-"
 
@@ -1057,6 +1256,7 @@ func _add_need_detail_line(value: String) -> void:
 	_need_detail_content.add_child(label)
 
 func _on_market_row_selected(commodity: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_need_id = -1
@@ -1072,6 +1272,7 @@ func _on_market_row_selected(commodity: int) -> void:
 func _on_market_detail_close_pressed() -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _refresh_market_detail() -> void:
 	if _selected_market_commodity == -1:
@@ -1103,7 +1304,7 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	header.add_theme_constant_override("separation", 12)
 	_market_detail_content.add_child(header)
 	var title := Label.new()
-	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.text = "Supply and demand (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
 	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
@@ -1117,8 +1318,8 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.show_max_label = true
 	chart.set_series([
-		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
-		{"name": "Requested", "values": requested_history, "color": requested_color},
+		{"name": "Supplied", "values": _tail(report["supplied_history"]), "color": supplied_color},
+		{"name": "Requested", "values": _tail(requested_history), "color": requested_color},
 	])
 	_market_detail_content.add_child(chart)
 
@@ -1131,6 +1332,24 @@ func _add_market_detail_line(value: String) -> void:
 	label.text = value
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_market_detail_content.add_child(label)
+
+## A name that opens the business's detail pane when the row has a business_id,
+## otherwise plain text.
+func _add_market_owner_line(row: Dictionary, text_after_owner: String) -> void:
+	if not row.has("business_id"):
+		_add_market_detail_line("%s%s" % [row["owner"], text_after_owner])
+		return
+	var line := HBoxContainer.new()
+	var link := Button.new()
+	link.text = row["owner"]
+	link.flat = true
+	link.tooltip_text = "Open this business's detail"
+	link.pressed.connect(_on_linked_business_pressed.bind(row["business_id"]))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = text_after_owner
+	line.add_child(rest)
+	_market_detail_content.add_child(line)
 
 func _add_market_detail_section(title: String, rows: Array, quantity_key: String, secondary_key: String) -> void:
 	var heading := Label.new()
@@ -1147,18 +1366,17 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 		if row.get("kind", "") == "household":
 			continue
 		if row.get("kind", "") == "export":
-			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
-				row["owner"], row["capacity"], row["available"]])
+			_add_market_owner_line(row, ": up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
+				row["capacity"], row["available"]])
 			continue
 		if row.get("kind", "") == "import":
-			_add_market_detail_line("%s: up to %.1f shared import capacity  |  no stored stock" % [
-				row["owner"], row["capacity"]])
+			_add_market_owner_line(row, ": up to %.1f shared import capacity  |  no stored stock" % row["capacity"])
 			continue
-		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
+		var line := ": %.1f %s" % [row[quantity_key], quantity_key]
 		if secondary_key != "":
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
-		_add_market_detail_line(line)
+		_add_market_owner_line(row, line)
 
 ## One line standing in for every household row: count, average quantity, and
 ## (for buyers) average affordable plus how many can't afford their full request.
@@ -1212,7 +1430,7 @@ func _refresh_business_detail() -> void:
 	if not _trader_settings_button.visible:
 		_trader_settings_open = false
 	_update_trader_detail_page()
-	_business_detail_sparkline.set_data(report["balance_history"])
+	_business_detail_sparkline.set_data(_tail(report["balance_history"]))
 	_refresh_business_flow_chart(report)
 
 	for child in _business_detail_grid.get_children():
@@ -1307,7 +1525,7 @@ func _build_flow_chart(parent: Control) -> Dictionary:
 	header.add_theme_constant_override("separation", 12)
 	section.add_child(header)
 	var title_label := Label.new()
-	title_label.text = "Goods (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_goods_title_label = title_label
 	title_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title_label)
 	var tab_group := ButtonGroup.new()
@@ -1350,8 +1568,8 @@ func _refresh_business_flow_chart(report: Dictionary) -> void:
 			for detail_def in view.get("details", []):
 				for detail_entry in flow_history.get(detail_def[0], []):
 					if detail_entry["commodity"] == entry["commodity"]:
-						details.append({"name": detail_def[1], "values": detail_entry["values"]})
-			all_series.append({"name": series_name, "values": entry["values"], "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
+						details.append({"name": detail_def[1], "values": _tail(detail_entry["values"])})
+			all_series.append({"name": series_name, "values": _tail(entry["values"]), "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
 			_flow_series_names.append(series_name)
 
 	var hidden := _effective_hidden_flow_series()
@@ -1425,7 +1643,7 @@ func _add_detail_row(label_text: String, value) -> void:
 		for part in value:
 			# A third element marks text that names several goods inline
 			# (the Trader's "Export (...) / Import (...)" summary).
-			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1], 0.0, true))
 		_business_detail_grid.add_child(box)
 		return
 	var value_label := Label.new()
@@ -1462,7 +1680,9 @@ func _plain_label(text: String) -> Label:
 	return label
 
 ## Icon (when the good is known and has one) + text label in one cell.
-func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+## link_to_market makes the text a button opening that good's market detail
+## (only when the good actually has a market).
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, link_to_market: bool = false) -> HBoxContainer:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
 	box.custom_minimum_size = Vector2(min_width, 0)
@@ -1476,10 +1696,22 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -
 		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		box.add_child(rect)
+	if link_to_market and commodity != -1 and _known_market_commodities.has(commodity_name):
+		var link := Button.new()
+		link.text = text
+		link.flat = true
+		link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		link.tooltip_text = "Open %s market" % commodity_name
+		link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+		box.add_child(link)
+		return box
 	var label := Label.new()
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_market_pressed(commodity: int) -> void:
+	_open_linked(_on_market_row_selected.bind(commodity))
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -1582,7 +1814,13 @@ func _refresh_business_detail_employees() -> void:
 		if h["employer_business_id"] != _selected_business_id:
 			continue
 		employee_count += 1
-		_add_employee_cell(str(household_id))
+		var household_link := Button.new()
+		household_link.text = str(household_id)
+		household_link.flat = true
+		household_link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		household_link.tooltip_text = "Open household detail"
+		household_link.pressed.connect(_on_linked_household_pressed.bind(household_id))
+		_business_detail_employee_grid.add_child(household_link)
 		_add_employee_cell(str(h["worker_capacity"]))
 		_add_employee_cell(str(h["dependents"]))
 		_add_employee_cell("%.1f" % h["balance"])
@@ -1699,7 +1937,43 @@ func _rebuild_business_rows() -> void:
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels
+
+	var create_button := MenuButton.new()
+	create_button.text = "Create business ▾"
+	create_button.flat = false
+	create_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	create_button.tooltip_text = "Build a new business in the town. Free and instant; each kind can only be built once."
+	var create_popup := create_button.get_popup()
+	for i in BUILDABLE_BUSINESSES.size():
+		var option: Dictionary = BUILDABLE_BUSINESSES[i]
+		var already_built := _simulation.has_business_of_type(_town_settlement_id(), option["type_key"])
+		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
+		create_popup.set_item_disabled(i, already_built)
+	create_popup.id_pressed.connect(_on_create_business_pressed)
+	_business_list.add_child(create_button)
 	_rebuild_job_rows()
+
+func _town_settlement_id() -> int:
+	return _simulation.get_settlement_ids()[0]
+
+func _on_create_business_pressed(index: int) -> void:
+	var option: Dictionary = BUILDABLE_BUSINESSES[index]
+	var settlement_id := _town_settlement_id()
+	if _simulation.has_business_of_type(settlement_id, option["type_key"]):
+		return
+	var business: HEBusiness
+	var id := _simulation.next_business_id()
+	match option["type_key"]:
+		"farm": business = HEScenarioSeeds.make_farm(id, settlement_id)
+		"woodlot": business = HEScenarioSeeds.make_woodlot(id, settlement_id)
+		"trader": business = HEScenarioSeeds.make_trader(id, settlement_id)
+		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
+		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
+		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
+	_simulation.add_business(business)
+	_business_names[business.id] = business.name
+	_rebuild_business_rows()
+	_refresh()
 
 ## One row per business (not per household): target capacity, max capacity and
 ## how many workers are employed. Filled in by _refresh_job_rows.
@@ -1821,8 +2095,11 @@ func _rebuild_household_rows() -> void:
 		id_label.pressed.connect(_on_household_row_selected.bind(household_id))
 		grid.add_child(id_label)
 
-		var employer_label := Label.new()
+		var employer_label := Button.new()
+		employer_label.flat = true
+		employer_label.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		employer_label.custom_minimum_size = Vector2(80, 0)
+		employer_label.pressed.connect(_on_household_employer_pressed.bind(household_id))
 		grid.add_child(employer_label)
 
 		var workers_label := Label.new()
@@ -1867,9 +2144,40 @@ func _rebuild_household_rows() -> void:
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
+## Top-line government treasury and its 30-day movement (tooltip).
+func _refresh_treasury() -> void:
+	var summary := _simulation.get_treasury_summary(TREASURY_TREND_DAYS)
+	_treasury_margin.visible = summary["has_government"]
+	if not summary["has_government"]:
+		_treasury_tip.visible = false
+		return
+	_treasury_label.text = "%.0f gold" % summary["treasury"]
+	var covered: int = summary["days_covered"]
+	var tip := "Government treasury"
+	if covered <= 0:
+		tip += "\nNo history yet."
+	else:
+		var change: float = summary["change"]
+		tip += "\n%+.1f gold over the last %d days" % [change, covered]
+		tip += "\n(%.1f -> %.1f)" % [summary["then"], summary["treasury"]]
+	_treasury_tip_label.text = tip
+	_treasury_tip.reset_size() # shrink back to fit when the text gets shorter
+
+func _on_treasury_hover(hovering: bool) -> void:
+	_treasury_tip.visible = hovering
+	if hovering:
+		_refresh_treasury()
+		_treasury_tip.global_position = _treasury_box.global_position + Vector2(0, _treasury_box.size.y + 6)
+
+func _on_household_employer_pressed(household_id: int) -> void:
+	var employer_id: int = _simulation.get_household_summary(household_id)["employer_business_id"]
+	if _business_names.has(employer_id):
+		_on_business_row_selected(employer_id)
+
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
+	_refresh_treasury()
 
 	_refresh_town()
 
@@ -1886,9 +2194,16 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
-	_refresh_market_detail()
+	# The detail panels below are rebuilt from scratch, link buttons included. At
+	# high speed this runs nearly every frame, which would swap a button out
+	# between mouse-down and mouse-up and eat the click, so hold off while a
+	# mouse button is down; the next refresh catches up.
+	var mouse_down := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not mouse_down:
+		_refresh_market_detail()
 	_refresh_needs_tab()
-	_refresh_need_detail()
+	if not mouse_down:
+		_refresh_need_detail()
 
 	for report in _simulation.get_business_reports():
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
@@ -1953,7 +2268,7 @@ func _refresh() -> void:
 
 	_refresh_job_rows()
 
-	if _selected_business_id != -1:
+	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
 
 	var current_ids := _simulation.get_household_ids()
@@ -1971,7 +2286,10 @@ func _refresh() -> void:
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Button).text = str(household_id)
-		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
+		var employer_button := row["employer"] as Button
+		employer_button.text = _business_names.get(h["employer_business_id"], "Unemployed")
+		employer_button.disabled = not _business_names.has(h["employer_business_id"])
+		employer_button.tooltip_text = "Open employer detail" if not employer_button.disabled else ""
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
 		if worker_ages.is_empty():
@@ -2001,13 +2319,14 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
-	_refresh_household_detail()
+	if not mouse_down:
+		_refresh_household_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city
 ## cares about seeing without scrolling.
 func _refresh_blotter() -> void:
-	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
+	var events := _simulation.get_event_log_days(GameState.blotter_days)
 	var lines: Array[String] = []
 	for i in range(events.size() - 1, -1, -1):
 		if not _blotter_filter_enabled.get(events[i]["type"], true):

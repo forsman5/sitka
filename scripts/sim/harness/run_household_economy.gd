@@ -932,9 +932,12 @@ func _check_old_age_orphans_get_adopted() -> void:
 			adopted_events += 1
 	_assert(adopted_events == 1, "Expected exactly one 'adopted' event, saw %d" % adopted_events)
 
-	sim.advance_ticks(360)
+	# Reaching the aging threshold only makes a dependent eligible to leave
+	# (5%-25% per monthly check, see HEHousehold.leave_home_chance), so allow
+	# two more years for the promotion to actually happen.
+	sim.advance_ticks(360 * 3)
 	var city := sim.get_city_summary()
-	print("  adopted dependent's fate a year later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
+	print("  adopted dependent's fate three years later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
 	_assert(city["worker_promotions_total"] >= 1, "Adopted dependent should keep aging normally and eventually promote to worker, got 0 promotions")
 	_check_demographic_invariants(sim)
 
@@ -1318,10 +1321,26 @@ func _check_government_taxes() -> void:
 	staffed.advance_ticks(HESimulation.CAPACITY_EVAL_INTERVAL_DAYS)
 	_assert((staffed.get_government_summary(1)["administrator_household_ids"] as Array).size() >= 1, "Administrator post should be refilled after the holder leaves")
 
+	# Top-line treasury summary: matches the government's balance, and its
+	# 30-day change equals balance now minus the closing balance 30 days ago.
+	var trend := sim.get_treasury_summary(30)
+	_assert(trend["has_government"] and absf(trend["treasury"] - summary["treasury"]) < EPSILON, "Treasury summary should match the government balance")
+	_assert(trend["days_covered"] == 30, "A two-year-old sim should cover the full 30-day window")
+	var gov_history: Array[float] = []
+	for report in sim.get_business_reports(1):
+		if report["business_id"] == gov_id:
+			gov_history.assign(report["balance_history"])
+	_assert(absf(trend["change"] - (summary["treasury"] - gov_history[gov_history.size() - 31])) < EPSILON, "30-day treasury change should be now minus the balance 30 days ago")
+	var young := _new_sim("build_three_business_economy")
+	young.advance_ticks(5)
+	_assert(young.get_treasury_summary(30)["days_covered"] == 4, "A young sim should report only the history it has")
+	print("  top-line treasury: %.1f gold, %+.1f over %d days" % [trend["treasury"], trend["change"], trend["days_covered"]])
+
 	# A town with no government taxes nothing and reports none.
 	var bare := _new_sim("build_two_settlement_economy")
 	bare.advance_ticks(60)
 	_assert(bare.get_government_summary(1).is_empty(), "A scenario without a government should report none")
+	_assert(not bare.get_treasury_summary(30)["has_government"], "No government: the top-line treasury should be hidden")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

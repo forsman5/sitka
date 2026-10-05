@@ -60,6 +60,23 @@ const BIRTH_ELIGIBLE_DAYS := 180
 ## Minimum spacing between a household's births, so a permanently
 ## prosperous household can't produce a baby every single eligible day.
 const BIRTH_COOLDOWN_DAYS := 360
+## Each birth draws the NEXT cooldown as BIRTH_COOLDOWN_DAYS +/- this
+## fraction, and an eligible household only has a birth on a given monthly
+## check with BIRTH_MONTHLY_CHANCE. Together they spread births across the
+## year instead of letting every household that turned eligible together
+## give birth together -- the 360-day timers otherwise line up into cohort
+## waves that arrive as one lump of new adult households a year later.
+const BIRTH_COOLDOWN_JITTER := 0.25
+const BIRTH_MONTHLY_CHANCE := 0.5
+## Leaving home. A dependent at AGING_THRESHOLD_DAYS (age 18 on the sim's
+## 1 "year" = 360 days scale) has LEAVE_HOME_CHANCE_START per monthly check
+## of founding their own household; the chance rises linearly to
+## LEAVE_HOME_CHANCE_FULL at LEAVE_HOME_FULL_AGE_DAYS (age 25 = 500 days) and
+## stays there. Until they go they remain dependents: they eat, don't work,
+## and fill a MAX_PENDING_DEPENDENTS slot, which also slows further births.
+const LEAVE_HOME_CHANCE_START := 0.05
+const LEAVE_HOME_CHANCE_FULL := 0.25
+const LEAVE_HOME_FULL_AGE_DAYS := 500
 const BIRTH_FULFILLMENT_THRESHOLD := 0.95
 const BIRTH_STRESS_THRESHOLD := 0.1
 ## Caps how many dependents can be IN THE PIPELINE (born but not yet aged
@@ -122,6 +139,9 @@ var _consecutive_prosperous_days: int = 0
 ## Starts already at the cooldown ceiling so a household prosperous from
 ## day one isn't artificially blocked from its FIRST birth.
 var _days_since_last_birth: int = BIRTH_COOLDOWN_DAYS
+## Cooldown that applies after the most recent birth; redrawn with jitter on
+## each birth (see evaluate_birth).
+var _birth_cooldown_days: int = BIRTH_COOLDOWN_DAYS
 
 ## Reported by HESimulation each day, keyed by Commodity.Type. Kept on the
 ## household (rather than only in the daily ledger) so a caller can read a
@@ -262,13 +282,18 @@ func remove_member_for_emigration() -> void:
 ## DEPENDENTS) are the only thing that fluctuates -- so there's no separate
 ## household-size cap to author: growth becomes more, smaller households
 ## instead of a few unboundedly large ones.
-func evaluate_aging() -> int:
+##
+## Reaching AGING_THRESHOLD_DAYS only makes a dependent ELIGIBLE to leave:
+## each monthly check they go with leave_home_chance(age), so they stay on
+## as an adult dependent for a few months on average. `rng` is the
+## simulation's, so runs stay deterministic.
+func evaluate_aging(rng: RandomNumberGenerator) -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
 	last_promoted_member_numbers.clear()
 	for i in _dependent_ages.size():
 		var age: int = _dependent_ages[i]
-		if age >= AGING_THRESHOLD_DAYS:
+		if age >= AGING_THRESHOLD_DAYS and rng.randf() < leave_home_chance(age):
 			promoted += 1
 			# 1-based position in the member list (workers first, then
 			# dependents) as of just before promotion.
@@ -280,6 +305,13 @@ func evaluate_aging() -> int:
 	_dependent_ages = remaining
 	demographics.dependents -= promoted
 	return promoted
+
+## Monthly chance that a dependent of `age` days leaves to found their own
+## household: LEAVE_HOME_CHANCE_START at AGING_THRESHOLD_DAYS, rising
+## linearly to LEAVE_HOME_CHANCE_FULL at LEAVE_HOME_FULL_AGE_DAYS.
+static func leave_home_chance(age: int) -> float:
+	var t := clampf(float(age - AGING_THRESHOLD_DAYS) / float(LEAVE_HOME_FULL_AGE_DAYS - AGING_THRESHOLD_DAYS), 0.0, 1.0)
+	return lerpf(LEAVE_HOME_CHANCE_START, LEAVE_HOME_CHANCE_FULL, t)
 
 ## Monthly, alongside evaluate_aging: removes every worker whose age has
 ## crossed LIFESPAN_DAYS from THIS household and returns how many. Unlike a
@@ -316,16 +348,19 @@ func evaluate_old_age_death() -> int:
 ## and has fewer than MAX_PENDING_DEPENDENTS dependents already in the
 ## pipeline gains one new dependent at age 0. Returns true if a birth
 ## happened, for HESimulation's reporting.
-func evaluate_birth() -> bool:
+func evaluate_birth(rng: RandomNumberGenerator) -> bool:
 	if _consecutive_prosperous_days < BIRTH_ELIGIBLE_DAYS:
 		return false
-	if _days_since_last_birth < BIRTH_COOLDOWN_DAYS:
+	if _days_since_last_birth < _birth_cooldown_days:
 		return false
 	if _dependent_ages.size() >= MAX_PENDING_DEPENDENTS:
+		return false
+	if rng.randf() >= BIRTH_MONTHLY_CHANCE:
 		return false
 	_dependent_ages.append(0)
 	demographics.dependents += 1
 	_days_since_last_birth = 0
+	_birth_cooldown_days = roundi(BIRTH_COOLDOWN_DAYS * (1.0 + rng.randf_range(-BIRTH_COOLDOWN_JITTER, BIRTH_COOLDOWN_JITTER)))
 	return true
 
 ## Adds one dependent at a SPECIFIC age (unlike evaluate_birth()'s always-0)

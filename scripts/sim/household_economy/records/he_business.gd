@@ -81,7 +81,7 @@ const TRADER_REVENUE_WINDOW_DAYS := 45
 ## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
 ## which reads better over a longer stretch than the weekly self-tuning
 ## signal needs.
-const BALANCE_HISTORY_WINDOW_DAYS := 90
+const BALANCE_HISTORY_WINDOW_DAYS := 730
 
 ## Goods flows tracked for the detail panel's charts. PRODUCED/CONSUMED are
 ## what the production step actually made and used up; SOLD/BOUGHT are what
@@ -106,6 +106,10 @@ var id: int
 var settlement_id: int
 var name: String
 var kind: Kind
+## Which buildable business this is ("farm", "trader", ...), set by the
+## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
+## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
+var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int

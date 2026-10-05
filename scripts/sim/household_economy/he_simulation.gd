@@ -437,13 +437,13 @@ const CASH_RUNWAY_DANGER_DAYS := 14.0
 ## than being carried forward at the same fraction forever.
 const SELL_PACE_HEADROOM := 1.15
 
-const HISTORY_MAX_DAYS := 360
+const HISTORY_MAX_DAYS := 730
 ## Per-ranch history kept on HEBusiness.herd_events (see its doc comment).
 const HERD_EVENT_HISTORY_MAX := 60
 ## Event retention is day-based so a burst of hiring/firing cannot evict
 ## quieter notification types from the same recent-time window. The
 ## dashboard queries a smaller slice through get_event_log_days().
-const EVENT_LOG_RETENTION_DAYS := 360
+const EVENT_LOG_RETENTION_DAYS := 730
 ## Employment changes are sparse for a stable business. Keep the latest
 ## events of EACH type regardless of age, so filtering to firings or hires
 ## still shows the last change after a long quiet period.
@@ -575,6 +575,35 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
+
+## Registers a business built after the sim started. Takes a free id from
+## next_business_id(); the caller builds the record. Nothing is charged -- the
+## business starts with whatever balance/stock the record already carries.
+func add_business(b: HEBusiness) -> void:
+	assert(not businesses.has(b.id), "Business id %d already exists" % b.id)
+	assert(settlements.has(b.settlement_id), "Unknown settlement %d" % b.settlement_id)
+	businesses[b.id] = b
+	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
+	if b.kind == HEBusiness.Kind.TRADER:
+		var enabled := {}
+		for commodity in EXPORT_PRIORITY:
+			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+		_trader_export_enabled[b.id] = enabled
+
+func next_business_id() -> int:
+	var next_id := 1
+	for business_id in businesses.keys():
+		next_id = maxi(next_id, business_id + 1)
+	return next_id
+
+## Whether `settlement_id` already has a business of buildable kind
+## `type_key` (see HEBusiness.type_key) -- how "unique building" limits are checked.
+func has_business_of_type(settlement_id: int, type_key: String) -> bool:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id == settlement_id and b.type_key == type_key:
+			return true
+	return false
 
 func advance_ticks(days: int) -> void:
 	for i in days:
@@ -908,7 +937,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			continue
 		var stock := b.stock(commodity)
 		if stock > 0.0001:
-			holdings.append({"owner": b.name, "quantity": stock})
+			holdings.append({"owner": b.name, "business_id": b.id, "quantity": stock})
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.sells(commodity):
@@ -917,23 +946,23 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 				offered = minf(stock, stock / float(maxi(1, b.days_until_next_harvest())) * SELL_PACE_HEADROOM)
 			elif not SUBSISTENCE_COMMODITIES.has(commodity):
 				offered = _seller_surplus_above_reserve(b, settlement_id, commodity)
-			sellers.append({"owner": b.name, "offered": offered, "stock": stock})
+			sellers.append({"owner": b.name, "business_id": b.id, "offered": offered, "stock": stock})
 		if b.recipe.inputs.has(commodity):
 			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
 			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
 			if desired > 0.0001:
-				buyers.append({"owner": b.name, "requested": desired,
+				buyers.append({"owner": b.name, "business_id": b.id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
 	var trader := _settlement_trader(settlement_id)
 	if trader != null:
 		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
 		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
-			sellers.append({"owner": "%s (imports)" % trader.name,
+			sellers.append({"owner": "%s (imports)" % trader.name, "business_id": trader.id,
 				"kind": "import", "capacity": capacity})
 		elif _trader_export_enabled[trader.id].get(commodity, false) and _business_selling(settlement_id, commodity) != null:
 			var export_seller := _business_selling(settlement_id, commodity)
-			buyers.append({"owner": "%s (exports)" % trader.name, "kind": "export",
+			buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
 				"capacity": capacity,
 				"available": minf(capacity, _exportable_surplus(export_seller, settlement_id, commodity))})
 	report["buyers"] = buyers
@@ -1029,7 +1058,8 @@ func get_trader_transactions(business_id: int, days: int = 30) -> Array:
 ## filter is applied before the limit; "both" includes hires and firings.
 ## Returns copies so callers cannot change the stored history.
 func get_business_employment_events(business_id: int, event_type: String = "both", limit: int = 50) -> Array:
-	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
+	# A failed (deleted) business keeps its employment history.
+	assert(businesses.has(business_id) or _employment_event_log.has(business_id), "Unknown business id %d" % business_id)
 	assert(event_type in ["both", "job", "fired"], "Unknown employment event type %s" % event_type)
 	var events: Array = _employment_event_log.get(business_id, [])
 	var out: Array = []
@@ -1260,7 +1290,6 @@ func _fail_business(business_id: int, record: Dictionary) -> void:
 		"households_laid_off": laid_off,
 	})
 	(settlements[b.settlement_id] as HESettlement).business_ids.erase(business_id)
-	_employment_event_log.erase(business_id)
 	businesses.erase(business_id)
 
 ## Kind.HERD only, called from _pay_wages before its cash allowance is
@@ -1828,12 +1857,12 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
-		var promoted := h.evaluate_aging()
+		var promoted := h.evaluate_aging(rng)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
-		if h.evaluate_birth():
+		if h.evaluate_birth(rng):
 			births += 1
 			_log_event("birth", {"household_id": household_id})
 
@@ -3056,6 +3085,33 @@ func get_government_summary(settlement_id: int) -> Dictionary:
 		"administrator_household_ids": admin_ids,
 		"builder_slots": gov.builder_slots,
 	}
+
+## Every government's treasury summed, for the dashboard's top line: the
+## balance now and how it has moved over the last `days` days. `change` is
+## measured from the oldest closing balance still within the window, so a young
+## sim reports `days_covered` < `days` instead of inventing history. Both are
+## 0 / empty when no settlement has a government.
+func get_treasury_summary(days: int = 30) -> Dictionary:
+	var total := 0.0
+	var histories: Array = []
+	for settlement_id in settlements.keys():
+		var gov := _settlement_government(settlement_id)
+		if gov == null:
+			continue
+		total += gov.balance
+		histories.append(gov.balance_history())
+	if histories.is_empty():
+		return {"has_government": false, "treasury": 0.0, "change": 0.0, "days_covered": 0}
+	# History holds closing balances, newest last; today's is the latest entry.
+	var covered := 0
+	for history in histories:
+		covered = maxi(covered, mini(days, (history as Array).size() - 1))
+	var then := 0.0
+	for history in histories:
+		var h: Array = history
+		var index := h.size() - 1 - covered
+		then += h[index] if index >= 0 else 0.0
+	return {"has_government": true, "treasury": total, "change": total - then if covered > 0 else 0.0, "days_covered": covered, "then": then}
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
