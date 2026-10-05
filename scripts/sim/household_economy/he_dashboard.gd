@@ -1990,7 +1990,13 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
-	_refresh_market_detail()
+	# The detail panels below are rebuilt from scratch, link buttons included. At
+	# high speed this runs nearly every frame, which would swap a button out
+	# between mouse-down and mouse-up and eat the click, so hold off while a
+	# mouse button is down; the next refresh catches up.
+	var mouse_down := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not mouse_down:
+		_refresh_market_detail()
 	_refresh_needs_tab()
 	_refresh_need_detail()
 
@@ -2057,7 +2063,7 @@ func _refresh() -> void:
 
 	_refresh_job_rows()
 
-	if _selected_business_id != -1:
+	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
 
 	var current_ids := _simulation.get_household_ids()
@@ -2108,7 +2114,8 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
-	_refresh_household_detail()
+	if not mouse_down:
+		_refresh_household_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city
