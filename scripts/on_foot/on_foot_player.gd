@@ -1,5 +1,6 @@
 class_name OnFootPlayer extends CharacterBody3D
-## First-person walker: WASD + mouse look, Space to jump, Shift to sprint.
+## Walker: WASD + mouse look, Space to jump, Shift to sprint, F5 cycles the
+## camera (first person -> third person behind -> third person in front).
 ## Keys are read by physical keycode so no InputMap entries are needed.
 
 @export var walk_speed: float = 5.0
@@ -16,9 +17,19 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var eye_height: float = 1.65
 @export var bob_amount: float = 0.04
 @export var bob_frequency: float = 2.2
+@export var third_person_distance: float = 3.2
+
+enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
+
+const MODEL_SCENE := preload("res://assets/models/people/Casual_Male.fbx")
+const ANIM_PREFIX := "CharacterArmature|"
 
 var _head: Node3D
+var _arm: SpringArm3D
 var _camera: Camera3D
+var _model: Node3D
+var _anim: AnimationPlayer
+var _camera_mode: int = CameraMode.FIRST_PERSON
 var _pitch: float = 0.0
 var _coyote_left: float = 0.0
 var _buffer_left: float = 0.0
@@ -42,10 +53,27 @@ func _ready() -> void:
 	_head.position.y = eye_height
 	add_child(_head)
 
+	# SpringArm pulls the camera in when something is between it and the head.
+	_arm = SpringArm3D.new()
+	_arm.shape = SphereShape3D.new()
+	(_arm.shape as SphereShape3D).radius = 0.2
+	_arm.margin = 0.1
+	_arm.add_excluded_object(get_rid())
+	_head.add_child(_arm)
+
 	_camera = Camera3D.new()
 	_camera.fov = 80.0
 	_camera.current = true
-	_head.add_child(_camera)
+	_arm.add_child(_camera)
+
+	# Same placement as the Person scene: rotated so the model faces -Z.
+	_model = MODEL_SCENE.instantiate()
+	_model.rotation_degrees = Vector3(0, 180, 0)
+	_model.scale = Vector3(0.54, 0.54, 0.54)
+	add_child(_model)
+	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
+
+	_set_camera_mode(CameraMode.FIRST_PERSON)
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -57,8 +85,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
 		_head.rotation.x = _pitch
-	elif event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_SPACE:
-		_buffer_left = jump_buffer_time
+	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.physical_keycode == KEY_SPACE:
+			_buffer_left = jump_buffer_time
+		elif event.physical_keycode == KEY_F5:
+			_set_camera_mode((_camera_mode + 1) % CameraMode.size())
+
+func _set_camera_mode(mode: int) -> void:
+	_camera_mode = mode
+	_model.visible = mode != CameraMode.FIRST_PERSON
+	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
+	# Rotating the arm half a turn puts the camera in front, looking back at us.
+	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()
@@ -107,13 +145,29 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_update_camera(delta)
+	_update_animation()
 
 func _update_camera(delta: float) -> void:
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
 	var bob := 0.0
-	if is_on_floor() and horiz_speed > 0.5:
+	if _camera_mode == CameraMode.FIRST_PERSON and is_on_floor() and horiz_speed > 0.5:
 		_bob_t += delta * bob_frequency * horiz_speed
 		bob = sin(_bob_t) * bob_amount * clampf(horiz_speed / walk_speed, 0.0, 1.5)
 	_land_dip = move_toward(_land_dip, 0.0, delta * 0.6)
 	var target_y := eye_height + bob - _land_dip
 	_head.position.y = lerpf(_head.position.y, target_y, clampf(delta * 25.0, 0.0, 1.0))
+
+func _update_animation() -> void:
+	if _anim == null or not _model.visible:
+		return
+	var horiz_speed := Vector2(velocity.x, velocity.z).length()
+	var clip := "Idle"
+	if not is_on_floor():
+		clip = "Jump"
+	elif horiz_speed > walk_speed + 0.5:
+		clip = "Run"
+	elif horiz_speed > 0.5:
+		clip = "Walk"
+	clip = ANIM_PREFIX + clip
+	if _anim.current_animation != clip:
+		_anim.play(clip, 0.15)
