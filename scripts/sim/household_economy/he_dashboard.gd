@@ -106,6 +106,9 @@ const BLOTTER_FILTERS := [
 	{"type": "coming_of_age", "label": "Coming of age"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
+	{"type": "herd_birth", "label": "Herd births"},
+	{"type": "herd_cull", "label": "Herd culls"},
+	{"type": "hardship_butcher", "label": "Hardship butchering"},
 ]
 
 ## Set by the config page (he_config.gd) before it switches to this scene.
