@@ -57,6 +57,16 @@ extends RefCounted
 ## inventory until production consumes them. An input nothing local
 ## produces is supplied by the settlement's Trader, importing it from
 ## outside the settlement; see he_simulation.gd's _run_input_purchasing.
+##
+## Kind.GOVERNMENT (the settlement's "Government") is a fourth odd one out:
+## no recipe, no stock, no sales. Its `balance` is the town treasury, filled
+## by the sales tax every domestic transaction remits to it (see
+## he_simulation.gd's _collect_sales_tax) and drained only by wages. It does
+## not self-tune: its permanent administrator household is assigned by the
+## scenario seed (and re-assigned if that household ever leaves the
+## workforce), and it never goes into debt to pay anyone -- an empty
+## treasury means a rationed wage, not an overdraft. `builder_slots` is the
+## (not yet modeled) number of builder jobs it will fund; see its comment.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -90,7 +100,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
 enum Species { CATTLE, SHEEP }
 
 var id: int
@@ -229,6 +239,19 @@ var _wage_history: Array[float] = []
 ## what _evaluate_business_capacity compares against the reference wage to
 ## decide growth/shrink, per he_simulation.gd's doc comment there.
 var _revenue_per_worker_history: Array[float] = []
+
+## Kind.GOVERNMENT only: sales tax remitted to the treasury today / ever, for
+## reporting -- see he_simulation.gd._collect_sales_tax.
+var last_tax_collected: float = 0.0
+var tax_collected_total: float = 0.0
+
+## Kind.GOVERNMENT only: how many builder jobs the government should employ.
+## TODO(builders): not modeled yet. Nothing hires into these slots and
+## _reconcile_employment leaves a government's staffing alone; when builders
+## land they should draw wages from the treasury like the administrator and
+## spend labor on player-ordered construction (new businesses). Kept as a
+## plain variable now so the UI and player actions have a stable name to bind.
+var builder_slots: int = 0
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0

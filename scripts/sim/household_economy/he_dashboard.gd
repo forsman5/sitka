@@ -967,7 +967,12 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 	if rows.is_empty():
 		_add_market_detail_line("None")
 		return
+	var household_rows: Array = rows.filter(func(r): return r.get("kind", "") == "household")
+	if not household_rows.is_empty():
+		_add_market_detail_line(_household_summary_line(household_rows, quantity_key, secondary_key))
 	for row in rows:
+		if row.get("kind", "") == "household":
+			continue
 		if row.get("kind", "") == "export":
 			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
 				row["owner"], row["capacity"], row["available"]])
@@ -981,6 +986,26 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
 		_add_market_detail_line(line)
+
+## One line standing in for every household row: count, average quantity, and
+## (for buyers) average affordable plus how many can't afford their full request.
+func _household_summary_line(rows: Array, quantity_key: String, secondary_key: String) -> String:
+	var count := rows.size()
+	var total := 0.0
+	var total_secondary := 0.0
+	var unaffordable := 0
+	for row in rows:
+		total += row[quantity_key]
+		if secondary_key != "":
+			total_secondary += row[secondary_key]
+			if secondary_key == "funded" and row[secondary_key] < row[quantity_key] - 0.0001:
+				unaffordable += 1
+	var line := "%d households: avg %.1f %s" % [count, total / count, quantity_key]
+	if secondary_key == "funded":
+		line += "  |  avg %.1f affordable  |  %d cannot afford full request" % [total_secondary / count, unaffordable]
+	elif secondary_key != "":
+		line += "  |  avg %.1f %s" % [total_secondary / count, secondary_key]
+	return line
 
 func _on_trader_transaction_filter_pressed(filter: String) -> void:
 	_trader_transaction_filter = filter
@@ -1720,6 +1745,10 @@ func _refresh() -> void:
 			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
 			status_label.text = status_text
 			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
+		elif report["kind"] == "government":
+			var gov_text := "Treasury %.1f · tax today %.2f (%.0f%% sales tax)" % [report["treasury"], report["last_tax_collected"], report["sales_tax_rate"] * 100.0]
+			status_label.text = gov_text
+			status_label.tooltip_text = "%s\n\nSales tax on every local sale pays the administrator; builder jobs are not modeled yet." % gov_text
 		elif report["kind"] == "trader":
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
