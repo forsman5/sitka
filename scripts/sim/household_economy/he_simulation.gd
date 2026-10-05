@@ -3065,6 +3065,33 @@ func get_government_summary(settlement_id: int) -> Dictionary:
 		"builder_slots": gov.builder_slots,
 	}
 
+## Every government's treasury summed, for the dashboard's top line: the
+## balance now and how it has moved over the last `days` days. `change` is
+## measured from the oldest closing balance still within the window, so a young
+## sim reports `days_covered` < `days` instead of inventing history. Both are
+## 0 / empty when no settlement has a government.
+func get_treasury_summary(days: int = 30) -> Dictionary:
+	var total := 0.0
+	var histories: Array = []
+	for settlement_id in settlements.keys():
+		var gov := _settlement_government(settlement_id)
+		if gov == null:
+			continue
+		total += gov.balance
+		histories.append(gov.balance_history())
+	if histories.is_empty():
+		return {"has_government": false, "treasury": 0.0, "change": 0.0, "days_covered": 0}
+	# History holds closing balances, newest last; today's is the latest entry.
+	var covered := 0
+	for history in histories:
+		covered = maxi(covered, mini(days, (history as Array).size() - 1))
+	var then := 0.0
+	for history in histories:
+		var h: Array = history
+		var index := h.size() - 1 - covered
+		then += h[index] if index >= 0 else 0.0
+	return {"has_government": true, "treasury": total, "change": total - then if covered > 0 else 0.0, "days_covered": covered, "then": then}
+
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
 ## this), so the reserve tracks the settlement's actual size/composition
