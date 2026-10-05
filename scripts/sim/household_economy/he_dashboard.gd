@@ -1130,6 +1130,7 @@ func _on_market_row_selected(commodity: int) -> void:
 func _on_market_detail_close_pressed() -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _refresh_market_detail() -> void:
 	if _selected_market_commodity == -1:
@@ -1500,7 +1501,7 @@ func _add_detail_row(label_text: String, value) -> void:
 		for part in value:
 			# A third element marks text that names several goods inline
 			# (the Trader's "Export (...) / Import (...)" summary).
-			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1], 0.0, true))
 		_business_detail_grid.add_child(box)
 		return
 	var value_label := Label.new()
@@ -1537,7 +1538,9 @@ func _plain_label(text: String) -> Label:
 	return label
 
 ## Icon (when the good is known and has one) + text label in one cell.
-func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+## link_to_market makes the text a button opening that good's market detail
+## (only when the good actually has a market).
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, link_to_market: bool = false) -> HBoxContainer:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
 	box.custom_minimum_size = Vector2(min_width, 0)
@@ -1551,10 +1554,22 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -
 		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		box.add_child(rect)
+	if link_to_market and commodity != -1 and _known_market_commodities.has(commodity_name):
+		var link := Button.new()
+		link.text = text
+		link.flat = true
+		link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		link.tooltip_text = "Open %s market" % commodity_name
+		link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+		box.add_child(link)
+		return box
 	var label := Label.new()
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_market_pressed(commodity: int) -> void:
+	_open_linked(_on_market_row_selected.bind(commodity))
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
