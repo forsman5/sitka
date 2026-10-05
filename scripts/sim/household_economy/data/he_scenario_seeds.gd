@@ -34,6 +34,9 @@ const BUTCHER_BUSINESS_ID := 8
 ## pays one permanent administrator household. Present in every _build_world
 ## town, including build_custom's, which never offers it as a choice.
 const GOVERNMENT_BUSINESS_ID := 9
+## Opt-in, like the Bloomery whose iron it buys. Numbered after the government
+## so existing ids stay put.
+const TOOLSMITH_BUSINESS_ID := 10
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
 
@@ -88,6 +91,16 @@ const TRADER_MAX_CAPACITY := 20
 ## not a whole settlement's dominant employer. Legacy (non-field) business,
 ## so this IS the hard ceiling, not a land-derived one.
 const BLOOMERY_MAX_CAPACITY := 20
+
+## The Toolsmith serves only the settlement's own households (its Trader export
+## starts disabled), whose demand is about 0.6 tools a day -- roughly twelve
+## workers at _toolsmith_recipe's rate. It keeps a core crew year-round: demand
+## is smooth, and a business tuned to zero would only trial-hire a crew the
+## town can't feed. Starting at the full demand-sized crew avoids a first-month
+## shortage that would pin the price at its ceiling.
+const TOOLSMITH_MIN_CAPACITY := 6
+const TOOLSMITH_STARTING_CAPACITY := 12
+const TOOLSMITH_MAX_CAPACITY := 16
 
 ## Starting herd sizes -- deliberately well under either species' cull
 ## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
@@ -170,6 +183,17 @@ static func _butcher_recipe() -> Recipe:
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
+## Iron in, tools out. Calibrated so the price settles near the 6.0 base
+## (the pooled model's) rather than at a floor or ceiling: wages in these
+## scenarios run 0.2-0.4 a day, so a worker clears that at 6.0 by making about
+## 0.06 tools a day (0.36 of sales). At that rate twelve workers make 0.72
+## tools a day, a little over what 30 households use at 0.005 per person.
+## Iron's price here is inflated (see BASE_PRICE's Iron comment), so 0.1 iron
+## per tool (1.5) is a quarter of the tool's price; the pooled smithy's 1.5
+## iron per tool would cost more than the tool sells for.
+static func _toolsmith_recipe() -> Recipe:
+	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.1}, {Commodity.Type.TOOLS: 0.06})
+
 static func _iron_mine_recipe() -> Recipe:
 	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
 
@@ -239,7 +263,7 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## HESimulation._evaluate_business_capacity's zero-capacity-protection
 ## mechanic, since there is no such business id in `businesses` for that to
 ## apply to.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0) -> Dictionary:
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, toolsmith_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
 	var farm := HEBusiness.new(FARM_BUSINESS_ID, "Farm", _farm_recipe(), 0, farm_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
@@ -315,6 +339,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
 
+	var toolsmith: HEBusiness = null
+	if toolsmith_capacity > 0:
+		toolsmith = HEBusiness.new(TOOLSMITH_BUSINESS_ID, "Toolsmith", _toolsmith_recipe(), TOOLSMITH_MAX_CAPACITY, toolsmith_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		toolsmith.min_capacity = TOOLSMITH_MIN_CAPACITY
+		toolsmith.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * toolsmith_capacity
+		businesses[TOOLSMITH_BUSINESS_ID] = toolsmith
+		settlement.business_ids.append(TOOLSMITH_BUSINESS_ID)
+
 	var grain_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * STARTING_BUFFER_DAYS
 	var timber_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * STARTING_BUFFER_DAYS
 	var wool_buffer := HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.WOOL) * STARTING_BUFFER_DAYS
@@ -324,6 +356,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var woodlot_workers_assigned := 0
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
+	var toolsmith_workers_assigned := 0
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
@@ -346,6 +379,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		elif iron_mine != null and iron_mine_workers_assigned < iron_mine_capacity:
 			household.employer_business_id = IRON_MINE_BUSINESS_ID
 			iron_mine_workers_assigned += WORKER_CAPACITY
+		elif toolsmith != null and toolsmith_workers_assigned < toolsmith_capacity:
+			household.employer_business_id = TOOLSMITH_BUSINESS_ID
+			toolsmith_workers_assigned += WORKER_CAPACITY
 		elif trader_workers_assigned < trader_capacity:
 			household.employer_business_id = TRADER_BUSINESS_ID
 			trader_workers_assigned += WORKER_CAPACITY
@@ -447,6 +483,18 @@ static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerato
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader, bloomery, iron_mine)
 
+## A town with a Toolsmith and no iron production of its own: no local seller
+## of iron exists, so the Trader imports it (see HESimulation's
+## _run_input_purchasing), as the valley's Staithe smithy gets its iron from
+## elsewhere. Existing builders leave the Toolsmith out so their outcomes stay
+## comparable.
+static func build_economy_with_toolsmith(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var toolsmith := TOOLSMITH_STARTING_CAPACITY
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - toolsmith
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader, 0, 0, toolsmith)
+
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather
 ## than waiting for the balanced scenario's slower drift. The Trader starts
@@ -469,7 +517,8 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine
+	var toolsmith: int = TOOLSMITH_MIN_CAPACITY if included.has(TOOLSMITH_BUSINESS_ID) else 0
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - toolsmith
 	var has_farm := included.has(FARM_BUSINESS_ID)
 	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
 	var farm := 0
@@ -481,7 +530,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 		farm = remainder
 	elif has_woodlot:
 		woodlot = remainder
-	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine)
+	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine, toolsmith)
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
 	for business_id in businesses.keys():

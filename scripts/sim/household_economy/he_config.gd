@@ -18,6 +18,7 @@ const BUSINESSES := [
 	{"id": HEScenarioSeeds.BUTCHER_BUSINESS_ID, "label": "Butcher", "hint": "Turns ranch livestock into meat and leather."},
 	{"id": HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore."},
 	{"id": HEScenarioSeeds.IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery."},
+	{"id": HEScenarioSeeds.TOOLSMITH_BUSINESS_ID, "label": "Toolsmith", "hint": "Forges tools from iron; imports it unless a Bloomery supplies it."},
 ]
 
 ## "include" mirrors which businesses each builder in HEScenarioSeeds creates,
@@ -27,6 +28,7 @@ const PRESETS := [
 	{"label": "Six businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7, 8]},
 	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
 	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
+	{"label": "Seven businesses, with Toolsmith (imports iron)", "builder": "build_economy_with_toolsmith", "include": [1, 2, 3, 6, 7, 8, 10]},
 ]
 
 var _preset_picker: OptionButton

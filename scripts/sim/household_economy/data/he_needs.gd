@@ -26,6 +26,10 @@ static func all() -> Array[HENeed]:
 			# Leather and wool are interchangeable one-for-one; households buy
 			# whichever posts the lower price (see _preferred_satisfier).
 			HENeed.new(HENeed.Id.CLOTHING, "Clothing", 0.01, {Commodity.Type.LEATHER: 1.0, Commodity.Type.WOOL: 1.0}, Commodity.Type.WOOL),
+			# Matches Simulation.TOOLS_PER_PERSON_PER_DAY. Like clothing it does
+			# not feed the lifecycle engine; only a Toolsmith supplies it, so a
+			# town without one simply has no tools need (needs_seller).
+			HENeed.new(HENeed.Id.TOOLS, "Tools", 0.005, {Commodity.Type.TOOLS: 1.0}, Commodity.Type.TOOLS, false, true),
 		]
 	return _all
 

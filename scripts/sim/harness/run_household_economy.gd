@@ -45,6 +45,7 @@ func _init() -> void:
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
 	_check_butcher_processes_livestock()
+	_check_toolsmith_supplies_tools()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_government_taxes()
@@ -1120,6 +1121,58 @@ func _check_butcher_processes_livestock() -> void:
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
 
+## The Toolsmith buys the Bloomery's iron locally (instead of the Trader
+## exporting all of it at half price) and sells tools to households, which use
+## them at the pooled model's 0.005 per person per day. Two years, reconciling
+## goods and money every day.
+func _check_toolsmith_supplies_tools() -> void:
+	print("\n=== Toolsmith: iron becomes tools, which households use ===")
+	var sim := _new_sim("build_economy_with_toolsmith")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var toolsmith: HEBusiness = sim.businesses[HEScenarioSeeds.TOOLSMITH_BUSINESS_ID]
+	_assert(toolsmith.sells(Commodity.Type.TOOLS) and toolsmith.recipe.inputs.has(Commodity.Type.IRON),
+		"The seeded Toolsmith should turn iron into tools")
+	_assert(sim._business_selling(settlement_id, Commodity.Type.TOOLS) == toolsmith, "The Toolsmith should be the local seller of tools")
+	_assert(not _new_sim("build_economy_with_bloomery_and_iron_mine").businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID),
+		"Only the Toolsmith scenario should seed a Toolsmith")
+
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	reconciled_commodities.append(Commodity.Type.IRON)
+	var produced := {}
+	var consumed := {}
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	var min_employed := 1000
+	for window in 2:
+		sim.advance_ticks(360)
+		for record in sim.get_daily_history(360):
+			for c in reconciled_commodities:
+				var name := Commodity.name_of(c)
+				var day_produced: float = record["produced"].get(name, 0.0)
+				var day_consumed: float = record["consumed"].get(name, 0.0)
+				var day_exported: float = (record["exported"] as Dictionary).get(name, 0.0)
+				var day_imported: float = (record["imported"] as Dictionary).get(name, 0.0)
+				var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				var expected: float = record["opening_stock"][name] + day_produced + day_imported - day_consumed - day_exported - written_off
+				worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+				produced[name] = produced.get(name, 0.0) + day_produced
+				consumed[name] = consumed.get(name, 0.0) + day_consumed
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+		min_employed = mini(min_employed, sim._business_employed_worker_count(toolsmith.id))
+
+	var tools_report := sim.get_market_report(settlement_id, Commodity.Type.TOOLS)
+	print("  over 2 years: toolsmith made %.0f tools from %.0f iron; households used %.0f | price %.2f, employed %d (min at year end %d)" % [
+		produced.get("Tools", 0.0), consumed.get("Iron", 0.0), consumed.get("Tools", 0.0), tools_report["price"], sim._business_employed_worker_count(toolsmith.id), min_employed])
+	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(produced.get("Tools", 0.0) > 0.0 and consumed.get("Iron", 0.0) > 0.0, "The Toolsmith should have turned some iron into tools")
+	_assert(consumed.get("Tools", 0.0) > 0.0, "Households should have used some tools")
+	_assert(sim._business_employed_worker_count(toolsmith.id) >= 1, "The Toolsmith should still be employing people after two years")
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Toolsmith present, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
+	_check_demographic_invariants(sim)
+
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
 ## the lifecycle engine.
@@ -1128,8 +1181,8 @@ func _check_needs_catalog() -> void:
 	var ids: Array = []
 	for need in HENeeds.all():
 		ids.append(need.id)
-	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
+	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING, HENeed.Id.TOOLS], "Needs should be food, heat, clothing, tools in that order")
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL, Commodity.Type.TOOLS],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)

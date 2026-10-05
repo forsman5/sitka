@@ -15,7 +15,7 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 ## good that packs more into each unit (charcoal's 4 heat vs timber's 1) is
 ## compared by price per need-unit, not price per good.
 
-enum Id { FOOD, HEAT, CLOTHING }
+enum Id { FOOD, HEAT, CLOTHING, TOOLS }
 
 var id: Id
 var label: String
@@ -33,9 +33,16 @@ var baseline: Commodity.Type
 ## Whether the fraction of this need met feeds the household lifecycle engine
 ## (stress, migration pressure, starvation, births). Only food does.
 var drives_lifecycle: bool
+## True for a need nothing but a dedicated business can meet (tools): a
+## settlement with no seller of the baseline has no market for it, so the need
+## is left out of demand, shortfall reporting and the cost of living there
+## instead of showing as permanent unmet scarcity. Food, heat and clothing
+## leave this false -- grain, timber and wool are the staples every
+## settlement is assumed able to get.
+var needs_seller: bool
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
-		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false) -> void:
+		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_needs_seller: bool = false) -> void:
 	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
@@ -43,6 +50,7 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	unit_values = p_unit_values
 	baseline = p_baseline
 	drives_lifecycle = p_drives_lifecycle
+	needs_seller = p_needs_seller
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []
