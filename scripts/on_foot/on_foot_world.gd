@@ -12,7 +12,8 @@ var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 
 func _ready() -> void:
 	_build_ground()
-	_build_markers()
+	_spawn_pen()
+	_spawn_flock()
 	_build_environment()
 
 	var player := OnFootPlayer.new()
@@ -87,6 +88,22 @@ func _to_main_menu() -> void:
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
+## Open-gated pen ahead of the flock, with its gate side facing the spawn point.
+func _spawn_pen() -> void:
+	var pen := SheepPen.new()
+	pen.name = "SheepPen"
+	pen.position = Vector3(8, 0, -36)
+	add_child(pen)
+
+## A small flock a short walk ahead of the spawn point.
+func _spawn_flock() -> void:
+	var center := Vector3(-6, 0, -18)
+	for i in randi_range(3, 5):
+		var sheep := OnFootSheep.new()
+		sheep.position = center + Vector3(randf_range(-3, 3), 0.1, randf_range(-3, 3))
+		sheep.rotation.y = randf() * TAU
+		add_child(sheep)
+
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
 	var col := CollisionShape3D.new()
@@ -117,28 +134,6 @@ func _checker_texture() -> ImageTexture:
 	img.set_pixel(1, 0, Color(0.85, 0.85, 0.85))
 	img.set_pixel(0, 1, Color(0.85, 0.85, 0.85))
 	return ImageTexture.create_from_image(img)
-
-## A few boxes of known size for judging scale and jump height.
-func _build_markers() -> void:
-	var heights := [0.5, 1.0, 1.5, 2.5]
-	for i in heights.size():
-		var h: float = heights[i]
-		var body := StaticBody3D.new()
-		body.position = Vector3(4.0 + i * 3.0, h * 0.5, -8.0)
-		var col := CollisionShape3D.new()
-		var box := BoxShape3D.new()
-		box.size = Vector3(2, h, 2)
-		col.shape = box
-		body.add_child(col)
-		var mesh := MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = box.size
-		mesh.mesh = bm
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.7, 0.55, 0.4)
-		mesh.material_override = mat
-		body.add_child(mesh)
-		add_child(body)
 
 func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()

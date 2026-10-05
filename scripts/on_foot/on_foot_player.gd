@@ -37,6 +37,7 @@ const CHARACTERS := {
 		"walk_speed": 5.0,
 		"sprint_speed": 8.5,
 		"jump_height": 1.2,
+		"scare_radius": 8.0,
 		"anim": {
 			"idle": "CharacterArmature|Idle",
 			"walk": "CharacterArmature|Walk",
@@ -54,6 +55,7 @@ const CHARACTERS := {
 		"walk_speed": 3.5,
 		"sprint_speed": 8.0,
 		"jump_height": 0.9,
+		"scare_radius": 15.0,
 		"anim": {
 			"idle": "AnimalArmature|Idle",
 			"walk": "AnimalArmature|Walk",
@@ -80,6 +82,7 @@ var _character: Dictionary
 
 func _ready() -> void:
 	_character = CHARACTERS[selected_character]
+	add_to_group("on_foot_player")
 	walk_speed = _character["walk_speed"]
 	sprint_speed = _character["sprint_speed"]
 	jump_height = _character["jump_height"]
@@ -135,6 +138,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_buffer_left = jump_buffer_time
 		elif event.physical_keycode == KEY_F5:
 			_set_camera_mode((_camera_mode + 1) % CameraMode.size())
+
+## How close (in metres) animals let this character get before fleeing.
+func scare_radius() -> float:
+	return _character["scare_radius"]
 
 func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
