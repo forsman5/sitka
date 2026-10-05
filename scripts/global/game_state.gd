@@ -14,6 +14,7 @@ signal food_changed(amount: int)
 @export var barn_cost: int = 60
 @export var ship_cost: int = 50
 @export var cow_cost: int = 40
+@export var sheep_cost: int = 30
 var time_of_day: float = 0.25
 var pending_load: Dictionary = {}
 var current_save_name: String = ""
