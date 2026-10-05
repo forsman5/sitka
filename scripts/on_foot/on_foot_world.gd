@@ -13,6 +13,7 @@ var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 func _ready() -> void:
 	_build_ground()
 	_build_markers()
+	_spawn_flock()
 	_build_environment()
 
 	var player := OnFootPlayer.new()
@@ -86,6 +87,15 @@ func _set_paused(paused: bool) -> void:
 func _to_main_menu() -> void:
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
+
+## A small flock a short walk ahead of the spawn point.
+func _spawn_flock() -> void:
+	var center := Vector3(-6, 0, -18)
+	for i in randi_range(3, 5):
+		var sheep := OnFootSheep.new()
+		sheep.position = center + Vector3(randf_range(-3, 3), 0.1, randf_range(-3, 3))
+		sheep.rotation.y = randf() * TAU
+		add_child(sheep)
 
 func _build_ground() -> void:
 	var body := StaticBody3D.new()
