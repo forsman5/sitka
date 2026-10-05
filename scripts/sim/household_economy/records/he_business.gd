@@ -132,6 +132,12 @@ var need_inputs: Dictionary[Commodity.Type, int] = {}
 ## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
 var processes_livestock: bool = false
 
+## Wages come only out of cash on hand -- no negative-balance allowance (see
+## he_simulation.gd's _wage_overdraft_floor). Set on processors that buy their
+## inputs from a thin local market (Mill, Bakery), where wage debt would
+## otherwise crowd out the credit they need to keep buying inputs.
+var wages_from_cash_only: bool = false
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0

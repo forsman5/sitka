@@ -1192,7 +1192,7 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
-		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		var floor: float = _wage_overdraft_floor(b, total_needed)
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
@@ -1226,6 +1226,17 @@ func _pay_wages(record: Dictionary) -> void:
 ## export_revenue ledger _run_trade's Trader export pass uses, so this
 ## doesn't create money run_household_economy.gd's conservation check can't
 ## account for -- it's a real sale, just not through the Trader.
+## The lowest balance wages may push `b` to. A business flagged
+## wages_from_cash_only (the Mill and Bakery) gets no wage overdraft: wages and
+## its flour/timber purchases would draw on the same debt, and wages (paid
+## first each tick) could spend it all, leaving a crew on the payroll with
+## nothing to work on and no revenue to ever repay it. Its input credit line
+## (see _input_budget) is what lets it restart instead.
+func _wage_overdraft_floor(b: HEBusiness, total_needed: float) -> float:
+	if b.kind == HEBusiness.Kind.GOVERNMENT or b.wages_from_cash_only:
+		return 0.0
+	return -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+
 func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: Dictionary) -> void:
 	b.last_hardship_butchered = 0.0
 	if cash_shortfall <= 0.0001:
@@ -2701,7 +2712,13 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if seller != null:
 				var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
 				b2b["sold"] += bought
-				b2b["requested"] += requested * affordable_ratio
+				# The price signal sees one day's real need, not the whole
+				# PRODUCTION_INPUT_BUFFER_DAYS refill: a buyer that uses up
+				# everything it is sold never fills its buffer, and counting
+				# the standing 14-day gap as demand ratchets a supplier's price
+				# up 5% a day for as long as the chain exists (the Mill's flour
+				# went 1.8 -> 6+ in a month, bankrupting the Bakery it feeds).
+				b2b["requested"] += minf(requested, needed_by_commodity[commodity]) * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
 				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)

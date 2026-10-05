@@ -118,6 +118,11 @@ const IRON_MINE_MAX_CAPACITY := 20
 ## Bloomery/Iron Mine pair: compact legacy production sites.
 const MILL_MAX_CAPACITY := 20
 const BAKERY_MAX_CAPACITY := 20
+## Households sit on a ~10-day seeded food buffer, so a new Mill/Bakery's
+## first sales trickle in late; without a grace period the capacity tuner
+## reads that quiet first week as "unprofitable" and fires the crew on day 7
+## (see HESimulation._evaluate_business_capacity's protected_until_day).
+const PROCESSOR_STARTUP_PROTECTION_DAYS := 30
 
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
@@ -341,6 +346,8 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	if mill_capacity > 0:
 		mill = HEBusiness.new(MILL_BUSINESS_ID, "Mill", _mill_recipe(), MILL_MAX_CAPACITY, mill_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
 		mill.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * mill_capacity
+		mill.protected_until_day = PROCESSOR_STARTUP_PROTECTION_DAYS
+		mill.wages_from_cash_only = true
 		businesses[MILL_BUSINESS_ID] = mill
 		settlement.business_ids.append(MILL_BUSINESS_ID)
 
@@ -348,6 +355,8 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	if bakery_capacity > 0:
 		bakery = HEBusiness.new(BAKERY_BUSINESS_ID, "Bakery", _bakery_recipe(), BAKERY_MAX_CAPACITY, bakery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
 		bakery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bakery_capacity
+		bakery.protected_until_day = PROCESSOR_STARTUP_PROTECTION_DAYS
+		bakery.wages_from_cash_only = true
 		# Its timber input is the oven's heat, which any heat fuel can supply.
 		bakery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 		businesses[BAKERY_BUSINESS_ID] = bakery
