@@ -885,9 +885,12 @@ func _check_old_age_orphans_get_adopted() -> void:
 			adopted_events += 1
 	_assert(adopted_events == 1, "Expected exactly one 'adopted' event, saw %d" % adopted_events)
 
-	sim.advance_ticks(360)
+	# Reaching the aging threshold only makes a dependent eligible to leave
+	# (5%-25% per monthly check, see HEHousehold.leave_home_chance), so allow
+	# two more years for the promotion to actually happen.
+	sim.advance_ticks(360 * 3)
 	var city := sim.get_city_summary()
-	print("  adopted dependent's fate a year later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
+	print("  adopted dependent's fate three years later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
 	_assert(city["worker_promotions_total"] >= 1, "Adopted dependent should keep aging normally and eventually promote to worker, got 0 promotions")
 	_check_demographic_invariants(sim)
 

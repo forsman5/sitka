@@ -1785,12 +1785,12 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
-		var promoted := h.evaluate_aging()
+		var promoted := h.evaluate_aging(rng)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
-		if h.evaluate_birth():
+		if h.evaluate_birth(rng):
 			births += 1
 			_log_event("birth", {"household_id": household_id})
 
