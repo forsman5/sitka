@@ -863,11 +863,11 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 		var h: HEHousehold = households[household_id]
 		var stock := h.stock(commodity)
 		if stock > 0.0001:
-			holdings.append({"owner": "Household %d" % household_id, "quantity": stock})
+			holdings.append({"owner": "Household %d" % household_id, "kind": "household", "quantity": stock})
 		if SUBSISTENCE_COMMODITIES.has(commodity):
 			var desired: float = _desired_purchase(h, commodity)
 			if desired > 0.0001:
-				buyers.append({"owner": "Household %d" % household_id, "requested": desired,
+				buyers.append({"owner": "Household %d" % household_id, "kind": "household", "requested": desired,
 					"funded": minf(desired, maxf(0.0, h.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
 	var business_ids := businesses.keys()
