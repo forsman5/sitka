@@ -578,6 +578,35 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
 
+## Registers a business built after the sim started. Takes a free id from
+## next_business_id(); the caller builds the record. Nothing is charged -- the
+## business starts with whatever balance/stock the record already carries.
+func add_business(b: HEBusiness) -> void:
+	assert(not businesses.has(b.id), "Business id %d already exists" % b.id)
+	assert(settlements.has(b.settlement_id), "Unknown settlement %d" % b.settlement_id)
+	businesses[b.id] = b
+	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
+	if b.kind == HEBusiness.Kind.TRADER:
+		var enabled := {}
+		for commodity in EXPORT_PRIORITY:
+			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+		_trader_export_enabled[b.id] = enabled
+
+func next_business_id() -> int:
+	var next_id := 1
+	for business_id in businesses.keys():
+		next_id = maxi(next_id, business_id + 1)
+	return next_id
+
+## Whether `settlement_id` already has a business of buildable kind
+## `type_key` (see HEBusiness.type_key) -- how "unique building" limits are checked.
+func has_business_of_type(settlement_id: int, type_key: String) -> bool:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id == settlement_id and b.type_key == type_key:
+			return true
+	return false
+
 func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()

@@ -20,6 +20,16 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## Row order of the Needs tab.
 const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
+## Offered by the Businesses tab's "Create business" menu. Each kind is unique
+## per town (matched by HEBusiness.type_key) and costs nothing -- both may change later.
+const BUILDABLE_BUSINESSES := [
+	{"label": "Farm", "type_key": "farm"},
+	{"label": "Woodlot", "type_key": "woodlot"},
+	{"label": "Trader", "type_key": "trader"},
+	{"label": "Cattle Ranch", "type_key": "cattle_ranch"},
+	{"label": "Sheep Farm", "type_key": "sheep_farm"},
+	{"label": "Butcher", "type_key": "butcher"},
+]
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
@@ -1926,7 +1936,43 @@ func _rebuild_business_rows() -> void:
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels
+
+	var create_button := MenuButton.new()
+	create_button.text = "Create business ▾"
+	create_button.flat = false
+	create_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	create_button.tooltip_text = "Build a new business in the town. Free and instant; each kind can only be built once."
+	var create_popup := create_button.get_popup()
+	for i in BUILDABLE_BUSINESSES.size():
+		var option: Dictionary = BUILDABLE_BUSINESSES[i]
+		var already_built := _simulation.has_business_of_type(_town_settlement_id(), option["type_key"])
+		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
+		create_popup.set_item_disabled(i, already_built)
+	create_popup.id_pressed.connect(_on_create_business_pressed)
+	_business_list.add_child(create_button)
 	_rebuild_job_rows()
+
+func _town_settlement_id() -> int:
+	return _simulation.get_settlement_ids()[0]
+
+func _on_create_business_pressed(index: int) -> void:
+	var option: Dictionary = BUILDABLE_BUSINESSES[index]
+	var settlement_id := _town_settlement_id()
+	if _simulation.has_business_of_type(settlement_id, option["type_key"]):
+		return
+	var business: HEBusiness
+	var id := _simulation.next_business_id()
+	match option["type_key"]:
+		"farm": business = HEScenarioSeeds.make_farm(id, settlement_id)
+		"woodlot": business = HEScenarioSeeds.make_woodlot(id, settlement_id)
+		"trader": business = HEScenarioSeeds.make_trader(id, settlement_id)
+		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
+		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
+		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
+	_simulation.add_business(business)
+	_business_names[business.id] = business.name
+	_rebuild_business_rows()
+	_refresh()
 
 ## One row per business (not per household): target capacity, max capacity and
 ## how many workers are employed. Filled in by _refresh_job_rows.
