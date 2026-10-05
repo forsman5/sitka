@@ -439,13 +439,13 @@ const CASH_RUNWAY_DANGER_DAYS := 14.0
 ## than being carried forward at the same fraction forever.
 const SELL_PACE_HEADROOM := 1.15
 
-const HISTORY_MAX_DAYS := 360
+const HISTORY_MAX_DAYS := 730
 ## Per-ranch history kept on HEBusiness.herd_events (see its doc comment).
 const HERD_EVENT_HISTORY_MAX := 60
 ## Event retention is day-based so a burst of hiring/firing cannot evict
 ## quieter notification types from the same recent-time window. The
 ## dashboard queries a smaller slice through get_event_log_days().
-const EVENT_LOG_RETENTION_DAYS := 360
+const EVENT_LOG_RETENTION_DAYS := 730
 ## Employment changes are sparse for a stable business. Keep the latest
 ## events of EACH type regardless of age, so filtering to firings or hires
 ## still shows the last change after a long quiet period.

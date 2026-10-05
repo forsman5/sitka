@@ -25,9 +25,8 @@ const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
-const BLOTTER_HISTORY_DAYS := 30
 ## Household detail looks back as far as the sim retains events
-## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter follows GameState.blotter_days.
 const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
@@ -70,7 +69,6 @@ const TOWN_STATS := [
 	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
 	["Import cost (lifetime)", "import_cost_total", "%.1f"],
 ]
-const TOWN_CHART_DAYS := 90
 ## Births, emigrations and deaths are evaluated monthly, so the daily record is
 ## mostly zeros with a spike every 30 days; the flow chart plots a trailing
 ## sum over this many days instead so the lines are readable.
@@ -109,6 +107,9 @@ var _day_accumulator: float = 0.0
 var _day_label: Label
 var _town_stat_labels: Dictionary = {} # city-summary key -> Label
 var _town_population_chart: HESparkline
+var _town_population_title: Label
+var _cash_history_label: Label
+var _goods_title_label: Label
 var _town_flow_chart: HESparkline
 var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
@@ -197,8 +198,10 @@ func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
+	GameState.settings_changed.connect(_on_history_settings_changed)
 	_load_scenario()
 	_build_ui()
+	_update_history_titles()
 	_refresh()
 
 func _configure_tooltip_theme() -> void:
@@ -287,6 +290,7 @@ func _build_ui() -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
 
+	top_bar.add_child(_make_settings_button())
 	top_bar.add_child(_make_speed_button("Pause", 0.0))
 	top_bar.add_child(_make_speed_button("1x", 1.0))
 	top_bar.add_child(_make_speed_button("10x", 10.0))
@@ -425,7 +429,7 @@ func _build_ui() -> void:
 	_business_detail_overview_scroll.add_child(detail_content)
 
 	var cash_history_label := Label.new()
-	cash_history_label.text = "Cash (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_cash_history_label = cash_history_label
 	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	detail_content.add_child(cash_history_label)
 
@@ -709,7 +713,8 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	charts.size_flags_stretch_ratio = 2.0
 	row.add_child(charts)
-	_town_population_chart = _add_town_chart(charts, "Population (last %d days)" % TOWN_CHART_DAYS, TOWN_POPULATION_SERIES)
+	_town_population_chart = _add_town_chart(charts, "", TOWN_POPULATION_SERIES)
+	_town_population_title = _town_population_chart.get_meta("title_label")
 	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
 
 ## A title row with a color-keyed legend above a hoverable chart.
@@ -727,6 +732,7 @@ func _add_town_chart(parent: Control, title_text: String, series_defs: Array) ->
 		legend.add_theme_color_override("font_color", HESparkline.color_for_series(i))
 		header.add_child(legend)
 	var chart := HESparkline.new()
+	chart.set_meta("title_label", title)
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	chart.show_max_label = true
@@ -738,8 +744,8 @@ func _refresh_town() -> void:
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
 	# Extra leading days so the trailing flow sums are full from the first point.
-	var history := _simulation.get_daily_history(TOWN_CHART_DAYS + TOWN_FLOW_WINDOW_DAYS - 1)
-	var shown_from := maxi(0, history.size() - TOWN_CHART_DAYS)
+	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
 	var population_series: Array = []
 	for i in TOWN_POPULATION_SERIES.size():
 		var values: Array[float] = []
@@ -757,6 +763,61 @@ func _refresh_town() -> void:
 			values.append(total)
 		flow_series.append({"name": TOWN_FLOW_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
 	_town_flow_chart.set_series(flow_series)
+
+## Settings button left of Pause: one popup holding the history-length settings.
+func _make_settings_button() -> Button:
+	var btn := Button.new()
+	btn.text = "Settings"
+	btn.pressed.connect(_open_settings_dialog)
+	return btn
+
+func _open_settings_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Settings"
+	dialog.ok_button_text = "Close"
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 8)
+	dialog.add_child(grid)
+	var sparkline_box := _add_days_setting(grid, "Sparkline history (days)", GameState.sparkline_days, GameState.MAX_SPARKLINE_DAYS)
+	var blotter_box := _add_days_setting(grid, "Blotter history (days)", GameState.blotter_days, GameState.MAX_BLOTTER_DAYS)
+	var apply := func(_value: float) -> void:
+		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
+	sparkline_box.value_changed.connect(apply)
+	blotter_box.value_changed.connect(apply)
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _add_days_setting(grid: GridContainer, label_text: String, value: int, max_value: int) -> SpinBox:
+	var label := Label.new()
+	label.text = label_text
+	grid.add_child(label)
+	var box := SpinBox.new()
+	box.min_value = 1
+	box.max_value = max_value
+	box.value = value
+	grid.add_child(box)
+	return box
+
+## The last GameState.sparkline_days entries of a retained history.
+func _tail(values: Array) -> Array:
+	var keep := GameState.sparkline_days
+	return values.slice(values.size() - keep) if values.size() > keep else values
+
+func _on_history_settings_changed() -> void:
+	_update_history_titles()
+	_set_blotter_minimized(_blotter_minimized)
+	_refresh()
+	_refresh_blotter()
+
+func _update_history_titles() -> void:
+	var days := GameState.sparkline_days
+	_town_population_title.text = "Population (last %d days)" % days
+	_cash_history_label.text = "Cash (last %d days)" % days
+	_goods_title_label.text = "Goods (last %d days)" % days
 
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
@@ -791,7 +852,7 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.custom_minimum_size = Vector2(32, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_SHRINK_END
 	else:
-		_blotter_toggle_button.text = "Blotter (%dd) ▸" % BLOTTER_HISTORY_DAYS
+		_blotter_toggle_button.text = "Blotter (%dd) ▸" % GameState.blotter_days
 		_blotter_toggle_button.tooltip_text = "Minimize the blotter"
 		_blotter_column.custom_minimum_size = Vector2(0, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1061,7 +1122,7 @@ func _on_need_detail_close_pressed() -> void:
 func _refresh_need_detail() -> void:
 	if _selected_need_id == -1:
 		return
-	var detail := _simulation.get_need_detail(_selected_need_id, HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS)
+	var detail := _simulation.get_need_detail(_selected_need_id, GameState.sparkline_days)
 	_need_detail_title.text = "%s need" % detail["label"]
 	for child in _need_detail_content.get_children():
 		_need_detail_content.remove_child(child)
@@ -1088,7 +1149,7 @@ func _refresh_need_detail() -> void:
 	header.add_theme_constant_override("separation", 12)
 	_need_detail_content.add_child(header)
 	var title := Label.new()
-	title.text = "Demand met and unmet (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.text = "Demand met and unmet (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
 	var index := 0
@@ -1187,7 +1248,7 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	header.add_theme_constant_override("separation", 12)
 	_market_detail_content.add_child(header)
 	var title := Label.new()
-	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.text = "Supply and demand (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
 	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
@@ -1201,8 +1262,8 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.show_max_label = true
 	chart.set_series([
-		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
-		{"name": "Requested", "values": requested_history, "color": requested_color},
+		{"name": "Supplied", "values": _tail(report["supplied_history"]), "color": supplied_color},
+		{"name": "Requested", "values": _tail(requested_history), "color": requested_color},
 	])
 	_market_detail_content.add_child(chart)
 
@@ -1313,7 +1374,7 @@ func _refresh_business_detail() -> void:
 	if not _trader_settings_button.visible:
 		_trader_settings_open = false
 	_update_trader_detail_page()
-	_business_detail_sparkline.set_data(report["balance_history"])
+	_business_detail_sparkline.set_data(_tail(report["balance_history"]))
 	_refresh_business_flow_chart(report)
 
 	for child in _business_detail_grid.get_children():
@@ -1408,7 +1469,7 @@ func _build_flow_chart(parent: Control) -> Dictionary:
 	header.add_theme_constant_override("separation", 12)
 	section.add_child(header)
 	var title_label := Label.new()
-	title_label.text = "Goods (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_goods_title_label = title_label
 	title_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title_label)
 	var tab_group := ButtonGroup.new()
@@ -1451,8 +1512,8 @@ func _refresh_business_flow_chart(report: Dictionary) -> void:
 			for detail_def in view.get("details", []):
 				for detail_entry in flow_history.get(detail_def[0], []):
 					if detail_entry["commodity"] == entry["commodity"]:
-						details.append({"name": detail_def[1], "values": detail_entry["values"]})
-			all_series.append({"name": series_name, "values": entry["values"], "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
+						details.append({"name": detail_def[1], "values": _tail(detail_entry["values"])})
+			all_series.append({"name": series_name, "values": _tail(entry["values"]), "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
 			_flow_series_names.append(series_name)
 
 	var hidden := _effective_hidden_flow_series()
@@ -2147,7 +2208,7 @@ func _refresh() -> void:
 ## Newest event first, since that's what a player checking in on the city
 ## cares about seeing without scrolling.
 func _refresh_blotter() -> void:
-	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
+	var events := _simulation.get_event_log_days(GameState.blotter_days)
 	var lines: Array[String] = []
 	for i in range(events.size() - 1, -1, -1):
 		if not _blotter_filter_enabled.get(events[i]["type"], true):
