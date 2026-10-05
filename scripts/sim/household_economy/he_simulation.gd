@@ -656,6 +656,8 @@ func get_household_summary(household_id: int) -> Dictionary:
 			"label": need.label,
 			"required": h.last_need_required.get(need.id, 0.0),
 			"provided": h.last_need_provided.get(need.id, 0.0),
+			"stress": h.stress_of(need.id),
+			"effect": need.effect_text,
 			"satisfiers": satisfiers,
 		})
 
@@ -670,6 +672,10 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
+		"health": h.health(),
+		"morale": h.morale(),
+		"health_losses": h.health_losses(),
+		"morale_penalties": h.morale_penalties(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -678,6 +684,67 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
+	}
+
+## One member of a household, by their 1-based member number (workers first,
+## then dependents -- the household detail's numbering). Members have no
+## persistent identity, so everything here is DERIVED from the household: the
+## household's shared stores are split evenly, and the person's own age
+## decides how hard a shortfall hits them. Returns {} if there is no such member.
+func get_person_summary(household_id: int, member_number: int) -> Dictionary:
+	if not households.has(household_id):
+		return {}
+	var h: HEHousehold = households[household_id]
+	var workers := h.worker_ages()
+	var dependents := h.dependent_ages()
+	var index := member_number - 1
+	if index < 0 or index >= workers.size() + dependents.size():
+		return {}
+	var is_worker := index < workers.size()
+	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var vulnerability := HEHousehold.vulnerability_of(is_worker, age)
+	var role := "Worker"
+	var life_stage := "Adult"
+	var note := ""
+	if is_worker:
+		if vulnerability > 1.0:
+			life_stage = "Elderly"
+		note = "%d days until old age" % maxi(HEHousehold.LIFESPAN_DAYS - age, 0)
+	elif age < HEHousehold.AGING_THRESHOLD_DAYS:
+		role = "Dependent"
+		life_stage = "Child"
+		note = "%d days until adulthood" % (HEHousehold.AGING_THRESHOLD_DAYS - age)
+	else:
+		role = "Dependent"
+		life_stage = "Adult living at home"
+		note = "%.0f%% chance per month of leaving to found a household" % (HEHousehold.leave_home_chance(age) * 100.0)
+
+	var needs: Array[Dictionary] = []
+	for need in HENeeds.all():
+		var required := need.per_person_daily
+		var household_required: float = h.last_need_required.get(need.id, 0.0)
+		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
+		needs.append({
+			"label": need.label,
+			"required": required,
+			"provided": required * ratio,
+			"stress": minf(h.stress_of(need.id) * vulnerability, 1.0),
+			"health_loss": need.health_weight * h.stress_of(need.id) * vulnerability,
+			"effect": need.effect_text,
+		})
+	return {
+		"household_id": household_id,
+		"member_number": member_number,
+		"role": role,
+		"life_stage": life_stage,
+		"age_days": age,
+		"note": note,
+		"vulnerability": vulnerability,
+		"health": h.health(vulnerability),
+		"morale": h.morale(vulnerability, is_worker),
+		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"needs": needs,
+		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
 
 func get_business_reports(settlement_id: int = -1) -> Array:
@@ -1620,6 +1687,7 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 		var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
 		h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
 		h.advance_day_for_lifecycle(rolling)
+	h.record_need_stress(need, needed, provided)
 
 ## Reporting only, exactly like the pooled model's migration pressure --
 ## does NOT move or remove anyone.

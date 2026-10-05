@@ -25,6 +25,8 @@ extends RefCounted
 
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
 const GRAIN_ROLLING_WINDOW_DAYS := 30
 
@@ -162,6 +164,24 @@ var last_unmet_scarcity: Dictionary[Commodity.Type, float] = {}
 ## Wanted and physically available to buy, but this household couldn't
 ## afford the funded quantity at today's posted price.
 var last_unmet_unaffordable: Dictionary[Commodity.Type, float] = {}
+
+## Health and morale are REPORTING signals derived from per-need stress (see
+## need_stress below) -- they do not feed emigration, starvation or births;
+## only food stress does that, through `demographics`. Children and the
+## elderly are hit harder by the same shortfall (VULNERABILITY_MULTIPLIER).
+const VULNERABILITY_MULTIPLIER := 1.25
+## Workers this far through LIFESPAN_DAYS count as frail.
+const FRAIL_LIFESPAN_FRACTION := 0.8
+## Morale = 1 minus these penalties (floored at 0). Unmet needs cost up to
+## MORALE_NEED_PENALTY at full stress; the other two are flat while they apply.
+const MORALE_NEED_PENALTY := 0.6
+const MORALE_UNEMPLOYED_PENALTY := 0.15
+const MORALE_UNAFFORDABLE_PENALTY := 0.1
+
+## Smoothed shortfall per need (HENeed.Id -> 0..1), using the same gain and
+## recovery as food stress: a bad day jumps it, recovery takes ~20 days. Food
+## mirrors demographics.food_stress so the two never disagree.
+var need_stress: Dictionary[int, float] = {}
 
 func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_balance: float = 0.0, p_settlement_id: int = 0) -> void:
 	id = p_id
@@ -373,3 +393,65 @@ func evaluate_birth(rng: RandomNumberGenerator) -> bool:
 func add_dependent(age: int) -> void:
 	_dependent_ages.append(age)
 	demographics.dependents += 1
+
+## Called daily per need after consumption. Food reads back the lifecycle
+## engine's own stress; other needs get the same update locally.
+func record_need_stress(need: HENeed, required: float, provided: float) -> void:
+	if need.drives_lifecycle:
+		need_stress[need.id] = demographics.food_stress
+		return
+	var ratio := (provided / required) if required > 0.0 else 1.0
+	var current: float = need_stress.get(need.id, 0.0)
+	if ratio >= 1.0:
+		need_stress[need.id] = maxf(current - Household.STRESS_RECOVERY_PER_DAY, 0.0)
+	else:
+		need_stress[need.id] = minf(current + (1.0 - ratio) * Household.STRESS_GAIN_PER_SHORTAGE, 1.0)
+
+func stress_of(need_id: int) -> float:
+	return need_stress.get(need_id, 0.0)
+
+## Health-weighted stress across all needs, 0..1.
+func weighted_need_stress() -> float:
+	var total := 0.0
+	for need in HENeeds.all():
+		total += need.health_weight * stress_of(need.id)
+	return total
+
+## 1.0 = fully healthy. `vulnerability` scales the shortfall (1.0 for the
+## household as a whole; see vulnerability_of() for an individual).
+func health(vulnerability: float = 1.0) -> float:
+	return clampf(1.0 - weighted_need_stress() * vulnerability, 0.0, 1.0)
+
+## What each need's stress costs in health, for display: [{label, loss}].
+func health_losses(vulnerability: float = 1.0) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for need in HENeeds.all():
+		out.append({"label": need.label, "loss": need.health_weight * stress_of(need.id) * vulnerability})
+	return out
+
+## Morale penalties currently applying, as [{label, penalty}] (penalty > 0).
+## `works` is false for dependents, who aren't affected by unemployment.
+func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var need_penalty := MORALE_NEED_PENALTY * minf(weighted_need_stress() * vulnerability, 1.0)
+	if need_penalty > 0.001:
+		out.append({"label": "Unmet needs", "penalty": need_penalty})
+	if works and not is_employed():
+		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
+	for amount in last_unmet_unaffordable.values():
+		if amount > 0.001:
+			out.append({"label": "Could not afford goods today", "penalty": MORALE_UNAFFORDABLE_PENALTY})
+			break
+	return out
+
+func morale(vulnerability: float = 1.0, works: bool = true) -> float:
+	var total := 0.0
+	for entry in morale_penalties(vulnerability, works):
+		total += entry["penalty"]
+	return clampf(1.0 - total, 0.0, 1.0)
+
+## 1.0 for most people; VULNERABILITY_MULTIPLIER for children and the frail.
+static func vulnerability_of(is_worker: bool, age_days: int) -> float:
+	if not is_worker:
+		return VULNERABILITY_MULTIPLIER if age_days < AGING_THRESHOLD_DAYS else 1.0
+	return VULNERABILITY_MULTIPLIER if age_days >= int(LIFESPAN_DAYS * FRAIL_LIFESPAN_FRACTION) else 1.0
