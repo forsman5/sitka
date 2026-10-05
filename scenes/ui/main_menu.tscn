@@ -30,9 +30,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -170.0
-offset_top = -235.0
+offset_top = -255.0
 offset_right = 170.0
-offset_bottom = 235.0
+offset_bottom = 255.0
 theme_override_styles/panel = SubResource("PanelStyle_1")
 
 [node name="VBox" type="VBoxContainer" parent="Panel"]
@@ -69,6 +69,9 @@ text = "Large Valleys Simulation"
 [node name="RiverValleyViewButton" type="Button" parent="Panel/VBox"]
 text = "Single Valley (Game View)"
 
+[node name="OnFootButton" type="Button" parent="Panel/VBox"]
+text = "On Foot"
+
 [node name="HintLabel" type="Label" parent="Panel/VBox"]
 text = "Hold Alt + move mouse to tilt camera"
 horizontal_alignment = 1
@@ -81,3 +84,4 @@ modulate = Color(0.65, 0.65, 0.75, 1)
 [connection signal="pressed" from="Panel/VBox/HouseholdEconomySimButton" to="." method="_on_household_economy_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/LargeValleysSimButton" to="." method="_on_large_valleys_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/RiverValleyViewButton" to="." method="_on_river_valley_view_pressed"]
+[connection signal="pressed" from="Panel/VBox/OnFootButton" to="." method="_on_on_foot_pressed"]
