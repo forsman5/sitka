@@ -44,6 +44,10 @@ const STARTING_TREASURY_DAYS := 10.0
 ## to a second when there is enough to process. Like the ranches it has no
 ## day-one employees: it is hired from the unemployed pool.
 const BUTCHER_MIN_CAPACITY := 2
+## Crew a ranch is authorized to hire from day one. It starts with no employees
+## and fills this from the unemployed pool at the weekly reconcile; there is no
+## longer a trial-hire path that bootstraps a business sitting at zero.
+const RANCH_STARTING_CAPACITY := 4
 const BUTCHER_MAX_CAPACITY := 4
 
 const HOUSEHOLD_COUNT := 30
@@ -125,6 +129,14 @@ const STARTING_BUFFER_DAYS := 10.0
 ## he_simulation.gd's WAGE_NEGATIVE_BALANCE_FLOOR_DAYS for what happens once
 ## it's gone).
 const STARTING_CASH_RESERVE_DAYS := 30.0
+## Startup cash for a field business covers its whole production cycle of
+## wages, times this safety factor. The credit line only covers 60 days of the
+## wage bill and the reference wage can swing several-fold, so a bare cycle's
+## worth runs out before the first harvest (measured: a recreated Farm needs
+## ~90 and a Woodlot ~275 for a crew of 4 with the wage at its seed value).
+const STARTUP_CASH_SAFETY_FACTOR := 2.0
+## Crew a player-created business is authorized to hire.
+const NEW_BUSINESS_STARTING_CAPACITY := 4
 
 ## A field business also starts with enough of its own product already in
 ## stock to cover local demand until ITS OWN first harvest lands (see
@@ -139,8 +151,9 @@ static func _farm_recipe() -> Recipe:
 ## The Farm record, public so a business can be built mid-run (see
 ## HESimulation.add_business) with the same land/field setup the seeded one
 ## gets. A farm built mid-run defaults to every field freshly planted on day 0
-## and no day-one staff: like a ranch it self-bootstraps through the
-## zero-capacity trial-hire path in HESimulation._evaluate_business_capacity.
+## and no day-one staff. With the trial hire gone, a farm at capacity 0 stays
+## at zero until the caller passes initial_capacity (TODO: the create-business
+## flow should seed one).
 static func make_farm(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var farm := HEBusiness.new(business_id, "Farm", _farm_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	farm.type_key = "farm"
@@ -164,17 +177,15 @@ static func make_trader(business_id: int, settlement_id: int, initial_capacity: 
 
 ## Unlike a field, a herd's cull isn't a guaranteed, dated payoff (see
 ## HESimulation._hardship_butcher_if_needed's doc comment), so a ranch
-## deliberately does NOT get the full-cycle protection window a field-model
-## business does -- only the short, evidence-based CASH_RUNWAY_DANGER_DAYS
-## leash Trader/legacy businesses get. It starts with no staff and
-## self-bootstraps through the zero-capacity trial-hire path in
-## HESimulation._evaluate_business_capacity. growth_days is set to
+## is judged on the short, evidence-based CASH_RUNWAY_DANGER_DAYS leash.
+## It starts with no staff but RANCH_STARTING_CAPACITY authorized, filled at
+## the weekly reconcile. growth_days is set to
 ## HESimulation.HERD_EVAL_INTERVAL_DAYS purely so
 ## rolling_average_revenue_per_worker() smooths over the ranch's own cycle
 ## length instead of a flat week (see HEBusiness.has_long_cycle()).
 static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.Species) -> HEBusiness:
 	var is_cattle := species == HEBusiness.Species.CATTLE
-	var herd := HEBusiness.new(business_id, "Cattle Ranch" if is_cattle else "Sheep Farm", null, herd_max_capacity(species), 0, HEBusiness.Kind.HERD, settlement_id, species, CATTLE_STARTING_HERD if is_cattle else SHEEP_STARTING_HERD)
+	var herd := HEBusiness.new(business_id, "Cattle Ranch" if is_cattle else "Sheep Farm", null, herd_max_capacity(species), RANCH_STARTING_CAPACITY, HEBusiness.Kind.HERD, settlement_id, species, CATTLE_STARTING_HERD if is_cattle else SHEEP_STARTING_HERD)
 	herd.type_key = "cattle_ranch" if is_cattle else "sheep_farm"
 	herd.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 	return herd
@@ -259,6 +270,14 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## wage_per_worker. Used only to size each business's STARTING_CASH_RESERVE_
 ## DAYS cushion (see _build_world) -- once the simulation is running,
 ## the real _reference_wage_per_worker takes over.
+## Cash a business needs to pay `crew` workers through one production cycle
+## (growth_days, or STARTING_CASH_RESERVE_DAYS if it has no cycle) at the seed
+## wage, with a safety margin. Used for the day-one Farm/Woodlot and for
+## player-created businesses (HESimulation.add_new_business).
+static func startup_cash(b: HEBusiness, crew: int) -> float:
+	var days := maxf(float(b.growth_days), STARTING_CASH_RESERVE_DAYS)
+	return STARTUP_CASH_SAFETY_FACTOR * days * _estimated_starting_reference_wage() * crew
+
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
 	var per_person_cost: float = HESimulation.BASE_PRICE[Commodity.Type.GRAIN] * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) \
@@ -300,10 +319,8 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## scenario builder it picks (see he_dashboard.gd's SCENARIOS and
 ## build_three_business_economy_with_bloomery below), not a capacity of
 ## zero on a business that still exists: a Bloomery that was never
-## constructed here can never later get a trial hire from
-## HESimulation._evaluate_business_capacity's zero-capacity-protection
-## mechanic, since there is no such business id in `businesses` for that to
-## apply to.
+## constructed here can never later appear on its own, since there is no
+## such business id in `businesses`.
 static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
@@ -314,17 +331,19 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var trader := make_trader(TRADER_BUSINESS_ID, SETTLEMENT_ID, trader_capacity)
 
 	# Ranches aren't seeded with any day-one employees (unlike Farm/Woodlot/
-	# Trader above) -- see make_herd for how they self-bootstrap.
+	# Trader above) -- see make_herd for their starting crew allowance.
 	var cattle_ranch := make_herd(CATTLE_RANCH_BUSINESS_ID, SETTLEMENT_ID, HEBusiness.Species.CATTLE)
 	var sheep_farm := make_herd(SHEEP_FARM_BUSINESS_ID, SETTLEMENT_ID, HEBusiness.Species.SHEEP)
 
 	var butcher := make_butcher(BUTCHER_BUSINESS_ID, SETTLEMENT_ID)
 
 	var estimated_wage := _estimated_starting_reference_wage()
-	farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * farm_capacity
-	woodlot.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * woodlot_capacity
+	farm.balance = startup_cash(farm, farm_capacity)
+	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY
+	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
+	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 
 	var farm_days_to_first_harvest: int = FARM_GROWTH_DAYS - FARM_FIELD_START_DAYS.max()
 	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)

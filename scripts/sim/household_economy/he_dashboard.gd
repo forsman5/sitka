@@ -108,6 +108,7 @@ const BLOTTER_FILTERS := [
 	{"type": "coming_of_age", "label": "Coming of age"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
+	{"type": "business_failed", "label": "Business closures"},
 	{"type": "herd_birth", "label": "Herd births"},
 	{"type": "herd_cull", "label": "Herd culls"},
 	{"type": "hardship_butcher", "label": "Hardship butchering"},
@@ -2291,7 +2292,7 @@ func _on_create_business_pressed(index: int) -> void:
 		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
 		"bloomery": business = HEScenarioSeeds.make_bloomery(id, settlement_id)
 		"iron_mine": business = HEScenarioSeeds.make_iron_mine(id, settlement_id)
-	_simulation.add_business(business)
+	_simulation.add_new_business(business)
 	_business_names[business.id] = business.name
 	_rebuild_business_rows()
 	_refresh()
@@ -2527,7 +2528,17 @@ func _refresh() -> void:
 	if not mouse_down:
 		_refresh_need_detail()
 
-	for report in _simulation.get_business_reports():
+	# A business that failed (or was created) changes the set of rows and the
+	# Create business menu's "already built" state; rebuild rather than leave a
+	# frozen row for a business that no longer exists.
+	var reports := _simulation.get_business_reports()
+	var rows_stale := reports.size() != _business_rows.size()
+	for report in reports:
+		if not _business_rows.has(report["business_id"]):
+			rows_stale = true
+	if rows_stale:
+		_rebuild_business_rows()
+	for report in reports:
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
 		if row.is_empty():
 			continue
@@ -2729,5 +2740,9 @@ func _format_event(event: Dictionary) -> String:
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
 			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
+		"business_failed":
+			var failed_plural := "s" if event["households_laid_off"] != 1 else ""
+			return "[color=#e07070]%s - %s failed: credit limit reached, %.1f debt written off, %d household%s laid off[/color]" % [
+				day, event["name"], event["debt"], event["households_laid_off"], failed_plural]
 		_:
 			return "%s - %s" % [day, event["type"]]
