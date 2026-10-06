@@ -53,6 +53,8 @@ func _ready() -> void:
 
 	var hint := Label.new()
 	hint.text = "WASD move · Shift sprint · Space jump · F5 camera view · Esc menu"
+	if OnFootPlayer.selected_character == "dog":
+		hint.text = "Left click bark · " + hint.text
 	hint.position = Vector2(12, 8)
 	var layer := CanvasLayer.new()
 	layer.add_child(hint)
