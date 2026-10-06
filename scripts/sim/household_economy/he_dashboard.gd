@@ -124,6 +124,13 @@ var _day_accumulator: float = 0.0
 
 var _day_label: Label
 var _treasury_margin: Control
+var _population_label: Label
+var _top_unemployed_label: Label
+var _avg_health_label: Label
+var _avg_morale_label: Label
+var _population_box: HBoxContainer
+var _population_tip: PanelContainer
+var _population_tip_label: Label
 var _treasury_box: HBoxContainer
 var _treasury_label: Label
 var _treasury_tip: PanelContainer
@@ -212,6 +219,11 @@ var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
 var _household_detail_content: VBoxContainer
+var _person_detail_panel: PanelContainer
+var _person_detail_title: Label
+var _person_detail_content: VBoxContainer
+var _selected_person_household_id: int = -1
+var _selected_person_number: int = -1
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -287,6 +299,7 @@ func _load_scenario() -> void:
 	_selected_household_id = -1
 	if _household_detail_panel != null:
 		_household_detail_panel.visible = false
+		_clear_person_detail()
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -346,6 +359,8 @@ func _build_ui() -> void:
 	add_child(_treasury_tip)
 	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
 	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
+
+	top_bar.add_child(_build_population_summary())
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -682,6 +697,7 @@ func _build_ui() -> void:
 	_household_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_household_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	content_area.add_child(_household_detail_panel)
 	var household_detail_box := VBoxContainer.new()
 	_household_detail_panel.add_child(household_detail_box)
@@ -705,6 +721,34 @@ func _build_ui() -> void:
 	_household_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_household_detail_content.add_theme_constant_override("separation", 6)
 	household_scroll.add_child(_household_detail_content)
+
+	_person_detail_panel = PanelContainer.new()
+	_person_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_person_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_person_detail_panel.visible = false
+	content_area.add_child(_person_detail_panel)
+	var person_detail_box := VBoxContainer.new()
+	_person_detail_panel.add_child(person_detail_box)
+	var person_title_bar := HBoxContainer.new()
+	person_detail_box.add_child(person_title_bar)
+	_person_detail_title = Label.new()
+	_person_detail_title.add_theme_font_size_override("font_size", 16)
+	person_title_bar.add_child(_person_detail_title)
+	var person_title_spacer := Control.new()
+	person_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	person_title_bar.add_child(person_title_spacer)
+	var person_close := Button.new()
+	person_close.text = "X"
+	person_close.tooltip_text = "Close (back to previous view)"
+	person_close.pressed.connect(_on_person_detail_close_pressed)
+	person_title_bar.add_child(person_close)
+	var person_scroll := ScrollContainer.new()
+	person_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	person_detail_box.add_child(person_scroll)
+	_person_detail_content = VBoxContainer.new()
+	_person_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_person_detail_content.add_theme_constant_override("separation", 6)
+	person_scroll.add_child(_person_detail_content)
 
 	_blotter_column = VBoxContainer.new()
 	lower_row.add_child(_blotter_column)
@@ -743,6 +787,114 @@ func _build_ui() -> void:
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
+
+## "<person icon> 123 (12 unemployed)    Health 82%    Morale 64%" -- town-wide headcount and
+## per-person averages, colored by _wellbeing_color().
+func _build_population_summary() -> Control:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.mouse_entered.connect(_on_population_hover.bind(true))
+	box.mouse_exited.connect(_on_population_hover.bind(false))
+	margin.add_child(box)
+	_population_box = box
+
+	# Same live-refreshing popup approach as the treasury tip: a built-in
+	# tooltip would freeze its text while hovered.
+	_population_tip = PanelContainer.new()
+	_population_tip.top_level = true
+	_population_tip.visible = false
+	_population_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip_label = Label.new()
+	_population_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip.add_child(_population_tip_label)
+	add_child(_population_tip)
+
+	var icon := TextureRect.new()
+	icon.texture = _person_icon()
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2(24, 24)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(icon)
+	_population_label = Label.new()
+	_population_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_population_label)
+	_top_unemployed_label = Label.new()
+	_top_unemployed_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_top_unemployed_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(_top_unemployed_label)
+
+	var health_caption := Label.new()
+	health_caption.text = "Health"
+	health_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var health_margin := MarginContainer.new()
+	health_margin.add_theme_constant_override("margin_left", 16)
+	health_margin.add_child(health_caption)
+	box.add_child(health_margin)
+	_avg_health_label = Label.new()
+	_avg_health_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_avg_health_label)
+
+	var morale_caption := Label.new()
+	morale_caption.text = "Morale"
+	morale_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var morale_margin := MarginContainer.new()
+	morale_margin.add_theme_constant_override("margin_left", 16)
+	morale_margin.add_child(morale_caption)
+	box.add_child(morale_margin)
+	_avg_morale_label = Label.new()
+	_avg_morale_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_avg_morale_label)
+	return margin
+
+## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
+## needs no asset file.
+static func _person_icon() -> Texture2D:
+	var svg := '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="15" r="9" fill="#d8d8e0"/><path d="M6 44 C6 31 14 26 24 26 C34 26 42 31 42 44 Z" fill="#d8d8e0"/></svg>'
+	var image := Image.new()
+	image.load_svg_from_string(svg)
+	return ImageTexture.create_from_image(image)
+
+## Red below 50%, yellow up to 80%, green above.
+static func _wellbeing_color(value: float) -> Color:
+	if value < 0.5:
+		return Color(0.85, 0.35, 0.3)
+	if value <= 0.8:
+		return Color(0.9, 0.7, 0.3)
+	return Color(0.4, 0.75, 0.45)
+
+func _refresh_population_summary() -> void:
+	var w := _simulation.get_population_wellbeing()
+	_population_label.text = "%d" % w["population"]
+	_top_unemployed_label.text = "(%d unemployed)" % w["unemployed"]
+	_avg_health_label.text = "%.0f%%" % (w["avg_health"] * 100.0)
+	_avg_health_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_health"]))
+	_avg_morale_label.text = "%.0f%%" % (w["avg_morale"] * 100.0)
+	_avg_morale_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_morale"]))
+	var tip := "%d people. Averages are per person." % w["population"]
+	tip += _factor_tip_section("Health", w["avg_health"], w["health_factors"], w["population"])
+	tip += _factor_tip_section("Morale", w["avg_morale"], w["morale_factors"], w["population"])
+	_population_tip_label.text = tip
+	_population_tip.reset_size()
+
+## "\nHealth 82%\n  Food shortfall: -10 pts (affects 40 of 120 people)" -- or a
+## note that nothing is dragging it down.
+func _factor_tip_section(caption: String, average: float, factors: Array, population: int) -> String:
+	var text := "\n\n%s %.0f%%" % [caption, average * 100.0]
+	if factors.is_empty():
+		return text + "\n  Nothing is lowering it."
+	for factor in factors:
+		text += "\n  %s: -%.1f pts (affects %d of %d people)" % [factor["label"], factor["avg_loss"] * 100.0, factor["people"], population]
+	return text
+
+func _on_population_hover(hovering: bool) -> void:
+	_population_tip.visible = hovering
+	if hovering:
+		_refresh_population_summary()
+		_population_tip.global_position = _population_box.global_position + Vector2(0, _population_box.size.y + 6)
 
 ## Town tab (index 0): the city-wide indicators on the left, and two charts on
 ## the right -- population levels, and births/emigrations/deaths.
@@ -923,6 +1075,7 @@ func _set_blotter_minimized(minimized: bool) -> void:
 
 func _on_household_row_selected(household_id: int) -> void:
 	_return_stack.clear()
+	_clear_person_detail()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
@@ -936,6 +1089,7 @@ func _on_household_row_selected(household_id: int) -> void:
 func _on_household_detail_close_pressed() -> void:
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	_return_to_previous_view()
 
 ## Rebuilt every refresh; the content is a handful of lines, so there's no
@@ -947,6 +1101,7 @@ func _refresh_household_detail() -> void:
 		# The household died or the scenario reloaded.
 		_selected_household_id = -1
 		_household_detail_panel.visible = false
+		_clear_person_detail()
 		return
 	var h := _simulation.get_household_summary(_selected_household_id)
 	_household_detail_title.text = "Household %d" % _selected_household_id
@@ -976,11 +1131,20 @@ func _refresh_household_detail() -> void:
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
 	var member_index := 1
 	for age in h["worker_ages"]:
-		_add_household_detail_line("Member %d: worker, age %s" % [member_index, _format_age(age)])
+		_add_member_link(member_index, "worker", age)
 		member_index += 1
 	for age in h["dependent_ages"]:
-		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
+		_add_member_link(member_index, "dependent", age)
 		member_index += 1
+
+	_add_household_detail_heading("Health and morale")
+	_add_meter_row(_household_detail_content, "Health", h["health"])
+	for loss in h["health_losses"]:
+		if loss["loss"] > 0.001:
+			_add_household_detail_line("    %s shortfall: -%.0f%% health" % [loss["label"], loss["loss"] * 100.0])
+	_add_meter_row(_household_detail_content, "Morale", h["morale"])
+	for penalty in h["morale_penalties"]:
+		_add_household_detail_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
@@ -1006,10 +1170,154 @@ func _refresh_household_detail() -> void:
 	# being listed as a separate requirement.
 	_add_household_detail_heading("Needs (today)")
 	for need in h["needs"]:
-		_add_household_detail_line("%s: needs %.2f, met %.2f" % [need["label"], need["required"], need["provided"]])
+		_add_household_detail_line("%s: needs %.2f, met %.2f  |  stress %.2f" % [need["label"], need["required"], need["provided"], need["stress"]])
 		for satisfier in need["satisfiers"]:
 			if satisfier["consumed"] > 0.0001:
 				_add_household_detail_line("    %s used: %.2f" % [satisfier["name"], satisfier["consumed"]])
+		if need["stress"] > 0.001:
+			var effect := Label.new()
+			effect.text = "    " + need["effect"]
+			effect.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
+			_household_detail_content.add_child(effect)
+
+func _add_member_link(member_number: int, role: String, age: int) -> void:
+	var link := Button.new()
+	link.text = "Member %d: %s, age %s" % [member_number, role, _format_age(age)]
+	link.flat = true
+	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	link.tooltip_text = "Open person detail"
+	link.pressed.connect(_on_linked_person_pressed.bind(_selected_household_id, member_number))
+	_household_detail_content.add_child(link)
+
+## "Label  [bar]  72%" -- 0..1 meters, colored red/amber/green by level.
+func _add_meter_row(parent: Control, caption: String, value: float) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var name_label := Label.new()
+	name_label.text = caption
+	name_label.custom_minimum_size = Vector2(70, 0)
+	row.add_child(name_label)
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.value = value
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(200, 16)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = _wellbeing_color(value)
+	bar.add_theme_stylebox_override("fill", fill)
+	row.add_child(bar)
+	var value_label := Label.new()
+	value_label.text = "%.0f%%" % (value * 100.0)
+	row.add_child(value_label)
+
+func _clear_person_detail() -> void:
+	_selected_person_household_id = -1
+	_selected_person_number = -1
+	if _person_detail_panel != null:
+		_person_detail_panel.visible = false
+
+func _on_linked_person_pressed(household_id: int, member_number: int) -> void:
+	_open_linked(_on_person_selected.bind(household_id, member_number))
+
+func _on_person_selected(household_id: int, member_number: int) -> void:
+	_return_stack.clear()
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+	_selected_person_household_id = household_id
+	_selected_person_number = member_number
+	_person_detail_panel.visible = true
+	_refresh_person_detail()
+
+func _on_person_detail_close_pressed() -> void:
+	_clear_person_detail()
+	_return_to_previous_view()
+
+## Rebuilt every refresh. Everything is derived from the household (see
+## HESimulation.get_person_summary) -- members have no identity of their own.
+func _refresh_person_detail() -> void:
+	if _selected_person_household_id == -1:
+		return
+	var p := _simulation.get_person_summary(_selected_person_household_id, _selected_person_number)
+	if p.is_empty():
+		# Household gone, or the member left/died and numbering shifted.
+		_clear_person_detail()
+		return
+	_person_detail_title.text = "Household %d - Member %d" % [p["household_id"], p["member_number"]]
+	for child in _person_detail_content.get_children():
+		_person_detail_content.remove_child(child)
+		child.queue_free()
+
+	var household_row := HBoxContainer.new()
+	var household_caption := Label.new()
+	household_caption.text = "Household:"
+	household_row.add_child(household_caption)
+	var household_link := Button.new()
+	household_link.text = "Household %d" % p["household_id"]
+	household_link.flat = true
+	household_link.tooltip_text = "Open household detail"
+	household_link.pressed.connect(_on_linked_household_pressed.bind(p["household_id"]))
+	household_row.add_child(household_link)
+	_person_detail_content.add_child(household_row)
+
+	_add_person_line("%s, %s, age %s" % [p["role"], p["life_stage"].to_lower(), _format_age(p["age_days"])])
+	_add_person_line(p["note"])
+	if p["role"] == "Worker":
+		var employer_id: int = p["employer_business_id"]
+		if _business_names.has(employer_id):
+			var employer_row := HBoxContainer.new()
+			var employer_caption := Label.new()
+			employer_caption.text = "Employer:"
+			employer_row.add_child(employer_caption)
+			var employer_link := Button.new()
+			employer_link.text = _business_names[employer_id]
+			employer_link.flat = true
+			employer_link.tooltip_text = "Open employer detail"
+			employer_link.pressed.connect(_on_linked_business_pressed.bind(employer_id))
+			employer_row.add_child(employer_link)
+			_person_detail_content.add_child(employer_row)
+		else:
+			_add_person_line("Employer: unemployed")
+	if p["vulnerability"] > 1.0:
+		_add_person_line("Vulnerable (%s): shortfalls hit %.0f%% harder." % [p["life_stage"].to_lower(), (p["vulnerability"] - 1.0) * 100.0])
+
+	_add_person_heading("Health and morale")
+	_add_meter_row(_person_detail_content, "Health", p["health"])
+	_add_meter_row(_person_detail_content, "Morale", p["morale"])
+	for penalty in p["morale_penalties"]:
+		_add_person_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+
+	_add_person_heading("Needs (today, equal share of the household's)")
+	for need in p["needs"]:
+		_add_person_line("%s: needs %.2f, met %.2f  |  stress %.2f  |  health -%.0f%%" % [
+			need["label"], need["required"], need["provided"], need["stress"], need["health_loss"] * 100.0])
+		if need["stress"] > 0.001:
+			var effect := Label.new()
+			effect.text = "    " + need["effect"]
+			effect.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
+			_person_detail_content.add_child(effect)
+
+func _add_person_heading(value: String) -> void:
+	var heading := Label.new()
+	heading.text = value
+	heading.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_person_detail_content.add_child(heading)
+
+func _add_person_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_person_detail_content.add_child(label)
 
 func _add_household_detail_heading(value: String) -> void:
 	var heading := Label.new()
@@ -1030,6 +1338,7 @@ func _on_business_row_selected(business_id: int) -> void:
 	_need_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
 	_trader_settings_open = false
@@ -1061,6 +1370,8 @@ func _open_linked(open_view: Callable) -> void:
 		stack.append(_on_business_row_selected.bind(_selected_business_id))
 	elif _household_detail_panel.visible:
 		stack.append(_on_household_row_selected.bind(_selected_household_id))
+	elif _person_detail_panel.visible:
+		stack.append(_on_person_selected.bind(_selected_person_household_id, _selected_person_number))
 	elif _need_detail_panel.visible:
 		stack.append(_on_need_row_selected.bind(_selected_need_id))
 	open_view.call()
@@ -1169,6 +1480,7 @@ func _on_need_row_selected(need_id: int) -> void:
 	_market_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	_selected_need_id = need_id
 	_need_detail_panel.visible = true
 	_refresh_need_detail()
@@ -1199,7 +1511,7 @@ func _refresh_need_detail() -> void:
 			detail["avg_stress_unmet"], detail["households_with_migration_pressure"],
 			detail["households_emigration_candidates"], detail["emigration_likelihood"] * 100.0])
 	else:
-		_add_need_detail_line("Stress and emigration: not modelled -- only food shortfalls currently cause stress or emigration.")
+		_add_need_detail_line("Stress and emigration: only food shortfalls cause emigration. Unmet %s still builds stress, which lowers health and morale (see household and person pages)." % detail["label"].to_lower())
 
 	var required: float = detail["required"]
 	_add_need_detail_line("Demand today: %.2f need units" % required)
@@ -1270,6 +1582,7 @@ func _on_market_row_selected(commodity: int) -> void:
 	_need_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	_selected_need_id = -1
 	_need_detail_panel.visible = false
 	_selected_market_commodity = commodity
@@ -2187,6 +2500,7 @@ func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
 	_refresh_treasury()
+	_refresh_population_summary()
 
 	_refresh_town()
 
@@ -2340,6 +2654,7 @@ func _refresh() -> void:
 
 	if not mouse_down:
 		_refresh_household_detail()
+		_refresh_person_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city
