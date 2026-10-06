@@ -90,6 +90,11 @@ func _on_body_entered(body: Node3D) -> void:
 	sheep_penned.emit(penned_count)
 
 func _add_segment(scene: PackedScene, pos: Vector3, yaw_deg: float) -> void:
+	# Sit each segment on the ground beneath it, sunk a little to hide slope gaps.
+	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain != null:
+		var g := to_global(pos)
+		pos.y = terrain.get_height(g.x, g.z) - global_position.y - 0.1
 	var body := StaticBody3D.new()
 	body.position = pos
 	body.rotation_degrees.y = yaw_deg

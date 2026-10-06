@@ -21,6 +21,7 @@ var _frozen: bool = false
 var _model: Node3D
 var _anim: AnimationPlayer
 var _player: Node3D
+var _terrain: Node = null
 var _gravity: float
 var _wander_dir := Vector3.ZERO
 var _state_left: float = 0.0
@@ -30,6 +31,8 @@ var _bob_t: float = randf() * TAU
 
 func _ready() -> void:
 	add_to_group("on_foot_sheep")
+	collision_mask = 1 | 2  # World objects plus the island terrain (layer 2).
+	_terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	_gravity = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 
 	var shape := CapsuleShape3D.new()
@@ -109,6 +112,11 @@ func _physics_process(delta: float) -> void:
 		else:
 			speed = 0.0
 
+	if desired != Vector3.ZERO:
+		desired = _avoid_water(desired)
+		if desired == Vector3.ZERO:
+			speed = 0.0
+
 	var target := desired * speed
 	var horiz := Vector3(velocity.x, 0.0, velocity.z).move_toward(target, accel * delta)
 	velocity.x = horiz.x
@@ -120,6 +128,19 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_face_and_animate(delta, horiz)
+
+## Sheep won't walk into the sea or pond: if the way ahead is water, swing
+## toward the nearest dry heading (or stop if boxed in).
+func _avoid_water(dir: Vector3) -> Vector3:
+	if _terrain == null:
+		return dir
+	const MIN_LAND_HEIGHT := 0.6
+	for deg in [0.0, 40.0, -40.0, 80.0, -80.0, 130.0, -130.0]:
+		var d := dir.rotated(Vector3.UP, deg_to_rad(deg))
+		var ahead := global_position + d * 2.0
+		if _terrain.get_height(ahead.x, ahead.z) >= MIN_LAND_HEIGHT:
+			return d
+	return Vector3.ZERO
 
 ## Direction away from the player (blended away from the arena edge), or zero if
 ## the player is far enough away that this sheep is calm.
