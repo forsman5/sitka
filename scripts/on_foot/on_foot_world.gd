@@ -30,6 +30,7 @@ const _SKY_KEYS := [
 	[1.00, Color(0.01, 0.01, 0.05), Color(0.04, 0.05, 0.12)],
 ]
 
+var _pen: SheepPen
 var _pause_layer: CanvasLayer
 var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 var _terrain: Node
@@ -57,6 +58,18 @@ func _ready() -> void:
 	layer.add_child(hint)
 	add_child(layer)
 	_build_pause_menu()
+
+	var points := Label.new()
+	points.text = "Points: 0"
+	points.add_theme_font_size_override("font_size", 28)
+	points.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	points.anchor_left = 1.0
+	points.anchor_right = 1.0
+	points.offset_left = -260.0
+	points.offset_right = -16.0
+	points.offset_top = 8.0
+	layer.add_child(points)
+	_pen.sheep_penned.connect(func(total: int) -> void: points.text = "Points: %d" % total)
 
 func _process(_delta: float) -> void:
 	_update_sky(GameState.time_of_day)
@@ -175,11 +188,11 @@ func _build_shore_barrier() -> void:
 
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
-	var pen := SheepPen.new()
-	pen.name = "SheepPen"
-	pen.position = _ground_point(Vector2(18, -2))
-	pen.rotation_degrees.y = -90.0
-	add_child(pen)
+	_pen = SheepPen.new()
+	_pen.name = "SheepPen"
+	_pen.position = _ground_point(Vector2(18, -2))
+	_pen.rotation_degrees.y = -90.0
+	add_child(_pen)
 
 ## A small flock a short walk from the spawn point.
 func _spawn_flock() -> void:
