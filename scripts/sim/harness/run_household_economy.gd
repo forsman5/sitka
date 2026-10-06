@@ -30,6 +30,7 @@ func _init() -> void:
 	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
+	_check_need_vs_funded_demand()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -565,6 +566,75 @@ func _check_market_supply_demand_history() -> void:
 	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
 	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
 	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
+
+## Need, wanted-for-stock, affordable and bought are four different numbers.
+## Each case sets every household into one state, clears one day's market, and
+## checks how the household-only signals diverge.
+func _check_need_vs_funded_demand() -> void:
+	print("\n=== Household demand signals: wanted vs affordable vs bought ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"no cash": {"balance": 0.0, "household_stock": 0.0, "seller_stock": 1000.0},
+		"cash but no supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 0.0},
+		"already stocked": {"balance": 1000.0, "household_stock": 1000.0, "seller_stock": 1000.0},
+		"cash and supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 1000.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			if c["household_stock"] > 0.0:
+				h.add_stock(grain, c["household_stock"])
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var market: HEMarket = sim.markets[settlement_id]
+		var offer: float = sim._household_offer(settlement_id, grain)
+		sim._run_market(sim._new_daily_record())
+		var d := market.household_demand(grain)
+		print("  %-20s wanted=%.1f affordable=%.1f bought=%.1f" % [label, d["wanted"], d["funded"], d["bought"]])
+		_assert(d["funded"] <= d["wanted"] + EPSILON, "%s: affordable cannot exceed wanted" % label)
+		_assert(d["bought"] <= d["funded"] + EPSILON, "%s: bought cannot exceed affordable" % label)
+		match label:
+			"no cash":
+				_assert(d["wanted"] > 1.0 and d["funded"] < EPSILON and d["bought"] < EPSILON, "No cash: wanted but nothing affordable or bought")
+			"cash but no supply":
+				_assert(d["wanted"] > 1.0 and absf(d["funded"] - d["wanted"]) < EPSILON and d["bought"] < EPSILON, "No supply: fully affordable but nothing bought")
+			"already stocked":
+				_assert(d["wanted"] < EPSILON and d["funded"] < EPSILON and d["bought"] < EPSILON, "Stocked households want nothing")
+			"cash and supply":
+				_assert(d["bought"] > 1.0 and absf(d["bought"] - minf(offer, d["funded"])) < EPSILON, "Cash and supply: bought is the funded request capped by the (paced) offer")
+		# A stocked household still NEEDS grain; need is independent of wanting.
+		sim._run_consumption(sim._new_daily_record())
+		var any_household: HEHousehold = sim.households[sim.get_household_ids()[0]]
+		_assert(any_household.last_need_required.get(HENeed.Id.FOOD, 0.0) > 0.0, "%s: food is still required regardless of cash or stock" % label)
+		_assert(not sim._market_need_report(grain).is_empty(), "%s: grain should map to the food need" % label)
+
+	# Histories align by day, and a shared need is reported once, not per good.
+	var run := _new_sim("build_economy_with_charcoal_burner")
+	run.advance_ticks(60)
+	var settlement: int = run.get_settlement_ids()[0]
+	var report := run.get_market_report(settlement, Commodity.Type.TIMBER)
+	var wanted: Array = report["household_wanted_history"]
+	var funded: Array = report["household_funded_history"]
+	var bought: Array = report["household_bought_history"]
+	var plain: Array = report["demanded_history"]
+	_assert(wanted.size() == plain.size() and funded.size() == plain.size() and bought.size() == plain.size(), "Household series should have one point per day like the existing ones")
+	for i in wanted.size():
+		_assert(funded[i] <= wanted[i] + EPSILON and bought[i] <= funded[i] + EPSILON, "Day %d: wanted >= affordable >= bought" % i)
+		_assert(bought[i] <= plain[i] + EPSILON, "Day %d: household purchases fit within all-buyer affordable requests" % i)
+	var timber_need: Dictionary = report["need"]
+	var charcoal_need: Dictionary = run.get_market_report(settlement, Commodity.Type.CHARCOAL)["need"]
+	_assert(timber_need["id"] == charcoal_need["id"] and timber_need["required_history"] == charcoal_need["required_history"], "Timber and charcoal should report the same heat requirement")
+	_assert(timber_need["required_history"].size() == plain.size(), "Need history should cover the same days as market history")
+	var record: Dictionary = run.get_daily_history(1)[0]
+	_assert(absf(timber_need["required_history"].back() - record["needs"][timber_need["id"]]["required"]) < EPSILON, "Need history's last point is the latest day's requirement")
+	print("  histories align over %d days; heat need reported once for timber and charcoal" % plain.size())
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader

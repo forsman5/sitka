@@ -1040,6 +1040,34 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"supplied_history": local_market.supplied_history(commodity),
 		"demanded_history": local_market.demanded_history(commodity),
 		"demanded_with_export_history": local_market.demanded_with_export_history(commodity),
+		"household_demand": local_market.household_demand(commodity),
+		"household_wanted_history": local_market.household_wanted_history(commodity),
+		"household_funded_history": local_market.household_funded_history(commodity),
+		"household_bought_history": local_market.household_bought_history(commodity),
+		"need": _market_need_report(commodity),
+	}
+
+## Daily requirement of the need `commodity` helps satisfy, in need units and
+## counted once per need (not per satisfier), so timber and wool do not each
+## claim the same heat requirement. Empty for goods that satisfy no need.
+## Histories are one point per simulated day, oldest first.
+func _market_need_report(commodity: Commodity.Type) -> Dictionary:
+	var need := HENeeds.for_commodity(commodity)
+	if need == null:
+		return {}
+	var required_history: Array = []
+	var provided_history: Array = []
+	var start: int = maxi(0, _history.size() - HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS)
+	for i in range(start, _history.size()):
+		var entry: Dictionary = (_history[i] as Dictionary)["needs"].get(need.id, {})
+		required_history.append(entry.get("required", 0.0))
+		provided_history.append(entry.get("provided", 0.0))
+	return {
+		"id": need.id,
+		"label": need.label,
+		"satisfiers": need.satisfiers().map(func(c): return Commodity.name_of(c)),
+		"required_history": required_history,
+		"provided_history": provided_history,
 	}
 
 func get_trader_export_settings(business_id: int) -> Array:
@@ -2443,11 +2471,13 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 
 	var requests_funded: Dictionary = {}
 	var total_funded_request := 0.0
+	var total_wanted := 0.0
 
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
 		var desired_qty: float = _desired_purchase(h, commodity)
 		if desired_qty > 0.0001:
+			total_wanted += desired_qty
 			var available_balance: float = starting_balance[household_id] - reserved_spend.get(household_id, 0.0)
 			var affordable_qty: float = (available_balance / price) if price > 0.0 else 0.0
 			var funded_qty: float = min(desired_qty, max(0.0, affordable_qty))
@@ -2491,6 +2521,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	# Records only the household pass; the business-to-business sales were
 	# already merged in _run_input_purchasing. The PRICE signal below sees both.
 	local_market.merge_clearing(commodity, total_offer, total_funded_request, quantity_traded, price)
+	local_market.record_household_demand(commodity, total_wanted, total_funded_request, maxf(0.0, quantity_traded))
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + quantity_traded
 
 	if price_adjustment_enabled:

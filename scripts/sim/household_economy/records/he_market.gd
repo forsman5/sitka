@@ -55,9 +55,30 @@ var _export_appetite: Dictionary[Commodity.Type, float] = {}
 var _export_in_clearing: Dictionary[Commodity.Type, float] = {}
 var _demanded_with_export_history: Dictionary[Commodity.Type, Array] = {}
 
+## Today's HOUSEHOLD-only purchase picture per commodity: {wanted, funded,
+## bought}. "wanted" is what households asked for toward their stock buffer
+## before the balance cap (not the daily need -- a household already holding
+## enough asks for 0), "funded" is that request after capping at what each
+## household can pay at today's price, "bought" is what actually traded. Kept
+## apart from last_clearing, whose requested total also folds in business
+## input requests and Trader exports. Cleared daily with last_clearing.
+var _household_demand: Dictionary[Commodity.Type, Dictionary] = {}
+var _household_wanted_history: Dictionary[Commodity.Type, Array] = {}
+var _household_funded_history: Dictionary[Commodity.Type, Array] = {}
+var _household_bought_history: Dictionary[Commodity.Type, Array] = {}
+
 func clear_daily_export() -> void:
 	_export_appetite.clear()
 	_export_in_clearing.clear()
+	_household_demand.clear()
+
+## Records the household pass of one clearing. One pass per commodity per day,
+## so this overwrites rather than accumulates.
+func record_household_demand(commodity: Commodity.Type, wanted: float, funded: float, bought: float) -> void:
+	_household_demand[commodity] = {"wanted": wanted, "funded": funded, "bought": bought}
+
+func household_demand(commodity: Commodity.Type) -> Dictionary:
+	return (_household_demand.get(commodity, {"wanted": 0.0, "funded": 0.0, "bought": 0.0}) as Dictionary).duplicate()
 
 func record_export(commodity: Commodity.Type, appetite: float, executed_in_clearing: float) -> void:
 	_export_appetite[commodity] = _export_appetite.get(commodity, 0.0) + appetite
@@ -71,6 +92,10 @@ func record_supply_demand_history() -> void:
 		_push_history(_demanded_history, commodity, requested)
 		_push_history(_demanded_with_export_history, commodity,
 			maxf(0.0, requested - _export_in_clearing.get(commodity, 0.0)) + _export_appetite.get(commodity, 0.0))
+		var household := household_demand(commodity)
+		_push_history(_household_wanted_history, commodity, household["wanted"])
+		_push_history(_household_funded_history, commodity, household["funded"])
+		_push_history(_household_bought_history, commodity, household["bought"])
 
 func _push_history(store: Dictionary, commodity: Commodity.Type, value: float) -> void:
 	var series: Array = store.get(commodity, [])
@@ -84,6 +109,16 @@ func supplied_history(commodity: Commodity.Type) -> Array:
 
 func demanded_history(commodity: Commodity.Type) -> Array:
 	return (_demanded_history.get(commodity, []) as Array).duplicate()
+
+## Household-only series, one point per day like the series above.
+func household_wanted_history(commodity: Commodity.Type) -> Array:
+	return (_household_wanted_history.get(commodity, []) as Array).duplicate()
+
+func household_funded_history(commodity: Commodity.Type) -> Array:
+	return (_household_funded_history.get(commodity, []) as Array).duplicate()
+
+func household_bought_history(commodity: Commodity.Type) -> Array:
+	return (_household_bought_history.get(commodity, []) as Array).duplicate()
 
 ## Same as demanded_history, but Trader exports count at the Trader's
 ## appetite (remaining capacity) instead of the quantity actually shipped.
