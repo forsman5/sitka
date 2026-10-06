@@ -7,9 +7,10 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## FOOD and CLOTHING have two satisfiers each: meat (twice grain's food value)
-## and leather (a one-for-one alternative to wool). Planned additions are
-## one-line entries: charcoal for HEAT; cloth for CLOTHING (wool stays as the
+## Every need has two satisfiers: FOOD takes meat (twice grain's food value) or
+## grain, HEAT takes charcoal (four times timber's heat) or timber, and
+## CLOTHING takes leather (a one-for-one alternative to wool) or wool. Planned
+## addition is a one-line entry: cloth for CLOTHING (wool stays as the
 ## raw-fibre stand-in until a tailor exists).
 static var _all: Array[HENeed] = []
 
@@ -21,12 +22,14 @@ static func all() -> Array[HENeed]:
 			# Meat packs twice grain's food into each unit, so it burns first.
 			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.MEAT: 2.0, Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true, 0.6,
 				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births."),
-			# Authored placeholder, not yet tuned.
-			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER, false, 0.25,
+			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
+			# packs 4 into a unit, so it can cost more per unit and still be the
+			# cheaper way to heat a house. Densest first: charcoal burns first.
+			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.CHARCOAL: 4.0, Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER, false, 0.25,
 				"Cold wears down health and morale. Reporting only: does not (yet) cause emigration."),
 			# Matches Simulation.WOOL_PER_PERSON_PER_DAY.
 			# Leather and wool are interchangeable one-for-one; households buy
-			# whichever posts the lower price (see _preferred_satisfier).
+			# whichever posts the lower price (see _satisfier_cascade).
 			HENeed.new(HENeed.Id.CLOTHING, "Clothing", 0.01, {Commodity.Type.LEATHER: 1.0, Commodity.Type.WOOL: 1.0}, Commodity.Type.WOOL, false, 0.15,
 				"Threadbare clothes slowly wear down health and morale. Reporting only: does not (yet) cause emigration."),
 		]

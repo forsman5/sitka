@@ -9,17 +9,6 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HEDashboard = preload("res://scripts/sim/household_economy/he_dashboard.gd")
 const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 
-const BUSINESSES := [
-	{"id": HEScenarioSeeds.FARM_BUSINESS_ID, "label": "Farm", "hint": "Grows grain."},
-	{"id": HEScenarioSeeds.WOODLOT_BUSINESS_ID, "label": "Woodlot", "hint": "Grows timber."},
-	{"id": HEScenarioSeeds.TRADER_BUSINESS_ID, "label": "Trader", "hint": "Imports and exports surplus."},
-	{"id": HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID, "label": "Cattle Ranch", "hint": "Herd; starts with no staff."},
-	{"id": HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID, "label": "Sheep Farm", "hint": "Herd and wool; starts with no staff."},
-	{"id": HEScenarioSeeds.BUTCHER_BUSINESS_ID, "label": "Butcher", "hint": "Turns ranch livestock into meat and leather."},
-	{"id": HEScenarioSeeds.BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore."},
-	{"id": HEScenarioSeeds.IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery."},
-]
-
 ## "include" mirrors which businesses each builder in HEScenarioSeeds creates,
 ## so choosing a preset ticks the matching boxes.
 const PRESETS := [
@@ -27,6 +16,7 @@ const PRESETS := [
 	{"label": "Six businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7, 8]},
 	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
 	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
+	{"label": "Nine businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8, 10]},
 ]
 
 var _preset_picker: OptionButton
@@ -68,7 +58,7 @@ func _build_ui() -> void:
 	var businesses_label := Label.new()
 	businesses_label.text = "Businesses to include"
 	vbox.add_child(businesses_label)
-	for business in BUSINESSES:
+	for business in HEScenarioSeeds.business_types():
 		var check := CheckBox.new()
 		check.text = business["label"]
 		check.tooltip_text = business["hint"]
@@ -114,7 +104,7 @@ func _on_check_toggled(_pressed: bool) -> void:
 
 func _included_ids() -> Array:
 	var ids: Array = []
-	for business in BUSINESSES:
+	for business in HEScenarioSeeds.business_types():
 		if (_checks[business["id"]] as CheckBox).button_pressed:
 			ids.append(business["id"])
 	return ids

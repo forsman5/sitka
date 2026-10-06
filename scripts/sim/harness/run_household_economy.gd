@@ -24,6 +24,8 @@ func _init() -> void:
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
+	_check_charcoal_burner_heats_households()
+	_check_every_business_kind_is_buildable()
 	_check_businesses_share_wood_with_households()
 	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
@@ -47,6 +49,7 @@ func _init() -> void:
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
+	_check_fuel_fallback()
 	_check_government_taxes()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
@@ -414,6 +417,105 @@ func _check_goods_flow_history_reconciles_with_stock() -> void:
 			_assert((flows[HEBusiness.FLOW_CONSUMED] as Array).size() > 0 and (flows[HEBusiness.FLOW_BOUGHT] as Array).size() > 0, "%s has inputs and should show both consumed and bought series" % report["name"])
 		checked += 1
 	_assert(checked > 0, "Scenario should contain at least one production business")
+
+## Charcoal enters as a second heat satisfier: the burner must actually
+## produce, households and the Bloomery must burn it, and goods/money must
+## still reconcile with it in play.
+func _check_charcoal_burner_heats_households() -> void:
+	print("\n=== Charcoal Burner: timber becomes charcoal, households and the Bloomery heat with it ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	sim.advance_ticks(365)
+	var history := sim.get_daily_history(365)
+
+	var charcoal_produced := 0.0
+	var charcoal_burned := 0.0
+	var timber_burned := 0.0
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for record in history:
+		charcoal_produced += (record["produced"] as Dictionary).get("Charcoal", 0.0)
+		charcoal_burned += (record["consumed"] as Dictionary).get("Charcoal", 0.0)
+		timber_burned += (record["consumed"] as Dictionary).get("Timber", 0.0)
+		for c in HESimulation.SUBSISTENCE_COMMODITIES:
+			var name := Commodity.name_of(c)
+			var expected: float = record["opening_stock"][name] + (record["produced"] as Dictionary).get(name, 0.0) \
+				- (record["consumed"] as Dictionary).get(name, 0.0) - (record["exported"] as Dictionary).get(name, 0.0) \
+				- (record["goods_written_off"] as Dictionary).get(c, 0.0)
+			worst_stock_gap = max(worst_stock_gap, abs(record["closing_stock"][name] - expected))
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = max(worst_money_gap, abs(record["closing_money"] - expected_money))
+
+	print("  over 365 days: charcoal produced=%.1f, charcoal burned=%.1f, timber burned/used=%.1f" % [charcoal_produced, charcoal_burned, timber_burned])
+	print("  worst stock reconciliation gap: %.4f, worst money gap: %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(charcoal_produced > 0.0, "Charcoal Burner should have produced charcoal")
+	_assert(charcoal_burned > 0.0, "Households or the Bloomery should have burned charcoal as fuel")
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with charcoal in play, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with charcoal in play, worst gap %.4f" % worst_money_gap)
+
+	# Households start with weeks of timber in hand, so check the first
+	# couple of months of a fresh run for the switch rather than year-end.
+	var fresh := _new_sim("build_economy_with_charcoal_burner")
+	var household_charcoal := 0.0
+	for day in 60:
+		fresh.advance_ticks(1)
+		for household_id in fresh.get_household_ids():
+			household_charcoal += _household_satisfier_used(fresh.get_household_summary(household_id), "Heat", "Charcoal")
+	print("  charcoal burned by households over the first 60 days: %.2f" % household_charcoal)
+	_assert(household_charcoal > 0.0, "Households should be heating with charcoal once the burner is selling")
+
+## Every kind of business the sim can seed must be registered in
+## HEScenarioSeeds.business_types() -- the one list the dashboard's Create menu
+## and the setup page are built from -- so a new business kind cannot be added
+## to the world but silently left out of either. Also builds each registered
+## kind mid-run, the way the Create menu does, to prove its factory works.
+func _check_every_business_kind_is_buildable() -> void:
+	print("\n=== Every business kind is in the Create menu / setup registry ===")
+	var types := HEScenarioSeeds.business_types()
+	var ids: Array = []
+	var type_keys := {}
+	for entry in types:
+		ids.append(entry["id"])
+		_assert(not type_keys.has(entry["type_key"]), "Duplicate business type_key '%s' in the registry" % entry["type_key"])
+		type_keys[entry["type_key"]] = entry["id"]
+
+	# A world seeded with every registered kind: whatever it contains beyond
+	# the Government must be in the registry, under the id it was seeded with.
+	var full := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind(ids), true)
+	var unregistered: Array[String] = []
+	for business_id in full.businesses.keys():
+		var b: HEBusiness = full.businesses[business_id]
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			continue
+		if not type_keys.has(b.type_key) or type_keys[b.type_key] != business_id:
+			unregistered.append("%s (id %d, type_key '%s')" % [b.name, business_id, b.type_key])
+	_assert(unregistered.is_empty(), "Seeded businesses missing from HEScenarioSeeds.business_types(): %s" % ", ".join(unregistered))
+	_assert(full.businesses.size() - 1 == types.size(), "Seeding every registered kind should create exactly one business each (plus the Government)")
+
+	# Each kind, built mid-run into a town that has none of the optional ones.
+	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind([HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID]), true)
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var created := 0
+	for entry in types:
+		if sim.has_business_of_type(settlement_id, entry["type_key"]):
+			continue
+		var business: HEBusiness = entry["make"].call(sim.next_business_id(), settlement_id)
+		_assert(business != null and business.type_key == entry["type_key"], "%s's factory should build a business carrying its own type_key" % entry["label"])
+		sim.add_new_business(business)
+		_assert(sim.has_business_of_type(settlement_id, entry["type_key"]), "%s should exist after being created" % entry["label"])
+		created += 1
+	sim.advance_ticks(60)
+	print("  %d kinds registered; %d built mid-run and the sim ran 60 days" % [types.size(), created])
+	_assert(created == types.size() - 2, "Every kind except the seeded Farm and Woodlot should have been creatable")
+
+## How much of `satisfier` a household spent today on the need labelled
+## `need_label`, read from the summary's per-need list.
+func _household_satisfier_used(summary: Dictionary, need_label: String, satisfier: String) -> float:
+	for need in summary["needs"]:
+		if need["label"] == need_label:
+			for entry in need["satisfiers"]:
+				if entry["name"] == satisfier:
+					return entry["consumed"]
+	return 0.0
 
 func _check_market_supply_demand_history() -> void:
 	print("\n=== Market detail carries a rolling supplied/requested history ===")
@@ -1243,7 +1345,7 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
@@ -1307,15 +1409,111 @@ func _check_need_substitutes() -> void:
 	_assert(is_equal_approx(short["provided"], 1.0), "A burn beyond what is held supplies only what exists: got %.2f" % short["provided"])
 	_assert(is_equal_approx(need.held(h), 0.0), "Everything held should be spent")
 
-	# Preferred satisfier: the baseline until an alternative is both in supply
-	# and cheaper per need-unit (wool 2.0 / 4 = 0.5 vs timber 1.0).
+	# Cascade: the baseline alone until an alternative is actually on offer,
+	# then cheapest per need-unit first (wool 2.0 / 4 = 0.5 vs timber 1.0).
 	var sim := _new_sim("build_three_business_economy")
 	var settlement_id: int = sim.get_settlement_ids()[0]
-	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.TIMBER, "With no alternative in supply, the baseline should be preferred")
-	var trader: HEBusiness = sim._settlement_trader(settlement_id)
-	trader.add_stock(Commodity.Type.WOOL, 5.0)
-	_assert(sim._preferred_satisfier(settlement_id, need) == Commodity.Type.WOOL, "A cheaper-per-unit satisfier in supply should be preferred")
-	print("  burn order, partial burns and preferred-satisfier choice behave as expected")
+	_assert(sim._household_cascade(settlement_id, need) == [Commodity.Type.TIMBER], "With no alternative on offer, only the baseline should be listed")
+	var wool_seller: HEBusiness = sim._business_selling(settlement_id, Commodity.Type.WOOL)
+	wool_seller.add_stock(Commodity.Type.WOOL, 5.0)
+	_assert(sim._household_cascade(settlement_id, need) == [Commodity.Type.WOOL, Commodity.Type.TIMBER],
+		"A cheaper-per-unit satisfier on offer should be listed first, with the baseline still behind it")
+	print("  burn order, partial burns and cascade order behave as expected")
+
+## Substitution through the real clearing paths, with the Charcoal Burner's
+## scenario. Charcoal is cheaper per heat unit than timber, so it is every
+## buyer's first choice; these check that when it cannot cover a buyer, the
+## buyer still gets heat from timber.
+func _check_fuel_fallback() -> void:
+	print("\n=== Heat falls back to timber when charcoal cannot cover the need ===")
+	var heat: HENeed = HENeeds.get_need(HENeed.Id.HEAT)
+	var charcoal := Commodity.Type.CHARCOAL
+	var timber := Commodity.Type.TIMBER
+
+	# Households: a sliver of charcoal for sale, ample timber.
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var market: HEMarket = sim.markets[settlement_id]
+	market.price[charcoal] = 3.0 # 0.75 per heat vs timber's 1.0
+	var burner: HEBusiness = sim.businesses[HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID]
+	burner.inventory = {charcoal: 2.0}
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	woodlot.inventory = {timber: 5000.0}
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		h.inventory = {}
+		h.balance = 1000.0
+	_assert(sim._household_cascade(settlement_id, heat) == [charcoal, timber], "Charcoal on offer and cheaper should lead the households' cascade")
+	sim._run_market(sim._new_daily_record())
+	var worst_gap := 0.0
+	var any_unmet := false
+	var charcoal_bought := 0.0
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		var target: float = float(h.headcount()) * heat.per_person_daily * HESimulation.TARGET_BUFFER_DAYS
+		worst_gap = maxf(worst_gap, target - heat.held(h))
+		charcoal_bought += h.stock(charcoal)
+		any_unmet = any_unmet or h.last_unmet_scarcity.get(charcoal, 0.0) > 0.0001 or h.last_unmet_scarcity.get(timber, 0.0) > 0.0001
+	print("  households: charcoal sold=%.2f, worst heat shortfall vs buffer=%.4f" % [charcoal_bought, worst_gap])
+	_assert(charcoal_bought > 1.99, "The little charcoal for sale should all be sold, got %.2f" % charcoal_bought)
+	_assert(worst_gap < EPSILON, "Households should top up the rest of their heat buffer with timber, worst shortfall %.4f" % worst_gap)
+	_assert(not any_unmet, "A need covered by the fallback should not be reported as unmet")
+
+	# A preferred good whose seller PACES its sales (a long-cycle business such
+	# as the Woodlot) still has most of its stock left after clearing, so having
+	# stock is not the same as being available. Fixture need: timber (4 units
+	# each, the Woodlot's paced stock) is cheaper per unit than wool (1 unit,
+	# the baseline) -- when timber's paced offer can't cover the households,
+	# they must top up with wool instead of going without.
+	var saved_needs: Array[HENeed] = HENeeds._all
+	var fixture_units: Dictionary[Commodity.Type, float] = {timber: 4.0, Commodity.Type.WOOL: 1.0}
+	var fixture_needs: Array[HENeed] = [HENeed.new(HENeed.Id.HEAT, "Fixture fuel", 0.5, fixture_units, Commodity.Type.WOOL)]
+	HENeeds._all = fixture_needs
+	var paced := _new_sim("build_economy_with_charcoal_burner")
+	var paced_settlement: int = paced.get_settlement_ids()[0]
+	paced.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 400.0}
+	# The wool seller paces its sales too, so give it enough stock that its own
+	# paced offer comfortably covers what the timber leaves over.
+	paced._business_selling(paced_settlement, Commodity.Type.WOOL).inventory = {Commodity.Type.WOOL: 500000.0}
+	var paced_target := 0.0
+	for household_id in paced.get_household_ids():
+		var h: HEHousehold = paced.households[household_id]
+		h.inventory = {}
+		h.balance = 1000.0
+		paced_target += float(h.headcount()) * fixture_needs[0].per_person_daily * HESimulation.TARGET_BUFFER_DAYS
+	var timber_offer: float = paced._household_offer(paced_settlement, timber)
+	_assert(timber_offer > 0.0 and timber_offer * 4.0 < paced_target, "Test setup: timber's paced offer (%.2f units) should be unable to cover the households' %.2f heat" % [timber_offer, paced_target])
+	_assert(paced._household_cascade(paced_settlement, fixture_needs[0]) == [timber, Commodity.Type.WOOL], "Test setup: timber should lead, wool behind it")
+	paced._run_market(paced._new_daily_record())
+	var paced_gap := 0.0
+	for household_id in paced.get_household_ids():
+		var h: HEHousehold = paced.households[household_id]
+		paced_gap = maxf(paced_gap, float(h.headcount()) * fixture_needs[0].per_person_daily * HESimulation.TARGET_BUFFER_DAYS - fixture_needs[0].held(h))
+	var timber_left: float = paced.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(timber)
+	HENeeds._all = saved_needs
+	print("  paced preferred seller: timber left unsold=%.1f, worst heat shortfall vs buffer=%.4f" % [timber_left, paced_gap])
+	_assert(timber_left > 1.0, "Test setup: the Woodlot should still hold stock after clearing (it paces its sales)")
+	_assert(paced_gap < EPSILON, "Households should top up from the baseline when the preferred seller's paced offer runs short, worst shortfall %.4f" % paced_gap)
+
+	# Bloomery: only a sliver of charcoal exists. There is no household reserve,
+	# so the Bloomery may take part of it, but never more than exists, and the
+	# rest of its heat must still come from timber.
+	var sim2 := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id2: int = sim2.get_settlement_ids()[0]
+	(sim2.markets[settlement_id2] as HEMarket).price[charcoal] = 3.0
+	var burner2: HEBusiness = sim2.businesses[HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID]
+	burner2.inventory = {charcoal: 1.0}
+	var bloomery: HEBusiness = sim2.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	bloomery.inventory = {}
+	bloomery.balance = 10000.0
+	sim2.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
+	# Purchases are proportional across inputs, so the ore side needs stock too.
+	sim2.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
+	sim2._run_input_purchasing(sim2._new_daily_record())
+	print("  bloomery: timber bought=%.1f, charcoal bought=%.1f, input fulfilment=%.2f" % [bloomery.stock(timber), bloomery.stock(charcoal), bloomery.last_input_fulfillment_ratio])
+	_assert(bloomery.stock(charcoal) <= 1.0001, "A business cannot buy more charcoal than the burner holds, got %.3f" % bloomery.stock(charcoal))
+	_assert(bloomery.stock(timber) > 0.0, "The Bloomery should buy timber when the cheaper fuel is unavailable to it")
+	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "The Bloomery should not stall for fuel while timber is for sale")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.
