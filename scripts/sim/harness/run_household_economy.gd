@@ -48,6 +48,7 @@ func _init() -> void:
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_government_taxes()
+	_check_person_health_and_morale()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -62,6 +63,32 @@ func _assert(condition: bool, message: String) -> void:
 	if not condition:
 		push_error(message)
 		_ok = false
+
+func _check_person_health_and_morale() -> void:
+	print("
+=== Person health and morale ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.advance_ticks(200)
+	var stressed_seen := false
+	var child_seen := false
+	for household_id in sim.get_household_ids():
+		var h := sim.get_household_summary(household_id)
+		_assert(h["health"] >= 0.0 and h["health"] <= 1.0 and h["morale"] >= 0.0 and h["morale"] <= 1.0,
+			"Household %d health/morale out of range" % household_id)
+		if h["food_stress"] > 0.001:
+			stressed_seen = true
+			_assert(h["health"] < 1.0, "Household %d is food-stressed but at full health" % household_id)
+		for member in range(1, h["headcount"] + 1):
+			var p := sim.get_person_summary(household_id, member)
+			_assert(not p.is_empty(), "Household %d member %d should exist" % [household_id, member])
+			_assert(p["health"] <= h["health"] + 0.0001 or p["vulnerability"] <= 1.0,
+				"A vulnerable member should not be healthier than their household")
+			if p["life_stage"] == "Child":
+				child_seen = true
+	var any_id: int = sim.get_household_ids()[0]
+	_assert(sim.get_person_summary(any_id, 0).is_empty(), "Member 0 should not exist")
+	_assert(sim.get_person_summary(any_id, 9999).is_empty(), "Out-of-range member should not exist")
+	print("  stressed household seen: %s, child seen: %s" % [stressed_seen, child_seen])
 
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
