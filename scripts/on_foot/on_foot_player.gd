@@ -147,6 +147,8 @@ func _ready() -> void:
 	_model.rotation_degrees = Vector3(0, 180, 0)
 	_model.scale = Vector3.ONE * float(_character["model_scale"])
 	add_child(_model)
+	if selected_character == "person":
+		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 
 	_bark_player = AudioStreamPlayer3D.new()
