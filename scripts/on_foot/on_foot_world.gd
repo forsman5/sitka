@@ -33,9 +33,12 @@ func _ready() -> void:
 	var points := Label.new()
 	points.text = "Points: 0"
 	points.add_theme_font_size_override("font_size", 28)
-	points.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	points.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	points.position = Vector2(-16, 8)
+	points.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	points.anchor_left = 1.0
+	points.anchor_right = 1.0
+	points.offset_left = -260.0
+	points.offset_right = -16.0
+	points.offset_top = 8.0
 	layer.add_child(points)
 	_pen.sheep_penned.connect(func(total: int) -> void: points.text = "Points: %d" % total)
 
