@@ -19,9 +19,21 @@ const MESH_CENTER_OFFSET := 1.0 * FENCE_SCALE
 ## Which front-side slot (0-based, left to right) is the open gate.
 @export var gate_slot: int = 1
 
+signal sheep_penned(total: int)
+
+## Distance inside the fence line that penned sheep stand at, and their spacing.
+const SLOT_INSET := 1.0
+const SLOT_SPACING := 1.7
+
+var penned_count: int = 0
+var _slots: Array[Vector3] = []   # local-space stand points, evenly spaced along the walls
+var _slot_yaws: Array[float] = []
+
 func _ready() -> void:
 	var half_w := segments_wide * SEGMENT_LENGTH * 0.5
 	var half_d := segments_deep * SEGMENT_LENGTH * 0.5
+	_build_slots(half_w, half_d)
+	_build_detector(half_w, half_d)
 
 	# Back (-Z) and front (+Z) sides run along X; left/right sides along Z.
 	for i in segments_wide:
@@ -37,6 +49,45 @@ func _ready() -> void:
 		var z := -half_d + (j + 0.5) * SEGMENT_LENGTH
 		_add_segment(FENCE, Vector3(-half_w, 0, z), 0.0)
 		_add_segment(FENCE, Vector3(half_w, 0, z), 0.0)
+
+## Slots run along the back wall, then the left and right walls (stopping short
+## of the front so the open gate stays clear). Each sheep faces its wall.
+func _build_slots(half_w: float, half_d: float) -> void:
+	var inner_w := half_w - SLOT_INSET
+	var inner_d := half_d - SLOT_INSET
+	var n_back := int((inner_w * 2.0) / SLOT_SPACING) + 1
+	var back_start := -(n_back - 1) * SLOT_SPACING * 0.5
+	for i in n_back:
+		_add_slot(Vector3(back_start + i * SLOT_SPACING, 0, -inner_d), Vector3(0, 0, -1))
+	var z := -inner_d + SLOT_SPACING
+	while z <= inner_d - SLOT_SPACING * 0.5:
+		_add_slot(Vector3(-inner_w, 0, z), Vector3(-1, 0, 0))
+		_add_slot(Vector3(inner_w, 0, z), Vector3(1, 0, 0))
+		z += SLOT_SPACING
+
+func _add_slot(pos: Vector3, facing: Vector3) -> void:
+	_slots.append(pos)
+	_slot_yaws.append(atan2(-facing.x, -facing.z))
+
+func _build_detector(half_w: float, half_d: float) -> void:
+	var area := Area3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(half_w * 2.0 - 0.8, 2.0, half_d * 2.0 - 0.8)
+	var col := CollisionShape3D.new()
+	col.shape = shape
+	col.position.y = 1.0
+	area.add_child(col)
+	area.body_entered.connect(_on_body_entered)
+	add_child(area)
+
+func _on_body_entered(body: Node3D) -> void:
+	var sheep := body as OnFootSheep
+	if sheep == null or sheep.penned or penned_count >= _slots.size():
+		return
+	var slot := penned_count
+	penned_count += 1
+	sheep.pen_in(to_global(_slots[slot]), rotation.y + _slot_yaws[slot])
+	sheep_penned.emit(penned_count)
 
 func _add_segment(scene: PackedScene, pos: Vector3, yaw_deg: float) -> void:
 	var body := StaticBody3D.new()

@@ -11,6 +11,13 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 @export var accel: float = 14.0
 @export var arena_half_size: float = 90.0
 
+## True once the pen has claimed this sheep; it then ignores the player.
+var penned: bool = false
+var _slot_pos := Vector3.ZERO
+var _slot_yaw: float = 0.0
+var _pen_walk_left: float = 0.0
+var _frozen: bool = false
+
 var _model: Node3D
 var _anim: AnimationPlayer
 var _player: Node3D
@@ -44,7 +51,41 @@ func _ready() -> void:
 
 	_state_left = randf_range(0.5, 4.0)
 
+## Called by the pen when this sheep enters: walk to the slot, then stand still.
+func pen_in(slot_pos: Vector3, yaw: float) -> void:
+	penned = true
+	_slot_pos = slot_pos
+	_slot_yaw = yaw
+	_pen_walk_left = 8.0
+
+func _penned_step(delta: float) -> void:
+	if _frozen:
+		return
+	var to_slot := _slot_pos - global_position
+	to_slot.y = 0.0
+	_pen_walk_left -= delta
+	if to_slot.length() < 0.15 or _pen_walk_left <= 0.0:
+		# Arrived (or crowded out for too long): lock in place, stop animating.
+		_frozen = true
+		velocity = Vector3.ZERO
+		global_position = Vector3(_slot_pos.x, global_position.y, _slot_pos.z)
+		rotation.y = _slot_yaw
+		_model.position.y = 0.0
+		_model.rotation.z = 0.0
+		if _anim != null:
+			_anim.pause()
+		return
+	var horiz := Vector3(velocity.x, 0.0, velocity.z).move_toward(to_slot.normalized() * wander_speed, accel * delta)
+	velocity.x = horiz.x
+	velocity.z = horiz.z
+	velocity.y = 0.0 if is_on_floor() else velocity.y - _gravity * delta
+	move_and_slide()
+	_face_and_animate(delta, horiz)
+
 func _physics_process(delta: float) -> void:
+	if penned:
+		_penned_step(delta)
+		return
 	if _player == null or not is_instance_valid(_player):
 		_player = get_tree().get_first_node_in_group("on_foot_player") as Node3D
 

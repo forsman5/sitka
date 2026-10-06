@@ -7,6 +7,7 @@ const PLANE_SIZE := 200.0
 ## window) before the game sees a key press, so a lost capture also opens the menu.
 const ESC_DEBOUNCE_MSEC := 250
 
+var _pen: SheepPen
 var _pause_layer: CanvasLayer
 var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 
@@ -28,6 +29,15 @@ func _ready() -> void:
 	layer.add_child(hint)
 	add_child(layer)
 	_build_pause_menu()
+
+	var points := Label.new()
+	points.text = "Points: 0"
+	points.add_theme_font_size_override("font_size", 28)
+	points.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	points.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	points.position = Vector2(-16, 8)
+	layer.add_child(points)
+	_pen.sheep_penned.connect(func(total: int) -> void: points.text = "Points: %d" % total)
 
 func _build_pause_menu() -> void:
 	_pause_layer = CanvasLayer.new()
@@ -90,10 +100,10 @@ func _to_main_menu() -> void:
 
 ## Open-gated pen ahead of the flock, with its gate side facing the spawn point.
 func _spawn_pen() -> void:
-	var pen := SheepPen.new()
-	pen.name = "SheepPen"
-	pen.position = Vector3(8, 0, -36)
-	add_child(pen)
+	_pen = SheepPen.new()
+	_pen.name = "SheepPen"
+	_pen.position = Vector3(8, 0, -36)
+	add_child(_pen)
 
 ## A small flock a short walk ahead of the spawn point.
 func _spawn_flock() -> void:
