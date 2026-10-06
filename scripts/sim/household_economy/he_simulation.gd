@@ -686,6 +686,31 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"unmet_unaffordable_today": unmet_unaffordable,
 	}
 
+## Town-wide headcount with the average health and morale PER PERSON (so a
+## big household counts for more than a small one), using the same
+## age-vulnerability and employment rules as get_person_summary().
+func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
+	var population := 0
+	var health_total := 0.0
+	var morale_total := 0.0
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		for age in h.worker_ages():
+			var v := HEHousehold.vulnerability_of(true, age)
+			health_total += h.health(v)
+			morale_total += h.morale(v, true)
+			population += 1
+		for age in h.dependent_ages():
+			var v := HEHousehold.vulnerability_of(false, age)
+			health_total += h.health(v)
+			morale_total += h.morale(v, false)
+			population += 1
+	return {
+		"population": population,
+		"avg_health": (health_total / population) if population > 0 else 1.0,
+		"avg_morale": (morale_total / population) if population > 0 else 1.0,
+	}
+
 ## One member of a household, by their 1-based member number (workers first,
 ## then dependents -- the household detail's numbering). Members have no
 ## persistent identity, so everything here is DERIVED from the household: the

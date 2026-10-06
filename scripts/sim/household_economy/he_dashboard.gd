@@ -118,6 +118,9 @@ var _day_accumulator: float = 0.0
 
 var _day_label: Label
 var _treasury_margin: Control
+var _population_label: Label
+var _avg_health_label: Label
+var _avg_morale_label: Label
 var _treasury_box: HBoxContainer
 var _treasury_label: Label
 var _treasury_tip: PanelContainer
@@ -346,6 +349,8 @@ func _build_ui() -> void:
 	add_child(_treasury_tip)
 	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
 	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
+
+	top_bar.add_child(_build_population_summary())
 
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -771,6 +776,77 @@ func _build_ui() -> void:
 	_rebuild_business_rows()
 	_rebuild_household_rows()
 
+## "<person icon> 123    Health 82%    Morale 64%" -- town-wide headcount and
+## per-person averages, colored by _wellbeing_color().
+func _build_population_summary() -> Control:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	margin.add_child(box)
+
+	var icon := TextureRect.new()
+	icon.texture = _person_icon()
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2(24, 24)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.tooltip_text = "Population"
+	box.add_child(icon)
+	_population_label = Label.new()
+	_population_label.add_theme_font_size_override("font_size", 22)
+	_population_label.tooltip_text = "Total people in town"
+	box.add_child(_population_label)
+
+	var health_caption := Label.new()
+	health_caption.text = "Health"
+	health_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var health_margin := MarginContainer.new()
+	health_margin.add_theme_constant_override("margin_left", 16)
+	health_margin.add_child(health_caption)
+	box.add_child(health_margin)
+	_avg_health_label = Label.new()
+	_avg_health_label.add_theme_font_size_override("font_size", 22)
+	_avg_health_label.tooltip_text = "Average health per person"
+	box.add_child(_avg_health_label)
+
+	var morale_caption := Label.new()
+	morale_caption.text = "Morale"
+	morale_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var morale_margin := MarginContainer.new()
+	morale_margin.add_theme_constant_override("margin_left", 16)
+	morale_margin.add_child(morale_caption)
+	box.add_child(morale_margin)
+	_avg_morale_label = Label.new()
+	_avg_morale_label.add_theme_font_size_override("font_size", 22)
+	_avg_morale_label.tooltip_text = "Average morale per person"
+	box.add_child(_avg_morale_label)
+	return margin
+
+## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
+## needs no asset file.
+static func _person_icon() -> Texture2D:
+	var svg := '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="15" r="9" fill="#d8d8e0"/><path d="M6 44 C6 31 14 26 24 26 C34 26 42 31 42 44 Z" fill="#d8d8e0"/></svg>'
+	var image := Image.new()
+	image.load_svg_from_string(svg)
+	return ImageTexture.create_from_image(image)
+
+## Red below 50%, yellow up to 80%, green above.
+static func _wellbeing_color(value: float) -> Color:
+	if value < 0.5:
+		return Color(0.85, 0.35, 0.3)
+	if value <= 0.8:
+		return Color(0.9, 0.7, 0.3)
+	return Color(0.4, 0.75, 0.45)
+
+func _refresh_population_summary() -> void:
+	var w := _simulation.get_population_wellbeing()
+	_population_label.text = "%d" % w["population"]
+	_avg_health_label.text = "%.0f%%" % (w["avg_health"] * 100.0)
+	_avg_health_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_health"]))
+	_avg_morale_label.text = "%.0f%%" % (w["avg_morale"] * 100.0)
+	_avg_morale_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_morale"]))
+
 ## Town tab (index 0): the city-wide indicators on the left, and two charts on
 ## the right -- population levels, and births/emigrations/deaths.
 func _build_town_tab(top_tabs: TabContainer) -> void:
@@ -1082,7 +1158,7 @@ func _add_meter_row(parent: Control, caption: String, value: float) -> void:
 	bar.custom_minimum_size = Vector2(200, 16)
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var fill := StyleBoxFlat.new()
-	fill.bg_color = Color(0.4, 0.75, 0.45) if value >= 0.7 else (Color(0.9, 0.7, 0.3) if value >= 0.4 else Color(0.85, 0.35, 0.3))
+	fill.bg_color = _wellbeing_color(value)
 	bar.add_theme_stylebox_override("fill", fill)
 	row.add_child(bar)
 	var value_label := Label.new()
@@ -2373,6 +2449,7 @@ func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
 	_refresh_treasury()
+	_refresh_population_summary()
 
 	_refresh_town()
 
