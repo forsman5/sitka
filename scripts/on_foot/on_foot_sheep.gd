@@ -12,8 +12,8 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 @export var arena_half_size: float = 90.0
 ## A bark inside the player's bark radius keeps a sheep running for this long
 ## (seconds, min..max), even once it is outside the normal scare radius.
-@export var startle_time_min: float = 3.0
-@export var startle_time_max: float = 4.0
+@export var startle_time_min: float = 2.0
+@export var startle_time_max: float = 2.5
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
