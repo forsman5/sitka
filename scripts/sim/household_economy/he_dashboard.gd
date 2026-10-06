@@ -14,17 +14,36 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+
+## Row order of the Needs tab.
+const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
+const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
+## Offered by the Businesses tab's "Create business" menu. Each kind is unique
+## per town (matched by HEBusiness.type_key) and costs nothing -- both may change later.
+const BUILDABLE_BUSINESSES := [
+	{"label": "Farm", "type_key": "farm"},
+	{"label": "Woodlot", "type_key": "woodlot"},
+	{"label": "Trader", "type_key": "trader"},
+	{"label": "Cattle Ranch", "type_key": "cattle_ranch"},
+	{"label": "Sheep Farm", "type_key": "sheep_farm"},
+	{"label": "Butcher", "type_key": "butcher"},
+	{"label": "Bloomery", "type_key": "bloomery"},
+	{"label": "Iron Mine", "type_key": "iron_mine"},
+]
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
-const BLOTTER_HISTORY_DAYS := 30
 ## Household detail looks back as far as the sim retains events
-## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter stays at 30.
+## (HESimulation.EVENT_LOG_RETENTION_DAYS); the main blotter follows GameState.blotter_days.
 const HOUSEHOLD_EVENT_HISTORY_DAYS := 360
 const BUSINESS_STATUS_COLUMN_WIDTH := 430.0
 const TRADER_TRANSACTION_HISTORY_DAYS := 30
+## Window for the top-line treasury's hover change.
+const TREASURY_TREND_DAYS := 30
 const BUSINESS_EMPLOYMENT_VISIBLE_EVENTS := 50
 ## Views of the goods chart on a production business's detail tab, switched
 ## by tabs above it. Each series is [series id, legend suffix, dashed]: outputs
@@ -64,7 +83,6 @@ const TOWN_STATS := [
 	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
 	["Import cost (lifetime)", "import_cost_total", "%.1f"],
 ]
-const TOWN_CHART_DAYS := 90
 ## Births, emigrations and deaths are evaluated monthly, so the daily record is
 ## mostly zeros with a spike every 30 days; the flow chart plots a trailing
 ## sum over this many days instead so the lines are readable.
@@ -90,6 +108,10 @@ const BLOTTER_FILTERS := [
 	{"type": "coming_of_age", "label": "Coming of age"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
+	{"type": "business_failed", "label": "Business closures"},
+	{"type": "herd_birth", "label": "Herd births"},
+	{"type": "herd_cull", "label": "Herd culls"},
+	{"type": "hardship_butcher", "label": "Hardship butchering"},
 ]
 
 ## Set by the config page (he_config.gd) before it switches to this scene.
@@ -101,8 +123,23 @@ var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
 var _day_label: Label
+var _treasury_margin: Control
+var _population_label: Label
+var _top_unemployed_label: Label
+var _avg_health_label: Label
+var _avg_morale_label: Label
+var _population_box: HBoxContainer
+var _population_tip: PanelContainer
+var _population_tip_label: Label
+var _treasury_box: HBoxContainer
+var _treasury_label: Label
+var _treasury_tip: PanelContainer
+var _treasury_tip_label: Label
 var _town_stat_labels: Dictionary = {} # city-summary key -> Label
 var _town_population_chart: HESparkline
+var _town_population_title: Label
+var _cash_history_label: Label
+var _goods_title_label: Label
 var _town_flow_chart: HESparkline
 var _market_grid: GridContainer
 var _market_labels: Dictionary = {} # commodity_name -> {"price","offered","funded","traded"}
@@ -160,16 +197,33 @@ var _business_detail_employment_empty: Label
 var _business_employment_filter := "both"
 var _business_detail_employee_grid: GridContainer
 var _selected_market_commodity: int = -1
+## Reopen callables for the detail views the player navigated through via
+## links (market -> business -> household ...); closing a detail pops one.
+## In memory only; empty means close back to the list. Opening a detail from
+## a list row clears it.
+var _return_stack: Array[Callable] = []
 var _market_detail_panel: PanelContainer
 var _market_detail_title: Label
 var _market_detail_content: VBoxContainer
 ## User toggle for the market chart's "Requested" series -- see
 ## _add_market_detail_chart.
 var _market_chart_export_appetite := false
+## -1 means no need is selected; otherwise a HENeed.Id whose detail panel is
+## stacked over the household list like the market and household panels.
+var _selected_need_id: int = -1
+var _need_detail_panel: PanelContainer
+var _need_detail_title: Label
+var _need_detail_content: VBoxContainer
+var _need_labels: Dictionary = {} # HENeed.Id -> {"met","unmet","unmet_demand"} Labels on the Needs tab
 var _selected_household_id: int = -1
 var _household_detail_panel: PanelContainer
 var _household_detail_title: Label
 var _household_detail_content: VBoxContainer
+var _person_detail_panel: PanelContainer
+var _person_detail_title: Label
+var _person_detail_content: VBoxContainer
+var _selected_person_household_id: int = -1
+var _selected_person_number: int = -1
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -179,8 +233,10 @@ func _ready() -> void:
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
+	GameState.settings_changed.connect(_on_history_settings_changed)
 	_load_scenario()
 	_build_ui()
+	_update_history_titles()
 	_refresh()
 
 func _configure_tooltip_theme() -> void:
@@ -230,15 +286,20 @@ func _load_scenario() -> void:
 	# guarded null check because this runs once before _build_ui() ever
 	# creates the panel (see _ready()).
 	_selected_business_id = -1
+	_return_stack.clear()
 	_trader_settings_open = false
 	if _business_detail_panel != null:
 		_business_detail_panel.visible = false
 	_selected_market_commodity = -1
 	if _market_detail_panel != null:
 		_market_detail_panel.visible = false
+	_selected_need_id = -1
+	if _need_detail_panel != null:
+		_need_detail_panel.visible = false
 	_selected_household_id = -1
 	if _household_detail_panel != null:
 		_household_detail_panel.visible = false
+		_clear_person_detail()
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -261,10 +322,51 @@ func _build_ui() -> void:
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
 
+	# Government treasury: "<gold icon> 99 gold", hover for the 30-day change.
+	# Hidden when the scenario has no government.
+	_treasury_box = HBoxContainer.new()
+	_treasury_box.add_theme_constant_override("separation", 4)
+	_treasury_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	var treasury_icon := TextureRect.new()
+	treasury_icon.texture = Commodity.gold_icon()
+	treasury_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	treasury_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	treasury_icon.custom_minimum_size = Vector2(24, 24)
+	treasury_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	treasury_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(treasury_icon)
+	_treasury_label = Label.new()
+	_treasury_label.add_theme_font_size_override("font_size", 22)
+	_treasury_label.add_theme_color_override("font_color", Commodity.GOLD_COLOR)
+	_treasury_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_box.add_child(_treasury_label)
+	var treasury_margin := MarginContainer.new()
+	treasury_margin.add_theme_constant_override("margin_left", 16)
+	treasury_margin.add_child(_treasury_box)
+	top_bar.add_child(treasury_margin)
+	_treasury_margin = treasury_margin
+
+	# A built-in tooltip is frozen once shown, so the 30-day change would stop
+	# updating while hovered (sim speed can be 100x). This popup is refreshed
+	# by _refresh_treasury() every tick instead.
+	_treasury_tip = PanelContainer.new()
+	_treasury_tip.top_level = true
+	_treasury_tip.visible = false
+	_treasury_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip_label = Label.new()
+	_treasury_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_treasury_tip.add_child(_treasury_tip_label)
+	add_child(_treasury_tip)
+	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
+	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
+
+	top_bar.add_child(_build_population_summary())
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
 
+	top_bar.add_child(_make_settings_button())
 	top_bar.add_child(_make_speed_button("Pause", 0.0))
 	top_bar.add_child(_make_speed_button("1x", 1.0))
 	top_bar.add_child(_make_speed_button("10x", 10.0))
@@ -289,6 +391,8 @@ func _build_ui() -> void:
 	top_tabs.add_child(business_scroll)
 	_business_list = VBoxContainer.new()
 	business_scroll.add_child(_business_list)
+
+	_build_needs_tab(top_tabs)
 
 	var goods_scroll := ScrollContainer.new()
 	goods_scroll.name = "Goods"
@@ -401,7 +505,7 @@ func _build_ui() -> void:
 	_business_detail_overview_scroll.add_child(detail_content)
 
 	var cash_history_label := Label.new()
-	cash_history_label.text = "Cash (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_cash_history_label = cash_history_label
 	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	detail_content.add_child(cash_history_label)
 
@@ -561,10 +665,39 @@ func _build_ui() -> void:
 	_market_detail_content.add_theme_constant_override("separation", 6)
 	market_scroll.add_child(_market_detail_content)
 
+	_need_detail_panel = PanelContainer.new()
+	_need_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_need_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_need_detail_panel.visible = false
+	content_area.add_child(_need_detail_panel)
+	var need_detail_box := VBoxContainer.new()
+	_need_detail_panel.add_child(need_detail_box)
+	var need_title_bar := HBoxContainer.new()
+	need_detail_box.add_child(need_title_bar)
+	_need_detail_title = Label.new()
+	_need_detail_title.add_theme_font_size_override("font_size", 16)
+	need_title_bar.add_child(_need_detail_title)
+	var need_title_spacer := Control.new()
+	need_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	need_title_bar.add_child(need_title_spacer)
+	var need_close := Button.new()
+	need_close.text = "X"
+	need_close.tooltip_text = "Close (back to household list)"
+	need_close.pressed.connect(_on_need_detail_close_pressed)
+	need_title_bar.add_child(need_close)
+	var need_scroll := ScrollContainer.new()
+	need_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	need_detail_box.add_child(need_scroll)
+	_need_detail_content = VBoxContainer.new()
+	_need_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_need_detail_content.add_theme_constant_override("separation", 6)
+	need_scroll.add_child(_need_detail_content)
+
 	_household_detail_panel = PanelContainer.new()
 	_household_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_household_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	content_area.add_child(_household_detail_panel)
 	var household_detail_box := VBoxContainer.new()
 	_household_detail_panel.add_child(household_detail_box)
@@ -589,6 +722,34 @@ func _build_ui() -> void:
 	_household_detail_content.add_theme_constant_override("separation", 6)
 	household_scroll.add_child(_household_detail_content)
 
+	_person_detail_panel = PanelContainer.new()
+	_person_detail_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_person_detail_panel.add_theme_stylebox_override("panel", detail_panel_style.duplicate())
+	_person_detail_panel.visible = false
+	content_area.add_child(_person_detail_panel)
+	var person_detail_box := VBoxContainer.new()
+	_person_detail_panel.add_child(person_detail_box)
+	var person_title_bar := HBoxContainer.new()
+	person_detail_box.add_child(person_title_bar)
+	_person_detail_title = Label.new()
+	_person_detail_title.add_theme_font_size_override("font_size", 16)
+	person_title_bar.add_child(_person_detail_title)
+	var person_title_spacer := Control.new()
+	person_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	person_title_bar.add_child(person_title_spacer)
+	var person_close := Button.new()
+	person_close.text = "X"
+	person_close.tooltip_text = "Close (back to previous view)"
+	person_close.pressed.connect(_on_person_detail_close_pressed)
+	person_title_bar.add_child(person_close)
+	var person_scroll := ScrollContainer.new()
+	person_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	person_detail_box.add_child(person_scroll)
+	_person_detail_content = VBoxContainer.new()
+	_person_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_person_detail_content.add_theme_constant_override("separation", 6)
+	person_scroll.add_child(_person_detail_content)
+
 	_blotter_column = VBoxContainer.new()
 	lower_row.add_child(_blotter_column)
 
@@ -608,6 +769,8 @@ func _build_ui() -> void:
 	_blotter_filter_button.text = "Filters"
 	_blotter_filter_button.tooltip_text = "Choose which notification types appear in the blotter"
 	var blotter_filter_popup := _blotter_filter_button.get_popup()
+	# Keep the menu open so several filters can be toggled in one visit.
+	blotter_filter_popup.hide_on_checkable_item_selection = false
 	for i in BLOTTER_FILTERS.size():
 		blotter_filter_popup.add_check_item(BLOTTER_FILTERS[i]["label"], i)
 		blotter_filter_popup.set_item_checked(blotter_filter_popup.get_item_index(i), true)
@@ -624,6 +787,114 @@ func _build_ui() -> void:
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
+
+## "<person icon> 123 (12 unemployed)    Health 82%    Morale 64%" -- town-wide headcount and
+## per-person averages, colored by _wellbeing_color().
+func _build_population_summary() -> Control:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.mouse_entered.connect(_on_population_hover.bind(true))
+	box.mouse_exited.connect(_on_population_hover.bind(false))
+	margin.add_child(box)
+	_population_box = box
+
+	# Same live-refreshing popup approach as the treasury tip: a built-in
+	# tooltip would freeze its text while hovered.
+	_population_tip = PanelContainer.new()
+	_population_tip.top_level = true
+	_population_tip.visible = false
+	_population_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip_label = Label.new()
+	_population_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip.add_child(_population_tip_label)
+	add_child(_population_tip)
+
+	var icon := TextureRect.new()
+	icon.texture = _person_icon()
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = Vector2(24, 24)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(icon)
+	_population_label = Label.new()
+	_population_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_population_label)
+	_top_unemployed_label = Label.new()
+	_top_unemployed_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_top_unemployed_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(_top_unemployed_label)
+
+	var health_caption := Label.new()
+	health_caption.text = "Health"
+	health_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var health_margin := MarginContainer.new()
+	health_margin.add_theme_constant_override("margin_left", 16)
+	health_margin.add_child(health_caption)
+	box.add_child(health_margin)
+	_avg_health_label = Label.new()
+	_avg_health_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_avg_health_label)
+
+	var morale_caption := Label.new()
+	morale_caption.text = "Morale"
+	morale_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	var morale_margin := MarginContainer.new()
+	morale_margin.add_theme_constant_override("margin_left", 16)
+	morale_margin.add_child(morale_caption)
+	box.add_child(morale_margin)
+	_avg_morale_label = Label.new()
+	_avg_morale_label.add_theme_font_size_override("font_size", 22)
+	box.add_child(_avg_morale_label)
+	return margin
+
+## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
+## needs no asset file.
+static func _person_icon() -> Texture2D:
+	var svg := '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="15" r="9" fill="#d8d8e0"/><path d="M6 44 C6 31 14 26 24 26 C34 26 42 31 42 44 Z" fill="#d8d8e0"/></svg>'
+	var image := Image.new()
+	image.load_svg_from_string(svg)
+	return ImageTexture.create_from_image(image)
+
+## Red below 50%, yellow up to 80%, green above.
+static func _wellbeing_color(value: float) -> Color:
+	if value < 0.5:
+		return Color(0.85, 0.35, 0.3)
+	if value <= 0.8:
+		return Color(0.9, 0.7, 0.3)
+	return Color(0.4, 0.75, 0.45)
+
+func _refresh_population_summary() -> void:
+	var w := _simulation.get_population_wellbeing()
+	_population_label.text = "%d" % w["population"]
+	_top_unemployed_label.text = "(%d unemployed)" % w["unemployed"]
+	_avg_health_label.text = "%.0f%%" % (w["avg_health"] * 100.0)
+	_avg_health_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_health"]))
+	_avg_morale_label.text = "%.0f%%" % (w["avg_morale"] * 100.0)
+	_avg_morale_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_morale"]))
+	var tip := "%d people. Averages are per person." % w["population"]
+	tip += _factor_tip_section("Health", w["avg_health"], w["health_factors"], w["population"])
+	tip += _factor_tip_section("Morale", w["avg_morale"], w["morale_factors"], w["population"])
+	_population_tip_label.text = tip
+	_population_tip.reset_size()
+
+## "\nHealth 82%\n  Food shortfall: -10 pts (affects 40 of 120 people)" -- or a
+## note that nothing is dragging it down.
+func _factor_tip_section(caption: String, average: float, factors: Array, population: int) -> String:
+	var text := "\n\n%s %.0f%%" % [caption, average * 100.0]
+	if factors.is_empty():
+		return text + "\n  Nothing is lowering it."
+	for factor in factors:
+		text += "\n  %s: -%.1f pts (affects %d of %d people)" % [factor["label"], factor["avg_loss"] * 100.0, factor["people"], population]
+	return text
+
+func _on_population_hover(hovering: bool) -> void:
+	_population_tip.visible = hovering
+	if hovering:
+		_refresh_population_summary()
+		_population_tip.global_position = _population_box.global_position + Vector2(0, _population_box.size.y + 6)
 
 ## Town tab (index 0): the city-wide indicators on the left, and two charts on
 ## the right -- population levels, and births/emigrations/deaths.
@@ -657,7 +928,8 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	charts.size_flags_stretch_ratio = 2.0
 	row.add_child(charts)
-	_town_population_chart = _add_town_chart(charts, "Population (last %d days)" % TOWN_CHART_DAYS, TOWN_POPULATION_SERIES)
+	_town_population_chart = _add_town_chart(charts, "", TOWN_POPULATION_SERIES)
+	_town_population_title = _town_population_chart.get_meta("title_label")
 	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
 
 ## A title row with a color-keyed legend above a hoverable chart.
@@ -675,6 +947,7 @@ func _add_town_chart(parent: Control, title_text: String, series_defs: Array) ->
 		legend.add_theme_color_override("font_color", HESparkline.color_for_series(i))
 		header.add_child(legend)
 	var chart := HESparkline.new()
+	chart.set_meta("title_label", title)
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	chart.show_max_label = true
@@ -686,8 +959,8 @@ func _refresh_town() -> void:
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
 	# Extra leading days so the trailing flow sums are full from the first point.
-	var history := _simulation.get_daily_history(TOWN_CHART_DAYS + TOWN_FLOW_WINDOW_DAYS - 1)
-	var shown_from := maxi(0, history.size() - TOWN_CHART_DAYS)
+	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
 	var population_series: Array = []
 	for i in TOWN_POPULATION_SERIES.size():
 		var values: Array[float] = []
@@ -705,6 +978,61 @@ func _refresh_town() -> void:
 			values.append(total)
 		flow_series.append({"name": TOWN_FLOW_SERIES[i][0], "values": values, "color": HESparkline.color_for_series(i)})
 	_town_flow_chart.set_series(flow_series)
+
+## Settings button left of Pause: one popup holding the history-length settings.
+func _make_settings_button() -> Button:
+	var btn := Button.new()
+	btn.text = "Settings"
+	btn.pressed.connect(_open_settings_dialog)
+	return btn
+
+func _open_settings_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Settings"
+	dialog.ok_button_text = "Close"
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 8)
+	dialog.add_child(grid)
+	var sparkline_box := _add_days_setting(grid, "Sparkline history (days)", GameState.sparkline_days, GameState.MAX_SPARKLINE_DAYS)
+	var blotter_box := _add_days_setting(grid, "Blotter history (days)", GameState.blotter_days, GameState.MAX_BLOTTER_DAYS)
+	var apply := func(_value: float) -> void:
+		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
+	sparkline_box.value_changed.connect(apply)
+	blotter_box.value_changed.connect(apply)
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _add_days_setting(grid: GridContainer, label_text: String, value: int, max_value: int) -> SpinBox:
+	var label := Label.new()
+	label.text = label_text
+	grid.add_child(label)
+	var box := SpinBox.new()
+	box.min_value = 1
+	box.max_value = max_value
+	box.value = value
+	grid.add_child(box)
+	return box
+
+## The last GameState.sparkline_days entries of a retained history.
+func _tail(values: Array) -> Array:
+	var keep := GameState.sparkline_days
+	return values.slice(values.size() - keep) if values.size() > keep else values
+
+func _on_history_settings_changed() -> void:
+	_update_history_titles()
+	_set_blotter_minimized(_blotter_minimized)
+	_refresh()
+	_refresh_blotter()
+
+func _update_history_titles() -> void:
+	var days := GameState.sparkline_days
+	_town_population_title.text = "Population (last %d days)" % days
+	_cash_history_label.text = "Cash (last %d days)" % days
+	_goods_title_label.text = "Goods (last %d days)" % days
 
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
@@ -739,17 +1067,21 @@ func _set_blotter_minimized(minimized: bool) -> void:
 		_blotter_column.custom_minimum_size = Vector2(32, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_SHRINK_END
 	else:
-		_blotter_toggle_button.text = "Blotter (%dd) ▸" % BLOTTER_HISTORY_DAYS
+		_blotter_toggle_button.text = "Blotter (%dd) ▸" % GameState.blotter_days
 		_blotter_toggle_button.tooltip_text = "Minimize the blotter"
 		_blotter_column.custom_minimum_size = Vector2(0, 0)
 		_blotter_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_blotter_column.size_flags_stretch_ratio = 1.0
 
 func _on_household_row_selected(household_id: int) -> void:
+	_return_stack.clear()
+	_clear_person_detail()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_household_id = household_id
 	_household_detail_panel.visible = true
 	_refresh_household_detail()
@@ -757,6 +1089,8 @@ func _on_household_row_selected(household_id: int) -> void:
 func _on_household_detail_close_pressed() -> void:
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
+	_return_to_previous_view()
 
 ## Rebuilt every refresh; the content is a handful of lines, so there's no
 ## fixed schema worth updating in place.
@@ -767,6 +1101,7 @@ func _refresh_household_detail() -> void:
 		# The household died or the scenario reloaded.
 		_selected_household_id = -1
 		_household_detail_panel.visible = false
+		_clear_person_detail()
 		return
 	var h := _simulation.get_household_summary(_selected_household_id)
 	_household_detail_title.text = "Household %d" % _selected_household_id
@@ -774,15 +1109,42 @@ func _refresh_household_detail() -> void:
 		_household_detail_content.remove_child(child)
 		child.queue_free()
 
+	var employer_id: int = h["employer_business_id"]
+	var employer_row := HBoxContainer.new()
+	var employer_caption := Label.new()
+	employer_caption.text = "Employer:"
+	employer_row.add_child(employer_caption)
+	if _business_names.has(employer_id):
+		var employer_link := Button.new()
+		employer_link.text = _business_names[employer_id]
+		employer_link.flat = true
+		employer_link.tooltip_text = "Open employer detail"
+		employer_link.pressed.connect(_on_linked_business_pressed.bind(employer_id))
+		employer_row.add_child(employer_link)
+	else:
+		var unemployed := Label.new()
+		unemployed.text = "Unemployed"
+		employer_row.add_child(unemployed)
+	_household_detail_content.add_child(employer_row)
+
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
 	var member_index := 1
 	for age in h["worker_ages"]:
-		_add_household_detail_line("Member %d: worker, age %s" % [member_index, _format_age(age)])
+		_add_member_link(member_index, "worker", age)
 		member_index += 1
 	for age in h["dependent_ages"]:
-		_add_household_detail_line("Member %d: dependent, age %s" % [member_index, _format_age(age)])
+		_add_member_link(member_index, "dependent", age)
 		member_index += 1
+
+	_add_household_detail_heading("Health and morale")
+	_add_meter_row(_household_detail_content, "Health", h["health"])
+	for loss in h["health_losses"]:
+		if loss["loss"] > 0.001:
+			_add_household_detail_line("    %s shortfall: -%.0f%% health" % [loss["label"], loss["loss"] * 100.0])
+	_add_meter_row(_household_detail_content, "Morale", h["morale"])
+	for penalty in h["morale_penalties"]:
+		_add_household_detail_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
@@ -808,10 +1170,154 @@ func _refresh_household_detail() -> void:
 	# being listed as a separate requirement.
 	_add_household_detail_heading("Needs (today)")
 	for need in h["needs"]:
-		_add_household_detail_line("%s: needs %.2f, met %.2f" % [need["label"], need["required"], need["provided"]])
+		_add_household_detail_line("%s: needs %.2f, met %.2f  |  stress %.2f" % [need["label"], need["required"], need["provided"], need["stress"]])
 		for satisfier in need["satisfiers"]:
 			if satisfier["consumed"] > 0.0001:
 				_add_household_detail_line("    %s used: %.2f" % [satisfier["name"], satisfier["consumed"]])
+		if need["stress"] > 0.001:
+			var effect := Label.new()
+			effect.text = "    " + need["effect"]
+			effect.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
+			_household_detail_content.add_child(effect)
+
+func _add_member_link(member_number: int, role: String, age: int) -> void:
+	var link := Button.new()
+	link.text = "Member %d: %s, age %s" % [member_number, role, _format_age(age)]
+	link.flat = true
+	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	link.tooltip_text = "Open person detail"
+	link.pressed.connect(_on_linked_person_pressed.bind(_selected_household_id, member_number))
+	_household_detail_content.add_child(link)
+
+## "Label  [bar]  72%" -- 0..1 meters, colored red/amber/green by level.
+func _add_meter_row(parent: Control, caption: String, value: float) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var name_label := Label.new()
+	name_label.text = caption
+	name_label.custom_minimum_size = Vector2(70, 0)
+	row.add_child(name_label)
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.value = value
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(200, 16)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = _wellbeing_color(value)
+	bar.add_theme_stylebox_override("fill", fill)
+	row.add_child(bar)
+	var value_label := Label.new()
+	value_label.text = "%.0f%%" % (value * 100.0)
+	row.add_child(value_label)
+
+func _clear_person_detail() -> void:
+	_selected_person_household_id = -1
+	_selected_person_number = -1
+	if _person_detail_panel != null:
+		_person_detail_panel.visible = false
+
+func _on_linked_person_pressed(household_id: int, member_number: int) -> void:
+	_open_linked(_on_person_selected.bind(household_id, member_number))
+
+func _on_person_selected(household_id: int, member_number: int) -> void:
+	_return_stack.clear()
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+	_selected_person_household_id = household_id
+	_selected_person_number = member_number
+	_person_detail_panel.visible = true
+	_refresh_person_detail()
+
+func _on_person_detail_close_pressed() -> void:
+	_clear_person_detail()
+	_return_to_previous_view()
+
+## Rebuilt every refresh. Everything is derived from the household (see
+## HESimulation.get_person_summary) -- members have no identity of their own.
+func _refresh_person_detail() -> void:
+	if _selected_person_household_id == -1:
+		return
+	var p := _simulation.get_person_summary(_selected_person_household_id, _selected_person_number)
+	if p.is_empty():
+		# Household gone, or the member left/died and numbering shifted.
+		_clear_person_detail()
+		return
+	_person_detail_title.text = "Household %d - Member %d" % [p["household_id"], p["member_number"]]
+	for child in _person_detail_content.get_children():
+		_person_detail_content.remove_child(child)
+		child.queue_free()
+
+	var household_row := HBoxContainer.new()
+	var household_caption := Label.new()
+	household_caption.text = "Household:"
+	household_row.add_child(household_caption)
+	var household_link := Button.new()
+	household_link.text = "Household %d" % p["household_id"]
+	household_link.flat = true
+	household_link.tooltip_text = "Open household detail"
+	household_link.pressed.connect(_on_linked_household_pressed.bind(p["household_id"]))
+	household_row.add_child(household_link)
+	_person_detail_content.add_child(household_row)
+
+	_add_person_line("%s, %s, age %s" % [p["role"], p["life_stage"].to_lower(), _format_age(p["age_days"])])
+	_add_person_line(p["note"])
+	if p["role"] == "Worker":
+		var employer_id: int = p["employer_business_id"]
+		if _business_names.has(employer_id):
+			var employer_row := HBoxContainer.new()
+			var employer_caption := Label.new()
+			employer_caption.text = "Employer:"
+			employer_row.add_child(employer_caption)
+			var employer_link := Button.new()
+			employer_link.text = _business_names[employer_id]
+			employer_link.flat = true
+			employer_link.tooltip_text = "Open employer detail"
+			employer_link.pressed.connect(_on_linked_business_pressed.bind(employer_id))
+			employer_row.add_child(employer_link)
+			_person_detail_content.add_child(employer_row)
+		else:
+			_add_person_line("Employer: unemployed")
+	if p["vulnerability"] > 1.0:
+		_add_person_line("Vulnerable (%s): shortfalls hit %.0f%% harder." % [p["life_stage"].to_lower(), (p["vulnerability"] - 1.0) * 100.0])
+
+	_add_person_heading("Health and morale")
+	_add_meter_row(_person_detail_content, "Health", p["health"])
+	_add_meter_row(_person_detail_content, "Morale", p["morale"])
+	for penalty in p["morale_penalties"]:
+		_add_person_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+
+	_add_person_heading("Needs (today, equal share of the household's)")
+	for need in p["needs"]:
+		_add_person_line("%s: needs %.2f, met %.2f  |  stress %.2f  |  health -%.0f%%" % [
+			need["label"], need["required"], need["provided"], need["stress"], need["health_loss"] * 100.0])
+		if need["stress"] > 0.001:
+			var effect := Label.new()
+			effect.text = "    " + need["effect"]
+			effect.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
+			_person_detail_content.add_child(effect)
+
+func _add_person_heading(value: String) -> void:
+	var heading := Label.new()
+	heading.text = value
+	heading.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_person_detail_content.add_child(heading)
+
+func _add_person_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_person_detail_content.add_child(label)
 
 func _add_household_detail_heading(value: String) -> void:
 	var heading := Label.new()
@@ -825,10 +1331,14 @@ func _add_household_detail_line(value: String) -> void:
 	_household_detail_content.add_child(label)
 
 func _on_business_row_selected(business_id: int) -> void:
+	_return_stack.clear()
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
 	_trader_settings_open = false
@@ -844,9 +1354,42 @@ func _on_cull_target_changed(value: float) -> void:
 		_business_detail_cull_target_box.set_value_no_signal(applied)
 		_refresh_business_detail()
 
+## Link handlers: open a detail view from inside another one, remembering the
+## current view so closing returns to it (no visual stacking).
+func _on_linked_business_pressed(business_id: int) -> void:
+	_open_linked(_on_business_row_selected.bind(business_id))
+
+func _on_linked_household_pressed(household_id: int) -> void:
+	_open_linked(_on_household_row_selected.bind(household_id))
+
+func _open_linked(open_view: Callable) -> void:
+	var stack := _return_stack.duplicate()
+	if _market_detail_panel.visible:
+		stack.append(_on_market_row_selected.bind(_selected_market_commodity))
+	elif _business_detail_panel.visible:
+		stack.append(_on_business_row_selected.bind(_selected_business_id))
+	elif _household_detail_panel.visible:
+		stack.append(_on_household_row_selected.bind(_selected_household_id))
+	elif _person_detail_panel.visible:
+		stack.append(_on_person_selected.bind(_selected_person_household_id, _selected_person_number))
+	elif _need_detail_panel.visible:
+		stack.append(_on_need_row_selected.bind(_selected_need_id))
+	open_view.call()
+	_return_stack.assign(stack)
+
+## After a detail panel closes: reopen the view it was linked from, if any.
+func _return_to_previous_view() -> void:
+	if _return_stack.is_empty():
+		return
+	var back: Callable = _return_stack.pop_back()
+	var rest := _return_stack.duplicate()
+	back.call()
+	_return_stack.assign(rest)
+
 func _on_business_detail_close_pressed() -> void:
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _on_trader_settings_pressed() -> void:
 	_trader_settings_open = not _trader_settings_open
@@ -887,11 +1430,161 @@ func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) 
 	_simulation.set_trader_export_enabled(business_id, commodity, enabled)
 	_refresh()
 
-func _on_market_row_selected(commodity: int) -> void:
+## Needs tab (just before Goods): one row per household need, in the order
+## the player thinks of them. Clicking a name opens that need's detail panel.
+func _build_needs_tab(top_tabs: TabContainer) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.name = "Needs"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	top_tabs.add_child(scroll)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
+	for col_label in ["Need", "Households met", "Households unmet", "Demand unmet"]:
+		var header := Label.new()
+		header.text = col_label
+		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		grid.add_child(header)
+	for need_id in NEEDS_TAB_ORDER:
+		var need := HENeeds.get_need(need_id)
+		var name_button := Button.new()
+		name_button.text = need.label
+		name_button.flat = true
+		name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		name_button.custom_minimum_size = Vector2(90, 20)
+		name_button.pressed.connect(_on_need_row_selected.bind(need_id))
+		grid.add_child(name_button)
+		var labels := {}
+		for key in ["met", "unmet", "unmet_demand"]:
+			var value_label := Label.new()
+			value_label.custom_minimum_size = Vector2(130, 0)
+			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
+			grid.add_child(value_label)
+			labels[key] = value_label
+		_need_labels[need_id] = labels
+
+func _refresh_needs_tab() -> void:
+	for need_id in _need_labels.keys():
+		var detail := _simulation.get_need_detail(need_id, 0)
+		var labels: Dictionary = _need_labels[need_id]
+		(labels["met"] as Label).text = "%d" % detail["households_met"]
+		(labels["unmet"] as Label).text = "%d" % detail["households_unmet"]
+		(labels["unmet_demand"] as Label).text = "%.1f" % detail["unmet"]
+
+func _on_need_row_selected(need_id: int) -> void:
+	_return_stack.clear()
 	_selected_business_id = -1
 	_business_detail_panel.visible = false
+	_selected_market_commodity = -1
+	_market_detail_panel.visible = false
 	_selected_household_id = -1
 	_household_detail_panel.visible = false
+	_clear_person_detail()
+	_selected_need_id = need_id
+	_need_detail_panel.visible = true
+	_refresh_need_detail()
+
+func _on_need_detail_close_pressed() -> void:
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
+	_return_to_previous_view()
+
+## Rebuilt every refresh, like the market detail. Reports households meeting
+## vs missing the need, the stress/emigration risk (food only -- the other
+## needs don't feed the lifecycle engine yet), and a chart of demand met per
+## satisfier against demand left unmet.
+func _refresh_need_detail() -> void:
+	if _selected_need_id == -1:
+		return
+	var detail := _simulation.get_need_detail(_selected_need_id, GameState.sparkline_days)
+	_need_detail_title.text = "%s need" % detail["label"]
+	for child in _need_detail_content.get_children():
+		_need_detail_content.remove_child(child)
+		child.queue_free()
+
+	var household_count: int = detail["households_met"] + detail["households_unmet"]
+	_add_need_detail_line("Households satisfying this need: %d of %d  |  unable to: %d" % [
+		detail["households_met"], household_count, detail["households_unmet"]])
+	if detail["drives_lifecycle"]:
+		_add_need_detail_line("Stress among unsatisfied households: %.2f (0-1)  |  with migration pressure: %d  |  at risk of emigrating: %d (%.0f%% of households)" % [
+			detail["avg_stress_unmet"], detail["households_with_migration_pressure"],
+			detail["households_emigration_candidates"], detail["emigration_likelihood"] * 100.0])
+	else:
+		_add_need_detail_line("Stress and emigration: only food shortfalls cause emigration. Unmet %s still builds stress, which lowers health and morale (see household and person pages)." % detail["label"].to_lower())
+
+	var required: float = detail["required"]
+	_add_need_detail_line("Demand today: %.2f need units" % required)
+	for name in detail["met_by"].keys():
+		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
+	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
+
+	var series: Array = []
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	_need_detail_content.add_child(header)
+	var title := Label.new()
+	title.text = "Demand met and unmet (last %d days)" % GameState.sparkline_days
+	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	header.add_child(title)
+	var index := 0
+	for name in detail["met_history"].keys():
+		series.append({"name": name, "values": detail["met_history"][name], "color": HESparkline.color_for_series(index)})
+		index += 1
+	series.append({"name": "Unmet", "values": detail["unmet_history"], "color": NEED_UNMET_COLOR})
+	for entry in series:
+		var legend := Label.new()
+		legend.text = entry["name"]
+		legend.add_theme_color_override("font_color", entry["color"])
+		header.add_child(legend)
+	var chart := HESparkline.new()
+	chart.custom_minimum_size = Vector2(0, 80)
+	chart.show_max_label = true
+	chart.set_series(series)
+	_need_detail_content.add_child(chart)
+
+## "Met by <good>: ..." with the good's name opening its market detail when it
+## has one.
+func _add_need_met_by_line(good_name: String, amount_text: String) -> void:
+	var commodity := Commodity.type_from_name(good_name)
+	if commodity == -1 or not _known_market_commodities.has(good_name):
+		_add_need_detail_line("   Met by %s: %s" % [good_name, amount_text])
+		return
+	var line := HBoxContainer.new()
+	var prefix := Label.new()
+	prefix.text = "   Met by"
+	line.add_child(prefix)
+	var link := Button.new()
+	link.text = good_name
+	link.flat = true
+	link.tooltip_text = "Open %s market" % good_name
+	link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = ": " + amount_text
+	line.add_child(rest)
+	_need_detail_content.add_child(line)
+
+func _percent_of(part: float, whole: float) -> String:
+	return "%.0f%%" % (part / whole * 100.0) if whole > 0.0 else "-"
+
+func _add_need_detail_line(value: String) -> void:
+	var label := Label.new()
+	label.text = value
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_need_detail_content.add_child(label)
+
+func _on_market_row_selected(commodity: int) -> void:
+	_return_stack.clear()
+	_selected_business_id = -1
+	_business_detail_panel.visible = false
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
+	_selected_household_id = -1
+	_household_detail_panel.visible = false
+	_clear_person_detail()
+	_selected_need_id = -1
+	_need_detail_panel.visible = false
 	_selected_market_commodity = commodity
 	_market_detail_panel.visible = true
 	_refresh_market_detail()
@@ -899,6 +1592,7 @@ func _on_market_row_selected(commodity: int) -> void:
 func _on_market_detail_close_pressed() -> void:
 	_selected_market_commodity = -1
 	_market_detail_panel.visible = false
+	_return_to_previous_view()
 
 func _refresh_market_detail() -> void:
 	if _selected_market_commodity == -1:
@@ -930,7 +1624,7 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	header.add_theme_constant_override("separation", 12)
 	_market_detail_content.add_child(header)
 	var title := Label.new()
-	title.text = "Supply and demand (last %d days)" % HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS
+	title.text = "Supply and demand (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
 	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
@@ -944,8 +1638,8 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.custom_minimum_size = Vector2(0, 60)
 	chart.show_max_label = true
 	chart.set_series([
-		{"name": "Supplied", "values": report["supplied_history"], "color": supplied_color},
-		{"name": "Requested", "values": requested_history, "color": requested_color},
+		{"name": "Supplied", "values": _tail(report["supplied_history"]), "color": supplied_color},
+		{"name": "Requested", "values": _tail(requested_history), "color": requested_color},
 	])
 	_market_detail_content.add_child(chart)
 
@@ -958,6 +1652,24 @@ func _add_market_detail_line(value: String) -> void:
 	label.text = value
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_market_detail_content.add_child(label)
+
+## A name that opens the business's detail pane when the row has a business_id,
+## otherwise plain text.
+func _add_market_owner_line(row: Dictionary, text_after_owner: String) -> void:
+	if not row.has("business_id"):
+		_add_market_detail_line("%s%s" % [row["owner"], text_after_owner])
+		return
+	var line := HBoxContainer.new()
+	var link := Button.new()
+	link.text = row["owner"]
+	link.flat = true
+	link.tooltip_text = "Open this business's detail"
+	link.pressed.connect(_on_linked_business_pressed.bind(row["business_id"]))
+	line.add_child(link)
+	var rest := Label.new()
+	rest.text = text_after_owner
+	line.add_child(rest)
+	_market_detail_content.add_child(line)
 
 func _add_market_detail_section(title: String, rows: Array, quantity_key: String, secondary_key: String) -> void:
 	var heading := Label.new()
@@ -974,18 +1686,17 @@ func _add_market_detail_section(title: String, rows: Array, quantity_key: String
 		if row.get("kind", "") == "household":
 			continue
 		if row.get("kind", "") == "export":
-			_add_market_detail_line("%s: up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
-				row["owner"], row["capacity"], row["available"]])
+			_add_market_owner_line(row, ": up to %.1f shared export capacity  |  %.1f exportable from this seller now" % [
+				row["capacity"], row["available"]])
 			continue
 		if row.get("kind", "") == "import":
-			_add_market_detail_line("%s: up to %.1f shared import capacity  |  no stored stock" % [
-				row["owner"], row["capacity"]])
+			_add_market_owner_line(row, ": up to %.1f shared import capacity  |  no stored stock" % row["capacity"])
 			continue
-		var line := "%s: %.1f %s" % [row["owner"], row[quantity_key], quantity_key]
+		var line := ": %.1f %s" % [row[quantity_key], quantity_key]
 		if secondary_key != "":
 			var secondary_label := "affordable" if secondary_key == "funded" else secondary_key
 			line += "  |  %.1f %s" % [row[secondary_key], secondary_label]
-		_add_market_detail_line(line)
+		_add_market_owner_line(row, line)
 
 ## One line standing in for every household row: count, average quantity, and
 ## (for buyers) average affordable plus how many can't afford their full request.
@@ -1039,7 +1750,7 @@ func _refresh_business_detail() -> void:
 	if not _trader_settings_button.visible:
 		_trader_settings_open = false
 	_update_trader_detail_page()
-	_business_detail_sparkline.set_data(report["balance_history"])
+	_business_detail_sparkline.set_data(_tail(report["balance_history"]))
 	_refresh_business_flow_chart(report)
 
 	for child in _business_detail_grid.get_children():
@@ -1134,7 +1845,7 @@ func _build_flow_chart(parent: Control) -> Dictionary:
 	header.add_theme_constant_override("separation", 12)
 	section.add_child(header)
 	var title_label := Label.new()
-	title_label.text = "Goods (last %d days)" % HEBusiness.BALANCE_HISTORY_WINDOW_DAYS
+	_goods_title_label = title_label
 	title_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title_label)
 	var tab_group := ButtonGroup.new()
@@ -1177,8 +1888,8 @@ func _refresh_business_flow_chart(report: Dictionary) -> void:
 			for detail_def in view.get("details", []):
 				for detail_entry in flow_history.get(detail_def[0], []):
 					if detail_entry["commodity"] == entry["commodity"]:
-						details.append({"name": detail_def[1], "values": detail_entry["values"]})
-			all_series.append({"name": series_name, "values": entry["values"], "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
+						details.append({"name": detail_def[1], "values": _tail(detail_entry["values"])})
+			all_series.append({"name": series_name, "values": _tail(entry["values"]), "color": HESparkline.color_for_series(all_series.size()), "dashed": series_def[2], "details": details})
 			_flow_series_names.append(series_name)
 
 	var hidden := _effective_hidden_flow_series()
@@ -1252,7 +1963,7 @@ func _add_detail_row(label_text: String, value) -> void:
 		for part in value:
 			# A third element marks text that names several goods inline
 			# (the Trader's "Export (...) / Import (...)" summary).
-			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1]))
+			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1], 0.0, true))
 		_business_detail_grid.add_child(box)
 		return
 	var value_label := Label.new()
@@ -1289,7 +2000,9 @@ func _plain_label(text: String) -> Label:
 	return label
 
 ## Icon (when the good is known and has one) + text label in one cell.
-func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -> HBoxContainer:
+## link_to_market makes the text a button opening that good's market detail
+## (only when the good actually has a market).
+func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, link_to_market: bool = false) -> HBoxContainer:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 5)
 	box.custom_minimum_size = Vector2(min_width, 0)
@@ -1303,10 +2016,22 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0) -
 		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		box.add_child(rect)
+	if link_to_market and commodity != -1 and _known_market_commodities.has(commodity_name):
+		var link := Button.new()
+		link.text = text
+		link.flat = true
+		link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		link.tooltip_text = "Open %s market" % commodity_name
+		link.pressed.connect(_on_linked_market_pressed.bind(commodity))
+		box.add_child(link)
+		return box
 	var label := Label.new()
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_market_pressed(commodity: int) -> void:
+	_open_linked(_on_market_row_selected.bind(commodity))
 
 func _refresh_trader_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
@@ -1409,7 +2134,13 @@ func _refresh_business_detail_employees() -> void:
 		if h["employer_business_id"] != _selected_business_id:
 			continue
 		employee_count += 1
-		_add_employee_cell(str(household_id))
+		var household_link := Button.new()
+		household_link.text = str(household_id)
+		household_link.flat = true
+		household_link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		household_link.tooltip_text = "Open household detail"
+		household_link.pressed.connect(_on_linked_household_pressed.bind(household_id))
+		_business_detail_employee_grid.add_child(household_link)
 		_add_employee_cell(str(h["worker_capacity"]))
 		_add_employee_cell(str(h["dependents"]))
 		_add_employee_cell("%.1f" % h["balance"])
@@ -1526,7 +2257,45 @@ func _rebuild_business_rows() -> void:
 			grid.add_child(label)
 			labels[key] = label
 		_business_rows[business_id] = labels
+
+	var create_button := MenuButton.new()
+	create_button.text = "Create business ▾"
+	create_button.flat = false
+	create_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	create_button.tooltip_text = "Build a new business in the town. Free and instant; each kind can only be built once."
+	var create_popup := create_button.get_popup()
+	for i in BUILDABLE_BUSINESSES.size():
+		var option: Dictionary = BUILDABLE_BUSINESSES[i]
+		var already_built := _simulation.has_business_of_type(_town_settlement_id(), option["type_key"])
+		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
+		create_popup.set_item_disabled(i, already_built)
+	create_popup.id_pressed.connect(_on_create_business_pressed)
+	_business_list.add_child(create_button)
 	_rebuild_job_rows()
+
+func _town_settlement_id() -> int:
+	return _simulation.get_settlement_ids()[0]
+
+func _on_create_business_pressed(index: int) -> void:
+	var option: Dictionary = BUILDABLE_BUSINESSES[index]
+	var settlement_id := _town_settlement_id()
+	if _simulation.has_business_of_type(settlement_id, option["type_key"]):
+		return
+	var business: HEBusiness
+	var id := _simulation.next_business_id()
+	match option["type_key"]:
+		"farm": business = HEScenarioSeeds.make_farm(id, settlement_id)
+		"woodlot": business = HEScenarioSeeds.make_woodlot(id, settlement_id)
+		"trader": business = HEScenarioSeeds.make_trader(id, settlement_id)
+		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
+		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
+		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
+		"bloomery": business = HEScenarioSeeds.make_bloomery(id, settlement_id)
+		"iron_mine": business = HEScenarioSeeds.make_iron_mine(id, settlement_id)
+	_simulation.add_new_business(business)
+	_business_names[business.id] = business.name
+	_rebuild_business_rows()
+	_refresh()
 
 ## One row per business (not per household): target capacity, max capacity and
 ## how many workers are employed. Filled in by _refresh_job_rows.
@@ -1648,8 +2417,11 @@ func _rebuild_household_rows() -> void:
 		id_label.pressed.connect(_on_household_row_selected.bind(household_id))
 		grid.add_child(id_label)
 
-		var employer_label := Label.new()
+		var employer_label := Button.new()
+		employer_label.flat = true
+		employer_label.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		employer_label.custom_minimum_size = Vector2(80, 0)
+		employer_label.pressed.connect(_on_household_employer_pressed.bind(household_id))
 		grid.add_child(employer_label)
 
 		var workers_label := Label.new()
@@ -1694,9 +2466,41 @@ func _rebuild_household_rows() -> void:
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
 
+## Top-line government treasury and its 30-day movement (tooltip).
+func _refresh_treasury() -> void:
+	var summary := _simulation.get_treasury_summary(TREASURY_TREND_DAYS)
+	_treasury_margin.visible = summary["has_government"]
+	if not summary["has_government"]:
+		_treasury_tip.visible = false
+		return
+	_treasury_label.text = "%.0f gold" % summary["treasury"]
+	var covered: int = summary["days_covered"]
+	var tip := "Government treasury"
+	if covered <= 0:
+		tip += "\nNo history yet."
+	else:
+		var change: float = summary["change"]
+		tip += "\n%+.1f gold over the last %d days" % [change, covered]
+		tip += "\n(%.1f -> %.1f)" % [summary["then"], summary["treasury"]]
+	_treasury_tip_label.text = tip
+	_treasury_tip.reset_size() # shrink back to fit when the text gets shorter
+
+func _on_treasury_hover(hovering: bool) -> void:
+	_treasury_tip.visible = hovering
+	if hovering:
+		_refresh_treasury()
+		_treasury_tip.global_position = _treasury_box.global_position + Vector2(0, _treasury_box.size.y + 6)
+
+func _on_household_employer_pressed(household_id: int) -> void:
+	var employer_id: int = _simulation.get_household_summary(household_id)["employer_business_id"]
+	if _business_names.has(employer_id):
+		_on_business_row_selected(employer_id)
+
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
+	_refresh_treasury()
+	_refresh_population_summary()
 
 	_refresh_town()
 
@@ -1713,9 +2517,28 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
-	_refresh_market_detail()
+	# The detail panels below are rebuilt from scratch, link buttons included. At
+	# high speed this runs nearly every frame, which would swap a button out
+	# between mouse-down and mouse-up and eat the click, so hold off while a
+	# mouse button is down; the next refresh catches up.
+	var mouse_down := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not mouse_down:
+		_refresh_market_detail()
+	_refresh_needs_tab()
+	if not mouse_down:
+		_refresh_need_detail()
 
-	for report in _simulation.get_business_reports():
+	# A business that failed (or was created) changes the set of rows and the
+	# Create business menu's "already built" state; rebuild rather than leave a
+	# frozen row for a business that no longer exists.
+	var reports := _simulation.get_business_reports()
+	var rows_stale := reports.size() != _business_rows.size()
+	for report in reports:
+		if not _business_rows.has(report["business_id"]):
+			rows_stale = true
+	if rows_stale:
+		_rebuild_business_rows()
+	for report in reports:
 		var row: Dictionary = _business_rows.get(report["business_id"], {})
 		if row.is_empty():
 			continue
@@ -1778,7 +2601,7 @@ func _refresh() -> void:
 
 	_refresh_job_rows()
 
-	if _selected_business_id != -1:
+	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
 
 	var current_ids := _simulation.get_household_ids()
@@ -1796,7 +2619,10 @@ func _refresh() -> void:
 		var h := _simulation.get_household_summary(household_id)
 		var row: Dictionary = _household_rows[household_id]
 		(row["id"] as Button).text = str(household_id)
-		(row["employer"] as Label).text = _business_names.get(h["employer_business_id"], "Unemployed")
+		var employer_button := row["employer"] as Button
+		employer_button.text = _business_names.get(h["employer_business_id"], "Unemployed")
+		employer_button.disabled = not _business_names.has(h["employer_business_id"])
+		employer_button.tooltip_text = "Open employer detail" if not employer_button.disabled else ""
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
 		if worker_ages.is_empty():
@@ -1826,13 +2652,15 @@ func _refresh() -> void:
 		(row["scarcity"] as Label).text = ("%.2f" % scarcity_total) if scarcity_total > 0.01 else ""
 		(row["unaffordable"] as Label).text = ("%.2f" % unaffordable_total) if unaffordable_total > 0.01 else ""
 
-	_refresh_household_detail()
+	if not mouse_down:
+		_refresh_household_detail()
+		_refresh_person_detail()
 	_refresh_blotter()
 
 ## Newest event first, since that's what a player checking in on the city
 ## cares about seeing without scrolling.
 func _refresh_blotter() -> void:
-	var events := _simulation.get_event_log_days(BLOTTER_HISTORY_DAYS)
+	var events := _simulation.get_event_log_days(GameState.blotter_days)
 	var lines: Array[String] = []
 	for i in range(events.size() - 1, -1, -1):
 		if not _blotter_filter_enabled.get(events[i]["type"], true):
@@ -1912,5 +2740,9 @@ func _format_event(event: Dictionary) -> String:
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
 			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]
+		"business_failed":
+			var failed_plural := "s" if event["households_laid_off"] != 1 else ""
+			return "[color=#e07070]%s - %s failed: credit limit reached, %.1f debt written off, %d household%s laid off[/color]" % [
+				day, event["name"], event["debt"], event["households_laid_off"], failed_plural]
 		_:
 			return "%s - %s" % [day, event["type"]]

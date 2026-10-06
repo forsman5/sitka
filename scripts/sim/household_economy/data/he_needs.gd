@@ -20,15 +20,18 @@ static func all() -> Array[HENeed]:
 			# Grain per person matches Simulation.GRAIN_PER_PERSON_PER_DAY.
 			# Food is the one need whose shortfall drives starvation.
 			# Meat packs twice grain's food into each unit, so it burns first.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.MEAT: 2.0, Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true),
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.MEAT: 2.0, Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true, 0.6,
+				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births."),
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the
 			# cheaper way to heat a house. Densest first: charcoal burns first.
-			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.CHARCOAL: 4.0, Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER),
+			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.CHARCOAL: 4.0, Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER, false, 0.25,
+				"Cold wears down health and morale. Reporting only: does not (yet) cause emigration."),
 			# Matches Simulation.WOOL_PER_PERSON_PER_DAY.
 			# Leather and wool are interchangeable one-for-one; households buy
-			# whichever posts the lower price (see _household_favourite).
-			HENeed.new(HENeed.Id.CLOTHING, "Clothing", 0.01, {Commodity.Type.LEATHER: 1.0, Commodity.Type.WOOL: 1.0}, Commodity.Type.WOOL),
+			# whichever posts the lower price (see _satisfier_cascade).
+			HENeed.new(HENeed.Id.CLOTHING, "Clothing", 0.01, {Commodity.Type.LEATHER: 1.0, Commodity.Type.WOOL: 1.0}, Commodity.Type.WOOL, false, 0.15,
+				"Threadbare clothes slowly wear down health and morale. Reporting only: does not (yet) cause emigration."),
 		]
 	return _all
 
