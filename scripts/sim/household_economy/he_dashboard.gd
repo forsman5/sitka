@@ -1602,6 +1602,19 @@ func _refresh_market_detail() -> void:
 	var household: Dictionary = report["household_demand"]
 	_add_market_detail_line("Households: %.1f wanted for stock  |  %.1f affordable  |  %.1f bought" % [
 		household["wanted"], household["funded"], household["bought"]])
+	var price_signal: Dictionary = report["price_signal"]
+	if not price_signal.is_empty():
+		var imbalance := "funded shortage %.1f" % price_signal["shortage"] if price_signal["shortage"] > 0.0001 \
+			else "unsold offer %.1f" % price_signal["unsold"]
+		_add_market_detail_line("Price %.2f -> %.2f (%s)  |  %s  |  households wanted but could not fund %.1f%s" % [
+			price_signal["opening_price"], price_signal["closing_price"], price_signal["reason"],
+			imbalance, price_signal["unfunded_household"],
+			"  |  at price %s" % price_signal["bound"] if price_signal["bound"] != "" else ""])
+	var seller: Dictionary = report["seller"]
+	if not seller.is_empty():
+		_add_market_detail_line("%s: %.1f in warehouse, %.1f offered today%s" % [
+			seller["name"], seller["stock"], seller["paced_offer"],
+			" (sales paced; harvest in %d days)" % seller["days_until_harvest"] if seller["paced"] else ""])
 	var need: Dictionary = report["need"]
 	if not need.is_empty() and not (need["required_history"] as Array).is_empty():
 		_add_market_detail_line("%s need (all %s, counted once): %.1f required, %.1f provided (latest day)" % [

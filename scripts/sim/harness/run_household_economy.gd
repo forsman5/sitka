@@ -31,6 +31,7 @@ func _init() -> void:
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
 	_check_need_vs_funded_demand()
+	_check_price_signal()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -635,6 +636,99 @@ func _check_need_vs_funded_demand() -> void:
 	var record: Dictionary = run.get_daily_history(1)[0]
 	_assert(absf(timber_need["required_history"].back() - record["needs"][timber_need["id"]]["required"]) < EPSILON, "Need history's last point is the latest day's requirement")
 	print("  histories align over %d days; heat need reported once for timber and charcoal" % plain.size())
+
+## One controlled grain market day: every household has this balance and no
+## stock, the grain seller holds exactly this much, then clear and price.
+func _run_grain_day(sim: HESimulation, settlement_id: int, balance: float, seller_stock: float) -> void:
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		h.inventory.clear()
+		h.balance = balance
+	var seller := sim._business_selling(settlement_id, Commodity.Type.GRAIN)
+	seller.inventory.clear()
+	seller.add_stock(Commodity.Type.GRAIN, seller_stock)
+	sim._run_market(sim._new_daily_record())
+	sim._apply_price_signals()
+
+## One price move per good per day: funded shortage up, unsold offer down,
+## need without purchasing power neither, exports outside the signal.
+func _check_price_signal() -> void:
+	print("\n=== Price signal: funded shortage up, unsold down, unfunded need neutral ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"funded shortage": {"balance": 1000.0, "seller_stock": 10.0},
+		"unsold offer": {"balance": 1000.0, "seller_stock": 100000.0},
+		"unfunded households": {"balance": 0.0, "seller_stock": 1000.0},
+		"no supply, no cash": {"balance": 0.0, "seller_stock": 0.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		var market: HEMarket = sim.markets[settlement_id]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var opening: float = market.price[grain]
+		sim._run_market(sim._new_daily_record())
+		_assert(market.price[grain] == opening, "%s: price must not move during clearing" % label)
+		sim._apply_price_signals()
+		var closing: float = market.price[grain]
+		var s: Dictionary = market.last_price_signal.get(grain, {})
+		_assert(not s.is_empty() and s["opening_price"] == opening and s["closing_price"] == closing, "%s: signal records opening and closing price" % label)
+		print("  %-20s %.3f -> %.3f  %s (shortage %.1f, unsold %.1f, unfunded household %.1f)" % [label, opening, closing, s.get("reason", "?"), s.get("shortage", 0.0), s.get("unsold", 0.0), s.get("unfunded_household", 0.0)])
+		_assert(absf(closing / opening - 1.0) <= HESimulation.PRICE_ADJUST_STEP + 0.00001, "%s: one day's move is capped" % label)
+		match label:
+			"funded shortage":
+				_assert(closing > opening and s["shortage"] > 1.0 and s["reason"] == "funded shortage", "A funded shortage should raise the price")
+			"unsold offer":
+				_assert(closing < opening and s["unsold"] > 1.0 and s["reason"] == "unsold offer", "Unsold offer should lower the price")
+			"unfunded households":
+				_assert(closing < opening and s["unfunded_household"] > 1.0 and s["shortage"] < EPSILON, "Households that want but cannot pay leave offer unsold: price falls, never rises")
+			"no supply, no cash":
+				_assert(closing == opening and s["reason"] == "no activity", "Need without purchasing power or supply should not move the price")
+
+	# Smoothing: a persistent shortage keeps raising the price, but a single
+	# shortage day in the middle of a glut trend does not reverse it.
+	var persistent := _new_sim("build_three_business_economy")
+	var p_settlement: int = persistent.get_settlement_ids()[0]
+	var p_market: HEMarket = persistent.markets[p_settlement]
+	var start: float = p_market.price[grain]
+	for d in 3:
+		_run_grain_day(persistent, p_settlement, 1000.0, 10.0)
+	var after_three: float = p_market.price[grain]
+	_assert(after_three > start, "A persistent funded shortage keeps raising the price")
+	var trend := _new_sim("build_three_business_economy")
+	var t_settlement: int = trend.get_settlement_ids()[0]
+	for d in 5:
+		_run_grain_day(trend, t_settlement, 1000.0, 100000.0)
+	var before_blip: float = trend.markets[t_settlement].price[grain]
+	_run_grain_day(trend, t_settlement, 1000.0, 10.0)
+	_assert(trend.markets[t_settlement].price[grain] < before_blip, "One shortage day should not reverse a falling trend")
+
+	# Exports are not local demand: iron (only the Trader buys it) has no
+	# signal and keeps its posted price while exporting.
+	var iron_sim := _new_sim("build_three_business_economy_with_bloomery")
+	iron_sim.advance_ticks(60)
+	var iron_market: HEMarket = iron_sim.markets[iron_sim.get_settlement_ids()[0]]
+	_assert(iron_market.price[Commodity.Type.IRON] == HESimulation.BASE_PRICE[Commodity.Type.IRON], "Export appetite must not move iron's local price")
+
+	# Price bounds: a long glut hits the floor and the day count is recorded.
+	var glut := _new_sim("build_three_business_economy")
+	var g_settlement: int = glut.get_settlement_ids()[0]
+	for d in 120:
+		for household_id in glut.get_household_ids():
+			glut.households[household_id].balance = 0.0
+		glut._business_selling(g_settlement, grain).add_stock(grain, 100000.0)
+		glut._run_market(glut._new_daily_record())
+		glut._apply_price_signals()
+	_assert(glut.markets[g_settlement].floor_days.get(grain, 0) > 0, "A persistent glut should record days at the price floor")
+	print("  persistent shortage 3 days: %.3f -> %.3f; glut floor days: %d" % [start, after_three, glut.markets[g_settlement].floor_days.get(grain, 0)])
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader

@@ -67,7 +67,21 @@ var _household_wanted_history: Dictionary[Commodity.Type, Array] = {}
 var _household_funded_history: Dictionary[Commodity.Type, Array] = {}
 var _household_bought_history: Dictionary[Commodity.Type, Array] = {}
 
+## Why today's price moved (or didn't), per commodity: {opening_price,
+## closing_price, offer, funded_household, funded_business, shortage, unsold,
+## wanted_household, unfunded_household, pressure, reason, bound}. Cleared
+## daily; a good with no local clearing today has no entry.
+var last_price_signal: Dictionary[Commodity.Type, Dictionary] = {}
+## Smoothed signed pressure (+ shortage, - unsold) carried between days so one
+## quiet or lumpy day does not reverse a trend.
+var price_pressure: Dictionary[Commodity.Type, float] = {}
+## Lifetime days each commodity's price ended the day pinned at its floor or
+## ceiling, so a persistent mismatch the bounds are hiding shows up in tuning.
+var floor_days: Dictionary[Commodity.Type, int] = {}
+var ceiling_days: Dictionary[Commodity.Type, int] = {}
+
 func clear_daily_export() -> void:
+	last_price_signal.clear()
 	_export_appetite.clear()
 	_export_in_clearing.clear()
 	_household_demand.clear()
