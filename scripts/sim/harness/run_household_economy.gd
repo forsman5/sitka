@@ -104,6 +104,25 @@ func _check_business_fails_at_credit_limit() -> void:
 			_assert(recreate._business_employed_worker_count(new_id) > 0, "A recreated %s should be staffed" % kind)
 		print("  recreated %s: alive=%s employed=%d" % [kind, recreate.businesses.has(new_id), recreate._business_employed_worker_count(new_id) if recreate.businesses.has(new_id) else 0])
 
+	# No zombies: the tuner never cuts a surviving business to zero (it keeps
+	# its last worker until credit runs out), including the recreate-after-
+	# closure case that used to strand a Woodlot at 0 forever.
+	for builder in ["build_three_business_economy", "build_lopsided_start"]:
+		var zombie := _new_sim(builder)
+		zombie.advance_ticks(20)
+		zombie.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].balance = -1000000.0
+		zombie.advance_ticks(1)
+		var again: HEBusiness = HEScenarioSeeds.make_woodlot(zombie.next_business_id(), HEScenarioSeeds.SETTLEMENT_ID)
+		zombie.add_new_business(again)
+		var zero_days := 0
+		for d in 700:
+			zombie.advance_ticks(1)
+			for id in zombie.businesses.keys():
+				var zb: HEBusiness = zombie.businesses[id]
+				if zb.kind != HEBusiness.Kind.GOVERNMENT and zb.max_capacity > 0 and zb.capacity < 1:
+					zero_days += 1
+		_assert(zero_days == 0, "%s: a surviving business sat at zero capacity on %d business-days" % [builder, zero_days])
+
 	# Zero workers alone never kills a business or brings staff back.
 	var idle := _new_sim("build_three_business_economy")
 	var idle_trader: HEBusiness = idle.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]

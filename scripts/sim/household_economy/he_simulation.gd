@@ -598,11 +598,16 @@ func add_business(b: HEBusiness) -> void:
 ## (it shows up in next day's opening money), and should be paid for by the
 ## player or the treasury.
 func add_new_business(b: HEBusiness) -> void:
-	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, b.min_capacity, b.max_capacity)
+	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
 	b.capacity = crew
 	b.balance += HEScenarioSeeds.startup_cash(b, crew)
 	b.startup_grace_until_day = day + (b.growth_days if b.growth_days > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
+
+## Lowest crew the tuner may set: one worker (or the business's own
+## min_capacity if higher), unless max_capacity itself is 0.
+func _capacity_floor(b: HEBusiness) -> int:
+	return mini(maxi(b.min_capacity, 1), b.max_capacity)
 
 func next_business_id() -> int:
 	var next_id := 1
@@ -1974,12 +1979,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# Staffed by the seed / _ensure_administrator, not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
-		if b.capacity == 0:
-			# Zero workers is allowed and stable: the business just sits idle
-			# until it is recreated or fails on its credit limit. It is no longer
-			# given a trial crew -- a failing business should be visibly failing
-			# (see _fail_business), not quietly resurrected.
-			continue
+		# A business is never tuned down to zero: it keeps its last worker and
+		# can only go away by exhausting its credit (see _fail_business), so
+		# there is no idle zombie and no trial rehire to bring one back.
+		b.capacity = maxi(b.capacity, _capacity_floor(b))
 		if day < b.startup_grace_until_day:
 			continue
 		if (day + 1) % _capacity_eval_interval_days(b) != 0:
@@ -2013,7 +2016,7 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 				change_reason = "cash_runway"
 		if delta != 0:
 			var old_capacity := b.capacity
-			b.capacity = clampi(b.capacity + delta, b.min_capacity, b.max_capacity)
+			b.capacity = clampi(b.capacity + delta, _capacity_floor(b), b.max_capacity)
 			if b.capacity != old_capacity:
 				record["capacity_changes"][business_id] = {
 					"reason": change_reason,
@@ -2107,7 +2110,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		employed_ids.sort()
 		var employed_workers := _business_employed_worker_count(business_id)
 		var i := employed_ids.size() - 1
-		while employed_workers > b.capacity and i >= 0:
+		# i >= 1: never lay off the last household, whatever its size.
+		while employed_workers > b.capacity and i >= 1:
 			var household_id: int = employed_ids[i]
 			var h: HEHousehold = households[household_id]
 			employed_workers -= h.worker_capacity()
