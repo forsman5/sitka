@@ -100,6 +100,10 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## can still win on price rather than tie and go unbought.
 	Commodity.Type.MEAT: 1.6,
 	Commodity.Type.LEATHER: 1.6,
+	## Matches Simulation.BASE_PRICE[TOOLS]. A small, durable purchase: at the
+	## pooled model's 0.005 per person per day, a household spends well under a
+	## tenth of what it spends on food.
+	Commodity.Type.TOOLS: 6.0,
 }
 const PRICE_ADJUST_STEP := 0.05
 const PRICE_MULTIPLIER_MIN := 0.25
@@ -125,7 +129,7 @@ const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodit
 ## good gets first use of shared Trader capacity. Ore, meat and leather start
 ## disabled: the Butcher's output is for the settlement's own households, and
 ## a Trader dumping it at half price would only undercut them.
-const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER, Commodity.Type.IRON_ORE]
+const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER, Commodity.Type.TOOLS, Commodity.Type.IRON_ORE]
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -1630,6 +1634,13 @@ func _record_business_revenue_history() -> void:
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
 
+## Whether `need` is part of this settlement's economy at all: always, unless
+## the need can only be met by a dedicated business (HENeed.needs_seller) and
+## the settlement has none. Judged by the business existing, not by today's
+## stock, so a Toolsmith's momentary sell-out doesn't flip the cost of living.
+func _need_served(settlement_id: int, need: HENeed) -> bool:
+	return not need.needs_seller or _business_selling(settlement_id, need.baseline) != null
+
 ## What `_clear_market_for` puts on offer to households today: the local
 ## seller's stock, paced over its harvest cycle if it has one. Zero when
 ## nothing local sells `commodity`.
@@ -1747,7 +1758,7 @@ func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity
 ## instead of the household going without when the cheaper good runs short.
 func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	if need == null:
+	if need == null or not _need_served(h.settlement_id, need):
 		return 0.0
 	if need.unit_values.size() > 1:
 		# Households clear a need's satisfiers in cascade order (cheapest posted
@@ -1857,7 +1868,7 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	h.last_need_provided[need.id] = provided
 
 	var shortfall_units := (needed - provided) / need.value_of(need.baseline)
-	if shortfall_units > 0.0001:
+	if shortfall_units > 0.0001 and _need_served(h.settlement_id, need):
 		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
 
 	var need_record: Dictionary = record["needs"].get_or_add(need.id, {
@@ -3483,6 +3494,8 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	var dependency_ratio := float(total_population) / float(total_workers)
 	var per_person_cost := 0.0
 	for need in HENeeds.all():
+		if not _need_served(settlement_id, need):
+			continue
 		var cheapest_unit_cost := INF
 		for c in _household_cascade(settlement_id, need):
 			cheapest_unit_cost = minf(cheapest_unit_cost, _average_price_history(settlement_id, c) / need.value_of(c))
