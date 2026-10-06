@@ -29,6 +29,8 @@ const BUILDABLE_BUSINESSES := [
 	{"label": "Cattle Ranch", "type_key": "cattle_ranch"},
 	{"label": "Sheep Farm", "type_key": "sheep_farm"},
 	{"label": "Butcher", "type_key": "butcher"},
+	{"label": "Bloomery", "type_key": "bloomery"},
+	{"label": "Iron Mine", "type_key": "iron_mine"},
 ]
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
@@ -1975,6 +1977,8 @@ func _on_create_business_pressed(index: int) -> void:
 		"cattle_ranch": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.CATTLE)
 		"sheep_farm": business = HEScenarioSeeds.make_herd(id, settlement_id, HEBusiness.Species.SHEEP)
 		"butcher": business = HEScenarioSeeds.make_butcher(id, settlement_id)
+		"bloomery": business = HEScenarioSeeds.make_bloomery(id, settlement_id)
+		"iron_mine": business = HEScenarioSeeds.make_iron_mine(id, settlement_id)
 	_simulation.add_new_business(business)
 	_business_names[business.id] = business.name
 	_rebuild_business_rows()

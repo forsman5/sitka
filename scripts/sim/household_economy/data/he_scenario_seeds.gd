@@ -200,6 +200,18 @@ static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
 	butcher.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 	return butcher
 
+static func make_bloomery(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var bloomery := HEBusiness.new(business_id, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	bloomery.type_key = "bloomery"
+	# Its timber input is the furnace's heat, which any heat fuel can supply.
+	bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
+	return bloomery
+
+static func make_iron_mine(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var iron_mine := HEBusiness.new(business_id, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	iron_mine.type_key = "iron_mine"
+	return iron_mine
+
 static func _woodlot_recipe() -> Recipe:
 	return Recipe.new("woodlot", {}, {Commodity.Type.TIMBER: 1.0})
 
@@ -355,16 +367,14 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
-		bloomery = HEBusiness.new(BLOOMERY_BUSINESS_ID, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, bloomery_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		bloomery = make_bloomery(BLOOMERY_BUSINESS_ID, SETTLEMENT_ID, bloomery_capacity)
 		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
-		# Its timber input is the furnace's heat, which any heat fuel can supply.
-		bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
 
 	var iron_mine: HEBusiness = null
 	if iron_mine_capacity > 0:
-		iron_mine = HEBusiness.new(IRON_MINE_BUSINESS_ID, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, iron_mine_capacity, HEBusiness.Kind.PRODUCTION, SETTLEMENT_ID)
+		iron_mine = make_iron_mine(IRON_MINE_BUSINESS_ID, SETTLEMENT_ID, iron_mine_capacity)
 		iron_mine.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * iron_mine_capacity
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
