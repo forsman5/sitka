@@ -121,6 +121,9 @@ var _treasury_margin: Control
 var _population_label: Label
 var _avg_health_label: Label
 var _avg_morale_label: Label
+var _population_box: HBoxContainer
+var _population_tip: PanelContainer
+var _population_tip_label: Label
 var _treasury_box: HBoxContainer
 var _treasury_label: Label
 var _treasury_tip: PanelContainer
@@ -783,7 +786,22 @@ func _build_population_summary() -> Control:
 	margin.add_theme_constant_override("margin_left", 16)
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
+	box.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.mouse_entered.connect(_on_population_hover.bind(true))
+	box.mouse_exited.connect(_on_population_hover.bind(false))
 	margin.add_child(box)
+	_population_box = box
+
+	# Same live-refreshing popup approach as the treasury tip: a built-in
+	# tooltip would freeze its text while hovered.
+	_population_tip = PanelContainer.new()
+	_population_tip.top_level = true
+	_population_tip.visible = false
+	_population_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip_label = Label.new()
+	_population_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_population_tip.add_child(_population_tip_label)
+	add_child(_population_tip)
 
 	var icon := TextureRect.new()
 	icon.texture = _person_icon()
@@ -791,11 +809,9 @@ func _build_population_summary() -> Control:
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.custom_minimum_size = Vector2(24, 24)
 	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	icon.tooltip_text = "Population"
 	box.add_child(icon)
 	_population_label = Label.new()
 	_population_label.add_theme_font_size_override("font_size", 22)
-	_population_label.tooltip_text = "Total people in town"
 	box.add_child(_population_label)
 
 	var health_caption := Label.new()
@@ -807,7 +823,6 @@ func _build_population_summary() -> Control:
 	box.add_child(health_margin)
 	_avg_health_label = Label.new()
 	_avg_health_label.add_theme_font_size_override("font_size", 22)
-	_avg_health_label.tooltip_text = "Average health per person"
 	box.add_child(_avg_health_label)
 
 	var morale_caption := Label.new()
@@ -819,7 +834,6 @@ func _build_population_summary() -> Control:
 	box.add_child(morale_margin)
 	_avg_morale_label = Label.new()
 	_avg_morale_label.add_theme_font_size_override("font_size", 22)
-	_avg_morale_label.tooltip_text = "Average morale per person"
 	box.add_child(_avg_morale_label)
 	return margin
 
@@ -846,6 +860,27 @@ func _refresh_population_summary() -> void:
 	_avg_health_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_health"]))
 	_avg_morale_label.text = "%.0f%%" % (w["avg_morale"] * 100.0)
 	_avg_morale_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_morale"]))
+	var tip := "%d people. Averages are per person." % w["population"]
+	tip += _factor_tip_section("Health", w["avg_health"], w["health_factors"], w["population"])
+	tip += _factor_tip_section("Morale", w["avg_morale"], w["morale_factors"], w["population"])
+	_population_tip_label.text = tip
+	_population_tip.reset_size()
+
+## "\nHealth 82%\n  Food shortfall: -10 pts (affects 40 of 120 people)" -- or a
+## note that nothing is dragging it down.
+func _factor_tip_section(caption: String, average: float, factors: Array, population: int) -> String:
+	var text := "\n\n%s %.0f%%" % [caption, average * 100.0]
+	if factors.is_empty():
+		return text + "\n  Nothing is lowering it."
+	for factor in factors:
+		text += "\n  %s: -%.1f pts (affects %d of %d people)" % [factor["label"], factor["avg_loss"] * 100.0, factor["people"], population]
+	return text
+
+func _on_population_hover(hovering: bool) -> void:
+	_population_tip.visible = hovering
+	if hovering:
+		_refresh_population_summary()
+		_population_tip.global_position = _population_box.global_position + Vector2(0, _population_box.size.y + 6)
 
 ## Town tab (index 0): the city-wide indicators on the left, and two charts on
 ## the right -- population levels, and births/emigrations/deaths.
