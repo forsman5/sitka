@@ -210,6 +210,13 @@ var last_wage_shortfall: float = 0.0
 ## HESimulation.add_new_business.
 var startup_grace_until_day: int = -1
 
+## Days until this business's inputs or sales reach a steady flow, for a
+## business with no growth cycle of its own: a charcoal burner is idle-poor
+## until the Woodlot's next harvest supplies cheap timber. Startup cash and the
+## startup grace period cover this long instead of the generic runway; 0 =
+## derive from growth_days. See HEScenarioSeeds.startup_cash.
+var startup_cycle_days: int = 0
+
 ## Rolling daily balance, oldest first, capped at BALANCE_HISTORY_WINDOW_
 ## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
 ## below), read by nothing that affects simulation outcomes.

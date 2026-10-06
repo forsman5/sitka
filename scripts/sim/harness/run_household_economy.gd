@@ -25,6 +25,7 @@ func _init() -> void:
 	_check_conservation()
 	_check_bloomery_smelting()
 	_check_charcoal_burner_heats_households()
+	_check_every_business_kind_is_buildable()
 	_check_businesses_share_wood_with_households()
 	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
@@ -461,6 +462,50 @@ func _check_charcoal_burner_heats_households() -> void:
 			household_charcoal += _household_satisfier_used(fresh.get_household_summary(household_id), "Heat", "Charcoal")
 	print("  charcoal burned by households over the first 60 days: %.2f" % household_charcoal)
 	_assert(household_charcoal > 0.0, "Households should be heating with charcoal once the burner is selling")
+
+## Every kind of business the sim can seed must be registered in
+## HEScenarioSeeds.business_types() -- the one list the dashboard's Create menu
+## and the setup page are built from -- so a new business kind cannot be added
+## to the world but silently left out of either. Also builds each registered
+## kind mid-run, the way the Create menu does, to prove its factory works.
+func _check_every_business_kind_is_buildable() -> void:
+	print("\n=== Every business kind is in the Create menu / setup registry ===")
+	var types := HEScenarioSeeds.business_types()
+	var ids: Array = []
+	var type_keys := {}
+	for entry in types:
+		ids.append(entry["id"])
+		_assert(not type_keys.has(entry["type_key"]), "Duplicate business type_key '%s' in the registry" % entry["type_key"])
+		type_keys[entry["type_key"]] = entry["id"]
+
+	# A world seeded with every registered kind: whatever it contains beyond
+	# the Government must be in the registry, under the id it was seeded with.
+	var full := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind(ids), true)
+	var unregistered: Array[String] = []
+	for business_id in full.businesses.keys():
+		var b: HEBusiness = full.businesses[business_id]
+		if b.kind == HEBusiness.Kind.GOVERNMENT:
+			continue
+		if not type_keys.has(b.type_key) or type_keys[b.type_key] != business_id:
+			unregistered.append("%s (id %d, type_key '%s')" % [b.name, business_id, b.type_key])
+	_assert(unregistered.is_empty(), "Seeded businesses missing from HEScenarioSeeds.business_types(): %s" % ", ".join(unregistered))
+	_assert(full.businesses.size() - 1 == types.size(), "Seeding every registered kind should create exactly one business each (plus the Government)")
+
+	# Each kind, built mid-run into a town that has none of the optional ones.
+	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind([HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID]), true)
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var created := 0
+	for entry in types:
+		if sim.has_business_of_type(settlement_id, entry["type_key"]):
+			continue
+		var business: HEBusiness = entry["make"].call(sim.next_business_id(), settlement_id)
+		_assert(business != null and business.type_key == entry["type_key"], "%s's factory should build a business carrying its own type_key" % entry["label"])
+		sim.add_new_business(business)
+		_assert(sim.has_business_of_type(settlement_id, entry["type_key"]), "%s should exist after being created" % entry["label"])
+		created += 1
+	sim.advance_ticks(60)
+	print("  %d kinds registered; %d built mid-run and the sim ran 60 days" % [types.size(), created])
+	_assert(created == types.size() - 2, "Every kind except the seeded Farm and Woodlot should have been creatable")
 
 ## How much of `satisfier` a household spent today on the need labelled
 ## `need_label`, read from the summary's per-need list.

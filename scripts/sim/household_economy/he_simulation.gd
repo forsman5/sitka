@@ -605,7 +605,8 @@ func add_new_business(b: HEBusiness) -> void:
 	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
 	b.capacity = crew
 	b.balance += HEScenarioSeeds.startup_cash(b, crew)
-	b.startup_grace_until_day = day + (b.growth_days if b.growth_days > 0 else int(CASH_RUNWAY_DANGER_DAYS))
+	var startup_cycle := maxi(b.growth_days, b.startup_cycle_days)
+	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
 
 ## Lowest crew the tuner may set: one worker (or the business's own
