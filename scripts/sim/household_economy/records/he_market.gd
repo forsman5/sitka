@@ -39,7 +39,7 @@ func merge_clearing(commodity: Commodity.Type, offered: float, requested_funded:
 ## "demanded" is total_requested_funded (the affordable request) from
 ## last_clearing; a day with no clearing records 0 for both so the chart's
 ## x-axis stays one point per day.
-const SUPPLY_DEMAND_HISTORY_WINDOW_DAYS := 90
+const SUPPLY_DEMAND_HISTORY_WINDOW_DAYS := 730
 var _supplied_history: Dictionary[Commodity.Type, Array] = {}
 var _demanded_history: Dictionary[Commodity.Type, Array] = {}
 

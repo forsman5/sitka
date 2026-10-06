@@ -6,15 +6,19 @@ const SHORE_REACH := 14.0
 @export var speed: float = 4.0
 
 var _dock: Node3D = null
-var _cow_scene: PackedScene = null
+var _item_scene: PackedScene = null
+var _item_label: String = "Cow"
+var _item_group: String = "cows"
 var _return_pos: Vector3 = Vector3.INF
 
 enum State { TO_DOCK, TO_TRADE_POINT }
 var _state := State.TO_DOCK
 
-func setup(dock: Node3D, cow_scene: PackedScene, return_pos: Vector3) -> void:
+func setup(dock: Node3D, item_scene: PackedScene, return_pos: Vector3, item_label: String = "Cow", item_group: String = "cows") -> void:
 	_dock = dock
-	_cow_scene = cow_scene
+	_item_scene = item_scene
+	_item_label = item_label
+	_item_group = item_group
 	_return_pos = Vector3(return_pos.x, 0.05, return_pos.z)
 
 func _process(delta: float) -> void:
@@ -43,25 +47,25 @@ func _process(delta: float) -> void:
 
 func _on_arrived() -> void:
 	if _state == State.TO_DOCK:
-		_deliver_cow()
+		_deliver_item()
 		_state = State.TO_TRADE_POINT
 	else:
 		queue_free()
 
-func _deliver_cow() -> void:
-	if _cow_scene == null:
+func _deliver_item() -> void:
+	if _item_scene == null:
 		return
 	var island := _find_island()
 	if island == null:
 		return
-	var cow := _cow_scene.instantiate()
-	cow.name = "Cow%d" % (get_tree().get_nodes_in_group("cows").size() + 1)
-	island.add_child(cow)
+	var item := _item_scene.instantiate()
+	item.name = "%s%d" % [_item_label, get_tree().get_nodes_in_group(_item_group).size() + 1]
+	island.add_child(item)
 	var spawn_pos := Vector3.ZERO
 	if is_instance_valid(_dock):
 		spawn_pos = _dock.global_position + Vector3(randf_range(-2.0, 2.0), 0.0, randf_range(-2.0, 2.0))
 		_dock.delivery_in_progress = false
-	cow.global_position = spawn_pos
+	item.global_position = spawn_pos
 
 func _find_island() -> Node:
 	var n := get_parent()

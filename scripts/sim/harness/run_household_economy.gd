@@ -49,12 +49,91 @@ func _init() -> void:
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_government_taxes()
+	_check_business_fails_at_credit_limit()
+	_check_person_health_and_morale()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
 	else:
 		print("\nH1 acceptance: FAIL")
 	quit(0 if _ok else 1)
+
+## A business past its credit line is deleted (debt written off, staff laid
+## off, no revival); one at zero workers is NOT, and stays at zero.
+func _check_business_fails_at_credit_limit() -> void:
+	print("\n=== Business failure: credit limit exhausted -> deleted, debt written off ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.advance_ticks(5)
+	var woodlot_id := HEScenarioSeeds.WOODLOT_BUSINESS_ID
+	var woodlot: HEBusiness = sim.businesses[woodlot_id]
+	var employed := 0
+	for h in sim.households.values():
+		if (h as HEHousehold).employer_business_id == woodlot_id:
+			employed += 1
+	_assert(employed > 0, "Woodlot should have staff before failing")
+	woodlot.balance = -1000000.0
+	var debt := woodlot.balance
+	sim.advance_ticks(1)
+	_assert(not sim.businesses.has(woodlot_id), "A business past its credit limit should be deleted")
+	_assert(not (sim.settlements[HEScenarioSeeds.SETTLEMENT_ID] as HESettlement).business_ids.has(woodlot_id), "Failed business should leave its settlement")
+	for h in sim.households.values():
+		_assert((h as HEHousehold).employer_business_id != woodlot_id, "No household should keep a deleted employer")
+	var record: Dictionary = sim.get_daily_history(1)[0]
+	_assert(absf(float(record["money_written_off"]) - debt) < EPSILON, "The debt should be written off (got %.1f)" % float(record["money_written_off"]))
+	var expected: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+	_assert(absf(record["closing_money"] - expected) < EPSILON, "Money should still reconcile through a business failure")
+	var failed_events := 0
+	for event in sim.get_event_log_days(1):
+		if event["type"] == "business_failed" and event["business_id"] == woodlot_id:
+			failed_events += 1
+	_assert(failed_events == 1, "A business failure should be logged exactly once")
+
+	# A business recreated after closing gets a startup allowance (crew, cash,
+	# grace) and must make it through its first harvest and keep staff.
+	for kind in ["farm", "woodlot"]:
+		var recreate := _new_sim("build_three_business_economy")
+		recreate.advance_ticks(30)
+		var old_id: int = HEScenarioSeeds.FARM_BUSINESS_ID if kind == "farm" else HEScenarioSeeds.WOODLOT_BUSINESS_ID
+		(recreate.businesses[old_id] as HEBusiness).balance = -1000000.0
+		recreate.advance_ticks(1)
+		_assert(not recreate.businesses.has(old_id), "%s should have closed" % kind)
+		var new_id := recreate.next_business_id()
+		var fresh: HEBusiness = HEScenarioSeeds.make_farm(new_id, HEScenarioSeeds.SETTLEMENT_ID) if kind == "farm" else HEScenarioSeeds.make_woodlot(new_id, HEScenarioSeeds.SETTLEMENT_ID)
+		recreate.add_new_business(fresh)
+		recreate.advance_ticks(fresh.growth_days + 150)
+		_assert(recreate.businesses.has(new_id), "A recreated %s should survive to and past its first harvest" % kind)
+		if recreate.businesses.has(new_id):
+			_assert(recreate._business_employed_worker_count(new_id) > 0, "A recreated %s should be staffed" % kind)
+		print("  recreated %s: alive=%s employed=%d" % [kind, recreate.businesses.has(new_id), recreate._business_employed_worker_count(new_id) if recreate.businesses.has(new_id) else 0])
+
+	# No zombies: the tuner never cuts a surviving business to zero (it keeps
+	# its last worker until credit runs out), including the recreate-after-
+	# closure case that used to strand a Woodlot at 0 forever.
+	for builder in ["build_three_business_economy", "build_lopsided_start"]:
+		var zombie := _new_sim(builder)
+		zombie.advance_ticks(20)
+		zombie.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].balance = -1000000.0
+		zombie.advance_ticks(1)
+		var again: HEBusiness = HEScenarioSeeds.make_woodlot(zombie.next_business_id(), HEScenarioSeeds.SETTLEMENT_ID)
+		zombie.add_new_business(again)
+		var zero_days := 0
+		for d in 700:
+			zombie.advance_ticks(1)
+			for id in zombie.businesses.keys():
+				var zb: HEBusiness = zombie.businesses[id]
+				if zb.kind != HEBusiness.Kind.GOVERNMENT and zb.max_capacity > 0 and zb.capacity < 1:
+					zero_days += 1
+		_assert(zero_days == 0, "%s: a surviving business sat at zero capacity on %d business-days" % [builder, zero_days])
+
+	# Zero workers alone never kills a business or brings staff back.
+	var idle := _new_sim("build_three_business_economy")
+	var idle_trader: HEBusiness = idle.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	idle_trader.capacity = 0
+	idle_trader.max_capacity = 0
+	idle.advance_ticks(120)
+	_assert(idle.businesses.has(HEScenarioSeeds.TRADER_BUSINESS_ID), "A zero-worker business should not fail without debt")
+	_assert(idle_trader.capacity == 0, "A zero-capacity business should not get a trial hire")
+	print("  woodlot deleted at the credit limit with %.0f written off; a zero-worker Trader stayed at zero" % -debt)
 
 func _new_sim(builder_method: String, price_adjustment_enabled: bool = true) -> HESimulation:
 	return HESimulation.new(SEED, Callable(HEScenarioSeeds, builder_method), price_adjustment_enabled)
@@ -63,6 +142,32 @@ func _assert(condition: bool, message: String) -> void:
 	if not condition:
 		push_error(message)
 		_ok = false
+
+func _check_person_health_and_morale() -> void:
+	print("
+=== Person health and morale ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.advance_ticks(200)
+	var stressed_seen := false
+	var child_seen := false
+	for household_id in sim.get_household_ids():
+		var h := sim.get_household_summary(household_id)
+		_assert(h["health"] >= 0.0 and h["health"] <= 1.0 and h["morale"] >= 0.0 and h["morale"] <= 1.0,
+			"Household %d health/morale out of range" % household_id)
+		if h["food_stress"] > 0.001:
+			stressed_seen = true
+			_assert(h["health"] < 1.0, "Household %d is food-stressed but at full health" % household_id)
+		for member in range(1, h["headcount"] + 1):
+			var p := sim.get_person_summary(household_id, member)
+			_assert(not p.is_empty(), "Household %d member %d should exist" % [household_id, member])
+			_assert(p["health"] <= h["health"] + 0.0001 or p["vulnerability"] <= 1.0,
+				"A vulnerable member should not be healthier than their household")
+			if p["life_stage"] == "Child":
+				child_seen = true
+	var any_id: int = sim.get_household_ids()[0]
+	_assert(sim.get_person_summary(any_id, 0).is_empty(), "Member 0 should not exist")
+	_assert(sim.get_person_summary(any_id, 9999).is_empty(), "Out-of-range member should not exist")
+	print("  stressed household seen: %s, child seen: %s" % [stressed_seen, child_seen])
 
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
@@ -745,6 +850,12 @@ func _business_snapshot(sim: HESimulation, day: int) -> Dictionary:
 	var out := {}
 	for report in sim.get_business_reports():
 		out[report["name"].to_lower()] = report
+	# A business that exhausted its credit is deleted, so it has no report;
+	# stand in an all-zero one so share/capacity checks read it as gone.
+	for key in ["farm", "woodlot", "trader"]:
+		if not out.has(key):
+			out[key] = {"capacity": 0, "employed_workers": 0, "rolling_average_revenue_per_worker": 0.0,
+				"reference_wage_per_worker": out.values()[0]["reference_wage_per_worker"]}
 	return out
 
 ## Starvation is no longer just a reported signal -- a business that can
@@ -886,9 +997,12 @@ func _check_old_age_orphans_get_adopted() -> void:
 			adopted_events += 1
 	_assert(adopted_events == 1, "Expected exactly one 'adopted' event, saw %d" % adopted_events)
 
-	sim.advance_ticks(360)
+	# Reaching the aging threshold only makes a dependent eligible to leave
+	# (5%-25% per monthly check, see HEHousehold.leave_home_chance), so allow
+	# two more years for the promotion to actually happen.
+	sim.advance_ticks(360 * 3)
 	var city := sim.get_city_summary()
-	print("  adopted dependent's fate a year later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
+	print("  adopted dependent's fate three years later: worker_promotions_total=%d (expected >= 1 -- it should have aged up and split off)" % city["worker_promotions_total"])
 	_assert(city["worker_promotions_total"] >= 1, "Adopted dependent should keep aging normally and eventually promote to worker, got 0 promotions")
 	_check_demographic_invariants(sim)
 
@@ -994,7 +1108,7 @@ func _check_herd_cull_target_is_configurable() -> void:
 ## capacity tuner has no stable staffing level to find (it churned the Sheep
 ## Farm ~400 times in 10 years when staffing changed nothing). Same seed, two
 ## worlds: ranches with no workers allowed vs. ranches pinned fully staffed
-## (protected from the tuner so the comparison isn't muddied by hiring noise).
+## (pinned by min_capacity so the comparison isn't muddied by hiring noise).
 func _check_herd_staffing_matters() -> void:
 	print("\n=== Herds: staffing a ranch actually changes how its herd and wool do ===")
 	var unstaffed := _new_sim("build_three_business_economy")
@@ -1005,7 +1119,7 @@ func _check_herd_staffing_matters() -> void:
 		u.capacity = 0
 		var s: HEBusiness = staffed.businesses[business_id]
 		s.capacity = s.max_capacity
-		s.protected_until_day = 1000000
+		s.min_capacity = s.max_capacity
 	unstaffed.advance_ticks(360)
 	staffed.advance_ticks(360)
 
@@ -1143,7 +1257,6 @@ func _check_toolsmith_supplies_tools() -> void:
 	var consumed := {}
 	var worst_stock_gap := 0.0
 	var worst_money_gap := 0.0
-	var min_employed := 1000
 	for window in 2:
 		sim.advance_ticks(360)
 		for record in sim.get_daily_history(360):
@@ -1160,15 +1273,15 @@ func _check_toolsmith_supplies_tools() -> void:
 				consumed[name] = consumed.get(name, 0.0) + day_consumed
 			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
 			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
-		min_employed = mini(min_employed, sim._business_employed_worker_count(toolsmith.id))
 
-	var tools_report := sim.get_market_report(settlement_id, Commodity.Type.TOOLS)
-	print("  over 2 years: toolsmith made %.0f tools from %.0f iron; households used %.0f | price %.2f, employed %d (min at year end %d)" % [
-		produced.get("Tools", 0.0), consumed.get("Iron", 0.0), consumed.get("Tools", 0.0), tools_report["price"], sim._business_employed_worker_count(toolsmith.id), min_employed])
+	# Survival is deliberately not asserted: a business that exhausts its credit
+	# is deleted, and the Toolsmith's imported iron depends on the Trader, which
+	# the seeded economy can lose.
+	print("  over 2 years: toolsmith made %.0f tools from %.0f iron; households used %.0f | still open: %s" % [
+		produced.get("Tools", 0.0), consumed.get("Iron", 0.0), consumed.get("Tools", 0.0), sim.businesses.has(toolsmith.id)])
 	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
 	_assert(produced.get("Tools", 0.0) > 0.0 and consumed.get("Iron", 0.0) > 0.0, "The Toolsmith should have turned some iron into tools")
 	_assert(consumed.get("Tools", 0.0) > 0.0, "Households should have used some tools")
-	_assert(sim._business_employed_worker_count(toolsmith.id) >= 1, "The Toolsmith should still be employing people after two years")
 	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Toolsmith present, worst gap %.4f" % worst_stock_gap)
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
@@ -1324,10 +1437,26 @@ func _check_government_taxes() -> void:
 	staffed.advance_ticks(HESimulation.CAPACITY_EVAL_INTERVAL_DAYS)
 	_assert((staffed.get_government_summary(1)["administrator_household_ids"] as Array).size() >= 1, "Administrator post should be refilled after the holder leaves")
 
+	# Top-line treasury summary: matches the government's balance, and its
+	# 30-day change equals balance now minus the closing balance 30 days ago.
+	var trend := sim.get_treasury_summary(30)
+	_assert(trend["has_government"] and absf(trend["treasury"] - summary["treasury"]) < EPSILON, "Treasury summary should match the government balance")
+	_assert(trend["days_covered"] == 30, "A two-year-old sim should cover the full 30-day window")
+	var gov_history: Array[float] = []
+	for report in sim.get_business_reports(1):
+		if report["business_id"] == gov_id:
+			gov_history.assign(report["balance_history"])
+	_assert(absf(trend["change"] - (summary["treasury"] - gov_history[gov_history.size() - 31])) < EPSILON, "30-day treasury change should be now minus the balance 30 days ago")
+	var young := _new_sim("build_three_business_economy")
+	young.advance_ticks(5)
+	_assert(young.get_treasury_summary(30)["days_covered"] == 4, "A young sim should report only the history it has")
+	print("  top-line treasury: %.1f gold, %+.1f over %d days" % [trend["treasury"], trend["change"], trend["days_covered"]])
+
 	# A town with no government taxes nothing and reports none.
 	var bare := _new_sim("build_two_settlement_economy")
 	bare.advance_ticks(60)
 	_assert(bare.get_government_summary(1).is_empty(), "A scenario without a government should report none")
+	_assert(not bare.get_treasury_summary(30)["has_government"], "No government: the top-line treasury should be hidden")
 
 func _total_worker_capacity(sim: HESimulation) -> int:
 	var total := 0

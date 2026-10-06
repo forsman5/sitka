@@ -38,8 +38,7 @@ extends RefCounted
 ## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
 ## pass). It DOES hire and pay wages like any other business -- `growth_days`
 ## is set to HERD_EVAL_INTERVAL_DAYS (see he_scenario_seeds.gd) purely so it
-## gets the same cycle-aware treatment (has_long_cycle(), protected trial
-## hires, revenue smoothed over its own cycle rather than a flat week) a
+## gets the same cycle-aware treatment (has_long_cycle(), revenue smoothed over its own cycle rather than a flat week) a
 ## field-model business gets, even though it has no `fields` of its own --
 ## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
 ##
@@ -82,7 +81,7 @@ const TRADER_REVENUE_WINDOW_DAYS := 45
 ## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
 ## which reads better over a longer stretch than the weekly self-tuning
 ## signal needs.
-const BALANCE_HISTORY_WINDOW_DAYS := 90
+const BALANCE_HISTORY_WINDOW_DAYS := 730
 
 ## Goods flows tracked for the detail panel's charts. PRODUCED/CONSUMED are
 ## what the production step actually made and used up; SOLD/BOUGHT are what
@@ -107,6 +106,10 @@ var id: int
 var settlement_id: int
 var name: String
 var kind: Kind
+## Which buildable business this is ("farm", "trader", ...), set by the
+## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
+## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
+var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int
@@ -200,6 +203,13 @@ var last_cash_change: float = 0.0
 ## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
 
+## Capacity self-tuning leaves this business alone until this day -- a newly
+## created business earns nothing until its first harvest, so judging it on
+## revenue before then would shrink its crew to zero. It can still fail on its
+## credit limit during the grace period. -1 = no grace. Set by
+## HESimulation.add_new_business.
+var startup_grace_until_day: int = -1
+
 ## Rolling daily balance, oldest first, capped at BALANCE_HISTORY_WINDOW_
 ## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
 ## below), read by nothing that affects simulation outcomes.
@@ -219,14 +229,6 @@ var todays_flows: Dictionary = {}
 ## adds series. Field-model businesses show lumpy PRODUCED spikes on harvest
 ## days, since last_output_produced is 0.0 on every other day.
 var _flow_history: Dictionary = {}
-
-## Set whenever a zero-capacity business gets its trial crew back (see
-## he_simulation.gd's _evaluate_business_capacity) to the day that
-## protection should end -- until then, capacity evaluation leaves this
-## business alone entirely, growth and shrink signals both, regardless of
-## how its average revenue reads. -1 (the initial value) means "not
-## currently protected".
-var protected_until_day: int = -1
 
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See

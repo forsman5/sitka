@@ -150,8 +150,7 @@ const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 ## i.e. just `price` at the 0.5 fraction above. That has to clear the
 ## reference wage with real room to spare even once oversupply has pushed
 ## price all the way down to its floor, or the Trader never grows past a
-## knife-edge break-even (and a bad week tips it into capacity 0, see
-## _evaluate_business_capacity's zero-capacity trial hire). A trader moving
+## knife-edge break-even (and a bad week tips it into capacity 0). A trader moving
 ## goods should scale per worker far better than a farmhand growing food by
 ## hand, hence the large jump from the first authored guess of 2.0.
 const TRADER_CAPACITY_PER_WORKER := 8.0
@@ -390,15 +389,14 @@ const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 ## seen in long (4000+ day) runs. CAPACITY_STEP_MAX_WORKERS is the ceiling on
 ## that proportional move (reached once the wage is WAGE_RATIO_CLAMP-or-more
 ## away from reference, so a single unusually noisy week can't cause an
-## unbounded lurch); CAPACITY_TRIAL_HIRE_WORKERS is a separate, same-valued-
-## today-but-conceptually-distinct constant for the zero-capacity recovery
-## case below, which has no wage signal to be proportional to at all.
+## unbounded lurch).
 const CAPACITY_EVAL_INTERVAL_DAYS := 7
 ## Trader revenue arrives in batches after supplier harvests; one decision
 ## per roughly farm-harvest interval avoids reacting to the same gap weekly.
 const TRADER_CAPACITY_EVAL_INTERVAL_DAYS := 21
 const CAPACITY_STEP_MAX_WORKERS := 4
-const CAPACITY_TRIAL_HIRE_WORKERS := 4
+## The cash-runway guard only forces a shrink on a crew bigger than this.
+const CASH_RUNWAY_GUARD_MIN_CAPACITY := 4
 const WAGE_PROFIT_MARGIN := 0.1
 ## How far avg_wage can be from reference_wage, as a fraction of
 ## reference_wage, before the proportional step maxes out at
@@ -443,13 +441,13 @@ const CASH_RUNWAY_DANGER_DAYS := 14.0
 ## than being carried forward at the same fraction forever.
 const SELL_PACE_HEADROOM := 1.15
 
-const HISTORY_MAX_DAYS := 360
+const HISTORY_MAX_DAYS := 730
 ## Per-ranch history kept on HEBusiness.herd_events (see its doc comment).
 const HERD_EVENT_HISTORY_MAX := 60
 ## Event retention is day-based so a burst of hiring/firing cannot evict
 ## quieter notification types from the same recent-time window. The
 ## dashboard queries a smaller slice through get_event_log_days().
-const EVENT_LOG_RETENTION_DAYS := 360
+const EVENT_LOG_RETENTION_DAYS := 730
 ## Employment changes are sparse for a stable business. Keep the latest
 ## events of EACH type regardless of age, so filtering to firings or hires
 ## still shows the last change after a long quiet period.
@@ -582,6 +580,54 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
 
+## Registers a business built after the sim started. Takes a free id from
+## next_business_id(); the caller builds the record. Nothing is charged -- the
+## business starts with whatever balance/stock the record already carries.
+func add_business(b: HEBusiness) -> void:
+	assert(not businesses.has(b.id), "Business id %d already exists" % b.id)
+	assert(settlements.has(b.settlement_id), "Unknown settlement %d" % b.settlement_id)
+	businesses[b.id] = b
+	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
+	if b.kind == HEBusiness.Kind.TRADER:
+		var enabled := {}
+		for commodity in EXPORT_PRIORITY:
+			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+		_trader_export_enabled[b.id] = enabled
+
+## Adds a business the player created mid-run, with a startup allowance so it
+## can actually get going (see HEScenarioSeeds.startup_cash): a starting crew,
+## seed cash, and a grace period until its first harvest (or
+## CASH_RUNWAY_DANGER_DAYS if it has no cycle) before the tuner judges it.
+## TODO creation cost: the seed cash is free money injected into the economy
+## (it shows up in next day's opening money), and should be paid for by the
+## player or the treasury.
+func add_new_business(b: HEBusiness) -> void:
+	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
+	b.capacity = crew
+	b.balance += HEScenarioSeeds.startup_cash(b, crew)
+	b.startup_grace_until_day = day + (b.growth_days if b.growth_days > 0 else int(CASH_RUNWAY_DANGER_DAYS))
+	add_business(b)
+
+## Lowest crew the tuner may set: one worker (or the business's own
+## min_capacity if higher), unless max_capacity itself is 0.
+func _capacity_floor(b: HEBusiness) -> int:
+	return mini(maxi(b.min_capacity, 1), b.max_capacity)
+
+func next_business_id() -> int:
+	var next_id := 1
+	for business_id in businesses.keys():
+		next_id = maxi(next_id, business_id + 1)
+	return next_id
+
+## Whether `settlement_id` already has a business of buildable kind
+## `type_key` (see HEBusiness.type_key) -- how "unique building" limits are checked.
+func has_business_of_type(settlement_id: int, type_key: String) -> bool:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id == settlement_id and b.type_key == type_key:
+			return true
+	return false
+
 func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()
@@ -631,6 +677,8 @@ func get_household_summary(household_id: int) -> Dictionary:
 			"label": need.label,
 			"required": h.last_need_required.get(need.id, 0.0),
 			"provided": h.last_need_provided.get(need.id, 0.0),
+			"stress": h.stress_of(need.id),
+			"effect": need.effect_text,
 			"satisfiers": satisfiers,
 		})
 
@@ -645,6 +693,10 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
+		"health": h.health(),
+		"morale": h.morale(),
+		"health_losses": h.health_losses(),
+		"morale_penalties": h.morale_penalties(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -653,6 +705,123 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
+	}
+
+## Town-wide headcount with the average health and morale PER PERSON (so a
+## big household counts for more than a small one), using the same
+## age-vulnerability and employment rules as get_person_summary().
+##
+## "health_factors" and "morale_factors" explain why those averages aren't
+## 100%: [{label, avg_loss, people}] sorted biggest first, where avg_loss is
+## the average points lost per person across the WHOLE town (0..1) and
+## `people` is how many of them that factor touches at all.
+func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
+	var population := 0
+	var unemployed := 0
+	var health_total := 0.0
+	var morale_total := 0.0
+	var health_factors := {}
+	var morale_factors := {}
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		if not h.is_employed():
+			unemployed += h.worker_capacity()
+		var members: Array[Dictionary] = []
+		for age in h.worker_ages():
+			members.append({"works": true, "v": HEHousehold.vulnerability_of(true, age)})
+		for age in h.dependent_ages():
+			members.append({"works": false, "v": HEHousehold.vulnerability_of(false, age)})
+		for member in members:
+			var v: float = member["v"]
+			health_total += h.health(v)
+			morale_total += h.morale(v, member["works"])
+			population += 1
+			for loss in h.health_losses(v):
+				_add_factor(health_factors, loss["label"], loss["loss"])
+			for penalty in h.morale_penalties(v, member["works"]):
+				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
+	return {
+		"population": population,
+		"unemployed": unemployed,
+		"avg_health": (health_total / population) if population > 0 else 1.0,
+		"avg_morale": (morale_total / population) if population > 0 else 1.0,
+		"health_factors": _factor_list(health_factors, population),
+		"morale_factors": _factor_list(morale_factors, population),
+	}
+
+func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
+	if amount <= 0.001:
+		return
+	var entry: Dictionary = factors.get_or_add(label, {"total": 0.0, "people": 0})
+	entry["total"] += amount
+	entry["people"] += 1
+
+func _factor_list(factors: Dictionary, population: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for label in factors.keys():
+		out.append({"label": label, "avg_loss": factors[label]["total"] / population, "people": factors[label]["people"]})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["avg_loss"] > b["avg_loss"])
+	return out
+
+## One member of a household, by their 1-based member number (workers first,
+## then dependents -- the household detail's numbering). Members have no
+## persistent identity, so everything here is DERIVED from the household: the
+## household's shared stores are split evenly, and the person's own age
+## decides how hard a shortfall hits them. Returns {} if there is no such member.
+func get_person_summary(household_id: int, member_number: int) -> Dictionary:
+	if not households.has(household_id):
+		return {}
+	var h: HEHousehold = households[household_id]
+	var workers := h.worker_ages()
+	var dependents := h.dependent_ages()
+	var index := member_number - 1
+	if index < 0 or index >= workers.size() + dependents.size():
+		return {}
+	var is_worker := index < workers.size()
+	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var vulnerability := HEHousehold.vulnerability_of(is_worker, age)
+	var role := "Worker"
+	var life_stage := "Adult"
+	var note := ""
+	if is_worker:
+		if vulnerability > 1.0:
+			life_stage = "Elderly"
+		note = "%d days until old age" % maxi(HEHousehold.LIFESPAN_DAYS - age, 0)
+	elif age < HEHousehold.AGING_THRESHOLD_DAYS:
+		role = "Dependent"
+		life_stage = "Child"
+		note = "%d days until adulthood" % (HEHousehold.AGING_THRESHOLD_DAYS - age)
+	else:
+		role = "Dependent"
+		life_stage = "Adult living at home"
+		note = "%.0f%% chance per month of leaving to found a household" % (HEHousehold.leave_home_chance(age) * 100.0)
+
+	var needs: Array[Dictionary] = []
+	for need in HENeeds.all():
+		var required := need.per_person_daily
+		var household_required: float = h.last_need_required.get(need.id, 0.0)
+		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
+		needs.append({
+			"label": need.label,
+			"required": required,
+			"provided": required * ratio,
+			"stress": minf(h.stress_of(need.id) * vulnerability, 1.0),
+			"health_loss": need.health_weight * h.stress_of(need.id) * vulnerability,
+			"effect": need.effect_text,
+		})
+	return {
+		"household_id": household_id,
+		"member_number": member_number,
+		"role": role,
+		"life_stage": life_stage,
+		"age_days": age,
+		"note": note,
+		"vulnerability": vulnerability,
+		"health": h.health(vulnerability),
+		"morale": h.morale(vulnerability, is_worker),
+		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"needs": needs,
+		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
 
 func get_business_reports(settlement_id: int = -1) -> Array:
@@ -914,7 +1083,7 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			continue
 		var stock := b.stock(commodity)
 		if stock > 0.0001:
-			holdings.append({"owner": b.name, "quantity": stock})
+			holdings.append({"owner": b.name, "business_id": b.id, "quantity": stock})
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.sells(commodity):
@@ -923,23 +1092,23 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 				offered = minf(stock, stock / float(maxi(1, b.days_until_next_harvest())) * SELL_PACE_HEADROOM)
 			elif not SUBSISTENCE_COMMODITIES.has(commodity):
 				offered = _seller_surplus_above_reserve(b, settlement_id, commodity)
-			sellers.append({"owner": b.name, "offered": offered, "stock": stock})
+			sellers.append({"owner": b.name, "business_id": b.id, "offered": offered, "stock": stock})
 		if b.recipe.inputs.has(commodity):
 			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
 			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
 			if desired > 0.0001:
-				buyers.append({"owner": b.name, "requested": desired,
+				buyers.append({"owner": b.name, "business_id": b.id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
 	var trader := _settlement_trader(settlement_id)
 	if trader != null:
 		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
 		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
-			sellers.append({"owner": "%s (imports)" % trader.name,
+			sellers.append({"owner": "%s (imports)" % trader.name, "business_id": trader.id,
 				"kind": "import", "capacity": capacity})
 		elif _trader_export_enabled[trader.id].get(commodity, false) and _business_selling(settlement_id, commodity) != null:
 			var export_seller := _business_selling(settlement_id, commodity)
-			buyers.append({"owner": "%s (exports)" % trader.name, "kind": "export",
+			buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
 				"capacity": capacity,
 				"available": minf(capacity, _exportable_surplus(export_seller, settlement_id, commodity))})
 	report["buyers"] = buyers
@@ -1035,7 +1204,8 @@ func get_trader_transactions(business_id: int, days: int = 30) -> Array:
 ## filter is applied before the limit; "both" includes hires and firings.
 ## Returns copies so callers cannot change the stored history.
 func get_business_employment_events(business_id: int, event_type: String = "both", limit: int = 50) -> Array:
-	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
+	# A failed (deleted) business keeps its employment history.
+	assert(businesses.has(business_id) or _employment_event_log.has(business_id), "Unknown business id %d" % business_id)
 	assert(event_type in ["both", "job", "fired"], "Unknown employment event type %s" % event_type)
 	var events: Array = _employment_event_log.get(business_id, [])
 	var out: Array = []
@@ -1132,6 +1302,9 @@ func _new_daily_record() -> Dictionary:
 		"consumed": {},
 		"unmet_scarcity": {},
 		"unmet_unaffordable": {},
+		# need id -> {required, provided, met_by: {good name: need units},
+		# households_met, households_unmet} -- see _consume_need.
+		"needs": {},
 		"traded_quantity": {},
 		"exported": {},
 		"export_revenue": 0.0,
@@ -1168,8 +1341,11 @@ func _finalize_daily_record(record: Dictionary) -> void:
 ## wage long-term is no longer this function's problem -- it always pays as
 ## much of the full bill as its (generous) cash allowance covers, and the
 ## weekly cash-runway guard in _evaluate_business_capacity is what actually
-## shrinks a business that can't keep this up (see its doc comment).
+## shrinks a business that can't keep this up (see its doc comment). A
+## business whose wage bill can't be covered even down to that floor has
+## exhausted its credit and is deleted (see _fail_business).
 func _pay_wages(record: Dictionary) -> void:
+	var failed_ids: Array[int] = []
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		b.last_wages_paid = 0.0
@@ -1220,6 +1396,47 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_wages_paid = total_paid
 		b.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
+		if shortfall > 0.0001 and b.kind != HEBusiness.Kind.GOVERNMENT:
+			failed_ids.append(business_id)
+	for business_id in failed_ids:
+		_fail_business(business_id, record)
+
+## A business that has used up its whole credit line (the wage floor, see
+## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) fails outright: it is deleted, its
+## employees go back to the unemployed pool, and its debt and leftover stock
+## are written off through the same closed-economy accounting households use
+## (money_written_off / goods_written_off). There is deliberately no revival
+## path -- a failed business stays gone, and recreating one is the player's
+## job (see add_business). A business may sit at zero workers indefinitely;
+## only running out of credit kills it.
+func _fail_business(business_id: int, record: Dictionary) -> void:
+	var b: HEBusiness = businesses[business_id]
+	var laid_off := 0
+	for household_id in households.keys():
+		var h: HEHousehold = households[household_id]
+		if h.employer_business_id == business_id:
+			h.employer_business_id = -1
+			laid_off += 1
+	var commodities: Array[Commodity.Type] = BASE_PRICE.keys()
+	commodities.append_array(HERD_COMMODITIES)
+	var goods_written_off: Dictionary[Commodity.Type, float] = {}
+	for c in commodities:
+		var amount := b.stock(c)
+		if amount > 0.0:
+			goods_written_off[c] = amount
+			_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + amount
+	_money_written_off_total += b.balance
+	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + b.balance
+	_merge_goods_written_off(record, goods_written_off)
+	_log_event("business_failed", {
+		"business_id": business_id,
+		"name": b.name,
+		"settlement_id": b.settlement_id,
+		"debt": -b.balance,
+		"households_laid_off": laid_off,
+	})
+	(settlements[b.settlement_id] as HESettlement).business_ids.erase(business_id)
+	businesses.erase(business_id)
 
 ## Kind.HERD only, called from _pay_wages before its cash allowance is
 ## computed: if this ranch can't cover today's wage bill even with its
@@ -1477,6 +1694,76 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
+## A household whose need shortfall is below this counts as having met it.
+const NEED_MET_EPSILON := 0.0001
+
+## Today's picture of one need across the settlement, for the Needs detail
+## view: how many households met or missed it, the stress and emigration
+## risk among them, the demand met by each satisfier (need units) versus the
+## demand left unmet, plus `days` of daily history. Only needs flagged
+## drives_lifecycle (food) feed stress and emigration -- check
+## "drives_lifecycle" before presenting those fields for any other need.
+func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> Dictionary:
+	var need := HENeeds.get_need(need_id)
+	assert(need != null, "Unknown need id %d" % need_id)
+	var s: HESettlement = settlements[_resolve_settlement_id(settlement_id)]
+	var met := 0
+	var unmet := 0
+	var unmet_stress_total := 0.0
+	var pressure := 0
+	var starving := 0
+	var required := 0.0
+	var provided := 0.0
+	var met_by := {}
+	for c in need.satisfiers():
+		met_by[Commodity.name_of(c)] = 0.0
+	for household_id in s.household_ids:
+		var h: HEHousehold = households[household_id]
+		var h_required: float = h.last_need_required.get(need.id, 0.0)
+		var h_provided: float = h.last_need_provided.get(need.id, 0.0)
+		required += h_required
+		provided += h_provided
+		for c in need.satisfiers():
+			met_by[Commodity.name_of(c)] += h.last_consumed.get(c, 0.0) * need.value_of(c)
+		if h_required - h_provided > NEED_MET_EPSILON:
+			unmet += 1
+			unmet_stress_total += h.demographics.food_stress
+		else:
+			met += 1
+		if h.demographics.has_migration_pressure:
+			pressure += 1
+		if h.demographics.is_starvation_candidate():
+			starving += 1
+
+	var met_history := {}
+	for c in need.satisfiers():
+		met_history[Commodity.name_of(c)] = []
+	var unmet_history: Array = []
+	for record in get_daily_history(days):
+		var entry: Dictionary = record["needs"].get(need.id, {})
+		for name in met_history.keys():
+			met_history[name].append(entry.get("met_by", {}).get(name, 0.0))
+		unmet_history.append(maxf(0.0, entry.get("required", 0.0) - entry.get("provided", 0.0)))
+
+	var household_count := met + unmet
+	return {
+		"id": need.id,
+		"label": need.label,
+		"drives_lifecycle": need.drives_lifecycle,
+		"households_met": met,
+		"households_unmet": unmet,
+		"required": required,
+		"provided": provided,
+		"unmet": maxf(0.0, required - provided),
+		"met_by": met_by,
+		"avg_stress_unmet": (unmet_stress_total / unmet) if unmet > 0 else 0.0,
+		"households_with_migration_pressure": pressure,
+		"households_emigration_candidates": starving,
+		"emigration_likelihood": (float(starving) / household_count) if household_count > 0 else 0.0,
+		"met_history": met_history,
+		"unmet_history": unmet_history,
+	}
+
 ## Consume owned goods -> update household stress/outcomes, purely from
 ## each household's OWN inventory. Only needs flagged drives_lifecycle (food)
 ## drive food_stress/migration-pressure/starvation-candidacy (everything
@@ -1504,10 +1791,20 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	if shortfall_units > 0.0001 and _need_served(h.settlement_id, need):
 		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
 
+	var need_record: Dictionary = record["needs"].get_or_add(need.id, {
+		"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
+	need_record["required"] += needed
+	need_record["provided"] += provided
+	if needed - provided > NEED_MET_EPSILON:
+		need_record["households_unmet"] += 1
+	else:
+		need_record["households_met"] += 1
+
 	for c in need.satisfiers():
 		var taken: float = burned.get(c, 0.0)
 		h.last_consumed[c] = taken
 		var name := Commodity.name_of(c)
+		need_record["met_by"][name] = need_record["met_by"].get(name, 0.0) + taken * need.value_of(c)
 		record["consumed"][name] = record["consumed"].get(name, 0.0) + taken
 		record["unmet_scarcity"][name] = record["unmet_scarcity"].get(name, 0.0) + h.last_unmet_scarcity.get(c, 0.0)
 		record["unmet_unaffordable"][name] = record["unmet_unaffordable"].get(name, 0.0) + h.last_unmet_unaffordable.get(c, 0.0)
@@ -1519,6 +1816,7 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 		var rolling_is_severe := rolling < Household.STARVATION_FULFILLMENT_THRESHOLD
 		h.demographics.apply_daily_fulfillment(daily_ratio, rolling_is_low, rolling_is_severe)
 		h.advance_day_for_lifecycle(rolling)
+	h.record_need_stress(need, needed, provided)
 
 ## Reporting only, exactly like the pooled model's migration pressure --
 ## does NOT move or remove anyone.
@@ -1713,12 +2011,12 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
-		var promoted := h.evaluate_aging()
+		var promoted := h.evaluate_aging(rng)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
-		if h.evaluate_birth():
+		if h.evaluate_birth(rng):
 			births += 1
 			_log_event("birth", {"household_id": household_id})
 
@@ -1801,19 +2099,11 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 ## DAYS) -- only the FORECAST of running out of runway forces a downsize,
 ## not the negative balance itself.
 ##
-## Only fires above CAPACITY_TRIAL_HIRE_WORKERS: below that there's no
-## meaningful crew left to cut, so forcing MORE shrinkage doesn't fix
-## anything -- it just guarantees the debt that triggered it can never be
-## earned back. This is the same trap the zero-capacity protection above
-## exists for, one step earlier: a small crew carrying legacy debt from a
-## bad patch (e.g. a price spike inflating the reference wage it was paid
-## at) will have a tiny wage bill and therefore an alarming-looking runway
-## ratio for as long as that debt sits on the books, even once the spike
-## that caused it has long passed and the business is otherwise fine --
-## this guard would otherwise keep grinding it back down every week it
-## re-fires, and it has nowhere left to go but 0. Once genuinely at 0, the
-## ordinary trial-hire/protection cycle above is what gives it room to
-## actually earn that debt down instead.
+## Only fires above CASH_RUNWAY_GUARD_MIN_CAPACITY: a small crew's wage bill
+## is tiny, so legacy debt makes its runway ratio look alarming long after
+## whatever caused it has passed. A business that truly can't keep up is not
+## handled here but by running out of credit (see _fail_business), and a
+## business that reaches zero workers stays at zero (no trial rehire).
 func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
@@ -1824,48 +2114,11 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# Staffed by the seed / _ensure_administrator, not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
-		if b.capacity == 0:
-			# A business at zero capacity has had no employed workers, so
-			# rolling_average_revenue_per_worker() reads a flat 0 --
-			# indistinguishable from "genuinely unprofitable" even once
-			# whatever shut it down (no surplus to trade, a bad price,
-			# anything) has long since passed. Left alone this is a
-			# one-way trap: nobody ever gets hired back in to generate real
-			# evidence to re-evaluate. Give it a small trial crew instead
-			# so next week's revenue is actual evidence, not silence --
-			# worst case it's genuinely still unprofitable and shrinks
-			# right back to 0 next week. There's no revenue signal at all
-			# here, so this can't be made proportional the way the branch
-			# below is -- it's a fixed-size probe by necessity, not a
-			# control response.
-			# A field-model trial crew has NO real evidence behind it until
-			# its nearest field's harvest actually lands -- which, for a
-			# multi-month growth cycle, can be far longer than one
-			# CAPACITY_EVAL_INTERVAL_DAYS week. Judging it before then (on
-			# either the revenue signal below or the cash guard, both of
-			# which would see nothing but a flat/near-flat 0.0 average and
-			# read that as failure) would revert the trial hire before it
-			# ever gets a chance to prove out -- a permanent trap. Protect
-			# it until the harvest date instead; the field keeps growing
-			# every day regardless of this protection (see
-			# _run_field_growth), so this costs nothing but time and
-			# (generously floored) wages while it waits. A non-field
-			# business has no such lag -- its output is instant -- so it
-			# only needs a couple of weeks' grace to accumulate a real
-			# revenue signal at all.
-			# Deliberately uses_field_model(), not the broader has_long_cycle():
-			# a field is GUARANTEED to harvest something every growth_days, so
-			# trusting it that long is safe. A herd's cull is conditional on
-			# herd_size actually crossing HERD_CULL_TARGET, which (especially
-			# on a fresh or just-culled herd) can take many multiples of
-			# HERD_EVAL_INTERVAL_DAYS -- protecting it for a full cycle on that
-			# same trust was verified to let a ranch hire and bleed wages for
-			# 700+ days on zero revenue before ever being judged. A herd gets
-			# the same short, evidence-based leash as Trader/legacy instead.
-			b.protected_until_day = day + (b.days_until_next_harvest() if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS)
-			b.capacity = mini(CAPACITY_TRIAL_HIRE_WORKERS, b.max_capacity)
-			continue
-		if day < b.protected_until_day:
+		# A business is never tuned down to zero: it keeps its last worker and
+		# can only go away by exhausting its credit (see _fail_business), so
+		# there is no idle zombie and no trial rehire to bring one back.
+		b.capacity = maxi(b.capacity, _capacity_floor(b))
+		if day < b.startup_grace_until_day:
 			continue
 		if (day + 1) % _capacity_eval_interval_days(b) != 0:
 			# A field-model business's output doesn't respond to a capacity
@@ -1887,11 +2140,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 				change_reason = "low_revenue" if delta < 0 else "high_revenue"
 		var cash_runway := INF
 		var required_runway := 0.0
-		if b.capacity > CAPACITY_TRIAL_HIRE_WORKERS:
-			# See protected_until_day's doc comment above for why this stays
-			# uses_field_model(), not has_long_cycle() -- same guaranteed-payoff
-			# reasoning applies to how long a shrink-worthy herd gets to prove
-			# itself before the runway guard forces a bigger cut.
+		if b.capacity > CASH_RUNWAY_GUARD_MIN_CAPACITY:
+			# uses_field_model(), not has_long_cycle(): only a field is
+			# guaranteed to pay off within its growth cycle, so only a field
+			# gets that long a runway before the guard forces a bigger cut.
 			required_runway = float(b.days_until_next_harvest()) if b.uses_field_model() else CASH_RUNWAY_DANGER_DAYS
 			cash_runway = _business_cash_runway_days(b)
 			if cash_runway < required_runway:
@@ -1899,7 +2151,7 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 				change_reason = "cash_runway"
 		if delta != 0:
 			var old_capacity := b.capacity
-			b.capacity = clampi(b.capacity + delta, b.min_capacity, b.max_capacity)
+			b.capacity = clampi(b.capacity + delta, _capacity_floor(b), b.max_capacity)
 			if b.capacity != old_capacity:
 				record["capacity_changes"][business_id] = {
 					"reason": change_reason,
@@ -1924,8 +2176,8 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 func _capacity_eval_interval_days(b: HEBusiness) -> int:
 	if b.kind == HEBusiness.Kind.TRADER:
 		return TRADER_CAPACITY_EVAL_INTERVAL_DAYS
-	# uses_field_model(), not has_long_cycle() -- see protected_until_day's
-	# doc comment in _evaluate_business_capacity.
+	# uses_field_model(), not has_long_cycle() -- only a field is guaranteed to
+	# pay off within its growth cycle.
 	if not b.uses_field_model():
 		return CAPACITY_EVAL_INTERVAL_DAYS
 	var weeks: int = maxi(1, roundi(float(b.growth_days) / 6.0 / float(CAPACITY_EVAL_INTERVAL_DAYS)))
@@ -1939,12 +2191,7 @@ func _capacity_eval_interval_days(b: HEBusiness) -> int:
 ## headcount) only has to cover what it's ACTUALLY paying today, not a
 ## hypothetical full crew it doesn't have -- comparing against max_capacity
 ## would force a perfectly solvent, merely-underutilized business to shrink
-## for no reason other than having land to spare. A recovering trial crew
-## isn't at risk from this despite its small `employed`: it's shielded from
-## this guard entirely until its own first harvest lands (see
-## _evaluate_business_capacity's protected_until_day check), so this
-## function is never even called for it during the window where a shrinking
-## `employed` used to spiral into a permanent trap. Used only by
+## for no reason other than having land to spare. Used only by
 ## _evaluate_business_capacity's cash-runway guard; never mutates anything.
 func _business_cash_runway_days(b: HEBusiness) -> float:
 	var employed := _business_employed_worker_count(b.id)
@@ -1998,7 +2245,8 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		employed_ids.sort()
 		var employed_workers := _business_employed_worker_count(business_id)
 		var i := employed_ids.size() - 1
-		while employed_workers > b.capacity and i >= 0:
+		# i >= 1: never lay off the last household, whatever its size.
+		while employed_workers > b.capacity and i >= 1:
 			var household_id: int = employed_ids[i]
 			var h: HEHousehold = households[household_id]
 			employed_workers -= h.worker_capacity()
@@ -2992,6 +3240,33 @@ func get_government_summary(settlement_id: int) -> Dictionary:
 		"administrator_household_ids": admin_ids,
 		"builder_slots": gov.builder_slots,
 	}
+
+## Every government's treasury summed, for the dashboard's top line: the
+## balance now and how it has moved over the last `days` days. `change` is
+## measured from the oldest closing balance still within the window, so a young
+## sim reports `days_covered` < `days` instead of inventing history. Both are
+## 0 / empty when no settlement has a government.
+func get_treasury_summary(days: int = 30) -> Dictionary:
+	var total := 0.0
+	var histories: Array = []
+	for settlement_id in settlements.keys():
+		var gov := _settlement_government(settlement_id)
+		if gov == null:
+			continue
+		total += gov.balance
+		histories.append(gov.balance_history())
+	if histories.is_empty():
+		return {"has_government": false, "treasury": 0.0, "change": 0.0, "days_covered": 0}
+	# History holds closing balances, newest last; today's is the latest entry.
+	var covered := 0
+	for history in histories:
+		covered = maxi(covered, mini(days, (history as Array).size() - 1))
+	var then := 0.0
+	for history in histories:
+		var h: Array = history
+		var index := h.size() - 1 - covered
+		then += h[index] if index >= 0 else 0.0
+	return {"has_government": true, "treasury": total, "change": total - then if covered > 0 else 0.0, "days_covered": covered, "then": then}
 
 ## Total daily need for `commodity` across every household right now -- the
 ## basis for the Trader's reserve (TRADER_RESERVE_BUFFER_DAYS worth of
