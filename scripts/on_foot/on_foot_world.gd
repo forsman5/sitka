@@ -48,6 +48,7 @@ func _ready() -> void:
 	player.position = player.spawn_point
 	add_child(player)
 
+	_spawn_companion(spawn)
 	_spawn_pen()
 	_spawn_flock()
 
@@ -185,6 +186,18 @@ func _build_shore_barrier() -> void:
 		col.position = Vector3(cos(a) * radius, 2.0, sin(a) * radius)
 		col.rotation.y = -(a + PI * 0.5)
 		body.add_child(col)
+
+## The character you aren't playing: a standing human beside the dog, or the dog
+## at heel (left rear) when you're the person.
+func _spawn_companion(spawn: Vector3) -> void:
+	var as_dog := OnFootPlayer.selected_character == "dog"
+	var companion := OnFootCompanion.new()
+	companion.name = "Companion"
+	companion.setup(as_dog, OnFootCompanion.Mode.STAND if as_dog else OnFootCompanion.Mode.HEEL)
+	var offset := Vector3(1.5, 0, 0) if as_dog else OnFootCompanion.HEEL_OFFSET
+	var xz := Vector2(spawn.x + offset.x, spawn.z + offset.z)
+	companion.position = _ground_point(xz) + Vector3(0, 0.3, 0)
+	add_child(companion)
 
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
