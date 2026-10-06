@@ -19,6 +19,8 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var bob_frequency: float = 2.2
 @export var third_person_distance: float = 3.2
 @export var bark_cooldown: float = 0.45
+## A bark carries this many times farther than the normal scare radius.
+@export var bark_range_multiplier: float = 2.0
 
 signal barked(world_position: Vector3)
 
@@ -195,6 +197,10 @@ func bark() -> bool:
 	_bark_anim_pending = _character.has("bark_anim")
 	barked.emit(global_position)
 	return true
+
+## How far (in metres) a bark startles animals.
+func bark_radius() -> float:
+	return scare_radius() * bark_range_multiplier
 
 ## How close (in metres) animals let this character get before fleeing.
 func scare_radius() -> float:

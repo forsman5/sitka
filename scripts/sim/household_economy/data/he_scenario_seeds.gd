@@ -34,9 +34,11 @@ const BUTCHER_BUSINESS_ID := 8
 ## pays one permanent administrator household. Present in every _build_world
 ## town, including build_custom's, which never offers it as a choice.
 const GOVERNMENT_BUSINESS_ID := 9
-## Opt-in, like the Bloomery whose iron it buys. Numbered after the government
-## so existing ids stay put.
-const TOOLSMITH_BUSINESS_ID := 10
+## Opt-in like the Bloomery and Iron Mine; numbered after the Butcher (8) and
+## the Government (9), which are present in every town.
+const CHARCOAL_BURNER_BUSINESS_ID := 10
+## Opt-in, like the Bloomery whose iron it buys.
+const TOOLSMITH_BUSINESS_ID := 11
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
 
@@ -105,6 +107,11 @@ const BLOOMERY_MAX_CAPACITY := 20
 const TOOLSMITH_MIN_CAPACITY := 6
 const TOOLSMITH_STARTING_CAPACITY := 12
 const TOOLSMITH_MAX_CAPACITY := 16
+
+## Opt-in only -- see build_economy_with_charcoal_burner(). A small workshop
+## like the Bloomery: legacy (non-field) business, so this is its hard ceiling.
+const CHARCOAL_BURNER_MAX_CAPACITY := 10
+const CHARCOAL_BURNER_GRACE_DAYS := 21
 
 ## Starting herd sizes -- deliberately well under either species' cull
 ## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
@@ -231,6 +238,47 @@ static func make_toolsmith(business_id: int, settlement_id: int, initial_capacit
 	toolsmith.min_capacity = TOOLSMITH_MIN_CAPACITY
 	return toolsmith
 
+## Its timber is raw material, not heat, so it stays a fixed input
+## (no need_inputs) -- unlike the Bloomery's.
+static func make_charcoal_burner(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var burner := HEBusiness.new(business_id, "Charcoal Burner", _charcoal_burner_recipe(), CHARCOAL_BURNER_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	burner.type_key = "charcoal_burner"
+	# It converts the Woodlot's timber, whose supply and price only settle once a
+	# harvest has landed, so its startup cash must outlast that whole cycle.
+	burner.startup_cycle_days = WOODLOT_GROWTH_DAYS
+	return burner
+
+## THE registry of business kinds a player can pick: the dashboard's "Create
+## business" menu and the setup page's checkboxes are both built from it, so a
+## new kind is wired into both by adding one entry here (and its make_*
+## factory above). The harness fails if a business _build_world seeds is
+## missing from it, so a kind can't be forgotten again. `id` is the kind's
+## seeded business id, `make` builds a bare instance for a given id and
+## settlement. The Government is not listed: it is never player-built.
+static func business_types() -> Array[Dictionary]:
+	return [
+		{"type_key": "farm", "id": FARM_BUSINESS_ID, "label": "Farm", "hint": "Grows grain.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_farm(id, sid)},
+		{"type_key": "woodlot", "id": WOODLOT_BUSINESS_ID, "label": "Woodlot", "hint": "Grows timber.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_woodlot(id, sid)},
+		{"type_key": "trader", "id": TRADER_BUSINESS_ID, "label": "Trader", "hint": "Imports and exports surplus.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_trader(id, sid)},
+		{"type_key": "cattle_ranch", "id": CATTLE_RANCH_BUSINESS_ID, "label": "Cattle Ranch", "hint": "Herd; starts with no staff.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_herd(id, sid, HEBusiness.Species.CATTLE)},
+		{"type_key": "sheep_farm", "id": SHEEP_FARM_BUSINESS_ID, "label": "Sheep Farm", "hint": "Herd and wool; starts with no staff.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_herd(id, sid, HEBusiness.Species.SHEEP)},
+		{"type_key": "butcher", "id": BUTCHER_BUSINESS_ID, "label": "Butcher", "hint": "Turns ranch livestock into meat and leather.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_butcher(id, sid)},
+		{"type_key": "bloomery", "id": BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_bloomery(id, sid)},
+		{"type_key": "iron_mine", "id": IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_iron_mine(id, sid)},
+		{"type_key": "charcoal_burner", "id": CHARCOAL_BURNER_BUSINESS_ID, "label": "Charcoal Burner", "hint": "Turns timber into charcoal, a denser fuel for heating.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_charcoal_burner(id, sid)},
+		{"type_key": "toolsmith", "id": TOOLSMITH_BUSINESS_ID, "label": "Toolsmith", "hint": "Forges tools from iron; imports it unless a Bloomery supplies it.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_toolsmith(id, sid)},
+	]
+
 static func _woodlot_recipe() -> Recipe:
 	return Recipe.new("woodlot", {}, {Commodity.Type.TIMBER: 1.0})
 
@@ -276,6 +324,17 @@ static func _bloomery_recipe() -> Recipe:
 static func _toolsmith_recipe() -> Recipe:
 	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.1}, {Commodity.Type.TOOLS: 0.06})
 
+## Charcoal burner: 3 timber -> 1 charcoal per unit of output (inputs are a
+## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
+## 4 heat against 3 heat of timber burned to make it, so the burner nets heat.
+## Per worker per day at full input supply: buys 4.5 timber (4.5) and sells 1.5
+## charcoal at BASE_PRICE 3.8 (5.7) = ~1.2 net, just above the ~1.1 reference
+## wage. Priced per heat unit that is 3.8 / 4 = 0.95 against timber's 1.0, so
+## households switch to it -- a slim edge on purpose; the posted prices move
+## with supply and demand.
+static func _charcoal_burner_recipe() -> Recipe:
+	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 3.0}, {Commodity.Type.CHARCOAL: 1.5})
+
 static func _iron_mine_recipe() -> Recipe:
 	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
 
@@ -304,9 +363,22 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## (growth_days, or STARTING_CASH_RESERVE_DAYS if it has no cycle) at the seed
 ## wage, with a safety margin. Used for the day-one Farm/Woodlot and for
 ## player-created businesses (HESimulation.add_new_business).
+## A business that buys inputs also needs the first input buffer in cash, which
+## its wage cushion alone does not cover (startup_input_cash).
 static func startup_cash(b: HEBusiness, crew: int) -> float:
-	var days := maxf(float(b.growth_days), STARTING_CASH_RESERVE_DAYS)
-	return STARTUP_CASH_SAFETY_FACTOR * days * _estimated_starting_reference_wage() * crew
+	var days := maxf(maxf(float(b.growth_days), float(b.startup_cycle_days)), STARTING_CASH_RESERVE_DAYS)
+	return STARTUP_CASH_SAFETY_FACTOR * days * _estimated_starting_reference_wage() * crew + startup_input_cash(b, crew)
+
+## What it costs, at base prices, to fill `b`'s first PRODUCTION_INPUT_BUFFER_DAYS
+## of recipe inputs for a crew of `crew` (zero for a business with no inputs).
+static func startup_input_cash(b: HEBusiness, crew: int) -> float:
+	if b.recipe == null or b.recipe.inputs.is_empty() or b.recipe.outputs.is_empty():
+		return 0.0
+	var units_per_day: float = float(crew) * b.recipe.outputs[b.output_commodity()]
+	var cost := 0.0
+	for commodity in b.recipe.inputs.keys():
+		cost += units_per_day * b.recipe.inputs[commodity] * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS * HESimulation.BASE_PRICE[commodity]
+	return cost
 
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
@@ -351,7 +423,7 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## zero on a business that still exists: a Bloomery that was never
 ## constructed here can never later appear on its own, since there is no
 ## such business id in `businesses`.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, toolsmith_capacity: int = 0) -> Dictionary:
+static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, charcoal_burner_capacity: int = 0, toolsmith_capacity: int = 0) -> Dictionary:
 	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
 
 	var farm := make_farm(FARM_BUSINESS_ID, SETTLEMENT_ID, farm_capacity, FARM_FIELD_START_DAYS)
@@ -402,6 +474,19 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
 
+	var charcoal_burner: HEBusiness = null
+	if charcoal_burner_capacity > 0:
+		charcoal_burner = make_charcoal_burner(CHARCOAL_BURNER_BUSINESS_ID, SETTLEMENT_ID, charcoal_burner_capacity)
+		# Wages across the whole Woodlot cycle plus its first timber input buffer
+		# (see startup_cash and make_charcoal_burner's startup_cycle_days).
+		charcoal_burner.balance = startup_cash(charcoal_burner, charcoal_burner_capacity)
+		# Households and the Bloomery start with weeks of timber in hand, so
+		# charcoal sales cannot begin until those buffers run down; the weekly
+		# tuner would read that lag as failure and shrink the crew on day 6.
+		charcoal_burner.startup_grace_until_day = CHARCOAL_BURNER_GRACE_DAYS
+		businesses[CHARCOAL_BURNER_BUSINESS_ID] = charcoal_burner
+		settlement.business_ids.append(CHARCOAL_BURNER_BUSINESS_ID)
+
 	var iron_mine: HEBusiness = null
 	if iron_mine_capacity > 0:
 		iron_mine = make_iron_mine(IRON_MINE_BUSINESS_ID, SETTLEMENT_ID, iron_mine_capacity)
@@ -426,6 +511,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
 	var toolsmith_workers_assigned := 0
+	var charcoal_burner_workers_assigned := 0
 	var trader_workers_assigned := 0
 	for i in HOUSEHOLD_COUNT:
 		var household_id := i + 1
@@ -451,6 +537,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		elif toolsmith != null and toolsmith_workers_assigned < toolsmith_capacity:
 			household.employer_business_id = TOOLSMITH_BUSINESS_ID
 			toolsmith_workers_assigned += WORKER_CAPACITY
+		elif charcoal_burner != null and charcoal_burner_workers_assigned < charcoal_burner_capacity:
+			household.employer_business_id = CHARCOAL_BURNER_BUSINESS_ID
+			charcoal_burner_workers_assigned += WORKER_CAPACITY
 		elif trader_workers_assigned < trader_capacity:
 			household.employer_business_id = TRADER_BUSINESS_ID
 			trader_workers_assigned += WORKER_CAPACITY
@@ -562,7 +651,21 @@ static func build_economy_with_toolsmith(_rng: RandomNumberGenerator) -> Diction
 	var toolsmith := TOOLSMITH_STARTING_CAPACITY
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - toolsmith
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, 0, 0, toolsmith)
+	return _build_world(half, remainder - half, trader, 0, 0, 0, toolsmith)
+
+## Eight businesses: the Iron Mine scenario plus a Charcoal Burner that turns
+## the Woodlot's timber into charcoal. Households switch to charcoal when it
+## is the cheaper way to heat a home (see HESimulation._satisfier_cascade);
+## the Bloomery's heat is bought the same way. The burner's own timber input
+## is raw material, not a need slot, so it stays timber.
+static func build_economy_with_charcoal_burner(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var bloomery := 8
+	var iron_mine := 8
+	var charcoal_burner := 4
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner
+	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
+	return _build_world(half, remainder - half, trader, bloomery, iron_mine, charcoal_burner)
 
 ## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
 ## Farm understaffed -- to make the self-correction visible fast rather
@@ -586,8 +689,9 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
+	var charcoal_burner: int = 4 if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
 	var toolsmith: int = TOOLSMITH_STARTING_CAPACITY if included.has(TOOLSMITH_BUSINESS_ID) else 0
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - toolsmith
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
 	var has_farm := included.has(FARM_BUSINESS_ID)
 	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
 	var farm := 0
@@ -599,7 +703,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 		farm = remainder
 	elif has_woodlot:
 		woodlot = remainder
-	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine, toolsmith)
+	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith)
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
 	for business_id in businesses.keys():

@@ -10,6 +10,10 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 @export var turn_rate: float = 6.0
 @export var accel: float = 14.0
 @export var arena_half_size: float = 90.0
+## A bark inside the player's bark radius keeps a sheep running for this long
+## (seconds, min..max), even once it is outside the normal scare radius.
+@export var startle_time_min: float = 2.0
+@export var startle_time_max: float = 2.5
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -27,6 +31,8 @@ var _wander_dir := Vector3.ZERO
 var _state_left: float = 0.0
 var _grazing: bool = true
 var _fleeing: bool = false
+var _startled_left: float = 0.0
+var _listening_to: Node = null
 var _bob_t: float = randf() * TAU
 
 func _ready() -> void:
@@ -91,6 +97,10 @@ func _physics_process(delta: float) -> void:
 		return
 	if _player == null or not is_instance_valid(_player):
 		_player = get_tree().get_first_node_in_group("on_foot_player") as Node3D
+	if _player != null and _listening_to != _player and _player.has_signal("barked"):
+		_player.connect("barked", _on_player_barked)
+		_listening_to = _player
+	_startled_left = maxf(_startled_left - delta, 0.0)
 
 	var desired := Vector3.ZERO
 	var speed := wander_speed
@@ -142,6 +152,15 @@ func _avoid_water(dir: Vector3) -> Vector3:
 			return d
 	return Vector3.ZERO
 
+## The player barked: sheep within the bark radius bolt for a few seconds.
+func _on_player_barked(bark_pos: Vector3) -> void:
+	if penned or _player == null or not _player.has_method("bark_radius"):
+		return
+	var off := global_position - bark_pos
+	off.y = 0.0
+	if off.length() <= _player.call("bark_radius"):
+		_startled_left = randf_range(startle_time_min, startle_time_max)
+
 ## Direction away from the player (blended away from the arena edge), or zero if
 ## the player is far enough away that this sheep is calm.
 func _flee_direction() -> Vector3:
@@ -155,7 +174,7 @@ func _flee_direction() -> Vector3:
 	var dist := away.length()
 	# Hysteresis: once running, keep going a little past the trigger distance.
 	var trigger := scare * (1.2 if _fleeing else 1.0)
-	if dist > trigger:
+	if dist > trigger and _startled_left <= 0.0:
 		return Vector3.ZERO
 	away = away.normalized() if dist > 0.01 else Vector3.FORWARD
 	return (away + _edge_push() + _separation()).normalized()
