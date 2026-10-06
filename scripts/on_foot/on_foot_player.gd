@@ -18,8 +18,20 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var bob_amount: float = 0.04
 @export var bob_frequency: float = 2.2
 @export var third_person_distance: float = 3.2
+@export var bark_cooldown: float = 0.45
+
+signal barked(world_position: Vector3)
 
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
+
+## Individual barks (see assets/audio/bark/CREDITS.md). Alternatives to audition
+## live in assets/audio/bark/options/.
+const DOG_BARKS: Array = [
+	preload("res://assets/audio/bark/bark_1.wav"),
+	preload("res://assets/audio/bark/bark_2.wav"),
+	preload("res://assets/audio/bark/bark_3.wav"),
+	preload("res://assets/audio/bark/bark_4.wav"),
+]
 
 ## Which character the next OnFootPlayer spawns as (set by the chooser scene).
 static var selected_character: String = "person"
@@ -38,6 +50,7 @@ const CHARACTERS := {
 		"sprint_speed": 8.5,
 		"jump_height": 1.2,
 		"scare_radius": 8.0,
+		"barks": [],
 		"anim": {
 			"idle": "CharacterArmature|Idle",
 			"walk": "CharacterArmature|Walk",
@@ -56,6 +69,8 @@ const CHARACTERS := {
 		"sprint_speed": 8.0,
 		"jump_height": 0.9,
 		"scare_radius": 15.0,
+		"barks": DOG_BARKS,
+		"bark_anim": "AnimalArmature|Attack",
 		"anim": {
 			"idle": "AnimalArmature|Idle",
 			"walk": "AnimalArmature|Walk",
@@ -70,7 +85,12 @@ var _arm: SpringArm3D
 var _camera: Camera3D
 var _model: Node3D
 var _anim: AnimationPlayer
-var _camera_mode: int = CameraMode.FIRST_PERSON
+var _camera_mode: int = CameraMode.THIRD_BACK
+var _bark_player: AudioStreamPlayer3D
+var _bark_cooldown_left: float = 0.0
+var _bark_anim_left: float = 0.0
+var _bark_anim_pending: bool = false
+var _last_bark: int = -1
 var _pitch: float = 0.0
 var _coyote_left: float = 0.0
 var _buffer_left: float = 0.0
@@ -127,9 +147,17 @@ func _ready() -> void:
 	_model.rotation_degrees = Vector3(0, 180, 0)
 	_model.scale = Vector3.ONE * float(_character["model_scale"])
 	add_child(_model)
+	if selected_character == "person":
+		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 
-	_set_camera_mode(CameraMode.FIRST_PERSON)
+	_bark_player = AudioStreamPlayer3D.new()
+	_bark_player.position.y = eye_height * 0.8
+	_bark_player.unit_size = 15.0
+	_bark_player.max_distance = 150.0
+	add_child(_bark_player)
+
+	_set_camera_mode(_camera_mode)
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -141,11 +169,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
 		_head.rotation.x = _pitch
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		bark()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			_buffer_left = jump_buffer_time
 		elif event.physical_keycode == KEY_F5:
 			_set_camera_mode((_camera_mode + 1) % CameraMode.size())
+
+## Left click: play a random bark (dog only; the person has none). Returns whether
+## a bark played. Emits `barked` so animals can react later.
+func bark() -> bool:
+	var barks: Array = _character.get("barks", [])
+	if barks.is_empty() or _bark_cooldown_left > 0.0:
+		return false
+	# Never the same clip twice in a row, and a little pitch variation.
+	var idx := randi() % barks.size()
+	if barks.size() > 1 and idx == _last_bark:
+		idx = (idx + 1 + randi() % (barks.size() - 1)) % barks.size()
+	_last_bark = idx
+	_bark_player.stream = barks[idx]
+	_bark_player.pitch_scale = randf_range(0.93, 1.07)
+	_bark_player.play()
+	_bark_cooldown_left = bark_cooldown
+	_bark_anim_pending = _character.has("bark_anim")
+	barked.emit(global_position)
+	return true
 
 ## How close (in metres) animals let this character get before fleeing.
 func scare_radius() -> float:
@@ -159,6 +208,8 @@ func _set_camera_mode(mode: int) -> void:
 	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
 
 func _physics_process(delta: float) -> void:
+	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
+	_bark_anim_left = maxf(_bark_anim_left - delta, 0.0)
 	if global_position.y < fall_limit:
 		global_position = spawn_point
 		velocity = Vector3.ZERO
@@ -223,6 +274,14 @@ func _update_camera(delta: float) -> void:
 
 func _update_animation() -> void:
 	if _anim == null or not _model.visible:
+		_bark_anim_pending = false
+		return
+	# One-shot bark pose; hold it briefly before returning to locomotion.
+	if _bark_anim_pending:
+		_bark_anim_pending = false
+		_bark_anim_left = 0.45
+		_anim.play(_character["bark_anim"], 0.05)
+	if _bark_anim_left > 0.0:
 		return
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
 	var anims: Dictionary = _character["anim"]
