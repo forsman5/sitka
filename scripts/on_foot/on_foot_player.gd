@@ -80,9 +80,17 @@ var _land_dip: float = 0.0
 var _gravity: float
 var _character: Dictionary
 
+## Where to put the player back if they ever fall out of the world.
+var spawn_point: Vector3 = Vector3.ZERO
+@export var fall_limit: float = -8.0
+
 func _ready() -> void:
 	_character = CHARACTERS[selected_character]
 	add_to_group("on_foot_player")
+	# The island terrain lives on layer 2 (the RTS uses it for click picking).
+	collision_mask = 1 | 2
+	# Stay glued to rolling terrain instead of going briefly airborne on slopes.
+	floor_snap_length = 0.5
 	walk_speed = _character["walk_speed"]
 	sprint_speed = _character["sprint_speed"]
 	jump_height = _character["jump_height"]
@@ -151,6 +159,10 @@ func _set_camera_mode(mode: int) -> void:
 	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
 
 func _physics_process(delta: float) -> void:
+	if global_position.y < fall_limit:
+		global_position = spawn_point
+		velocity = Vector3.ZERO
+
 	var on_floor := is_on_floor()
 
 	# Landing dip, scaled by impact speed.

@@ -39,6 +39,11 @@ func _ready() -> void:
 		_add_segment(FENCE, Vector3(half_w, 0, z), 0.0)
 
 func _add_segment(scene: PackedScene, pos: Vector3, yaw_deg: float) -> void:
+	# Sit each segment on the ground beneath it, sunk a little to hide slope gaps.
+	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain != null:
+		var g := to_global(pos)
+		pos.y = terrain.get_height(g.x, g.z) - global_position.y - 0.1
 	var body := StaticBody3D.new()
 	body.position = pos
 	body.rotation_degrees.y = yaw_deg

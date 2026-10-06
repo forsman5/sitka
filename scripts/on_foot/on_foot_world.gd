@@ -1,25 +1,54 @@
 extends Node3D
-## Blank test plane for first-person movement tuning.
+## First-person view of the main RTS island: the same heightmap terrain (default
+## MapConfig, so the same island), forest and berry-bush managers, and day/night
+## cycle -- minus the RTS-only machinery (capital placement, selection, nav baking).
 
-const PLANE_SIZE := 200.0
+## Must load first: resource nodes reference Island, and Island preloads resource
+## scenes, so the script load order has to start from Island, as in the RTS world.
+const _ISLAND_SCRIPT := preload("res://scripts/world/world.gd")
+const TERRAIN_SCENE := preload("res://scenes/world/heightmap_terrain.tscn")
+const FOREST_MANAGER := preload("res://scripts/world/forest_manager.gd")
+const BUSH_MANAGER := preload("res://scripts/world/bush_manager.gd")
+const DAY_NIGHT_CYCLE := preload("res://scripts/world/day_night_cycle.gd")
+
+## Established forest / bushes at start; the managers keep spawning more over time.
+const INITIAL_TREES := 60
+const INITIAL_BUSH_CLUSTERS := 12
+## Morning light, as in the RTS start (0.25 = dawn).
+const START_TIME_OF_DAY := 0.3
 
 ## Esc often releases mouse capture itself (browser pointer lock, embedded game
 ## window) before the game sees a key press, so a lost capture also opens the menu.
 const ESC_DEBOUNCE_MSEC := 250
 
+# [time, sky_top, horizon] -- same time keys as day_night_cycle.gd.
+const _SKY_KEYS := [
+	[0.00, Color(0.01, 0.01, 0.05), Color(0.04, 0.05, 0.12)],
+	[0.25, Color(0.30, 0.38, 0.62), Color(0.95, 0.60, 0.38)],
+	[0.50, Color(0.28, 0.52, 0.88), Color(0.68, 0.80, 0.92)],
+	[0.75, Color(0.30, 0.30, 0.55), Color(0.95, 0.50, 0.25)],
+	[1.00, Color(0.01, 0.01, 0.05), Color(0.04, 0.05, 0.12)],
+]
+
 var _pause_layer: CanvasLayer
 var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
+var _terrain: Node
+var _sky_mat: ProceduralSkyMaterial
 
 func _ready() -> void:
-	_build_ground()
-	_spawn_pen()
-	_spawn_flock()
+	GameState.time_of_day = START_TIME_OF_DAY
 	_build_environment()
+	_build_island()
 
+	var spawn := _ground_point(Vector2.ZERO)
 	var player := OnFootPlayer.new()
 	player.name = "Player"
-	player.position = Vector3(0, 0.1, 0)
+	player.spawn_point = spawn + Vector3(0, 0.5, 0)
+	player.position = player.spawn_point
 	add_child(player)
+
+	_spawn_pen()
+	_spawn_flock()
 
 	var hint := Label.new()
 	hint.text = "WASD move · Shift sprint · Space jump · F5 camera view · Esc menu"
@@ -28,6 +57,12 @@ func _ready() -> void:
 	layer.add_child(hint)
 	add_child(layer)
 	_build_pause_menu()
+
+func _process(_delta: float) -> void:
+	_update_sky(GameState.time_of_day)
+	if not get_tree().paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		_auto_paused_at = Time.get_ticks_msec()
+		_set_paused(true)
 
 func _build_pause_menu() -> void:
 	_pause_layer = CanvasLayer.new()
@@ -66,11 +101,6 @@ func _build_pause_menu() -> void:
 	quit.pressed.connect(_to_main_menu)
 	box.add_child(quit)
 
-func _process(_delta: float) -> void:
-	if not get_tree().paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		_auto_paused_at = Time.get_ticks_msec()
-		_set_paused(true)
-
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
@@ -88,65 +118,122 @@ func _to_main_menu() -> void:
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
-## Open-gated pen ahead of the flock, with its gate side facing the spawn point.
+## Terrain-height point under an XZ position.
+func _ground_point(xz: Vector2) -> Vector3:
+	return Vector3(xz.x, _terrain.get_height(xz.x, xz.y), xz.y)
+
+func _build_island() -> void:
+	_terrain = TERRAIN_SCENE.instantiate()
+	add_child(_terrain)  # Generates the island from the default MapConfig in _ready.
+
+	var water := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(3000, 3000)
+	water.mesh = plane
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.15, 0.38, 0.65)
+	mat.roughness = 0.05
+	water.material_override = mat
+	water.name = "WaterPlane"
+	add_child(water)
+
+	_build_shore_barrier()
+
+	# Same managers the RTS island runs: trees in the western forest, berry
+	# bush clusters spreading across the west of the island. They add their
+	# resource nodes as children of this node and keep spawning over time.
+	var forest := Node.new()
+	forest.name = "ForestManager"
+	forest.set_script(FOREST_MANAGER)
+	add_child(forest)
+	var bushes := Node.new()
+	bushes.name = "BushManager"
+	bushes.set_script(BUSH_MANAGER)
+	add_child(bushes)
+	forest.prewarm(INITIAL_TREES)
+	bushes.prewarm(INITIAL_BUSH_CLUSTERS)
+
+## Invisible wall ring at the waterline so nobody wades out to the edge of the
+## terrain collider and falls off the world.
+func _build_shore_barrier() -> void:
+	var cfg: MapConfig = _terrain.map_config
+	var radius := cfg.island_radius - cfg.shore_width * 0.5
+	var segments := 36
+	var seg_len := TAU * radius / segments + 0.6
+	var body := StaticBody3D.new()
+	body.name = "ShoreBarrier"
+	add_child(body)
+	for i in segments:
+		var a := TAU * i / segments
+		var col := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(seg_len, 10.0, 1.0)
+		col.shape = box
+		col.position = Vector3(cos(a) * radius, 2.0, sin(a) * radius)
+		col.rotation.y = -(a + PI * 0.5)
+		body.add_child(col)
+
+## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
 	var pen := SheepPen.new()
 	pen.name = "SheepPen"
-	pen.position = Vector3(8, 0, -36)
+	pen.position = _ground_point(Vector2(18, -2))
+	pen.rotation_degrees.y = -90.0
 	add_child(pen)
 
-## A small flock a short walk ahead of the spawn point.
+## A small flock a short walk from the spawn point.
 func _spawn_flock() -> void:
-	var center := Vector3(-6, 0, -18)
+	var center := Vector2(8, 14)
 	for i in randi_range(3, 5):
 		var sheep := OnFootSheep.new()
-		sheep.position = center + Vector3(randf_range(-3, 3), 0.1, randf_range(-3, 3))
+		var xz := center + Vector2(randf_range(-3, 3), randf_range(-3, 3))
+		sheep.position = _ground_point(xz) + Vector3(0, 0.3, 0)
 		sheep.rotation.y = randf() * TAU
 		add_child(sheep)
 
-func _build_ground() -> void:
-	var body := StaticBody3D.new()
-	var col := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(PLANE_SIZE, 1.0, PLANE_SIZE)
-	col.shape = box
-	col.position.y = -0.5
-	body.add_child(col)
-
-	var mesh := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(PLANE_SIZE, PLANE_SIZE)
-	mesh.mesh = plane
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.32, 0.5, 0.28)
-	mat.uv1_scale = Vector3(PLANE_SIZE / 2.0, PLANE_SIZE / 2.0, 1)
-	mat.albedo_texture = _checker_texture()
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS_ANISOTROPIC
-	mesh.material_override = mat
-	body.add_child(mesh)
-	add_child(body)
-
-## Small checker so motion and speed are readable on an otherwise blank plane.
-func _checker_texture() -> ImageTexture:
-	var img := Image.create(2, 2, false, Image.FORMAT_RGB8)
-	img.set_pixel(0, 0, Color(1, 1, 1))
-	img.set_pixel(1, 1, Color(1, 1, 1))
-	img.set_pixel(1, 0, Color(0.85, 0.85, 0.85))
-	img.set_pixel(0, 1, Color(0.85, 0.85, 0.85))
-	return ImageTexture.create_from_image(img)
-
+## Light and ambient come from the RTS DayNightCycle (it needs siblings named
+## DirectionalLight3D and WorldEnvironment). Its flat grey sky colours are meant
+## for a top-down view, so the sky here is a real procedural sky that follows the
+## same time of day.
 func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
+	sun.name = "DirectionalLight3D"
 	sun.rotation_degrees = Vector3(-50, -30, 0)
 	sun.shadow_enabled = true
 	add_child(sun)
 
+	_sky_mat = ProceduralSkyMaterial.new()
+	var sky := Sky.new()
+	sky.sky_material = _sky_mat
 	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.55, 0.7, 0.9)
+	env.background_mode = Environment.BG_SKY
+	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.7, 0.75, 0.85)
 	env.ambient_light_energy = 0.6
 	var we := WorldEnvironment.new()
+	we.name = "WorldEnvironment"
 	we.environment = env
 	add_child(we)
+
+	var cycle := Node.new()
+	cycle.name = "DayNightCycle"
+	cycle.set_script(DAY_NIGHT_CYCLE)
+	add_child(cycle)
+
+func _update_sky(t: float) -> void:
+	var a: Array = _SKY_KEYS[0]
+	var b: Array = _SKY_KEYS[1]
+	for i in range(_SKY_KEYS.size() - 1):
+		if t >= _SKY_KEYS[i][0] and t <= _SKY_KEYS[i + 1][0]:
+			a = _SKY_KEYS[i]
+			b = _SKY_KEYS[i + 1]
+			break
+	var span: float = b[0] - a[0]
+	var f: float = (t - a[0]) / span if span > 0.0 else 0.0
+	var top: Color = (a[1] as Color).lerp(b[1], f)
+	var horizon: Color = (a[2] as Color).lerp(b[2], f)
+	_sky_mat.sky_top_color = top
+	_sky_mat.sky_horizon_color = horizon
+	_sky_mat.ground_horizon_color = horizon
+	_sky_mat.ground_bottom_color = top * 0.4
