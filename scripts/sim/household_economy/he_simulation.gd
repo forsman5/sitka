@@ -696,12 +696,15 @@ func get_household_summary(household_id: int) -> Dictionary:
 ## `people` is how many of them that factor touches at all.
 func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var population := 0
+	var unemployed := 0
 	var health_total := 0.0
 	var morale_total := 0.0
 	var health_factors := {}
 	var morale_factors := {}
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
+		if not h.is_employed():
+			unemployed += h.worker_capacity()
 		var members: Array[Dictionary] = []
 		for age in h.worker_ages():
 			members.append({"works": true, "v": HEHousehold.vulnerability_of(true, age)})
@@ -718,6 +721,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
 	return {
 		"population": population,
+		"unemployed": unemployed,
 		"avg_health": (health_total / population) if population > 0 else 1.0,
 		"avg_morale": (morale_total / population) if population > 0 else 1.0,
 		"health_factors": _factor_list(health_factors, population),

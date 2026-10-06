@@ -119,6 +119,7 @@ var _day_accumulator: float = 0.0
 var _day_label: Label
 var _treasury_margin: Control
 var _population_label: Label
+var _top_unemployed_label: Label
 var _avg_health_label: Label
 var _avg_morale_label: Label
 var _population_box: HBoxContainer
@@ -779,7 +780,7 @@ func _build_ui() -> void:
 	_rebuild_business_rows()
 	_rebuild_household_rows()
 
-## "<person icon> 123    Health 82%    Morale 64%" -- town-wide headcount and
+## "<person icon> 123 (12 unemployed)    Health 82%    Morale 64%" -- town-wide headcount and
 ## per-person averages, colored by _wellbeing_color().
 func _build_population_summary() -> Control:
 	var margin := MarginContainer.new()
@@ -813,6 +814,10 @@ func _build_population_summary() -> Control:
 	_population_label = Label.new()
 	_population_label.add_theme_font_size_override("font_size", 22)
 	box.add_child(_population_label)
+	_top_unemployed_label = Label.new()
+	_top_unemployed_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_top_unemployed_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(_top_unemployed_label)
 
 	var health_caption := Label.new()
 	health_caption.text = "Health"
@@ -856,6 +861,7 @@ static func _wellbeing_color(value: float) -> Color:
 func _refresh_population_summary() -> void:
 	var w := _simulation.get_population_wellbeing()
 	_population_label.text = "%d" % w["population"]
+	_top_unemployed_label.text = "(%d unemployed)" % w["unemployed"]
 	_avg_health_label.text = "%.0f%%" % (w["avg_health"] * 100.0)
 	_avg_health_label.add_theme_color_override("font_color", _wellbeing_color(w["avg_health"]))
 	_avg_morale_label.text = "%.0f%%" % (w["avg_morale"] * 100.0)
