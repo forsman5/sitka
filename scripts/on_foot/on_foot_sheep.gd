@@ -14,6 +14,14 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 ## (seconds, min..max), even once it is outside the normal scare radius.
 @export var startle_time_min: float = 2.0
 @export var startle_time_max: float = 2.5
+## A bark makes a calm sheep hop straight up before it bolts.
+@export var react_time: float = 0.4
+@export var react_hop_height: float = 0.6
+## Each sheep waits a random beat (seconds, min..max) after a bark before hopping.
+@export var react_delay_min: float = 0.0
+@export var react_delay_max: float = 0.18
+## Chance that a sheep already running still gets spooked into a hop by a bark.
+@export_range(0.0, 1.0) var running_react_chance: float = 0.1
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -32,6 +40,8 @@ var _state_left: float = 0.0
 var _grazing: bool = true
 var _fleeing: bool = false
 var _startled_left: float = 0.0
+var _react_left: float = 0.0
+var _react_delay_left: float = 0.0
 var _listening_to: Node = null
 var _bob_t: float = randf() * TAU
 
@@ -101,6 +111,13 @@ func _physics_process(delta: float) -> void:
 		_player.connect("barked", _on_player_barked)
 		_listening_to = _player
 	_startled_left = maxf(_startled_left - delta, 0.0)
+	if _react_delay_left > 0.0:
+		_react_delay_left -= delta
+		if _react_delay_left <= 0.0:
+			_react_left = react_time
+	if _react_delay_left > 0.0 or _react_left > 0.0:
+		_react_step(delta)
+		return
 
 	var desired := Vector3.ZERO
 	var speed := wander_speed
@@ -159,7 +176,23 @@ func _on_player_barked(bark_pos: Vector3) -> void:
 	var off := global_position - bark_pos
 	off.y = 0.0
 	if off.length() <= _player.call("bark_radius"):
+		var calm := _startled_left <= 0.0 and not _fleeing
 		_startled_left = randf_range(startle_time_min, startle_time_max)
+		if calm or randf() < running_react_chance:
+			_react_delay_left = maxf(randf_range(react_delay_min, react_delay_max), 0.001)
+
+## Startle hop: stand still and jump straight up, then bolt (the bark's startle
+## timer is already set, so the flee starts as soon as we land).
+func _react_step(delta: float) -> void:
+	_react_left = maxf(_react_left - delta, 0.0)
+	var t := 1.0 - _react_left / react_time
+	_model.position.y = sin(t * PI) * react_hop_height
+	_model.rotation.z = 0.0
+	var horiz := Vector3(velocity.x, 0.0, velocity.z).move_toward(Vector3.ZERO, accel * delta)
+	velocity.x = horiz.x
+	velocity.z = horiz.z
+	velocity.y = 0.0 if is_on_floor() else velocity.y - _gravity * delta
+	move_and_slide()
 
 ## Direction away from the player (blended away from the arena edge), or zero if
 ## the player is far enough away that this sheep is calm.
