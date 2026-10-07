@@ -84,6 +84,12 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.CHARCOAL: 3.8,
 	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
+	## Households pick the cheapest satisfier per hunger point (grain 1.0/0.5
+	## = 2.0, flour 1.8/1 = 1.8, bread 6.0/4 = 1.5), so processed food wins
+	## once it is on sale. See he_scenario_seeds.gd's _mill_recipe/_bakery_recipe
+	## for the margins these prices leave the businesses.
+	Commodity.Type.FLOUR: 1.8,
+	Commodity.Type.BREAD: 6.0,
 	## Priced high enough that the Bloomery clears the reference wage even
 	## though EVERY unit it sells goes through the Trader's discounted
 	## export channel (TRADER_BUY_PRICE_FRACTION) -- unlike Farm/Woodlot,
@@ -1372,7 +1378,7 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
-		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		var floor: float = _wage_overdraft_floor(b, total_needed)
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
@@ -1447,6 +1453,17 @@ func _fail_business(business_id: int, record: Dictionary) -> void:
 ## export_revenue ledger _run_trade's Trader export pass uses, so this
 ## doesn't create money run_household_economy.gd's conservation check can't
 ## account for -- it's a real sale, just not through the Trader.
+## The lowest balance wages may push `b` to. A business flagged
+## wages_from_cash_only (the Mill and Bakery) gets no wage overdraft: wages and
+## its flour/timber purchases would draw on the same debt, and wages (paid
+## first each tick) could spend it all, leaving a crew on the payroll with
+## nothing to work on and no revenue to ever repay it. Its input credit line
+## (see _input_budget) is what lets it restart instead.
+func _wage_overdraft_floor(b: HEBusiness, total_needed: float) -> float:
+	if b.kind == HEBusiness.Kind.GOVERNMENT or b.wages_from_cash_only:
+		return 0.0
+	return -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+
 func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: Dictionary) -> void:
 	b.last_hardship_butchered = 0.0
 	if cash_shortfall <= 0.0001:
@@ -3043,7 +3060,16 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if seller != null:
 				var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
 				b2b["sold"] += bought
-				b2b["requested"] += requested * affordable_ratio
+				# A continuous producer (the Mill, with no harvest cycle) can
+				# never deliver PRODUCTION_INPUT_BUFFER_DAYS of stock at once,
+				# and a buyer that uses up everything it is sold never fills
+				# its buffer. Counting that standing gap as demand ratchets the
+				# supplier's price up 5% a day for as long as the chain exists
+				# (the Mill's flour went 1.8 -> 6+ in a month, bankrupting the
+				# Bakery it feeds), so its price signal is one day's real need.
+				# A lumpy seller (Farm, Woodlot) keeps the full refill signal.
+				var signalled_request: float = requested if seller.has_long_cycle() else minf(requested, daily_need_by_commodity.get(commodity, requested))
+				b2b["requested"] += signalled_request * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
 				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)

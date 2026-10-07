@@ -7,20 +7,25 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## Every need has two satisfiers: FOOD takes meat (twice grain's food value) or
-## grain, HEAT takes charcoal (four times timber's heat) or timber, and
-## CLOTHING takes leather (a one-for-one alternative to wool) or wool. Planned
-## addition is a one-line entry: cloth for CLOTHING (wool stays as the
-## raw-fibre stand-in until a tailor exists).
+## FOOD takes bread (4 hunger points), meat (1), flour (1) or grain (0.5); HEAT
+## takes charcoal (four times timber's heat) or timber; CLOTHING takes leather
+## (a one-for-one alternative to wool) or wool. Planned addition is a one-line
+## entry: cloth for CLOTHING (wool stays as the raw-fibre stand-in until a tailor
+## exists).
 static var _all: Array[HENeed] = []
 
 static func all() -> Array[HENeed]:
 	if _all.is_empty():
 		_all = [
-			# Grain per person matches Simulation.GRAIN_PER_PERSON_PER_DAY.
+			# Hunger points: bread 4, flour 1, grain 0.5 (densest first, so a
+			# household holding several eats bread before flour before grain).
+			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
+			# person -- Simulation.GRAIN_PER_PERSON_PER_DAY -- exactly as when
+			# grain was worth 1.0 and the need was 0.4.
 			# Food is the one need whose shortfall drives starvation.
-			# Meat packs twice grain's food into each unit, so it burns first.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.MEAT: 2.0, Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true, 0.6,
+			# Meat is worth twice grain's food (1.0 vs 0.5 here), as before the
+			# rescale; densest burns first.
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.FLOUR: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
 				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births."),
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the

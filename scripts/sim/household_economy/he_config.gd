@@ -17,6 +17,7 @@ const PRESETS := [
 	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
 	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
 	{"label": "Nine businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8, 10]},
+	{"label": "Eight businesses, with Mill and Bakery", "builder": "build_economy_with_mill_and_bakery", "include": [1, 2, 3, 6, 7, 8, 11, 12]},
 ]
 
 var _preset_picker: OptionButton

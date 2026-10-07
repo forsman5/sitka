@@ -50,6 +50,7 @@ func _init() -> void:
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
+	_check_mill_and_bakery_chain()
 	_check_government_taxes()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
@@ -1345,8 +1346,11 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.MEAT, Commodity.Type.FLOUR, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
+	var food := HENeeds.get_need(HENeed.Id.FOOD)
+	_assert(food.value_of(Commodity.Type.BREAD) == 4.0 and food.value_of(Commodity.Type.FLOUR) == 1.0 and food.value_of(Commodity.Type.GRAIN) == 0.5,
+		"Food points should be bread 4, flour 1, grain 0.5")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
 		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
@@ -1355,7 +1359,9 @@ func _check_needs_catalog() -> void:
 	_assert(HENeeds.for_commodity(Commodity.Type.MEAT).id == HENeed.Id.FOOD, "Meat should satisfy food")
 	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.MEAT), 2.0 * HENeeds.get_need(HENeed.Id.FOOD).value_of(Commodity.Type.GRAIN)),
 		"Meat should be worth twice grain as food")
-	_assert(HENeeds.get_need(HENeed.Id.FOOD).satisfiers()[0] == Commodity.Type.MEAT, "Meat is the denser food, so it should burn before grain")
+	var food_order := HENeeds.get_need(HENeed.Id.FOOD).satisfiers()
+	_assert(food_order[0] == Commodity.Type.BREAD and food_order.find(Commodity.Type.MEAT) < food_order.find(Commodity.Type.GRAIN),
+		"Bread is the densest food and meat is denser than grain, so they should burn first")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.MEAT), 0.2), "A person needs half as much meat as grain")
 	_assert(HENeeds.for_commodity(Commodity.Type.LEATHER).id == HENeed.Id.CLOTHING, "Leather should satisfy clothing")
 	_assert(is_equal_approx(HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.LEATHER), HENeeds.get_need(HENeed.Id.CLOTHING).value_of(Commodity.Type.WOOL)),
@@ -1514,6 +1520,38 @@ func _check_fuel_fallback() -> void:
 	_assert(bloomery.stock(charcoal) <= 1.0001, "A business cannot buy more charcoal than the burner holds, got %.3f" % bloomery.stock(charcoal))
 	_assert(bloomery.stock(timber) > 0.0, "The Bloomery should buy timber when the cheaper fuel is unavailable to it")
 	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "The Bloomery should not stall for fuel while timber is for sale")
+
+## Farm grain -> Mill flour -> Bakery bread (flour + timber heat), and
+## households actually eating the result.
+func _check_mill_and_bakery_chain() -> void:
+	print("\n=== Mill and Bakery: grain -> flour -> bread feeds households ===")
+	var plain := _new_sim("build_three_business_economy")
+	_assert(not plain.businesses.has(HEScenarioSeeds.MILL_BUSINESS_ID) and not plain.businesses.has(HEScenarioSeeds.BAKERY_BUSINESS_ID),
+		"Mill and Bakery should not exist in a scenario that never built them")
+
+	var sim := _new_sim("build_economy_with_mill_and_bakery")
+	var bakery: HEBusiness = sim.businesses[HEScenarioSeeds.BAKERY_BUSINESS_ID]
+	_assert(bakery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bakery's timber input should be a heat slot")
+	sim.advance_ticks(360)
+	var flour_made := 0.0
+	var bread_made := 0.0
+	for record in sim.get_daily_history(360):
+		flour_made += (record["produced"] as Dictionary).get("Flour", 0.0)
+		bread_made += (record["produced"] as Dictionary).get("Bread", 0.0)
+	var city := sim.get_city_summary()
+	print("  360 days: flour made=%.1f bread made=%.1f population=%d avg_food_stress=%.3f" % [flour_made, bread_made, city["population"], city["avg_food_stress"]])
+	_assert(flour_made > 0.0, "The Mill should have milled some flour")
+	_assert(bread_made > 0.0, "The Bakery should have baked some bread")
+	# The Bakery is not asserted to survive the year: its heat (timber) is scarce
+	# in this settlement, so it can exhaust its credit and be deleted (see
+	# _check_business_fails_at_credit_limit). The Mill, which has no such input
+	# squeeze, must still be trading flour.
+	_assert(city["market"].has("Flour"), "Flour should have a market row while the Mill is trading")
+	var bread_traded := 0.0
+	for record in sim.get_daily_history(360):
+		bread_traded += (record["traded_quantity"] as Dictionary).get("Bread", 0.0)
+	_assert(bread_traded > 0.0, "Households should have bought bread (it is cheaper per hunger point than grain)")
+	_check_demographic_invariants(sim)
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.
