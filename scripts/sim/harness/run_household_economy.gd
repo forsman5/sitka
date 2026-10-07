@@ -35,6 +35,7 @@ func _init() -> void:
 	_check_business_ledger_reconciles()
 	_check_staffing_decisions()
 	_check_staffing_outcomes()
+	_check_trader_stays_solvent()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -950,6 +951,33 @@ func _check_staffing_outcomes() -> void:
 	print("  burner with timber at 6.0: crew at the floor by day %d, closed on day %d" % [crew_floor_day, closed_day])
 	_assert(crew_floor_day >= 0, "A workshop losing money on every unit should shrink its crew")
 	_assert(closed_day >= 0, "A workshop that cannot cover its inputs should close once its credit is gone")
+
+## A Trader earns a spread on the units it moves, and what it can move is set by
+## the goods on offer, not by its crew. Its crew therefore follows throughput
+## (one worker moves TRADER_CAPACITY_PER_WORKER units a day): through years in
+## which grain and timber swing between floor and ceiling and exports dry up for
+## months, it must stay solvent instead of carrying a crew its volume cannot pay.
+func _check_trader_stays_solvent() -> void:
+	print("\n=== Trader: crew follows throughput, stays solvent through price swings ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	var lowest_balance := INF
+	var most_workers_idle := 0.0
+	for day in 1200:
+		sim.advance_ticks(1)
+		var trader: HEBusiness = sim.businesses.get(trader_id)
+		if trader == null:
+			break
+		lowest_balance = minf(lowest_balance, trader.balance)
+		if day >= 60 and day % 30 == 0:
+			var moved := trader.ledger_average("units_sold", 30)
+			var workers := float(sim._business_employed_worker_count(trader_id))
+			most_workers_idle = maxf(most_workers_idle, workers - moved / HESimulation.TRADER_CAPACITY_PER_WORKER)
+	var alive := sim.businesses.has(trader_id)
+	print("  Trader alive after 1200 days: %s, lowest balance %.0f, most workers beyond what its volume needed: %.1f" % [alive, lowest_balance, most_workers_idle])
+	_assert(alive, "The Trader should stay in business for 1200 days")
+	_assert(lowest_balance > 0.0, "The Trader should never run into debt, lowest balance %.0f" % lowest_balance)
+	_assert(most_workers_idle <= 8.0, "The Trader's crew should follow its throughput, but carried %.1f workers beyond it" % most_workers_idle)
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader

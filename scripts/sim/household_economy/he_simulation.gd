@@ -1715,6 +1715,11 @@ func _close_business_ledger(b: HEBusiness, reference_wage: float) -> void:
 	for c in outputs:
 		sold += float((b.todays_flows.get(HEBusiness.FLOW_SOLD, {}) as Dictionary).get(c, 0.0))
 		produced += float(b.last_output_produced.get(c, 0.0))
+	if b.kind == HEBusiness.Kind.TRADER:
+		for c in b.last_exported.keys():
+			sold += b.last_exported[c]
+		for c in b.last_imported.keys():
+			sold += b.last_imported[c]
 	b.ledger_today["reference_wage"] = reference_wage
 	b.close_ledger_day(prices, outputs, sold, produced)
 
@@ -2421,6 +2426,28 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 	if absf(ratio_error) > WAGE_PROFIT_MARGIN:
 		delta = roundi(clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP) * CAPACITY_STEP_MAX_WORKERS)
 		reason = "low_return" if delta < 0 else "high_return"
+
+	# A Trader's crew is its handling capacity: one worker moves
+	# TRADER_CAPACITY_PER_WORKER units a day, and what it earns is a spread on the
+	# units it actually moves, which the goods on offer (not its crew) decide. So
+	# the crew follows throughput, and it only grows while it is nearly full.
+	if b.kind == HEBusiness.Kind.TRADER:
+		var traded := b.ledger_average("units_sold", window)
+		var trader_target := traded * (1.0 + STAFFING_HEADROOM) / TRADER_CAPACITY_PER_WORKER
+		var trader_current := float(_business_employed_worker_count(b.id))
+		out["target_workers"] = trader_target
+		out["units_sold"] = traded
+		if trader_current > trader_target * (1.0 + STAFFING_SHRINK_TOLERANCE) + 0.5:
+			var trader_cut: int = -clampi(floori(trader_current - trader_target), 1, CAPACITY_STEP_MAX_WORKERS)
+			if trader_cut < delta or delta == 0:
+				delta = trader_cut
+				reason = "unused_capacity"
+		elif delta > 0 and traded < trader_current * TRADER_CAPACITY_PER_WORKER * 0.8:
+			delta = 0
+			reason = ""
+		out["delta"] = delta
+		out["reason"] = reason
+		return out
 
 	# The volume question needs a measured output per worker, so a production
 	# row (a harvest) inside the window; a field crew also needs the full cycle.
