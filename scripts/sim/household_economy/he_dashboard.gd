@@ -1617,8 +1617,18 @@ func _refresh_market_detail() -> void:
 			" (sales paced; harvest in %d days)" % seller["days_until_harvest"] if seller["paced"] else ""])
 	var need: Dictionary = report["need"]
 	if not need.is_empty() and not (need["required_history"] as Array).is_empty():
-		_add_market_detail_line("%s need (all %s, counted once): %.1f required, %.1f provided (latest day)" % [
-			need["label"], "/".join(need["satisfiers"]), need["required_history"].back(), need["provided_history"].back()])
+		var need_line := HBoxContainer.new()
+		var need_link := Button.new()
+		need_link.text = "%s need" % need["label"]
+		need_link.flat = true
+		need_link.tooltip_text = "Open %s need detail" % need["label"]
+		need_link.pressed.connect(_on_linked_need_pressed.bind(need["id"]))
+		need_line.add_child(need_link)
+		var need_rest := Label.new()
+		need_rest.text = ": %.1f required, %.1f provided (latest day)" % [
+			need["required_history"].back(), need["provided_history"].back()]
+		need_line.add_child(need_rest)
+		_market_detail_content.add_child(need_line)
 	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
@@ -2046,6 +2056,9 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, l
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_need_pressed(need_id: int) -> void:
+	_open_linked(_on_need_row_selected.bind(need_id))
 
 func _on_linked_market_pressed(commodity: int) -> void:
 	_open_linked(_on_market_row_selected.bind(commodity))
