@@ -10,6 +10,7 @@ const BarnFoundationScene = preload("res://scenes/entities/building/barn_foundat
 const ShipScene = preload("res://scenes/entities/ship.tscn")
 const TradeShipScene = preload("res://scenes/entities/trade_ship.tscn")
 const CowScene = preload("res://scenes/entities/cow.tscn")
+const SheepScene = preload("res://scenes/entities/sheep.tscn")
 const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 
 @onready var _day_label: Label = $Root/DayLabel
@@ -35,6 +36,7 @@ const ResourceNode = preload("res://scripts/entities/resource_node.gd")
 @onready var _spawn_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnButton
 @onready var _spawn_ship_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/SpawnShipButton
 @onready var _buy_cow_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuyCowButton
+@onready var _buy_sheep_btn: Button = $Root/SelectionPanel/VBoxContainer/BuildingView/BuySheepButton
 @onready var _build_btn: Button = $Root/BuildButton
 @onready var _build_menu: Panel = $Root/BuildMenu
 @onready var _jobs_btn: Button = $Root/JobsButton
@@ -270,6 +272,9 @@ func _refresh_panel() -> void:
 		_buy_cow_btn.visible = building != null and building.shows_buy_cow_button()
 		_buy_cow_btn.disabled = GameState.player_gold < GameState.cow_cost \
 			or (building != null and building.get("delivery_in_progress") == true)
+		_buy_sheep_btn.visible = building != null and building.shows_buy_sheep_button()
+		_buy_sheep_btn.disabled = GameState.player_gold < GameState.sheep_cost \
+			or (building != null and building.get("delivery_in_progress") == true)
 		if building != _last_selected_building:
 			if _last_selected_building != null and is_instance_valid(_last_selected_building) \
 					and _last_selected_building.is_in_group("cow_sleep_point"):
@@ -383,6 +388,30 @@ func _on_buy_cow_pressed() -> void:
 	IslandsManager.active_island.add_child(ship)
 	ship.global_position = Vector3(nearest_tr.global_position.x, 0.05, nearest_tr.global_position.z)
 	ship.call("setup", building, CowScene, nearest_tr.global_position)
+
+func _on_buy_sheep_pressed() -> void:
+	var building: Building = _last_selected_building
+	if building == null or not building.shows_buy_sheep_button():
+		return
+	if GameState.player_gold < GameState.sheep_cost:
+		return
+	if building.get("delivery_in_progress"):
+		return
+	var nearest_tr: Node3D = null
+	var nearest_dist := INF
+	for tr in get_tree().get_nodes_in_group("trade_routes"):
+		var d: float = building.global_position.distance_to((tr as Node3D).global_position)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest_tr = tr as Node3D
+	if nearest_tr == null:
+		return
+	GameState.player_gold -= GameState.sheep_cost
+	building.set("delivery_in_progress", true)
+	var ship := TradeShipScene.instantiate() as Node3D
+	IslandsManager.active_island.add_child(ship)
+	ship.global_position = Vector3(nearest_tr.global_position.x, 0.05, nearest_tr.global_position.z)
+	ship.call("setup", building, SheepScene, nearest_tr.global_position, "Sheep", "sheep")
 
 func _on_spawn_pressed() -> void:
 	if GameState.player_gold < GameState.settler_cost:
@@ -515,7 +544,7 @@ func _on_active_island_changed(island: Node) -> void:
 	var cam := get_tree().get_first_node_in_group("rts_camera") as Node3D
 	if cam != null and island != null:
 		cam.center_on(island.global_position)
-	for group in ["persons", "ships", "buildings", "resource_nodes", "foundations", "cows"]:
+	for group in ["persons", "ships", "buildings", "resource_nodes", "foundations", "cows", "sheep"]:
 		for n in get_tree().get_nodes_in_group(group):
 			if n.has_method("set_selected"):
 				n.set_selected(false)

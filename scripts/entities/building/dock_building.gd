@@ -9,3 +9,4 @@ func _ready() -> void:
 
 func shows_spawn_ship_button() -> bool: return true
 func shows_buy_cow_button() -> bool: return true
+func shows_buy_sheep_button() -> bool: return true
