@@ -53,6 +53,7 @@ func _init() -> void:
 	_check_need_substitutes()
 	_check_fuel_fallback()
 	_check_government_taxes()
+	_check_government_warehouse()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -1718,6 +1719,31 @@ func _check_fuel_fallback() -> void:
 	_assert(bloomery.stock(charcoal) <= 1.0001, "A business cannot buy more charcoal than the burner holds, got %.3f" % bloomery.stock(charcoal))
 	_assert(bloomery.stock(timber) > 0.0, "The Bloomery should buy timber when the cheaper fuel is unavailable to it")
 	_assert(bloomery.last_input_fulfillment_ratio > 0.0, "The Bloomery should not stall for fuel while timber is for sale")
+
+## Government Warehouse: costs 200 from the treasury, employs 2 admin workers
+## paid by the treasury, and money stays conserved.
+func _check_government_warehouse() -> void:
+	print("
+=== Government Warehouse: built from the treasury, 2 admin workers ===")
+	var sim := _new_sim("build_three_business_economy")
+	var cost := HEScenarioSeeds.WAREHOUSE_BUILD_COST
+	_assert(not sim.build_government_building(1, "warehouse"), "Starting treasury is too small to afford a warehouse")
+	sim.advance_ticks(1)
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	gov.balance = cost + 50.0
+	var money_before := sim._total_money()
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse should build once the treasury covers it")
+	_assert(absf(gov.balance - 50.0) < EPSILON, "Treasury should pay exactly the build cost")
+	_assert(absf(sim._total_money() - money_before) < EPSILON, "Building must conserve money")
+	_assert(not sim.build_government_building(1, "warehouse"), "Only one warehouse per town")
+	sim.advance_ticks(14)
+	var found := false
+	for report in sim.get_business_reports(1):
+		if report["kind"] == "warehouse":
+			found = true
+			_assert(report["employed_workers"] >= 1 and report["capacity"] == 2 and report["max_capacity"] == 2, "Warehouse should staff its 2 admin slots (employed %d)" % report["employed_workers"])
+			_assert(absf(report["construction_fund"] - cost) < EPSILON, "Warehouse keeps the build cost as its construction fund")
+	_assert(found, "Warehouse should appear in business reports")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.

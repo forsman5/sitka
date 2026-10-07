@@ -37,6 +37,10 @@ const GOVERNMENT_BUSINESS_ID := 9
 ## Opt-in like the Bloomery and Iron Mine; numbered after the Butcher (8) and
 ## the Government (9), which are present in every town.
 const CHARCOAL_BURNER_BUSINESS_ID := 10
+## Government Warehouse: built from the treasury, staffed by a fixed admin crew
+## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
+const WAREHOUSE_BUILD_COST := 200.0
+const WAREHOUSE_WORKERS := 2
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
 
@@ -229,6 +233,21 @@ static func make_charcoal_burner(business_id: int, settlement_id: int, initial_c
 	# harvest has landed, so its startup cash must outlast that whole cycle.
 	burner.startup_cycle_days = WOODLOT_GROWTH_DAYS
 	return burner
+
+static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
+	var warehouse := HEBusiness.new(business_id, "Government Warehouse", null, WAREHOUSE_WORKERS, WAREHOUSE_WORKERS, HEBusiness.Kind.WAREHOUSE, settlement_id)
+	warehouse.type_key = "warehouse"
+	return warehouse
+
+## Buildings the town government builds out of its treasury (not in
+## business_types(): they are not player-funded businesses and are never
+## seeded). Each has a gold `cost` the treasury must hold.
+static func government_buildings() -> Array[Dictionary]:
+	return [
+		{"type_key": "warehouse", "label": "Government Warehouse", "cost": WAREHOUSE_BUILD_COST,
+			"hint": "Employs %d admin workers; will buy inventory for construction projects." % WAREHOUSE_WORKERS,
+			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
+	]
 
 ## THE registry of business kinds a player can pick: the dashboard's "Create
 ## business" menu and the setup page's checkboxes are both built from it, so a
