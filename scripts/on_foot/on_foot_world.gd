@@ -38,7 +38,8 @@ const PEN_GROW_STEP := 6
 ## the Next Day button, so entering from the menu always starts a fresh run.
 static var _continuing: bool = false
 static var _day: int = 1
-static var _flock_size: int = 0
+## One entry per sheep: days survived since birth (starting flock are adults).
+static var _flock_ages: Array[int] = []
 
 ## Esc often releases mouse capture itself (browser pointer lock, embedded game
 ## window) before the game sees a key press, so a lost capture also opens the menu.
@@ -64,7 +65,7 @@ var _end_layer: CanvasLayer
 var _end_title: Label
 var _end_body: Label
 var _end_next: Button
-var _next_flock_size: int = 0
+var _next_flock_ages: Array[int] = []
 var _game_over: bool = false
 
 func _ready() -> void:
@@ -72,7 +73,9 @@ func _ready() -> void:
 		_continuing = false
 	else:
 		_day = 1
-		_flock_size = randi_range(STARTING_FLOCK_MIN, STARTING_FLOCK_MAX)
+		_flock_ages.clear()
+		for i in randi_range(STARTING_FLOCK_MIN, STARTING_FLOCK_MAX):
+			_flock_ages.append(OnFootSheep.ADULT_AGE)
 	GameState.time_of_day = START_TIME_OF_DAY
 	_build_environment()
 	_build_island()
@@ -188,22 +191,24 @@ func _end_day() -> void:
 	_day_ended = true
 	var penned := 0
 	var outside := 0
-	for sheep in get_tree().get_nodes_in_group("on_foot_sheep"):
-		if (sheep as OnFootSheep).penned:
+	var lost := 0
+	var lambs := 0
+	_next_flock_ages.clear()
+	for node in get_tree().get_nodes_in_group("on_foot_sheep"):
+		var sheep := node as OnFootSheep
+		if sheep.penned:
 			penned += 1
 		else:
 			outside += 1
-	var lost := 0
-	for i in outside:
-		if randf() < LOSS_CHANCE:
-			lost += 1
-	var survivors := penned + outside - lost
-	var lambs := 0
-	for i in survivors:
-		if randf() < LAMB_CHANCE:
+			if randf() < LOSS_CHANCE:
+				lost += 1
+				continue
+		# Lambs can't breed until they've aged ADULT_AGE nights.
+		_next_flock_ages.append(sheep.age_days + 1)
+		if sheep.is_adult() and randf() < LAMB_CHANCE:
 			lambs += 1
-	_next_flock_size = survivors + lambs
-	_game_over = _next_flock_size == 0
+			_next_flock_ages.append(0)
+	_game_over = _next_flock_ages.is_empty()
 
 	var lines: PackedStringArray = []
 	if _game_over:
@@ -219,7 +224,7 @@ func _end_day() -> void:
 	if lambs > 0:
 		lines.append("%d new lamb%s born!" % [lambs, "" if lambs == 1 else "s"])
 	if not _game_over:
-		lines.append("Flock for tomorrow: %d" % _next_flock_size)
+		lines.append("Flock for tomorrow: %d" % _next_flock_ages.size())
 	_end_body.text = "\n".join(lines)
 	_end_next.text = "New Game" if _game_over else "Next Day"
 
@@ -233,7 +238,7 @@ func _on_next_day_pressed() -> void:
 	else:
 		_continuing = true
 		_day += 1
-		_flock_size = _next_flock_size
+		_flock_ages = _next_flock_ages.duplicate()
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	get_tree().reload_current_scene()
@@ -362,7 +367,7 @@ func _spawn_companion(spawn: Vector3) -> void:
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
 	_pen = SheepPen.new()
-	var grow := maxi(0, ceili((_flock_size - PEN_BASE_CAPACITY) / float(PEN_GROW_STEP)))
+	var grow := maxi(0, ceili((_flock_ages.size() - PEN_BASE_CAPACITY) / float(PEN_GROW_STEP)))
 	_pen.segments_wide += grow
 	_pen.segments_deep += grow
 	_pen.name = "SheepPen"
@@ -373,8 +378,9 @@ func _spawn_pen() -> void:
 ## A small flock a short walk from the spawn point.
 func _spawn_flock() -> void:
 	var center := Vector2(8, 14)
-	for i in _flock_size:
+	for age in _flock_ages:
 		var sheep := OnFootSheep.new()
+		sheep.age_days = age
 		var xz := center + Vector2(randf_range(-3, 3), randf_range(-3, 3))
 		sheep.position = _ground_point(xz) + Vector3(0, 0.3, 0)
 		sheep.rotation.y = randf() * TAU

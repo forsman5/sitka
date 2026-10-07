@@ -6,6 +6,11 @@ class_name OnFootSheep extends CharacterBody3D
 const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 
 @export var wander_speed: float = 1.2
+## Nights survived since birth. Younger than ADULT_AGE is a lamb: smaller, and too
+## young to breed.
+const ADULT_AGE := 2
+const LAMB_SCALE := 0.6
+
 @export var flee_speed: float = 5.5
 @export var turn_rate: float = 6.0
 @export var accel: float = 14.0
@@ -14,6 +19,8 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 ## (seconds, min..max), even once it is outside the normal scare radius.
 @export var startle_time_min: float = 2.0
 @export var startle_time_max: float = 2.5
+
+var age_days: int = ADULT_AGE
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -52,13 +59,16 @@ func _ready() -> void:
 	# Same placement as sheep.tscn: rotated so the model faces -Z.
 	_model = MODEL_SCENE.instantiate()
 	_model.rotation_degrees = Vector3(0, 180, 0)
-	_model.scale = Vector3.ONE * 0.117
+	_model.scale = Vector3.ONE * 0.117 * (1.0 if is_adult() else LAMB_SCALE)
 	add_child(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if _anim != null:
 		_anim.play("Armature|Idle")
 
 	_state_left = randf_range(0.5, 4.0)
+
+func is_adult() -> bool:
+	return age_days >= ADULT_AGE
 
 ## Called by the pen when this sheep enters: walk to the slot, then stand still.
 func pen_in(slot_pos: Vector3, yaw: float) -> void:
