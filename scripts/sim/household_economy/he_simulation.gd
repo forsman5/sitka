@@ -352,16 +352,26 @@ const BUTCHERY_CREDIT_LIMIT := 2000.0
 ## HERD_EVAL_INTERVAL_DAYS cycles away from a fresh or just-culled herd, far
 ## longer than WAGE_NEGATIVE_BALANCE_FLOOR_DAYS' cushion covers. Rather than
 ## let it borrow indefinitely against a payoff that may never arrive in
-## time, once that cushion runs out it sells some of its own live herd
-## straight to cash, at a real discount off HERD_EXPORT_PRICE (worse than
-## even the Trader's already-discounted TRADER_BUY_PRICE_FRACTION) so a
-## ranch never prefers this over patiently waiting for a normal export --
-## it's a last resort, not a revenue strategy. Never sells below this
-## floor, so there's always enough left to regrow from. Cattle's floor
-## scales with its bigger HERD_CULL_TARGET (still ~20% of target, same
-## proportion as before) so a hardship sale can't gut just as large a
-## fraction of the now-bigger herd.
-const HARDSHIP_BUTCHER_PRICE_FRACTION := 0.25
+## time, once that cushion runs out its crew slaughters some of its own live
+## herd at home, with no Trader or Butcher involved. The meat stays in the
+## ranch's inventory and sells on the local market to the town's households
+## (the ranch's own workers among them), so cash arrives as it sells rather
+## than at once. It is deliberately a worse deal than the Butcher: far less
+## meat per head (HARDSHIP_BUTCHER_MEAT_PER_HEAD, about a twelfth of
+## BUTCHERY_MEAT_PER_HEAD, with no leather saved), and the work takes
+## HARDSHIP_BUTCHER_WORK_MULTIPLIER times the Butcher's worker-days per head,
+## which comes out of the herd's husbandry (care_worker_days). So a ranch
+## never prefers this over patiently waiting for a normal sale -- it's a last
+## resort, not a revenue strategy. Never slaughters below this floor, so
+## there's always enough left to regrow from. Cattle's floor scales with its
+## bigger HERD_CULL_TARGET (still ~20% of target, same proportion as before)
+## so a hardship slaughter can't gut just as large a fraction of the
+## now-bigger herd.
+const HARDSHIP_BUTCHER_MEAT_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 10.0,
+	HEBusiness.Species.SHEEP: 1.0,
+}
+const HARDSHIP_BUTCHER_WORK_MULTIPLIER := 2.0
 const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 30.0,
 	HEBusiness.Species.SHEEP: 20.0,
@@ -1022,6 +1032,9 @@ func _commodity_active_in_market(settlement_id: int, commodity: Commodity.Type) 
 		# the Trader instead, never the local market).
 		if b.kind == HEBusiness.Kind.HERD and commodity == Commodity.Type.WOOL and b.species == HEBusiness.Species.SHEEP:
 			return true
+		# ... and a ranch's hardship-slaughtered meat while it is on sale.
+		if b.kind == HEBusiness.Kind.HERD and commodity == Commodity.Type.MEAT and b.stock(commodity) > 0.0001:
+			return true
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
 		if b.sells(commodity):
@@ -1378,6 +1391,11 @@ func _pay_wages(record: Dictionary) -> void:
 			# toward what must be raised, so a crew that's hired is always
 			# actually paid (a hire into existing debt otherwise worked for 0).
 			_hardship_butcher_if_needed(b, maxf(0.0, total_needed - (b.balance - floor)), record)
+			# The meat that slaughter just put on the shelf only becomes cash
+			# when households buy it later this tick, so it counts as
+			# collateral against the wage floor -- otherwise the very wage it
+			# was slaughtered to cover would fail the ranch first.
+			floor -= b.stock(Commodity.Type.MEAT) * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.MEAT]
 		var available: float = max(0.0, b.balance - floor)
 		var paid: float = clampf(total_needed, 0.0, available)
 		var shortfall: float = total_needed - paid
@@ -1441,12 +1459,12 @@ func _fail_business(business_id: int, record: Dictionary) -> void:
 
 ## Kind.HERD only, called from _pay_wages before its cash allowance is
 ## computed: if this ranch can't cover today's wage bill even with its
-## generous negative-balance allowance, sell enough of its own live herd to
-## cover the gap -- see HARDSHIP_BUTCHER_PRICE_FRACTION/HARDSHIP_BUTCHER_
-## MIN_HERD's doc comment for why. Routed through the same exported/
-## export_revenue ledger _run_trade's Trader export pass uses, so this
-## doesn't create money run_household_economy.gd's conservation check can't
-## account for -- it's a real sale, just not through the Trader.
+## generous negative-balance allowance, slaughter enough of its own live herd
+## at home to cover the gap in meat, which then sells on the local market --
+## see HARDSHIP_BUTCHER_MEAT_PER_HEAD/HARDSHIP_BUTCHER_MIN_HERD's doc comment
+## for why. No money is created here: the meat is "produced" into the ranch's
+## inventory (like a sheep farm's wool) and the cash arrives only when
+## households buy it in _clear_market_for.
 func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: Dictionary) -> void:
 	b.last_hardship_butchered = 0.0
 	if cash_shortfall <= 0.0001:
@@ -1461,37 +1479,40 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 		# out the dip on the normal WAGE_NEGATIVE_BALANCE_FLOOR_DAYS
 		# allowance instead, same as any non-herd business would.
 		return
-	var price: float = HERD_EXPORT_PRICE[b.species] * HARDSHIP_BUTCHER_PRICE_FRACTION
-	if price <= 0.0:
+	var meat := Commodity.Type.MEAT
+	var meat_price: float = (markets[b.settlement_id] as HEMarket).price[meat]
+	var meat_per_head: float = HARDSHIP_BUTCHER_MEAT_PER_HEAD[b.species]
+	var head_value: float = meat_per_head * meat_price
+	if head_value <= 0.0:
+		return
+	# Meat already on the shelf from an earlier slaughter is income that is
+	# still on its way: don't slaughter more until it stops covering the gap.
+	if b.stock(meat) * meat_price >= cash_shortfall:
 		return
 	var available_head: float = max(0.0, b.herd_size - HARDSHIP_BUTCHER_MIN_HERD[b.species])
 	# Whole animals only, rounded UP: the shortfall is just today's unpaid
-	# wage (cents), so rounding down would never sell anything and the ranch
-	# would sit past its wage floor paying nobody. One head's proceeds then
-	# sit in the balance and fund the following days' wages, so this fires
-	# roughly once per (head price / daily wage) days, not daily.
-	var butchered: float = min(floorf(available_head), ceilf(cash_shortfall / price))
+	# wage (cents), so rounding down would never slaughter anything and the
+	# ranch would sit past its wage floor paying nobody. One head's meat then
+	# sells over the following days and funds their wages, so this fires
+	# roughly once per (head value / daily wage) days, not daily.
+	var butchered: float = min(floorf(available_head), ceilf((cash_shortfall - b.stock(meat) * meat_price) / head_value))
 	if butchered < 1.0:
 		return
 	b.herd_size -= butchered
-	var proceeds: float = butchered * price
-	b.balance += proceeds
+	var meat_made: float = butchered * meat_per_head
+	b.add_stock(meat, meat_made)
 	b.last_hardship_butchered = butchered
-	# Money-side only (export_revenue) -- NOT record["exported"]. A normal
-	# cull/export moves units OUT OF inventory (produced there by _run_herds,
-	# then subtracted here), so recording it as "exported" nets out exactly
-	# against that earlier "produced". A hardship sale converts herd_size
-	# straight to cash and never touches inventory at all -- it was never
-	# "produced" there in the first place, so subtracting it as an export
-	# would make run_household_economy.gd's stock reconciliation expect a
-	# drop in inventory that never happened (verified: this exact mismatch
-	# is what the check caught once hardship butchering actually started
-	# firing on a staffed Cattle Ranch).
-	record["export_revenue"] += proceeds
-	_export_revenue_total += proceeds
+	# The crew's time goes into the carcasses instead of husbandry.
+	var worker_days: float = butchered * BUTCHERY_WORKER_DAYS_PER_HEAD[b.species] * HARDSHIP_BUTCHER_WORK_MULTIPLIER
+	b.care_worker_days = maxf(0.0, b.care_worker_days - worker_days)
+	# Booked as production, like a sheep farm's wool: it appears in the
+	# ranch's inventory from nothing (the animal was herd_size, not inventory,
+	# so no CATTLE stock is consumed), and leaves it again when households buy
+	# it, which keeps run_household_economy.gd's stock reconciliation exact.
+	_accumulate(record["produced"], Commodity.name_of(meat), meat_made)
 	_log_herd_event(b, "hardship_butcher", {
-		"business_id": b.id, "head": butchered, "proceeds": proceeds,
-		"shortfall": cash_shortfall, "herd_after": b.herd_size,
+		"business_id": b.id, "head": butchered, "meat": meat_made,
+		"worker_days": worker_days, "shortfall": cash_shortfall, "herd_after": b.herd_size,
 	})
 
 ## Each PRODUCTION business produces its one recipe output using however
@@ -1638,7 +1659,10 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 	if seller == null:
 		return 0.0
 	var stock := seller.stock(commodity)
-	if seller.has_long_cycle():
+	# A ranch's home-butchered meat goes straight on sale rather than being
+	# paced over its herd cycle -- the cash is what the slaughter was for.
+	var home_butchered: bool = seller.kind == HEBusiness.Kind.HERD and commodity == Commodity.Type.MEAT
+	if seller.has_long_cycle() and not home_butchered:
 		var days_until: int = maxi(1, seller.days_until_next_harvest())
 		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 	return stock
@@ -2288,6 +2312,8 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 		stock_value = b.stock(herd_commodity) * HERD_EXPORT_PRICE[b.species] * TRADER_BUY_PRICE_FRACTION
 		if b.species == HEBusiness.Species.SHEEP:
 			stock_value += b.stock(Commodity.Type.WOOL) * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.WOOL]
+		# Home-butchered meat clears locally too (see _hardship_butcher_if_needed).
+		stock_value += b.stock(Commodity.Type.MEAT) * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.MEAT]
 	return (b.balance + stock_value) / daily_wage_bill
 
 ## Weekly self-tuning step 2: lay off whole households (highest household ID
@@ -2823,10 +2849,22 @@ func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusin
 		if b.settlement_id != settlement_id:
 			continue
 		if b.sells(commodity):
-			return b
+			return _home_butchery_seller(settlement_id, commodity, b)
 		if b.kind == HEBusiness.Kind.HERD and b.species == HEBusiness.Species.SHEEP and commodity == Commodity.Type.WOOL:
 			return b
-	return null
+	return _home_butchery_seller(settlement_id, commodity, null)
+
+## A market has one seller per good, but meat can come from two places: the
+## Butcher, or a ranch's own hardship slaughter (_hardship_butcher_if_needed).
+## The Butcher keeps the market while it holds meat; a ranch's home-butchered
+## meat sells when the Butcher is absent or sold out, so it is never stranded.
+func _home_butchery_seller(settlement_id: int, commodity: Commodity.Type, primary: HEBusiness) -> HEBusiness:
+	if commodity != Commodity.Type.MEAT or (primary != null and primary.stock(commodity) > 0.0001):
+		return primary
+	for herd_id in _herd_business_ids(settlement_id):
+		if (businesses[herd_id] as HEBusiness).stock(commodity) > 0.0001:
+			return businesses[herd_id]
+	return primary
 
 ## Sorted for the same deterministic-processing-order reason every other
 ## per-settlement business list in this file is sorted -- see _run_trade's

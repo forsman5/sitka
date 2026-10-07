@@ -46,6 +46,7 @@ func _init() -> void:
 	_check_herd_cull_target_is_configurable()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_hardship_butchery_makes_local_meat()
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
@@ -1273,6 +1274,52 @@ func _check_herd_monetization() -> void:
 			break
 	_assert(any_wool_traded, "Households should have actually bought wool from the Sheep Farm at least once in the run's final year")
 
+	_check_demographic_invariants(sim)
+
+## A ranch that cannot make payroll slaughters some of its own cattle at home:
+## no cash is created, the meat lands in the ranch's inventory (booked as
+## production) and is bought by the town's households over the following days,
+## and the ranch is not failed for the wage the slaughter was meant to cover.
+func _check_hardship_butchery_makes_local_meat() -> void:
+	print("\n=== Hardship butchering: a cash-starved ranch slaughters at home and sells meat locally ===")
+	var sim := _new_sim("build_three_business_economy")
+	var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+	var worker: HEHousehold = null
+	for household_id in sim.households.keys():
+		var h: HEHousehold = sim.households[household_id]
+		if h.worker_capacity() > 0:
+			worker = h
+			break
+	_assert(worker != null, "Expected a household able to staff the ranch")
+	if worker == null:
+		return
+	worker.employer_business_id = ranch.id
+	var wage_bill: float = sim._reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
+	ranch.balance = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * wage_bill - 20.0
+	var herd_before := ranch.herd_size
+	sim.advance_ticks(1)
+
+	_assert(sim.businesses.has(ranch.id), "A ranch with meat on its shelf to cover payroll should not fail the day it slaughters")
+	_assert(ranch.last_hardship_butchered >= 1.0, "A ranch past its wage floor should slaughter at least one head")
+	_assert(ranch.herd_size < herd_before, "Hardship butchering should shrink the live herd")
+	var day_one: Dictionary = sim.get_daily_history(1)[0]
+	_assert((day_one["exported"] as Dictionary).get("Cattle", 0.0) < 0.0001, "Hardship butchering must not be booked as a Trader export")
+	var made: float = (day_one["produced"] as Dictionary).get("Meat", 0.0)
+	_assert(made >= HESimulation.HARDSHIP_BUTCHER_MEAT_PER_HEAD[HEBusiness.Species.CATTLE], "The slaughter should produce meat, made %.1f" % made)
+	_assert(ranch.stock(Commodity.Type.CATTLE) < 0.0001, "Home slaughter should not touch the culled-livestock inventory")
+	print("  slaughtered %.0f head -> %.1f meat on the shelf (herd %.1f -> %.1f)" % [ranch.last_hardship_butchered, made, herd_before, ranch.herd_size])
+
+	var sold := 0.0
+	var balance_after_slaughter := ranch.balance
+	# Households only start buying meat once their grain buffers run down, a
+	# week or so in, so give them three weeks.
+	sim.advance_ticks(20)
+	for record in sim.get_daily_history(20):
+		sold += (record["traded_quantity"] as Dictionary).get("Meat", 0.0)
+	print("  households bought %.1f meat over the next 20 days; ranch balance %.1f -> %.1f" % [sold, balance_after_slaughter, ranch.balance])
+	_assert(sold > 0.0001, "Households should buy the ranch's home-butchered meat locally")
+	_assert(sim.businesses.has(ranch.id), "The ranch should survive on the meat it sells")
+	_assert(ranch.balance > balance_after_slaughter, "Meat sales should repay the ranch's debt")
 	_check_demographic_invariants(sim)
 
 ## The Butcher turns a ranch's cull into meat and leather instead of the Trader
