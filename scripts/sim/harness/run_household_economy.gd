@@ -723,9 +723,17 @@ func _check_price_signal() -> void:
 	# claim competes for today's offer and counts toward the price signal.
 	var biz := _new_sim("build_economy_with_charcoal_burner")
 	var b_settlement: int = biz.get_settlement_ids()[0]
+	# No household demand: businesses may take the whole offer, and the signal
+	# must agree with what they actually bought.
+	for household_id in biz.get_household_ids():
+		biz.households[household_id].balance = 0.0
+	var timber_before: float = biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
 	biz._run_input_purchasing(biz._new_daily_record())
+	var timber_sold: float = timber_before - biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
 	biz._run_market(biz._new_daily_record())
 	var timber_signal: Dictionary = biz._price_signal_today[b_settlement][Commodity.Type.TIMBER]
+	_assert(timber_signal["funded_business"] >= timber_sold - EPSILON, "Signal demand (%.1f) must cover what businesses actually bought (%.1f)" % [timber_signal["funded_business"], timber_sold])
+	_assert(timber_sold < timber_signal["funded_business"] + EPSILON, "Businesses cannot buy more than their capped request")
 	# Timber starts at zero in every buyer's hands, so the claim is exactly
 	# TARGET_BUFFER_DAYS of the PRODUCTION_INPUT_BUFFER_DAYS refill.
 	var claim_share: float = HESimulation.TARGET_BUFFER_DAYS / HESimulation.PRODUCTION_INPUT_BUFFER_DAYS

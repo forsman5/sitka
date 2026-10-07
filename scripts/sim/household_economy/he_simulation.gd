@@ -3147,6 +3147,18 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		var daily_input_cost := 0.0
 		for commodity in daily_need_by_commodity.keys():
 			daily_input_cost += daily_need_by_commodity[commodity] * local_market.price[commodity]
+		# The most a business buys of one input in a day is the same
+		# TARGET_BUFFER_DAYS horizon households ask over -- a real purchase
+		# limit, not just the weight of its share of a seller's offer -- so a
+		# 14-day working buffer fills over a few days instead of crowding
+		# households out or hoarding at a spiking price. The uncapped refill
+		# is kept as a planning figure for the price signal's report.
+		var buffer_request: Dictionary[Commodity.Type, float] = {}
+		for commodity in requested_by_commodity.keys():
+			buffer_request[commodity] = requested_by_commodity[commodity]
+			var daily_use: float = daily_need_by_commodity.get(commodity, 0.0)
+			if daily_use > 0.0001:
+				requested_by_commodity[commodity] = minf(requested_by_commodity[commodity], daily_use * TARGET_BUFFER_DAYS)
 		for commodity in requested_by_commodity.keys():
 			var requested: float = requested_by_commodity[commodity]
 			if requested <= 0.0001:
@@ -3154,10 +3166,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 
 			var price: float = local_market.price[commodity]
 			total_cost_if_fully_supplied += requested * price
-			# The claim on a local seller is capped at the same buffer horizon
-			# households ask over, so a business's bigger working buffer
-			# can't crowd them out.
-			var claim := minf(requested, daily_need_by_commodity.get(commodity, 0.0) * TARGET_BUFFER_DAYS)
+			var claim := requested
 			var offer := _business_offer(buyer.settlement_id, commodity, trader_import_capacity, not seller_only.get(commodity, false), claim)
 			offers_seen[commodity] = offer
 			claims_seen[commodity] = claim
@@ -3183,7 +3192,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		for commodity in offers_seen.keys():
 			var signal_today := _price_signal_entry(buyer.settlement_id, commodity)
 			signal_today["funded_business"] += claims_seen[commodity] * affordable_ratio
-			signal_today["business_buffer_request"] += requested_by_commodity[commodity] * affordable_ratio
+			signal_today["business_buffer_request"] += buffer_request[commodity] * affordable_ratio
 			if _business_selling(buyer.settlement_id, commodity) == null:
 				signal_today["import_capacity"] = maxf(signal_today["import_capacity"], offers_seen[commodity])
 
