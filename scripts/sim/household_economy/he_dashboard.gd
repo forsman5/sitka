@@ -1596,9 +1596,39 @@ func _refresh_market_detail() -> void:
 		_market_detail_content.remove_child(child)
 		child.queue_free()
 	var clearing: Dictionary = report["last_clearing"]
-	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
+	_add_market_detail_line("Posted price %.2f  |  Last clearing (all buyers): offered %.1f, affordable requests %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	var household: Dictionary = report["household_demand"]
+	_add_market_detail_line("Households: %.1f wanted for stock  |  %.1f affordable  |  %.1f bought" % [
+		household["wanted"], household["funded"], household["bought"]])
+	var price_signal: Dictionary = report["price_signal"]
+	if not price_signal.is_empty():
+		var imbalance := "funded shortage %.1f" % price_signal["shortage"] if price_signal["shortage"] > 0.0001 \
+			else "unsold offer %.1f" % price_signal["unsold"]
+		_add_market_detail_line("Price %.2f -> %.2f (%s)  |  %s  |  households wanted but could not fund %.1f%s" % [
+			price_signal["opening_price"], price_signal["closing_price"], price_signal["reason"],
+			imbalance, price_signal["unfunded_household"],
+			"  |  at price %s" % price_signal["bound"] if price_signal["bound"] != "" else ""])
+	var seller: Dictionary = report["seller"]
+	if not seller.is_empty():
+		_add_market_detail_line("%s: %.1f in warehouse, %.1f offered today%s" % [
+			seller["name"], seller["stock"], seller["paced_offer"],
+			" (sales paced; harvest in %d days)" % seller["days_until_harvest"] if seller["paced"] else ""])
+	var need: Dictionary = report["need"]
+	if not need.is_empty() and not (need["required_history"] as Array).is_empty():
+		var need_line := HBoxContainer.new()
+		var need_link := Button.new()
+		need_link.text = "%s need" % need["label"]
+		need_link.flat = true
+		need_link.tooltip_text = "Open %s need detail" % need["label"]
+		need_link.pressed.connect(_on_linked_need_pressed.bind(need["id"]))
+		need_line.add_child(need_link)
+		var need_rest := Label.new()
+		need_rest.text = ": %.1f required, %.1f provided (latest day)" % [
+			need["required_history"].back(), need["provided_history"].back()]
+		need_line.add_child(need_rest)
+		_market_detail_content.add_child(need_line)
 	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
@@ -1619,9 +1649,12 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	title.text = "Supply and demand (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
-	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
+	var wanted_color := HESparkline.color_for_series(2)
+	var bought_color := HESparkline.color_for_series(3)
+	var requested_name := "Affordable requests (incl. export capacity)" if _market_chart_export_appetite else "Affordable requests"
 	var requested_history: Array = report["demanded_with_export_history"] if _market_chart_export_appetite else report["demanded_history"]
-	for entry in [["Supplied", supplied_color], [requested_name, requested_color]]:
+	for entry in [["Supplied", supplied_color], [requested_name, requested_color],
+			["Households wanted", wanted_color], ["Households bought", bought_color]]:
 		var legend := Label.new()
 		legend.text = entry[0]
 		legend.add_theme_color_override("font_color", entry[1])
@@ -1631,7 +1664,9 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.show_max_label = true
 	chart.set_series([
 		{"name": "Supplied", "values": _tail(report["supplied_history"]), "color": supplied_color},
-		{"name": "Requested", "values": _tail(requested_history), "color": requested_color},
+		{"name": "Affordable requests", "values": _tail(requested_history), "color": requested_color},
+		{"name": "Households wanted", "values": _tail(report["household_wanted_history"]), "color": wanted_color},
+		{"name": "Households bought", "values": _tail(report["household_bought_history"]), "color": bought_color},
 	])
 	_market_detail_content.add_child(chart)
 
@@ -2021,6 +2056,9 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, l
 	label.text = text
 	box.add_child(label)
 	return box
+
+func _on_linked_need_pressed(need_id: int) -> void:
+	_open_linked(_on_need_row_selected.bind(need_id))
 
 func _on_linked_market_pressed(commodity: int) -> void:
 	_open_linked(_on_market_row_selected.bind(commodity))

@@ -30,6 +30,8 @@ func _init() -> void:
 	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
+	_check_need_vs_funded_demand()
+	_check_price_signal()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -205,6 +207,14 @@ func _check_multi_settlement_locality() -> void:
 		"Disconnected settlements with different supply should develop independent prices")
 	_assert(sim.get_household_summary(1001)["settlement_id"] == 1 and sim.get_household_summary(2001)["settlement_id"] == 2,
 		"Every household summary should retain authoritative settlement identity")
+	# Need history is per town, not valley-wide.
+	var food: int = HENeed.Id.FOOD
+	for town in [1, 2]:
+		var household: HEHousehold = sim.households[sim.get_household_ids(town)[0]]
+		var town_need: Dictionary = sim.get_market_report(town, Commodity.Type.GRAIN)["need"]
+		var valley_total: float = sim.get_daily_history(1)[0]["needs"][food]["required"]
+		_assert(absf(town_need["required_history"].back() - household.last_need_required[food]) < EPSILON, "Town %d need history should hold only its own households' requirement" % town)
+		_assert(town_need["required_history"].back() < valley_total - EPSILON, "Town %d need history must not equal the valley-wide total" % town)
 	print("  two settlements enumerate, hire, clear markets, and report independently")
 
 ## Goods and money reconcile as opening + produced - consumed - exported
@@ -565,6 +575,200 @@ func _check_market_supply_demand_history() -> void:
 	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
 	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
 	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
+
+## Need, wanted-for-stock, affordable and bought are four different numbers.
+## Each case sets every household into one state, clears one day's market, and
+## checks how the household-only signals diverge.
+func _check_need_vs_funded_demand() -> void:
+	print("\n=== Household demand signals: wanted vs affordable vs bought ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"no cash": {"balance": 0.0, "household_stock": 0.0, "seller_stock": 1000.0},
+		"cash but no supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 0.0},
+		"already stocked": {"balance": 1000.0, "household_stock": 1000.0, "seller_stock": 1000.0},
+		"cash and supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 1000.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			if c["household_stock"] > 0.0:
+				h.add_stock(grain, c["household_stock"])
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var market: HEMarket = sim.markets[settlement_id]
+		var offer: float = sim._household_offer(settlement_id, grain)
+		sim._run_market(sim._new_daily_record())
+		var d := market.household_demand(grain)
+		print("  %-20s wanted=%.1f affordable=%.1f bought=%.1f" % [label, d["wanted"], d["funded"], d["bought"]])
+		_assert(d["funded"] <= d["wanted"] + EPSILON, "%s: affordable cannot exceed wanted" % label)
+		_assert(d["bought"] <= d["funded"] + EPSILON, "%s: bought cannot exceed affordable" % label)
+		match label:
+			"no cash":
+				_assert(d["wanted"] > 1.0 and d["funded"] < EPSILON and d["bought"] < EPSILON, "No cash: wanted but nothing affordable or bought")
+			"cash but no supply":
+				_assert(d["wanted"] > 1.0 and absf(d["funded"] - d["wanted"]) < EPSILON and d["bought"] < EPSILON, "No supply: fully affordable but nothing bought")
+			"already stocked":
+				_assert(d["wanted"] < EPSILON and d["funded"] < EPSILON and d["bought"] < EPSILON, "Stocked households want nothing")
+			"cash and supply":
+				_assert(d["bought"] > 1.0 and absf(d["bought"] - minf(offer, d["funded"])) < EPSILON, "Cash and supply: bought is the funded request capped by the (paced) offer")
+		# A stocked household still NEEDS grain; need is independent of wanting.
+		sim._run_consumption(sim._new_daily_record())
+		var any_household: HEHousehold = sim.households[sim.get_household_ids()[0]]
+		_assert(any_household.last_need_required.get(HENeed.Id.FOOD, 0.0) > 0.0, "%s: food is still required regardless of cash or stock" % label)
+		_assert(not sim._market_need_report(settlement_id, grain).is_empty(), "%s: grain should map to the food need" % label)
+
+	# Histories align by day, and a shared need is reported once, not per good.
+	var run := _new_sim("build_economy_with_charcoal_burner")
+	run.advance_ticks(60)
+	var settlement: int = run.get_settlement_ids()[0]
+	var report := run.get_market_report(settlement, Commodity.Type.TIMBER)
+	var wanted: Array = report["household_wanted_history"]
+	var funded: Array = report["household_funded_history"]
+	var bought: Array = report["household_bought_history"]
+	var plain: Array = report["demanded_history"]
+	_assert(wanted.size() == plain.size() and funded.size() == plain.size() and bought.size() == plain.size(), "Household series should have one point per day like the existing ones")
+	for i in wanted.size():
+		_assert(funded[i] <= wanted[i] + EPSILON and bought[i] <= funded[i] + EPSILON, "Day %d: wanted >= affordable >= bought" % i)
+		_assert(bought[i] <= plain[i] + EPSILON, "Day %d: household purchases fit within all-buyer affordable requests" % i)
+	var timber_need: Dictionary = report["need"]
+	var charcoal_need: Dictionary = run.get_market_report(settlement, Commodity.Type.CHARCOAL)["need"]
+	_assert(timber_need["id"] == charcoal_need["id"] and timber_need["required_history"] == charcoal_need["required_history"], "Timber and charcoal should report the same heat requirement")
+	_assert(timber_need["required_history"].size() == plain.size(), "Need history should cover the same days as market history")
+	var record: Dictionary = run.get_daily_history(1)[0]
+	_assert(absf(timber_need["required_history"].back() - record["needs"][timber_need["id"]]["required"]) < EPSILON, "Need history's last point is the latest day's requirement")
+	print("  histories align over %d days; heat need reported once for timber and charcoal" % plain.size())
+
+## One controlled grain market day: every household has this balance and no
+## stock, the grain seller holds exactly this much, then clear and price.
+func _run_grain_day(sim: HESimulation, settlement_id: int, balance: float, seller_stock: float) -> void:
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		h.inventory.clear()
+		h.balance = balance
+	var seller := sim._business_selling(settlement_id, Commodity.Type.GRAIN)
+	seller.inventory.clear()
+	seller.add_stock(Commodity.Type.GRAIN, seller_stock)
+	sim._run_market(sim._new_daily_record())
+	sim._apply_price_signals()
+
+## One price move per good per day: funded shortage up, unsold offer down,
+## need without purchasing power neither, exports outside the signal.
+func _check_price_signal() -> void:
+	print("\n=== Price signal: funded shortage up, unsold down, unfunded need neutral ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"funded shortage": {"balance": 1000.0, "seller_stock": 10.0},
+		"unsold offer": {"balance": 1000.0, "seller_stock": 100000.0},
+		"unfunded households": {"balance": 0.0, "seller_stock": 1000.0},
+		"no supply, no cash": {"balance": 0.0, "seller_stock": 0.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		var market: HEMarket = sim.markets[settlement_id]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var opening: float = market.price[grain]
+		sim._run_market(sim._new_daily_record())
+		_assert(market.price[grain] == opening, "%s: price must not move during clearing" % label)
+		sim._apply_price_signals()
+		var closing: float = market.price[grain]
+		var s: Dictionary = market.last_price_signal.get(grain, {})
+		_assert(not s.is_empty() and s["opening_price"] == opening and s["closing_price"] == closing, "%s: signal records opening and closing price" % label)
+		print("  %-20s %.3f -> %.3f  %s (shortage %.1f, unsold %.1f, unfunded household %.1f)" % [label, opening, closing, s.get("reason", "?"), s.get("shortage", 0.0), s.get("unsold", 0.0), s.get("unfunded_household", 0.0)])
+		_assert(absf(closing / opening - 1.0) <= HESimulation.PRICE_ADJUST_STEP + 0.00001, "%s: one day's move is capped" % label)
+		match label:
+			"funded shortage":
+				_assert(closing > opening and s["shortage"] > 1.0 and s["reason"] == "funded shortage", "A funded shortage should raise the price")
+			"unsold offer":
+				_assert(closing < opening and s["unsold"] > 1.0 and s["reason"] == "unsold offer", "Unsold offer should lower the price")
+			"unfunded households":
+				_assert(closing < opening and s["unfunded_household"] > 1.0 and s["shortage"] < EPSILON, "Households that want but cannot pay leave offer unsold: price falls, never rises")
+			"no supply, no cash":
+				_assert(closing == opening and s["reason"] == "no activity", "Need without purchasing power or supply should not move the price")
+
+	# Smoothing: a persistent shortage keeps raising the price, but a single
+	# shortage day in the middle of a glut trend does not reverse it.
+	var persistent := _new_sim("build_three_business_economy")
+	var p_settlement: int = persistent.get_settlement_ids()[0]
+	var p_market: HEMarket = persistent.markets[p_settlement]
+	var start: float = p_market.price[grain]
+	for d in 3:
+		_run_grain_day(persistent, p_settlement, 1000.0, 10.0)
+	var after_three: float = p_market.price[grain]
+	_assert(after_three > start, "A persistent funded shortage keeps raising the price")
+	var trend := _new_sim("build_three_business_economy")
+	var t_settlement: int = trend.get_settlement_ids()[0]
+	for d in 5:
+		_run_grain_day(trend, t_settlement, 1000.0, 100000.0)
+	var before_blip: float = trend.markets[t_settlement].price[grain]
+	_run_grain_day(trend, t_settlement, 1000.0, 10.0)
+	_assert(trend.markets[t_settlement].price[grain] < before_blip, "One shortage day should not reverse a falling trend")
+
+	# A business's 14-day buffer refill is a planning figure; only its 3-day
+	# claim competes for today's offer and counts toward the price signal.
+	var biz := _new_sim("build_economy_with_charcoal_burner")
+	var b_settlement: int = biz.get_settlement_ids()[0]
+	# No household demand: businesses may take the whole offer, and the signal
+	# must agree with what they actually bought.
+	for household_id in biz.get_household_ids():
+		biz.households[household_id].balance = 0.0
+	var timber_before: float = biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
+	biz._run_input_purchasing(biz._new_daily_record())
+	var timber_sold: float = timber_before - biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
+	biz._run_market(biz._new_daily_record())
+	var timber_signal: Dictionary = biz._price_signal_today[b_settlement][Commodity.Type.TIMBER]
+	_assert(timber_signal["funded_business"] >= timber_sold - EPSILON, "Signal demand (%.1f) must cover what businesses actually bought (%.1f)" % [timber_signal["funded_business"], timber_sold])
+	_assert(timber_sold < timber_signal["funded_business"] + EPSILON, "Businesses cannot buy more than their capped request")
+	# Timber starts at zero in every buyer's hands, so the claim is exactly
+	# TARGET_BUFFER_DAYS of the PRODUCTION_INPUT_BUFFER_DAYS refill.
+	var claim_share: float = HESimulation.TARGET_BUFFER_DAYS / HESimulation.PRODUCTION_INPUT_BUFFER_DAYS
+	_assert(timber_signal["funded_business"] > EPSILON, "Test setup: businesses should be asking for timber")
+	_assert(absf(timber_signal["funded_business"] - timber_signal["business_buffer_request"] * claim_share) < 0.01 * timber_signal["business_buffer_request"], "Signal demand (%.1f) should be the %.0f-day claim, not the full buffer refill (%.1f)" % [timber_signal["funded_business"], HESimulation.TARGET_BUFFER_DAYS, timber_signal["business_buffer_request"]])
+
+	# Import capacity is not unsold local supply: the Trader's unused capacity
+	# must never push the ore price down, and imports that met the request
+	# create no pressure.
+	var imp := _new_sim("build_three_business_economy_with_bloomery")
+	imp.advance_ticks(40)
+	var imp_market: HEMarket = imp.markets[imp.get_settlement_ids()[0]]
+	var ore_signal: Dictionary = imp_market.last_price_signal.get(Commodity.Type.IRON_ORE, {})
+	print("  ore signal: %s" % [ore_signal])
+	_assert(not ore_signal.is_empty() and ore_signal["import_capacity"] > ore_signal["funded_business"], "Test setup: ore should be imported with spare Trader capacity")
+	_assert(ore_signal["unsold"] < EPSILON, "Spare import capacity must not read as unsold supply")
+
+	# Exports are not local demand: iron (only the Trader buys it) has no
+	# signal and keeps its posted price while exporting.
+	var iron_sim := _new_sim("build_three_business_economy_with_bloomery")
+	iron_sim.advance_ticks(60)
+	var iron_market: HEMarket = iron_sim.markets[iron_sim.get_settlement_ids()[0]]
+	_assert(iron_market.price[Commodity.Type.IRON] == HESimulation.BASE_PRICE[Commodity.Type.IRON], "Export appetite must not move iron's local price")
+
+	# Price bounds: a long glut hits the floor and the day count is recorded.
+	var glut := _new_sim("build_three_business_economy")
+	var g_settlement: int = glut.get_settlement_ids()[0]
+	for d in 120:
+		for household_id in glut.get_household_ids():
+			glut.households[household_id].balance = 0.0
+		glut._business_selling(g_settlement, grain).add_stock(grain, 100000.0)
+		glut._run_market(glut._new_daily_record())
+		glut._apply_price_signals()
+	_assert(glut.markets[g_settlement].floor_days.get(grain, 0) > 0, "A persistent glut should record days at the price floor")
+	print("  persistent shortage 3 days: %.3f -> %.3f; glut floor days: %d" % [start, after_three, glut.markets[g_settlement].floor_days.get(grain, 0)])
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
