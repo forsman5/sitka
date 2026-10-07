@@ -20,6 +20,8 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 ## Each sheep waits a random beat (seconds, min..max) after a bark before hopping.
 @export var react_delay_min: float = 0.0
 @export var react_delay_max: float = 0.18
+## Chance that a sheep already running still gets spooked into a hop by a bark.
+@export_range(0.0, 1.0) var running_react_chance: float = 0.1
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -176,7 +178,7 @@ func _on_player_barked(bark_pos: Vector3) -> void:
 	if off.length() <= _player.call("bark_radius"):
 		var calm := _startled_left <= 0.0 and not _fleeing
 		_startled_left = randf_range(startle_time_min, startle_time_max)
-		if calm:
+		if calm or randf() < running_react_chance:
 			_react_delay_left = maxf(randf_range(react_delay_min, react_delay_max), 0.001)
 
 ## Startle hop: stand still and jump straight up, then bolt (the bark's startle
