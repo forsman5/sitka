@@ -272,6 +272,11 @@ var last_wage_per_worker: float = 0.0
 ## business.
 var last_exported: Dictionary[Commodity.Type, float] = {}
 
+## Kind.TRADER only: the share of each good's reference price this Trader bids
+## for export, moved a step a day by he_simulation.gd's _adjust_trader_bids. A
+## good not listed bids TRADER_STARTING_BID_FRACTION.
+var bid_fraction: Dictionary[Commodity.Type, float] = {}
+
 ## Kind.TRADER only: units of each commodity imported (from outside the
 ## settlement, on behalf of a local buyer) today, for reporting -- see
 ## he_simulation.gd._run_input_purchasing. Always empty for a PRODUCTION
@@ -414,6 +419,9 @@ var _ledger_history: Array[Dictionary] = []
 
 func ledger_add(key: String, amount: float) -> void:
 	ledger_today[key] = ledger_today.get(key, 0.0) + amount
+
+func ledger_row_count() -> int:
+	return _ledger_history.size()
 
 func ledger_add_good(group: String, commodity: Commodity.Type, units: float) -> void:
 	var by_good: Dictionary = ledger_goods_today.get_or_add(group, {})
