@@ -1338,6 +1338,9 @@ func _daily_tick() -> void:
 	_run_consumption(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
 		_run_herds(record)
+	# After herd production, so a review's wool and culled head land in the day
+	# they were made (and in its stock change), not in a row already closed.
+	_close_business_ledgers()
 	if (day + 1) % MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_migration_pressure()
 	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
@@ -1682,7 +1685,6 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 ## revenue-per-worker signal, that just rides along on this same per-
 ## business daily pass rather than getting one of its own.
 func _record_business_revenue_history() -> void:
-	var wage_by_settlement := {}
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		var employed := _business_employed_worker_count(business_id)
@@ -1696,6 +1698,13 @@ func _record_business_revenue_history() -> void:
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
 		b.record_flow_day()
+
+## Closes every business's operating-ledger row for the day (see HEBusiness's
+## ledger_*). One reference wage per settlement per day.
+func _close_business_ledgers() -> void:
+	var wage_by_settlement := {}
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
 		if not wage_by_settlement.has(b.settlement_id):
 			wage_by_settlement[b.settlement_id] = _reference_wage_per_worker(b.settlement_id)
 		_close_business_ledger(b, wage_by_settlement[b.settlement_id])
@@ -1710,11 +1719,28 @@ func _close_business_ledger(b: HEBusiness, reference_wage: float) -> void:
 		prices[c] = (markets[b.settlement_id] as HEMarket).price[c]
 	if b.kind == HEBusiness.Kind.HERD:
 		prices[b.herd_commodity()] = HERD_EXPORT_PRICE[b.species] * TRADER_BUY_PRICE_FRACTION
+	if b.processes_livestock:
+		# A Butcher's animals are valued at what it pays for them, so the head it
+		# holds and uses are neither free nor marked to a price it never sees.
+		for species in BUTCHERY_SPECIES_ORDER:
+			prices[HEBusiness.livestock_commodity(species)] = _butchery_head_price(species)
 	var sold := 0.0
 	var produced := 0.0
 	for c in outputs:
 		sold += float((b.todays_flows.get(HEBusiness.FLOW_SOLD, {}) as Dictionary).get(c, 0.0))
-		produced += float(b.last_output_produced.get(c, 0.0))
+	# Production by good: a recipe or harvest sets last_output_produced daily; a
+	# herd's wool and culled head exist only on its review day.
+	var made: Dictionary = b.last_output_produced.duplicate()
+	if b.kind == HEBusiness.Kind.HERD:
+		made = {}
+		if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
+			for c in b.last_culled.keys():
+				made[c] = float(b.last_culled[c])
+			if b.species == HEBusiness.Species.SHEEP:
+				made[Commodity.Type.WOOL] = b.last_wool_produced
+	for c in made.keys():
+		b.ledger_add_good("produced", c, float(made[c]))
+		produced += float(made[c])
 	if b.kind == HEBusiness.Kind.TRADER:
 		for c in b.last_exported.keys():
 			sold += b.last_exported[c]
@@ -1741,6 +1767,18 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
 
+## Days until `b`'s next supply arrives (a harvest, or a herd review): the
+## stretch its current stock has to cover. A herd has no fields to count down, so
+## this is the real countdown to the shared review tick -- not the whole cycle
+## HEBusiness.days_until_next_harvest() reports for it. A seller whose output is
+## instant restocks tomorrow, so one day.
+func _days_until_next_supply(b: HEBusiness) -> int:
+	if b.kind == HEBusiness.Kind.HERD:
+		return maxi(1, (HERD_EVAL_INTERVAL_DAYS - ((day + 1) % HERD_EVAL_INTERVAL_DAYS)) % HERD_EVAL_INTERVAL_DAYS)
+	if b.has_long_cycle():
+		return maxi(1, b.days_until_next_harvest())
+	return 1
+
 ## What `_clear_market_for` puts on offer to households today: the local
 ## seller's stock, paced over its harvest cycle if it has one. Zero when
 ## nothing local sells `commodity`.
@@ -1750,7 +1788,7 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 		return 0.0
 	var stock := seller.stock(commodity)
 	if seller.has_long_cycle():
-		var days_until: int = maxi(1, seller.days_until_next_harvest())
+		var days_until: int = _days_until_next_supply(seller)
 		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 	return stock
 
@@ -2469,7 +2507,7 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 			var stock_units := 0.0
 			for c in _business_output_commodities(b):
 				stock_units += b.stock(c)
-			var horizon: float = minf(float(b.days_until_next_harvest()), STAFFING_GROW_MAX_STOCK_DAYS) if b.has_long_cycle() else STAFFING_GROW_MAX_STOCK_DAYS
+			var horizon: float = minf(float(_days_until_next_supply(b)), STAFFING_GROW_MAX_STOCK_DAYS) if b.has_long_cycle() else STAFFING_GROW_MAX_STOCK_DAYS
 			var drawn_from_stock := stock_units > demand * horizon
 			# A clearing return is the case for hiring; what blocks it is output
 			# that is not selling through, or sales that are only old stock
@@ -2638,7 +2676,7 @@ func _run_market(record: Dictionary) -> void:
 func _paced_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
 	var stock := seller.stock(commodity)
 	if seller.has_long_cycle():
-		var days_until: int = maxi(1, seller.days_until_next_harvest())
+		var days_until: int = _days_until_next_supply(seller)
 		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 	return stock
 
@@ -2735,6 +2773,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 			var sales_tax := _collect_sales_tax(settlement_id, gross_revenue)
 			var revenue := gross_revenue - sales_tax
 			seller.ledger_add("sales_household", gross_revenue)
+			seller.ledger_add_good("local", commodity, quantity_traded)
 			seller.ledger_add("taxes", sales_tax)
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
@@ -3446,6 +3485,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				var net_cost := cost - b2b_tax
 				seller.balance += net_cost
 				seller.ledger_add("sales_business", cost)
+				seller.ledger_add_good("local", commodity, bought)
 				seller.ledger_add("taxes", b2b_tax)
 				buyer.ledger_add("input_local", cost)
 				seller.last_revenue += net_cost
@@ -3594,6 +3634,7 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				var net_cost := cost - _collect_sales_tax(butcher.settlement_id, cost)
 				herd.balance += net_cost
 				herd.ledger_add("sales_business", cost)
+				herd.ledger_add_good("local", commodity, head)
 				herd.ledger_add("taxes", cost - net_cost)
 				butcher.ledger_add("input_local", cost)
 				herd.last_revenue += net_cost

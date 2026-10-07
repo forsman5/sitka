@@ -403,6 +403,11 @@ const LEDGER_OUTFLOWS := ["input_local", "input_import", "wages", "taxes"]
 const LEDGER_HISTORY_DAYS := 730
 
 var ledger_today: Dictionary = {}
+## Today's per-good physical movements, {group: {Commodity.Type: units}} with
+## group "produced", "local" (sold to households or businesses in town) or
+## "export" (sold to the Trader). Kept per good because a ranch or Butcher sells
+## more than one, and a seller's forecast of local use is per good.
+var ledger_goods_today: Dictionary = {}
 ## Stock held when the day opened, so close_ledger_day can value the change.
 var ledger_open_stock: Dictionary = {}
 var _ledger_history: Array[Dictionary] = []
@@ -410,8 +415,13 @@ var _ledger_history: Array[Dictionary] = []
 func ledger_add(key: String, amount: float) -> void:
 	ledger_today[key] = ledger_today.get(key, 0.0) + amount
 
+func ledger_add_good(group: String, commodity: Commodity.Type, units: float) -> void:
+	var by_good: Dictionary = ledger_goods_today.get_or_add(group, {})
+	by_good[commodity] = by_good.get(commodity, 0.0) + units
+
 func open_ledger_day() -> void:
 	ledger_today = {}
+	ledger_goods_today = {}
 	ledger_open_stock = inventory.duplicate()
 
 ## Finalises today's row. `prices` values stock at the day's closing prices;
@@ -465,6 +475,7 @@ func close_ledger_day(prices: Dictionary, output_commodities: Array, units_sold:
 	row["employed"] = ledger_today.get("employed", 0.0)
 	row["reference_wage"] = ledger_today.get("reference_wage", 0.0)
 	row["balance"] = balance
+	row["goods"] = ledger_goods_today.duplicate(true)
 	_ledger_history.append(row)
 	if _ledger_history.size() > LEDGER_HISTORY_DAYS:
 		_ledger_history.pop_front()
@@ -476,6 +487,19 @@ func ledger_history(days: int = LEDGER_HISTORY_DAYS) -> Array:
 	for i in range(start, _ledger_history.size()):
 		out.append((_ledger_history[i] as Dictionary).duplicate())
 	return out
+
+## Average per day of one good's units in a group ("produced", "local",
+## "export") over the last `days` rows (0.0 with no rows).
+func ledger_good_average(group: String, commodity: Commodity.Type, days: int) -> float:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var n := _ledger_history.size() - start
+	if n <= 0:
+		return 0.0
+	var total := 0.0
+	for i in range(start, _ledger_history.size()):
+		var goods: Dictionary = (_ledger_history[i] as Dictionary).get("goods", {})
+		total += float((goods.get(group, {}) as Dictionary).get(commodity, 0.0))
+	return total / n
 
 ## Average of one ledger column over the last `days` rows (0.0 with no rows).
 func ledger_average(key: String, days: int) -> float:
