@@ -17,6 +17,9 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 ## A bark makes a calm sheep hop straight up before it bolts.
 @export var react_time: float = 0.4
 @export var react_hop_height: float = 0.6
+## Each sheep waits a random beat (seconds, min..max) after a bark before hopping.
+@export var react_delay_min: float = 0.0
+@export var react_delay_max: float = 0.18
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -36,6 +39,7 @@ var _grazing: bool = true
 var _fleeing: bool = false
 var _startled_left: float = 0.0
 var _react_left: float = 0.0
+var _react_delay_left: float = 0.0
 var _listening_to: Node = null
 var _bob_t: float = randf() * TAU
 
@@ -105,7 +109,11 @@ func _physics_process(delta: float) -> void:
 		_player.connect("barked", _on_player_barked)
 		_listening_to = _player
 	_startled_left = maxf(_startled_left - delta, 0.0)
-	if _react_left > 0.0:
+	if _react_delay_left > 0.0:
+		_react_delay_left -= delta
+		if _react_delay_left <= 0.0:
+			_react_left = react_time
+	if _react_delay_left > 0.0 or _react_left > 0.0:
 		_react_step(delta)
 		return
 
@@ -169,7 +177,7 @@ func _on_player_barked(bark_pos: Vector3) -> void:
 		var calm := _startled_left <= 0.0 and not _fleeing
 		_startled_left = randf_range(startle_time_min, startle_time_max)
 		if calm:
-			_react_left = react_time
+			_react_delay_left = maxf(randf_range(react_delay_min, react_delay_max), 0.001)
 
 ## Startle hop: stand still and jump straight up, then bolt (the bark's startle
 ## timer is already set, so the flee starts as soon as we land).
