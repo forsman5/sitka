@@ -216,6 +216,9 @@ var _person_detail_title: Label
 var _person_detail_content: VBoxContainer
 var _selected_person_household_id: int = -1
 var _selected_person_number: int = -1
+var _end_screen: ColorRect
+var _end_screen_summary: Label
+var _ended := false
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -253,7 +256,7 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
-	if _simulation == null or _speed_multiplier <= 0.0:
+	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
 	_day_accumulator = minf(_day_accumulator, 8.0) # bound interactive work, same as dashboard.gd
@@ -779,6 +782,63 @@ func _build_ui() -> void:
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
+	_build_end_screen()
+
+## Full-window overlay shown once the town's population reaches 0. Added last
+## so it draws over everything and swallows clicks meant for the dashboard.
+func _build_end_screen() -> void:
+	_end_screen = ColorRect.new()
+	_end_screen.color = Color(0.0, 0.0, 0.0, 0.8)
+	_end_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_screen.mouse_filter = Control.MOUSE_FILTER_STOP
+	_end_screen.visible = false
+	add_child(_end_screen)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_screen.add_child(center)
+
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "The town is empty"
+	title.add_theme_font_size_override("font_size", 32)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+
+	_end_screen_summary = Label.new()
+	_end_screen_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_end_screen_summary.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
+	box.add_child(_end_screen_summary)
+
+	var restart := Button.new()
+	restart.text = "Restart this scenario"
+	restart.pressed.connect(func() -> void: get_tree().reload_current_scene())
+	box.add_child(restart)
+	var setup := Button.new()
+	setup.text = "Back to setup"
+	setup.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/sim/he_config.tscn"))
+	box.add_child(setup)
+	var menu := Button.new()
+	menu.text = "Main menu"
+	menu.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn"))
+	box.add_child(menu)
+
+## Stops the simulation and shows the end screen the first time population hits 0.
+func _check_extinction() -> void:
+	if _ended or _simulation.get_population_wellbeing()["population"] > 0:
+		return
+	_ended = true
+	_speed_multiplier = 0.0
+	var city := _simulation.get_city_summary()
+	_end_screen_summary.text = "Everyone is gone after %s.\nBirths %d  |  Emigrations %d  |  Old-age deaths %d" % [
+		_format_day(_simulation.get_clock_summary()["day"]),
+		city["births_total"], city["emigrations_total"], city["old_age_deaths_total"]]
+	_end_screen.visible = true
 
 ## "<person icon> 123 (12 unemployed)    Health 82%    Morale 64%" -- town-wide headcount and
 ## per-person averages, colored by _wellbeing_color().
@@ -2522,6 +2582,7 @@ func _refresh() -> void:
 	_day_label.text = _format_day(clock["day"])
 	_refresh_treasury()
 	_refresh_population_summary()
+	_check_extinction()
 
 	_refresh_town()
 
