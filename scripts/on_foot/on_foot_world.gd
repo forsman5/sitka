@@ -21,6 +21,23 @@ const START_TIME_OF_DAY := 18.5 / 24.0
 const NIGHT_TIME := 21.0 / 24.0
 const DUSK_SECONDS := 120.0
 
+## End-of-day odds, per head. Sheep still outside the pen at nightfall may be
+## lost; every sheep that makes it through the night may bear a lamb.
+const LOSS_CHANCE := 0.4
+const LAMB_CHANCE := 0.1
+const STARTING_FLOCK_MIN := 3
+const STARTING_FLOCK_MAX := 5
+## The pen starts at its default size and grows by this many segments (each way)
+## per PEN_GROW_STEP sheep beyond what the default pen holds.
+const PEN_BASE_CAPACITY := 10
+const PEN_GROW_STEP := 6
+
+## Run state carried across the next-day scene reload. _continuing is set only by
+## the Next Day button, so entering from the menu always starts a fresh run.
+static var _continuing: bool = false
+static var _day: int = 1
+static var _flock_size: int = 0
+
 ## Esc often releases mouse capture itself (browser pointer lock, embedded game
 ## window) before the game sees a key press, so a lost capture also opens the menu.
 const ESC_DEBOUNCE_MSEC := 250
@@ -40,8 +57,20 @@ var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 var _terrain: Node
 var _sky_mat: ProceduralSkyMaterial
 var _clock: Label
+var _day_ended: bool = false
+var _end_layer: CanvasLayer
+var _end_title: Label
+var _end_body: Label
+var _end_next: Button
+var _next_flock_size: int = 0
+var _game_over: bool = false
 
 func _ready() -> void:
+	if _continuing:
+		_continuing = false
+	else:
+		_day = 1
+		_flock_size = randi_range(STARTING_FLOCK_MIN, STARTING_FLOCK_MAX)
 	GameState.time_of_day = START_TIME_OF_DAY
 	_build_environment()
 	_build_island()
@@ -66,13 +95,14 @@ func _ready() -> void:
 	layer.add_child(hint)
 	add_child(layer)
 	_build_pause_menu()
+	_build_end_of_day_screen()
 
 	_clock = Label.new()
 	_clock.add_theme_font_size_override("font_size", 28)
 	_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_clock.anchor_left = 1.0
 	_clock.anchor_right = 1.0
-	_clock.offset_left = -260.0
+	_clock.offset_left = -320.0
 	_clock.offset_right = -16.0
 	_clock.offset_top = 44.0
 	layer.add_child(_clock)
@@ -92,9 +122,110 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_update_sky(GameState.time_of_day)
 	_update_clock(GameState.time_of_day)
+	if not _day_ended and GameState.time_of_day >= NIGHT_TIME:
+		_end_day()
+		return
 	if not get_tree().paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_auto_paused_at = Time.get_ticks_msec()
 		_set_paused(true)
+
+func _build_end_of_day_screen() -> void:
+	_end_layer = CanvasLayer.new()
+	_end_layer.layer = 30
+	_end_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_end_layer.visible = false
+	add_child(_end_layer)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.name = "Box"
+	box.custom_minimum_size = Vector2(420, 0)
+	box.add_theme_constant_override("separation", 14)
+	center.add_child(box)
+
+	_end_title = Label.new()
+	_end_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_end_title.add_theme_font_size_override("font_size", 36)
+	box.add_child(_end_title)
+
+	_end_body = Label.new()
+	_end_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_end_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_end_body.add_theme_font_size_override("font_size", 20)
+	box.add_child(_end_body)
+
+	_end_next = Button.new()
+	_end_next.pressed.connect(_on_next_day_pressed)
+	box.add_child(_end_next)
+
+	var quit := Button.new()
+	quit.text = "Main Menu"
+	quit.pressed.connect(_to_main_menu)
+	box.add_child(quit)
+
+## Nightfall: pause, then settle the night. Sheep left outside may be lost; every
+## surviving sheep may bear a lamb. The result seeds the next day's flock.
+func _end_day() -> void:
+	_day_ended = true
+	var penned := 0
+	var outside := 0
+	for sheep in get_tree().get_nodes_in_group("on_foot_sheep"):
+		if (sheep as OnFootSheep).penned:
+			penned += 1
+		else:
+			outside += 1
+	var lost := 0
+	for i in outside:
+		if randf() < LOSS_CHANCE:
+			lost += 1
+	var survivors := penned + outside - lost
+	var lambs := 0
+	for i in survivors:
+		if randf() < LAMB_CHANCE:
+			lambs += 1
+	_next_flock_size = survivors + lambs
+	_game_over = _next_flock_size == 0
+
+	var lines: PackedStringArray = []
+	if _game_over:
+		_end_title.text = "The flock is gone"
+		lines.append("Every sheep left outside was lost to the night.")
+	elif outside == 0:
+		_end_title.text = "Good job!"
+		lines.append("All %d sheep are safe in the pen." % penned)
+	else:
+		_end_title.text = "Uh-oh..."
+		lines.append("%d of %d sheep never made it into the pen." % [outside, penned + outside])
+		lines.append("%d lost in the night, %d found their way home." % [lost, outside - lost])
+	if lambs > 0:
+		lines.append("%d new lamb%s born!" % [lambs, "" if lambs == 1 else "s"])
+	if not _game_over:
+		lines.append("Flock for tomorrow: %d" % _next_flock_size)
+	_end_body.text = "\n".join(lines)
+	_end_next.text = "New Game" if _game_over else "Next Day"
+
+	_end_layer.visible = true
+	get_tree().paused = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _on_next_day_pressed() -> void:
+	if _game_over:
+		_continuing = false
+	else:
+		_continuing = true
+		_day += 1
+		_flock_size = _next_flock_size
+	get_tree().paused = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	get_tree().reload_current_scene()
 
 func _build_pause_menu() -> void:
 	_pause_layer = CanvasLayer.new()
@@ -220,6 +351,9 @@ func _spawn_companion(spawn: Vector3) -> void:
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
 	_pen = SheepPen.new()
+	var grow := maxi(0, ceili((_flock_size - PEN_BASE_CAPACITY) / float(PEN_GROW_STEP)))
+	_pen.segments_wide += grow
+	_pen.segments_deep += grow
 	_pen.name = "SheepPen"
 	_pen.position = _ground_point(Vector2(18, -2))
 	_pen.rotation_degrees.y = -90.0
@@ -228,7 +362,7 @@ func _spawn_pen() -> void:
 ## A small flock a short walk from the spawn point.
 func _spawn_flock() -> void:
 	var center := Vector2(8, 14)
-	for i in randi_range(3, 5):
+	for i in _flock_size:
 		var sheep := OnFootSheep.new()
 		var xz := center + Vector2(randf_range(-3, 3), randf_range(-3, 3))
 		sheep.position = _ground_point(xz) + Vector3(0, 0.3, 0)
@@ -268,7 +402,7 @@ func _build_environment() -> void:
 
 func _update_clock(t: float) -> void:
 	var minutes := int(t * 24.0 * 60.0)
-	_clock.text = "%02d:%02d" % [floori(minutes / 60.0), minutes % 60]
+	_clock.text = "Day %d  %02d:%02d" % [_day, floori(minutes / 60.0), minutes % 60]
 
 func _update_sky(t: float) -> void:
 	var a: Array = _SKY_KEYS[0]
