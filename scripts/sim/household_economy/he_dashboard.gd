@@ -1403,12 +1403,14 @@ func _rebuild_trader_settings() -> void:
 	title.add_theme_font_size_override("font_size", 16)
 	_trader_settings_list.add_child(title)
 	var note := Label.new()
-	note.text = "Changes take effect on the next day and reset when you load a scenario. Enabled goods use shared export capacity in the order shown. Local households and businesses buy before exports."
+	note.text = "Changes take effect on the next day and reset when you load a scenario. Local households and businesses buy first; each seller then decides how much it can spare and the least it will take, and the Trader takes what it can use at its bid, widest spread first, until its capacity is used. The bid moves a little each day."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trader_settings_list.add_child(note)
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
 		checkbox.text = option["name"]
+		if option["reference_price"] > 0.0:
+			checkbox.text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
 		var option_icon := Commodity.icon_of(option["commodity_id"])
 		if option_icon != null:
 			checkbox.icon = option_icon

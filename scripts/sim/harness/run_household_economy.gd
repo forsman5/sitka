@@ -36,6 +36,11 @@ func _init() -> void:
 	_check_staffing_decisions()
 	_check_staffing_outcomes()
 	_check_trader_stays_solvent()
+	_check_seller_trade_offers()
+	_check_trader_bids()
+	_check_trade_allocation_and_cash()
+	_check_herd_export_path()
+	_check_no_export_reserve_left()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -978,6 +983,215 @@ func _check_trader_stays_solvent() -> void:
 	_assert(alive, "The Trader should stay in business for 1200 days")
 	_assert(lowest_balance > 0.0, "The Trader should never run into debt, lowest balance %.0f" % lowest_balance)
 	_assert(most_workers_idle <= 8.0, "The Trader's crew should follow its throughput, but carried %.1f workers beyond it" % most_workers_idle)
+
+## A throwaway business with `rows` days of synthetic ledger, each carrying the
+## given row plus per-good units, so a seller's cost and forecast can be judged
+## on stated books.
+func _workshop_with_rows(sim: HESimulation, business: HEBusiness, rows: int, row: Dictionary, goods: Dictionary) -> HEBusiness:
+	var defaults := {
+		"employed": 2.0, "reference_wage": 1.0, "sales_household": 0.0, "sales_business": 0.0, "sales_export": 0.0,
+		"sales_other": 0.0, "trade_margin": 0.0, "input_consumed_value": 0.0, "taxes": 0.0, "units_sold": 0.0,
+		"units_produced": 0.0, "unmet_demand": 0.0, "unfunded_demand": 0.0, "cash_profit": 0.0, "balance": 0.0,
+		"wages": 0.0, "goods": goods}
+	for i in rows:
+		business._ledger_history.append(defaults.merged(row, true))
+	return business
+
+## A seller's export decision, before any Trader is involved: what it can spare
+## (its own forecast of local use until its next supply, plus a backlog counted
+## once, plus workshops' known input needs tomorrow) and the least it will take
+## (cost per unit of output value over its production cycle, shared costs split by
+## value, a documented starting quote until a cycle has been seen).
+func _check_seller_trade_offers() -> void:
+	print("\n=== Seller offers: forecast of local use, backlog counted once, cost-based floor ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var timber := Commodity.Type.TIMBER
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	woodlot.inventory.clear()
+	woodlot.add_stock(timber, 2000.0)
+
+	var offer := sim._seller_trade_offer(woodlot, timber)
+	var known := sim._known_daily_local_use(woodlot, timber)
+	print("  Woodlot, 2000 timber: routine use %.1f/day x %.0f days + next-day input %.1f -> reserve %.1f, offers %.1f (salvage %.1f), floor %.2f" % [
+		offer["routine_use"], offer["horizon"], offer["next_day_need"], offer["reserve"], offer["quantity"], offer["salvage_quantity"], offer["min_price"]])
+	_assert(known > 0.0 and offer["next_day_need"] > 0.0, "Households and staffed workshops should give the Woodlot local use to protect")
+	_assert(absf(offer["reserve"] - (known * offer["horizon"] + offer["outstanding"] + offer["next_day_need"])) < EPSILON, "Reserve should be routine use x horizon + backlog + next-day input")
+	_assert(absf(offer["quantity"] - (2000.0 - offer["reserve"])) < EPSILON, "The seller offers what is left above its reserve")
+	_assert(offer["salvage_quantity"] <= offer["quantity"] + EPSILON, "Salvage units are part of what the seller can spare, never more")
+	_assert(absf(offer["min_price"] - HESimulation.SELLER_STARTING_COST_RATIO * HESimulation.BASE_PRICE[timber]) < EPSILON, "Before a cycle is observed the floor is the documented starting quote")
+
+	# Today's unfilled funded requests are a backlog, counted once: the reserve
+	# rises by the backlog and not by backlog x days to the next harvest.
+	sim._price_signal_today = {settlement_id: {timber: {"funded_household": 50.0, "funded_business": 0.0, "offer": 10.0}}}
+	var with_backlog := sim._seller_trade_offer(woodlot, timber)
+	sim._price_signal_today = {}
+	_assert(absf(with_backlog["outstanding"] - 40.0) < EPSILON and absf((with_backlog["reserve"] - offer["reserve"]) - 40.0) < EPSILON,
+		"A 40-unit backlog should add exactly 40 to the reserve, not 40 x %.0f days" % offer["horizon"])
+
+	# Floor from the books: (wages + inputs) / (units produced x value), over a cycle.
+	var burner := HEScenarioSeeds.make_charcoal_burner(900, HEScenarioSeeds.SETTLEMENT_ID)
+	var charcoal := Commodity.Type.CHARCOAL
+	_workshop_with_rows(sim, burner, 40, {"wages": 2.0, "input_consumed_value": 6.0}, {"produced": {charcoal: 3.0}})
+	var expected_ratio := 8.0 / (3.0 * HESimulation.BASE_PRICE[charcoal])
+	var ratio := sim._seller_cost_ratio(burner)
+	print("  Burner books: cost 8.0/day for 3 charcoal -> cost ratio %.3f, floor %.2f per charcoal" % [ratio, sim._seller_min_price(burner, charcoal)])
+	_assert(absf(ratio - expected_ratio) < 0.001, "Cost ratio should be cost / (units produced x value), got %.3f vs %.3f" % [ratio, expected_ratio])
+	var young := HEScenarioSeeds.make_charcoal_burner(901, HEScenarioSeeds.SETTLEMENT_ID)
+	_workshop_with_rows(sim, young, 10, {"wages": 2.0, "input_consumed_value": 6.0}, {"produced": {charcoal: 3.0}})
+	_assert(sim._seller_cost_ratio(young) == HESimulation.SELLER_STARTING_COST_RATIO, "Fewer rows than a cycle should use the starting quote, not zero or infinity")
+
+	# Shared costs: a Butcher's meat and leather carry the same cost-to-value ratio.
+	var butcher := HEScenarioSeeds.make_butcher(902, HEScenarioSeeds.SETTLEMENT_ID)
+	_workshop_with_rows(sim, butcher, maxi(40, butcher.rolling_window_days()), {"wages": 3.0, "input_consumed_value": 3.0}, {"produced": {Commodity.Type.MEAT: 2.0, Commodity.Type.LEATHER: 1.0}})
+	var meat_ratio: float = sim._seller_min_price(butcher, Commodity.Type.MEAT) / HESimulation.BASE_PRICE[Commodity.Type.MEAT]
+	var leather_ratio: float = sim._seller_min_price(butcher, Commodity.Type.LEATHER) / HESimulation.BASE_PRICE[Commodity.Type.LEATHER]
+	_assert(absf(meat_ratio - leather_ratio) < 0.0001 and absf(meat_ratio - 6.0 / (2.0 * 1.6 + 1.0 * 1.6)) < 0.001, "Meat and leather should share one cost ratio (%.3f vs %.3f)" % [meat_ratio, leather_ratio])
+
+	# What a seller will sell at a given bid: all it can spare if the bid reaches
+	# its floor; otherwise only the units beyond its cover period.
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	var market: HEMarket = sim.markets[settlement_id]
+	woodlot.inventory.clear()
+	woodlot.add_stock(timber, 4000.0)
+	var good_view := sim._trader_offer_view(trader, woodlot, timber)
+	market.price[timber] = 0.25
+	var glut_view := sim._trader_offer_view(trader, woodlot, timber)
+	market.price[timber] = 1.0
+	print("  bid reaches the floor: sells %.1f | bid %.3f under the %.2f floor: sells only the %.1f beyond cover" % [good_view["eligible"], glut_view["bid"], glut_view["offer"]["min_price"], glut_view["eligible"]])
+	_assert(absf(good_view["eligible"] - good_view["offer"]["quantity"]) < EPSILON, "A bid at or above the floor should take everything the seller can spare")
+	_assert(absf(glut_view["eligible"] - glut_view["offer"]["salvage_quantity"]) < EPSILON and glut_view["eligible"] < glut_view["offer"]["quantity"], "A bid under the floor should take only the excess beyond cover")
+
+## The Trader's bid moves by a small step toward whatever fills its capacity
+## with offers it can take, and only then: capacity binding lowers the bids of
+## goods it turned away, refusals with spare capacity raise them (up to a ceiling
+## that still pays a wage), and nothing on offer leaves them alone.
+func _check_trader_bids() -> void:
+	print("\n=== Trader bids: controller behaviour at both capacity extremes ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	var grain := Commodity.Type.GRAIN
+	var reference := 1.0
+	var ceiling := sim._trader_max_bid_fraction(settlement_id, reference)
+	_assert(ceiling < 1.0 and ceiling > HESimulation.TRADER_BID_FRACTION_MIN, "The ceiling should leave the Trader a wage's spread, got %.3f" % ceiling)
+
+	var run := func(eligible: float, accepted: float, offered: float, capacity: float, remaining: float, days: int) -> float:
+		trader.bid_fraction.clear()
+		var fraction := HESimulation.TRADER_STARTING_BID_FRACTION
+		for i in days:
+			var offers: Array[Dictionary] = [{"commodity": grain, "fraction": fraction, "reference": reference,
+				"eligible": eligible, "accepted": accepted, "offer": {"quantity": offered}}]
+			sim._adjust_trader_bids(trader, offers, capacity, remaining)
+			fraction = trader.bid_fraction[grain]
+		return fraction
+
+	# Capacity binding: more offers sellers would take than the Trader can carry.
+	var squeezed: float = run.call(100.0, 10.0, 100.0, 10.0, 0.0, 200)
+	# Spare capacity with offers refused for being under the floor.
+	var refused: float = run.call(0.0, 0.0, 50.0, 100.0, 100.0, 200)
+	# Nothing on offer at all.
+	var idle: float = run.call(0.0, 0.0, 0.0, 100.0, 100.0, 200)
+	# Everything offered is taken with room to spare.
+	var satisfied: float = run.call(40.0, 40.0, 40.0, 100.0, 60.0, 200)
+	print("  capacity binding -> %.2f | refused with spare capacity -> %.2f (ceiling %.2f) | no offers -> %.2f | all taken -> %.2f" % [squeezed, refused, ceiling, idle, satisfied])
+	_assert(absf(squeezed - HESimulation.TRADER_BID_FRACTION_MIN) < 0.0001, "A Trader at capacity should widen its spread down to the minimum bid")
+	_assert(absf(refused - ceiling) < 0.0001, "Refused offers with spare capacity should raise the bid to, and no further than, the ceiling")
+	_assert(absf(idle - HESimulation.TRADER_STARTING_BID_FRACTION) < 0.0001, "With nothing on offer the bid should not move (an idle Trader must not talk itself into a loop)")
+	_assert(absf(satisfied - HESimulation.TRADER_STARTING_BID_FRACTION) < 0.0001, "When every offer is taken with room to spare the bid should stay put")
+
+## Allocation and cash: capacity goes to the widest Trader margin per unit, and
+## the cash entering the economy is the reference value whatever the bid, so the
+## bid only splits it between the seller and the Trader.
+func _check_trade_allocation_and_cash() -> void:
+	print("\n=== Trade: widest margin first; export cash independent of the bid ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	var trader: HEBusiness = sim.businesses[trader_id]
+	# One worker's worth of capacity.
+	var kept := false
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		if h.employer_business_id == trader_id:
+			if kept:
+				h.employer_business_id = -1
+			kept = true
+	var capacity: float = float(sim._business_employed_worker_count(trader_id)) * HESimulation.TRADER_CAPACITY_PER_WORKER
+	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	bloomery.inventory.clear()
+	bloomery.add_stock(Commodity.Type.IRON, 500.0)
+	woodlot.inventory.clear()
+	woodlot.add_stock(Commodity.Type.TIMBER, 5000.0)
+	var record := sim._new_daily_record()
+	sim._run_trade(record)
+	var iron_shipped: float = record["exported"].get("Iron", 0.0)
+	var timber_shipped: float = record["exported"].get("Timber", 0.0)
+	print("  capacity %.0f units: iron (margin %.2f/unit) shipped %.1f, timber (margin %.2f/unit) shipped %.1f" % [
+		capacity, 15.0 * 0.5, iron_shipped, 1.0 * 0.5, timber_shipped])
+	_assert(capacity > 0.0 and absf(iron_shipped - capacity) < EPSILON and timber_shipped < EPSILON, "Capacity should go to the widest margin per unit (iron) before cheaper goods")
+
+	# Same shipment at two different bids: identical cash entering, different split.
+	var results: Array = []
+	for bid in [0.4, 0.7]:
+		var fresh := _new_sim("build_economy_with_charcoal_burner")
+		var seller: HEBusiness = fresh.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+		var fresh_trader: HEBusiness = fresh.businesses[trader_id]
+		var seller_before := seller.balance
+		var trader_before := fresh_trader.balance
+		var entered_before: float = fresh._export_revenue_total
+		fresh._execute_export(fresh_trader, seller, Commodity.Type.TIMBER, 10.0, 1.0, bid, fresh._new_daily_record())
+		results.append({"entered": fresh._export_revenue_total - entered_before, "seller": seller.balance - seller_before, "trader": fresh_trader.balance - trader_before})
+	print("  10 timber at bid 0.4 vs 0.7: cash entering %.1f / %.1f, seller %.1f / %.1f, Trader spread %.1f / %.1f" % [
+		results[0]["entered"], results[1]["entered"], results[0]["seller"], results[1]["seller"], results[0]["trader"], results[1]["trader"]])
+	_assert(absf(results[0]["entered"] - 10.0) < EPSILON and absf(results[1]["entered"] - 10.0) < EPSILON, "Cash entering should be units x reference price regardless of the bid")
+	for r in results:
+		_assert(absf(r["seller"] + r["trader"] - r["entered"]) < EPSILON, "The seller's receipt plus the Trader's spread should equal the cash that entered")
+	_assert(results[1]["seller"] > results[0]["seller"] and results[1]["trader"] < results[0]["trader"], "A higher bid should shift value from the Trader to the seller")
+
+## Cattle and sheep use the same export path as every other good: enabled by
+## default, reference price from HERD_EXPORT_PRICE, and a horizon that is the
+## real countdown to the next review.
+func _check_herd_export_path() -> void:
+	print("\n=== Herds: livestock export through the common path ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var enabled := {}
+	for option in sim.get_trader_export_settings(HEScenarioSeeds.TRADER_BUSINESS_ID):
+		enabled[option["commodity_id"]] = option["enabled"]
+		if option["commodity_id"] == Commodity.Type.CATTLE:
+			_assert(absf(option["reference_price"] - HESimulation.HERD_EXPORT_PRICE[HEBusiness.Species.CATTLE]) < EPSILON, "A live animal's reference price is HERD_EXPORT_PRICE")
+	_assert(enabled.get(Commodity.Type.CATTLE, false) and enabled.get(Commodity.Type.SHEEP, false), "Cattle and sheep should be export checkbox goods, enabled by default")
+	var ranch: HEBusiness = sim._trade_seller(settlement_id, Commodity.Type.CATTLE)
+	_assert(ranch != null and ranch.kind == HEBusiness.Kind.HERD and ranch.species == HEBusiness.Species.CATTLE, "The cattle seller should be the Cattle Ranch")
+
+	var horizons: Array[int] = []
+	for day in 100:
+		horizons.append(sim._days_until_next_supply(ranch))
+		sim.advance_ticks(1)
+	var counted_down := true
+	var reset_seen := false
+	for i in range(1, horizons.size()):
+		if horizons[i] == horizons[i - 1] - 1 or horizons[i] == 1:
+			continue
+		if horizons[i] > horizons[i - 1]:
+			reset_seen = true
+			continue
+		counted_down = false
+	print("  herd horizon over 100 days: starts %d, a review resets it: %s, never the full %d-day growth cycle: %s" % [
+		horizons[0], reset_seen, ranch.growth_days, horizons.max() < ranch.growth_days or ranch.growth_days <= HESimulation.HERD_EVAL_INTERVAL_DAYS])
+	_assert(counted_down and reset_seen, "A herd's horizon should count down day by day to its next review, then reset")
+	_assert(horizons.max() <= HESimulation.HERD_EVAL_INTERVAL_DAYS, "A herd's horizon never exceeds its review interval")
+
+## The Trader holds no reserve of its own any more: nothing in the simulation
+## carries the old constant or the old Trader-owned surplus functions.
+func _check_no_export_reserve_left() -> void:
+	print("\n=== No Trader-owned reserve left in the simulation ===")
+	var source := FileAccess.get_file_as_string("res://scripts/sim/household_economy/he_simulation.gd")
+	for name in ["TRADER_RESERVE_BUFFER_DAYS", "_seller_surplus_above_reserve", "_exportable_surplus"]:
+		_assert(not source.contains(name), "%s should be gone: the seller decides what is spare" % name)
+	print("  reserve constant and Trader-owned surplus functions are gone")
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
