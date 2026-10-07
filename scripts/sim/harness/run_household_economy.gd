@@ -32,6 +32,9 @@ func _init() -> void:
 	_check_market_supply_demand_history()
 	_check_need_vs_funded_demand()
 	_check_price_signal()
+	_check_business_ledger_reconciles()
+	_check_staffing_decisions()
+	_check_staffing_outcomes()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
 	_check_bloomery_stays_off_when_not_seeded()
@@ -538,7 +541,9 @@ func _check_market_supply_demand_history() -> void:
 		var report := sim.get_market_detail(settlement_id, commodity)
 		var supplied: Array = report["supplied_history"]
 		var demanded: Array = report["demanded_history"]
-		_assert(supplied.size() == window and demanded.size() == window, "%s history should be capped at %d days, got %d/%d" % [Commodity.name_of(commodity), window, supplied.size(), demanded.size()])
+		# One point per simulated day, capped at the window: 100 days in, 100 points.
+		var expected_days := mini(window, 100)
+		_assert(supplied.size() == expected_days and demanded.size() == expected_days, "%s history should hold one point per day (%d), got %d/%d" % [Commodity.name_of(commodity), expected_days, supplied.size(), demanded.size()])
 		for v in supplied + demanded:
 			if v > 0.0:
 				any_activity = true
@@ -744,12 +749,17 @@ func _check_price_signal() -> void:
 	# must never push the ore price down, and imports that met the request
 	# create no pressure.
 	var imp := _new_sim("build_three_business_economy_with_bloomery")
-	imp.advance_ticks(40)
 	var imp_market: HEMarket = imp.markets[imp.get_settlement_ids()[0]]
-	var ore_signal: Dictionary = imp_market.last_price_signal.get(Commodity.Type.IRON_ORE, {})
+	var ore_signal: Dictionary = {}
+	# The Bloomery buys ore on the days its buffer needs topping up, so wait for one.
+	for day in 80:
+		imp.advance_ticks(1)
+		ore_signal = imp_market.last_price_signal.get(Commodity.Type.IRON_ORE, {})
+		if not ore_signal.is_empty() and ore_signal["funded_business"] > EPSILON:
+			break
 	print("  ore signal: %s" % [ore_signal])
 	_assert(not ore_signal.is_empty() and ore_signal["import_capacity"] > ore_signal["funded_business"], "Test setup: ore should be imported with spare Trader capacity")
-	_assert(ore_signal["unsold"] < EPSILON, "Spare import capacity must not read as unsold supply")
+	_assert(ore_signal.get("unsold", 1.0) < EPSILON, "Spare import capacity must not read as unsold supply")
 
 	# Exports are not local demand: iron (only the Trader buys it) has no
 	# signal and keeps its posted price while exporting.
@@ -769,6 +779,177 @@ func _check_price_signal() -> void:
 		glut._apply_price_signals()
 	_assert(glut.markets[g_settlement].floor_days.get(grain, 0) > 0, "A persistent glut should record days at the price floor")
 	print("  persistent shortage 3 days: %.3f -> %.3f; glut floor days: %d" % [start, after_three, glut.markets[g_settlement].floor_days.get(grain, 0)])
+
+## Operating ledger: every cash movement of a business lands under its own
+## heading, the day's cash profit reconciles to the balance change (less any
+## startup cash), and stock accumulation is a separate figure that moves on its
+## own -- so a business's books can be read without inferring costs from its
+## balance.
+func _check_business_ledger_reconciles() -> void:
+	print("\n=== Operating ledger: cash profit reconciles to balance; stock change kept apart ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	sim.advance_ticks(150)
+	var worst_gap := 0.0
+	var rows_checked := 0
+	var stock_moved := false
+	var cash_and_stock_differ := false
+	var kinds_with_sales := {}
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		var rows := b.ledger_history()
+		for i in range(1, rows.size()):
+			var balance_change: float = rows[i]["balance"] - rows[i - 1]["balance"]
+			worst_gap = maxf(worst_gap, absf(balance_change - (rows[i]["cash_profit"] + rows[i]["injection"])))
+			rows_checked += 1
+			if absf(rows[i]["stock_change_value"]) > 0.01:
+				stock_moved = true
+				if absf(rows[i]["stock_change_value"] - rows[i]["cash_profit"]) > 0.01:
+					cash_and_stock_differ = true
+			for key in ["sales_household", "sales_business", "sales_export", "input_local", "input_import", "wages", "taxes", "trade_margin", "tax_income"]:
+				if rows[i][key] > 0.0:
+					kinds_with_sales[key] = true
+	print("  %d business-days reconciled, worst gap %.4f; headings used: %s" % [rows_checked, worst_gap, kinds_with_sales.keys()])
+	_assert(rows_checked > 500, "Expected many ledger rows, got %d" % rows_checked)
+	_assert(worst_gap < EPSILON, "Ledger cash profit should equal the balance change, worst gap %.4f" % worst_gap)
+	_assert(stock_moved and cash_and_stock_differ, "Stock accumulation should be its own figure, not folded into cash profit")
+	for key in ["sales_household", "sales_business", "sales_export", "input_local", "wages", "taxes", "trade_margin", "tax_income"]:
+		_assert(kinds_with_sales.has(key), "Ledger heading %s never recorded anything in 150 days" % key)
+
+## A throwaway workshop with a crew and a synthetic ledger, so the staffing
+## decision can be judged on stated books instead of on a scenario's luck.
+func _synthetic_workshop(sim: HESimulation, crew: int, row: Dictionary, held_output: float = 0.0) -> HEBusiness:
+	var b: HEBusiness = HEScenarioSeeds.make_charcoal_burner(900, HEScenarioSeeds.SETTLEMENT_ID)
+	var seated := 0
+	for household_id in sim.get_household_ids():
+		if seated >= crew:
+			break
+		var h: HEHousehold = sim.households[household_id]
+		h.employer_business_id = 900
+		seated += h.worker_capacity()
+	var defaults := {
+		"employed": float(seated), "reference_wage": 1.0, "sales_household": 0.0, "sales_business": 0.0, "sales_export": 0.0,
+		"sales_other": 0.0, "trade_margin": 0.0, "input_consumed_value": 0.0, "taxes": 0.0, "units_sold": 0.0,
+		"units_produced": 0.0, "unmet_demand": 0.0, "unfunded_demand": 0.0, "cash_profit": 0.0, "balance": 0.0}
+	for i in 21:
+		b._ledger_history.append(defaults.merged(row, true))
+	if held_output > 0.0:
+		b.add_stock(Commodity.Type.CHARCOAL, held_output)
+	return b
+
+## The staffing decision, explained from the books: a workshop whose sales
+## cover its inputs and wages keeps (or adds to) its crew; one whose inputs cost
+## more than it sells shrinks; output with no buyer is cut toward what sells;
+## shortage and unfunded need call for hands; sales that are only old stock
+## leaving do not.
+func _check_staffing_decisions() -> void:
+	print("\n=== Staffing: decisions follow operating return and saleable volume ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var wage := 1.0
+	# 6 charcoal a day, sold at 3.8 each; inputs 2.5 timber per unit at timber price t.
+	var sold_all := {"units_produced": 6.0, "units_sold": 6.0, "sales_household": 22.8, "taxes": 0.5}
+
+	var viable := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 15.0}, true))
+	var viable_d := sim._staffing_decision(viable, wage)
+	print("  viable (inputs 15/day):        return/worker %.2f vs wage %.2f -> delta %d %s" % [viable_d["return_per_worker"], wage, viable_d["delta"], viable_d["reason"]])
+	_assert(viable_d["return_per_worker"] > wage, "Viable workshop should clear the wage")
+	_assert(viable_d["delta"] >= 0, "A workshop whose sales cover inputs and wages should not shrink")
+
+	var unviable := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 30.0}, true))
+	var unviable_d := sim._staffing_decision(unviable, wage)
+	print("  unviable (inputs 30/day):      return/worker %.2f vs wage %.2f -> delta %d %s" % [unviable_d["return_per_worker"], wage, unviable_d["delta"], unviable_d["reason"]])
+	_assert(unviable_d["return_per_worker"] < 0.0 and unviable_d["delta"] < 0 and unviable_d["reason"] == "low_return", "Inputs dearer than sales should shrink the crew for low return")
+
+	var oversupplied := _synthetic_workshop(sim, 4, {"units_produced": 6.0, "units_sold": 3.0, "sales_household": 11.4, "input_consumed_value": 3.0, "taxes": 0.25})
+	var oversupplied_d := sim._staffing_decision(oversupplied, wage)
+	print("  oversupplied (sells half):     target crew %.1f of %d -> delta %d %s" % [oversupplied_d["target_workers"], sim._business_employed_worker_count(900), oversupplied_d["delta"], oversupplied_d["reason"]])
+	_assert(oversupplied_d["return_per_worker"] > wage, "Test setup: the units that do sell should look profitable")
+	_assert(oversupplied_d["delta"] < 0 and oversupplied_d["reason"] == "unsold_output", "Output with no buyer should be cut even while the units that sell are profitable")
+
+	var short := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 3.0, "unmet_demand": 3.0}, true))
+	var short_d := sim._staffing_decision(short, wage)
+	print("  supply-limited (3/day unmet):  target crew %.1f -> delta %d %s" % [short_d["target_workers"], short_d["delta"], short_d["reason"]])
+	_assert(short_d["delta"] > 0, "Funded demand the crew could not fill, at a clearing return, should add workers")
+
+	var drawn := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 3.0}, true), 500.0)
+	var drawn_d := sim._staffing_decision(drawn, wage)
+	print("  sales from a pile of stock:    delta %d" % drawn_d["delta"])
+	_assert(drawn_d["delta"] == 0, "Sales that are only old stock leaving are not demand for more workers")
+
+	var broke := _synthetic_workshop(sim, 4, {"units_produced": 6.0, "units_sold": 3.0, "sales_household": 11.4, "input_consumed_value": 3.0, "taxes": 0.25, "unfunded_demand": 3.0})
+	var broke_d := sim._staffing_decision(broke, wage)
+	print("  unsold but households broke:   delta %d %s" % [broke_d["delta"], broke_d["reason"]])
+	_assert(broke_d["delta"] >= 0 and broke_d["reason"] != "unsold_output", "Output unsold because households lack money is a wage gap, not a reason to cut jobs")
+
+## Three businesses, each with an explicit expected outcome and the books that
+## explain it. Operating return and staffing are asserted BEFORE survival, so a
+## failure says which constraint broke rather than just "business missing".
+func _check_staffing_outcomes() -> void:
+	print("\n=== Staffing outcomes: oversupplied Woodlot sheds, viable workshop keeps its crew, unviable one closes ===")
+	var wood := HEScenarioSeeds.WOODLOT_BUSINESS_ID
+	var burner_id := HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID
+
+	# 1. An oversupplied Woodlot sheds workers before debt destroys it.
+	var town := _new_sim("build_three_business_economy_with_bloomery")
+	var woodlot: HEBusiness = town.businesses[wood]
+	var start_crew: int = woodlot.capacity
+	var smallest_crew := start_crew
+	var lowest_balance := woodlot.balance
+	var shed_events := 0
+	var unexplained_sheds := 0
+	for day in 450:
+		town.advance_ticks(1)
+		if not town.businesses.has(wood):
+			break
+		smallest_crew = mini(smallest_crew, woodlot.capacity)
+		lowest_balance = minf(lowest_balance, woodlot.balance)
+		var change: Dictionary = town.get_daily_history(1)[0]["capacity_changes"].get(wood, {})
+		if not change.is_empty() and change["new_capacity"] < change["old_capacity"]:
+			shed_events += 1
+			var why: Dictionary = change.get("staffing", {})
+			var explained: bool = change["reason"] == "cash_runway" \
+				or (change["reason"] == "low_return" and why.get("return_per_worker", 0.0) < why.get("wage", 0.0)) \
+				or (change["reason"] == "unsold_output" and why.get("target_workers", 0.0) < why.get("employed", 0.0))
+			if not explained:
+				unexplained_sheds += 1
+	print("  Woodlot crew %d -> %d at its smallest, %d shed decisions (%d unexplained by the books), lowest balance %.0f" % [start_crew, smallest_crew, shed_events, unexplained_sheds, lowest_balance])
+	_assert(shed_events > 0 and smallest_crew <= start_crew - 3, "An oversupplied Woodlot should shed workers (start %d, smallest %d)" % [start_crew, smallest_crew])
+	_assert(unexplained_sheds == 0, "Every Woodlot shed should be explained by its ledger (%d were not)" % unexplained_sheds)
+	_assert(town.businesses.has(wood) and lowest_balance > 0.0, "The Woodlot should shed before debt: survived=%s lowest balance %.0f" % [town.businesses.has(wood), lowest_balance])
+
+	# 2. A workshop with affordable inputs and buyers retains a crew. Prices held
+	# at their intended base values are those conditions.
+	var intended := _new_sim("build_economy_with_charcoal_burner", false)
+	intended.advance_ticks(300)
+	for id in [burner_id, HEScenarioSeeds.BLOOMERY_BUSINESS_ID]:
+		var workshop: HEBusiness = intended.businesses.get(id)
+		_assert(workshop != null, "Workshop %d should survive 300 days at intended prices" % id)
+		if workshop == null:
+			continue
+		var profit: float = workshop.ledger_average("cash_profit", 100)
+		var workers := intended._business_employed_worker_count(id)
+		var wage := intended._reference_wage_per_worker(workshop.settlement_id)
+		var books := intended._staffing_decision(workshop, wage)
+		print("  %s at intended prices: crew %d, cash profit %.2f/day over 100 days, return/worker %.2f vs wage %.2f" % [workshop.name, workers, profit, books["return_per_worker"], wage])
+		_assert(profit > 0.0, "%s at intended prices should make a cash profit, got %.2f/day" % [workshop.name, profit])
+		_assert(workers >= 1 and workshop.capacity >= 1, "%s should keep a crew when its sales cover its costs" % workshop.name)
+
+	# 3. A workshop whose inputs cost more than it can sell for shrinks, then closes.
+	var starved := _new_sim("build_economy_with_charcoal_burner", false)
+	(starved.markets[starved.get_settlement_ids()[0]] as HEMarket).price[Commodity.Type.TIMBER] = 6.0
+	var closed_day := -1
+	var crew_floor_day := -1
+	for day in 200:
+		starved.advance_ticks(1)
+		var failing: HEBusiness = starved.businesses.get(burner_id)
+		if failing == null:
+			closed_day = day
+			break
+		if crew_floor_day < 0 and failing.capacity <= 1:
+			crew_floor_day = day
+			_assert(failing.ledger_average("cash_profit", 14) < 0.0, "A crew cut to the floor should be losing money on the books")
+	print("  burner with timber at 6.0: crew at the floor by day %d, closed on day %d" % [crew_floor_day, closed_day])
+	_assert(crew_floor_day >= 0, "A workshop losing money on every unit should shrink its crew")
+	_assert(closed_day >= 0, "A workshop that cannot cover its inputs should close once its credit is gone")
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
