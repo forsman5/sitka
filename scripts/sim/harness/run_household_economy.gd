@@ -207,6 +207,14 @@ func _check_multi_settlement_locality() -> void:
 		"Disconnected settlements with different supply should develop independent prices")
 	_assert(sim.get_household_summary(1001)["settlement_id"] == 1 and sim.get_household_summary(2001)["settlement_id"] == 2,
 		"Every household summary should retain authoritative settlement identity")
+	# Need history is per town, not valley-wide.
+	var food: int = HENeed.Id.FOOD
+	for town in [1, 2]:
+		var household: HEHousehold = sim.households[sim.get_household_ids(town)[0]]
+		var town_need: Dictionary = sim.get_market_report(town, Commodity.Type.GRAIN)["need"]
+		var valley_total: float = sim.get_daily_history(1)[0]["needs"][food]["required"]
+		_assert(absf(town_need["required_history"].back() - household.last_need_required[food]) < EPSILON, "Town %d need history should hold only its own households' requirement" % town)
+		_assert(town_need["required_history"].back() < valley_total - EPSILON, "Town %d need history must not equal the valley-wide total" % town)
 	print("  two settlements enumerate, hire, clear markets, and report independently")
 
 ## Goods and money reconcile as opening + produced - consumed - exported
@@ -614,7 +622,7 @@ func _check_need_vs_funded_demand() -> void:
 		sim._run_consumption(sim._new_daily_record())
 		var any_household: HEHousehold = sim.households[sim.get_household_ids()[0]]
 		_assert(any_household.last_need_required.get(HENeed.Id.FOOD, 0.0) > 0.0, "%s: food is still required regardless of cash or stock" % label)
-		_assert(not sim._market_need_report(grain).is_empty(), "%s: grain should map to the food need" % label)
+		_assert(not sim._market_need_report(settlement_id, grain).is_empty(), "%s: grain should map to the food need" % label)
 
 	# Histories align by day, and a shared need is reported once, not per good.
 	var run := _new_sim("build_economy_with_charcoal_burner")
@@ -710,6 +718,30 @@ func _check_price_signal() -> void:
 	var before_blip: float = trend.markets[t_settlement].price[grain]
 	_run_grain_day(trend, t_settlement, 1000.0, 10.0)
 	_assert(trend.markets[t_settlement].price[grain] < before_blip, "One shortage day should not reverse a falling trend")
+
+	# A business's 14-day buffer refill is a planning figure; only its 3-day
+	# claim competes for today's offer and counts toward the price signal.
+	var biz := _new_sim("build_economy_with_charcoal_burner")
+	var b_settlement: int = biz.get_settlement_ids()[0]
+	biz._run_input_purchasing(biz._new_daily_record())
+	biz._run_market(biz._new_daily_record())
+	var timber_signal: Dictionary = biz._price_signal_today[b_settlement][Commodity.Type.TIMBER]
+	# Timber starts at zero in every buyer's hands, so the claim is exactly
+	# TARGET_BUFFER_DAYS of the PRODUCTION_INPUT_BUFFER_DAYS refill.
+	var claim_share: float = HESimulation.TARGET_BUFFER_DAYS / HESimulation.PRODUCTION_INPUT_BUFFER_DAYS
+	_assert(timber_signal["funded_business"] > EPSILON, "Test setup: businesses should be asking for timber")
+	_assert(absf(timber_signal["funded_business"] - timber_signal["business_buffer_request"] * claim_share) < 0.01 * timber_signal["business_buffer_request"], "Signal demand (%.1f) should be the %.0f-day claim, not the full buffer refill (%.1f)" % [timber_signal["funded_business"], HESimulation.TARGET_BUFFER_DAYS, timber_signal["business_buffer_request"]])
+
+	# Import capacity is not unsold local supply: the Trader's unused capacity
+	# must never push the ore price down, and imports that met the request
+	# create no pressure.
+	var imp := _new_sim("build_three_business_economy_with_bloomery")
+	imp.advance_ticks(40)
+	var imp_market: HEMarket = imp.markets[imp.get_settlement_ids()[0]]
+	var ore_signal: Dictionary = imp_market.last_price_signal.get(Commodity.Type.IRON_ORE, {})
+	print("  ore signal: %s" % [ore_signal])
+	_assert(not ore_signal.is_empty() and ore_signal["import_capacity"] > ore_signal["funded_business"], "Test setup: ore should be imported with spare Trader capacity")
+	_assert(ore_signal["unsold"] < EPSILON, "Spare import capacity must not read as unsold supply")
 
 	# Exports are not local demand: iron (only the Trader buys it) has no
 	# signal and keeps its posted price while exporting.

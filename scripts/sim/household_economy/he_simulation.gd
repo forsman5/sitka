@@ -1055,7 +1055,7 @@ func get_market_report(settlement_id: int, commodity: Commodity.Type) -> Diction
 		"household_wanted_history": local_market.household_wanted_history(commodity),
 		"household_funded_history": local_market.household_funded_history(commodity),
 		"household_bought_history": local_market.household_bought_history(commodity),
-		"need": _market_need_report(commodity),
+		"need": _market_need_report(settlement_id, commodity),
 		"price_signal": (local_market.last_price_signal.get(commodity, {}) as Dictionary).duplicate(),
 		"price_floor_days": local_market.floor_days.get(commodity, 0),
 		"price_ceiling_days": local_market.ceiling_days.get(commodity, 0),
@@ -1082,7 +1082,7 @@ func _market_seller_report(settlement_id: int, commodity: Commodity.Type) -> Dic
 ## counted once per need (not per satisfier), so timber and wool do not each
 ## claim the same heat requirement. Empty for goods that satisfy no need.
 ## Histories are one point per simulated day, oldest first.
-func _market_need_report(commodity: Commodity.Type) -> Dictionary:
+func _market_need_report(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
 	var need := HENeeds.for_commodity(commodity)
 	if need == null:
 		return {}
@@ -1090,7 +1090,7 @@ func _market_need_report(commodity: Commodity.Type) -> Dictionary:
 	var provided_history: Array = []
 	var start: int = maxi(0, _history.size() - HEMarket.SUPPLY_DEMAND_HISTORY_WINDOW_DAYS)
 	for i in range(start, _history.size()):
-		var entry: Dictionary = (_history[i] as Dictionary)["needs"].get(need.id, {})
+		var entry: Dictionary = (_history[i] as Dictionary)["needs_by_settlement"].get(settlement_id, {}).get(need.id, {})
 		required_history.append(entry.get("required", 0.0))
 		provided_history.append(entry.get("provided", 0.0))
 	return {
@@ -1366,6 +1366,8 @@ func _new_daily_record() -> Dictionary:
 		# need id -> {required, provided, met_by: {good name: need units},
 		# households_met, households_unmet} -- see _consume_need.
 		"needs": {},
+		# The same need totals split by settlement: settlement id -> need id -> {required, provided}.
+		"needs_by_settlement": {},
 		"traded_quantity": {},
 		"exported": {},
 		"export_revenue": 0.0,
@@ -1924,6 +1926,9 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 		"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
 	need_record["required"] += needed
 	need_record["provided"] += provided
+	var town_need: Dictionary = (record["needs_by_settlement"] as Dictionary).get_or_add(h.settlement_id, {}).get_or_add(need.id, {"required": 0.0, "provided": 0.0})
+	town_need["required"] += needed
+	town_need["provided"] += provided
 	if needed - provided > NEED_MET_EPSILON:
 		need_record["households_unmet"] += 1
 	else:
@@ -2572,6 +2577,7 @@ func _price_signal_entry(settlement_id: int, commodity: Commodity.Type) -> Dicti
 	var by_commodity: Dictionary = _price_signal_today.get_or_add(settlement_id, {})
 	return by_commodity.get_or_add(commodity, {
 		"offer": 0.0, "funded_household": 0.0, "funded_business": 0.0,
+		"business_buffer_request": 0.0, "import_capacity": 0.0,
 		"wanted_household": 0.0, "unfunded_household": 0.0})
 
 ## Does anyone local ever buy `commodity` -- a household need it satisfies, or
@@ -2608,6 +2614,12 @@ func _apply_price_signals() -> void:
 			var s: Dictionary = _price_signal_today[settlement_id][commodity]
 			var funded: float = s["funded_household"] + s["funded_business"]
 			var offer: float = s["offer"]
+			# Import capacity is what the Trader COULD bring in, not stock sitting
+			# unsold in town: the unused part must not read as a glut. Imports
+			# that met the funded requests count as matched supply (no pressure);
+			# funded requests beyond the capacity are a real shortage.
+			if s["import_capacity"] > 0.0:
+				offer = maxf(offer, minf(s["import_capacity"], funded))
 			var shortage := maxf(0.0, funded - offer)
 			var unsold := maxf(0.0, offer - funded)
 			var volume := maxf(offer, funded)
@@ -2639,6 +2651,7 @@ func _apply_price_signals() -> void:
 			local_market.last_price_signal[commodity] = {
 				"opening_price": opening, "closing_price": closing,
 				"offer": offer, "funded_household": s["funded_household"], "funded_business": s["funded_business"],
+				"business_buffer_request": s["business_buffer_request"], "import_capacity": s["import_capacity"],
 				"shortage": shortage, "unsold": unsold,
 				"wanted_household": s["wanted_household"], "unfunded_household": s["unfunded_household"],
 				"pressure": pressure, "reason": reason, "bound": bound,
@@ -3130,6 +3143,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		# toward affording wood AND ore independently, as if the business
 		# had that much cash for each).
 		var offers_seen: Dictionary[Commodity.Type, float] = {}
+		var claims_seen: Dictionary[Commodity.Type, float] = {}
 		var daily_input_cost := 0.0
 		for commodity in daily_need_by_commodity.keys():
 			daily_input_cost += daily_need_by_commodity[commodity] * local_market.price[commodity]
@@ -3146,6 +3160,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var claim := minf(requested, daily_need_by_commodity.get(commodity, 0.0) * TARGET_BUFFER_DAYS)
 			var offer := _business_offer(buyer.settlement_id, commodity, trader_import_capacity, not seller_only.get(commodity, false), claim)
 			offers_seen[commodity] = offer
+			claims_seen[commodity] = claim
 
 			purchase_ratio = minf(purchase_ratio, min(requested, offer) / requested)
 
@@ -3159,13 +3174,18 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			purchase_ratio = minf(purchase_ratio, affordable_ratio)
 
 		# The price signal sees every funded input request, even one nothing was
-		# on offer for. A good with no local seller is supplied by the Trader's
-		# import capacity, which then plays the part of the offer.
+		# on offer for -- but only the part eligible to compete for today's
+		# offer (the claim, capped at TARGET_BUFFER_DAYS of use), not the whole
+		# PRODUCTION_INPUT_BUFFER_DAYS refill, which is kept apart as a
+		# planning figure. A good with no local seller is supplied from the
+		# Trader's import capacity, recorded as capacity rather than as an offer
+		# (see _apply_price_signals).
 		for commodity in offers_seen.keys():
 			var signal_today := _price_signal_entry(buyer.settlement_id, commodity)
-			signal_today["funded_business"] += requested_by_commodity[commodity] * affordable_ratio
+			signal_today["funded_business"] += claims_seen[commodity] * affordable_ratio
+			signal_today["business_buffer_request"] += requested_by_commodity[commodity] * affordable_ratio
 			if _business_selling(buyer.settlement_id, commodity) == null:
-				signal_today["offer"] = maxf(signal_today["offer"], offers_seen[commodity])
+				signal_today["import_capacity"] = maxf(signal_today["import_capacity"], offers_seen[commodity])
 
 		for commodity in requested_by_commodity.keys():
 			var requested: float = requested_by_commodity[commodity]
