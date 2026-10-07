@@ -25,6 +25,8 @@ const DUSK_SECONDS := 120.0
 ## lost; every sheep that makes it through the night may bear a lamb.
 const LOSS_CHANCE := 0.4
 const LAMB_CHANCE := 0.1
+## Pause between the last sheep entering the pen and the end-of-day screen.
+const EARLY_END_DELAY := 1.5
 const STARTING_FLOCK_MIN := 3
 const STARTING_FLOCK_MAX := 5
 ## The pen starts at its default size and grows by this many segments (each way)
@@ -118,6 +120,7 @@ func _ready() -> void:
 	points.offset_top = 8.0
 	layer.add_child(points)
 	_pen.sheep_penned.connect(func(total: int) -> void: points.text = "Points: %d" % total)
+	_pen.sheep_penned.connect(_on_sheep_penned)
 
 func _process(_delta: float) -> void:
 	_update_sky(GameState.time_of_day)
@@ -170,6 +173,14 @@ func _build_end_of_day_screen() -> void:
 	quit.text = "Main Menu"
 	quit.pressed.connect(_to_main_menu)
 	box.add_child(quit)
+
+## Last sheep in: end the day early, after a beat so it can walk to its spot.
+func _on_sheep_penned(total: int) -> void:
+	if _day_ended or total < get_tree().get_nodes_in_group("on_foot_sheep").size():
+		return
+	await get_tree().create_timer(EARLY_END_DELAY).timeout
+	if not _day_ended:
+		_end_day()
 
 ## Nightfall: pause, then settle the night. Sheep left outside may be lost; every
 ## surviving sheep may bear a lamb. The result seeds the next day's flock.
