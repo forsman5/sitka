@@ -14,7 +14,7 @@ func _ready() -> void:
 	add_child(center)
 
 	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(260, 0)
+	box.custom_minimum_size = Vector2(360, 0)
 	box.add_theme_constant_override("separation", 14)
 	center.add_child(box)
 
@@ -23,6 +23,22 @@ func _ready() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 28)
 	box.add_child(title)
+
+	# Temporary tuning knob for validation; remove before release.
+	var repro_row := HBoxContainer.new()
+	repro_row.add_theme_constant_override("separation", 10)
+	box.add_child(repro_row)
+	var repro_label := Label.new()
+	repro_label.text = "Sheep reproduce chance per night (%)"
+	repro_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	repro_row.add_child(repro_label)
+	var repro := SpinBox.new()
+	repro.min_value = 0.0
+	repro.max_value = 100.0
+	repro.step = 1.0
+	repro.value = OnFootPlayer.sheep_repro_percent
+	repro.value_changed.connect(func(v: float) -> void: OnFootPlayer.sheep_repro_percent = v)
+	repro_row.add_child(repro)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 14)

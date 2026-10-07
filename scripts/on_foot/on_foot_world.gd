@@ -24,7 +24,6 @@ const DUSK_SECONDS := 120.0
 ## End-of-day odds, per head. Sheep still outside the pen at nightfall may be
 ## lost; every sheep that makes it through the night may bear a lamb.
 const LOSS_CHANCE := 0.4
-const LAMB_CHANCE := 0.1
 ## Pause between the last sheep entering the pen and the end-of-day screen.
 const EARLY_END_DELAY := 1.5
 const STARTING_FLOCK_MIN := 3
@@ -205,7 +204,7 @@ func _end_day() -> void:
 				continue
 		# Lambs can't breed until they've aged ADULT_AGE nights.
 		_next_flock_ages.append(sheep.age_days + 1)
-		if sheep.is_adult() and randf() < LAMB_CHANCE:
+		if sheep.is_adult() and randf() * 100.0 < OnFootPlayer.sheep_repro_percent:
 			lambs += 1
 			_next_flock_ages.append(0)
 	_game_over = _next_flock_ages.is_empty()
