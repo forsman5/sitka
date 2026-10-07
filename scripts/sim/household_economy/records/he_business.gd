@@ -67,6 +67,13 @@ extends RefCounted
 ## treasury means a rationed wage, not an overdraft. `builder_slots` is the
 ## (not yet modeled) number of builder jobs it will fund; see its comment.
 
+## Kind.WAREHOUSE (the "Government Warehouse") is a fifth odd one out, built by
+## the town government rather than a player-funded business: no recipe, no
+## sales, no self-tuning. Its fixed crew (the admin staff) is paid out of the
+## settlement's treasury, never its own `balance`. The build cost the treasury
+## paid sits in `balance` as its construction fund, which is not spent yet --
+## later the warehouse will buy inventory for construction projects with it.
+
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
@@ -99,7 +106,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
 enum Species { CATTLE, SHEEP }
 
 var id: int

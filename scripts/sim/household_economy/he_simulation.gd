@@ -620,6 +620,29 @@ func add_new_business(b: HEBusiness) -> void:
 	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
 
+## Builds a government building (HEScenarioSeeds.government_buildings()) out of
+## the settlement's treasury: the cost moves from the treasury into the new
+## building's balance, so money is conserved. Returns false -- building nothing
+## -- for an unknown type, a settlement with no government, a building of that
+## type that already exists, or a treasury that cannot cover the cost.
+func build_government_building(settlement_id: int, type_key: String) -> bool:
+	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
+	if gov == null or has_business_of_type(settlement_id, type_key):
+		return false
+	for option in HEScenarioSeeds.government_buildings():
+		if option["type_key"] != type_key:
+			continue
+		var cost: float = option["cost"]
+		if gov.balance < cost:
+			return false
+		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
+		gov.balance -= cost
+		gov.last_cash_change -= cost
+		building.balance += cost
+		add_business(building)
+		return true
+	return false
+
 ## Lowest crew the tuner may set: one worker (or the business's own
 ## min_capacity if higher), unless max_capacity itself is 0.
 func _capacity_floor(b: HEBusiness) -> int:
@@ -893,6 +916,11 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["tax_collected_total"] = b.tax_collected_total
 			report["sales_tax_rate"] = sales_tax_rate
 			report["builder_slots"] = b.builder_slots
+		elif b.kind == HEBusiness.Kind.WAREHOUSE:
+			report["recipe_id"] = "warehouse"
+			report["output_commodity"] = "Construction inventory"
+			report["stock"] = 0.0
+			report["construction_fund"] = b.balance
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
@@ -941,6 +969,7 @@ func _kind_name(kind: HEBusiness.Kind) -> String:
 		HEBusiness.Kind.TRADER: return "trader"
 		HEBusiness.Kind.HERD: return "herd"
 		HEBusiness.Kind.GOVERNMENT: return "government"
+		HEBusiness.Kind.WAREHOUSE: return "warehouse"
 		_: return "production"
 
 ## "Export (Grain, Timber) / Import (Iron Ore)" -- whichever commodities the
@@ -1434,13 +1463,20 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
-		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		# A warehouse's crew is paid by the treasury, which keeps the warehouse's
+		# own balance (the construction fund) untouched.
+		var payer: HEBusiness = b
+		if b.kind == HEBusiness.Kind.WAREHOUSE:
+			payer = _settlement_government(b.settlement_id)
+			if payer == null:
+				payer = b
+		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
 			# actually paid (a hire into existing debt otherwise worked for 0).
 			_hardship_butcher_if_needed(b, maxf(0.0, total_needed - (b.balance - floor)), record)
-		var available: float = max(0.0, b.balance - floor)
+		var available: float = max(0.0, payer.balance - floor)
 		var paid: float = clampf(total_needed, 0.0, available)
 		var shortfall: float = total_needed - paid
 		var wage_per_worker: float = paid / employed
@@ -1455,11 +1491,11 @@ func _pay_wages(record: Dictionary) -> void:
 			var pay: float = wage_per_worker * h.worker_capacity()
 			h.balance += pay
 			total_paid += pay
-		b.balance -= total_paid
+		payer.balance -= total_paid
 		b.last_wages_paid = total_paid
-		b.last_cash_change -= total_paid
+		payer.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
-		if shortfall > 0.0001 and b.kind != HEBusiness.Kind.GOVERNMENT:
+		if shortfall > 0.0001 and b.kind != HEBusiness.Kind.GOVERNMENT and b.kind != HEBusiness.Kind.WAREHOUSE:
 			failed_ids.append(business_id)
 	for business_id in failed_ids:
 		_fail_business(business_id, record)
@@ -2244,7 +2280,7 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 		var b: HEBusiness = businesses[business_id]
 		var reference_wage := _reference_wage_per_worker(b.settlement_id)
 		reference_wages[b.settlement_id] = reference_wage
-		if b.kind == HEBusiness.Kind.GOVERNMENT:
+		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 			# Staffed by the seed / _ensure_administrator, not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
@@ -2370,7 +2406,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
-		if b.kind == HEBusiness.Kind.GOVERNMENT:
+		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
 		for household_id in households.keys():
@@ -2403,6 +2439,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 
 	for settlement_id in get_settlement_ids():
 		_ensure_administrator(settlement_id)
+		_ensure_warehouse_staff(settlement_id)
 		var available: Array[int] = []
 		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 			if (households[household_id] as HEHousehold).employer_business_id == -1:
@@ -3494,6 +3531,42 @@ func _ensure_administrator(settlement_id: int) -> void:
 		return
 	pick.employer_business_id = gov.id
 	_log_event("job", {"household_id": pick.id, "business_id": gov.id, "settlement_id": settlement_id, "workers": pick.worker_capacity()})
+
+## Fills a Government Warehouse's fixed admin crew ahead of ordinary hiring,
+## the way _ensure_administrator does for the Government: unemployed worker
+## households first, else poaching from the lowest-id other private employer
+## (never the Government or another warehouse). Stops at the warehouse's
+## capacity, or when no worker household is left to take.
+func _ensure_warehouse_staff(settlement_id: int) -> void:
+	var household_ids: Array[int] = []
+	household_ids.assign((settlements[settlement_id] as HESettlement).household_ids)
+	household_ids.sort()
+	var business_ids: Array = (settlements[settlement_id] as HESettlement).business_ids.duplicate()
+	business_ids.sort()
+	for business_id in business_ids:
+		var warehouse: HEBusiness = businesses[business_id]
+		if warehouse.kind != HEBusiness.Kind.WAREHOUSE:
+			continue
+		var employed := _business_employed_worker_count(warehouse.id)
+		while employed < warehouse.capacity:
+			var pick: HEHousehold = null
+			for household_id in household_ids:
+				var h: HEHousehold = households[household_id]
+				if h.worker_capacity() > 0 and h.employer_business_id == -1:
+					pick = h
+					break
+			if pick == null:
+				for household_id in household_ids:
+					var h: HEHousehold = households[household_id]
+					var employer: HEBusiness = businesses.get(h.employer_business_id)
+					if h.worker_capacity() > 0 and employer != null and employer.kind != HEBusiness.Kind.GOVERNMENT and employer.kind != HEBusiness.Kind.WAREHOUSE:
+						pick = h
+						break
+			if pick == null:
+				return
+			pick.employer_business_id = warehouse.id
+			employed += pick.worker_capacity()
+			_log_event("job", {"household_id": pick.id, "business_id": warehouse.id, "settlement_id": settlement_id, "workers": pick.worker_capacity()})
 
 ## Read-only treasury view for UI / player actions (build costs will draw on
 ## it): {} when the settlement has no government.

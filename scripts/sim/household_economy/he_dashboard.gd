@@ -2302,6 +2302,28 @@ func _rebuild_business_rows() -> void:
 		create_popup.set_item_disabled(i, already_built)
 	create_popup.id_pressed.connect(_on_create_business_pressed)
 	_business_list.add_child(create_button)
+
+	var gov_build_button := MenuButton.new()
+	gov_build_button.text = "Government build ▾"
+	gov_build_button.flat = false
+	gov_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	gov_build_button.tooltip_text = "Build a municipal building. The cost is paid from the town treasury."
+	var gov_popup := gov_build_button.get_popup()
+	var treasury := float(_simulation.get_government_summary(_town_settlement_id()).get("treasury", 0.0))
+	var gov_options := HEScenarioSeeds.government_buildings()
+	for i in gov_options.size():
+		var gov_option: Dictionary = gov_options[i]
+		var built := _simulation.has_business_of_type(_town_settlement_id(), gov_option["type_key"])
+		var affordable := treasury >= float(gov_option["cost"])
+		var item_text := "%s (%.0f g)" % [gov_option["label"], gov_option["cost"]]
+		if built:
+			item_text = "%s (already built)" % gov_option["label"]
+		elif not affordable:
+			item_text += " - treasury too low"
+		gov_popup.add_item(item_text, i)
+		gov_popup.set_item_disabled(i, built or not affordable)
+	gov_popup.id_pressed.connect(_on_build_government_pressed)
+	_business_list.add_child(gov_build_button)
 	_rebuild_job_rows()
 
 func _town_settlement_id() -> int:
@@ -2315,6 +2337,15 @@ func _on_create_business_pressed(index: int) -> void:
 	var business: HEBusiness = option["make"].call(_simulation.next_business_id(), settlement_id)
 	_simulation.add_new_business(business)
 	_business_names[business.id] = business.name
+	_rebuild_business_rows()
+	_refresh()
+
+func _on_build_government_pressed(index: int) -> void:
+	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
+	if not _simulation.build_government_building(_town_settlement_id(), option["type_key"]):
+		return
+	for report in _simulation.get_business_reports():
+		_business_names[report["business_id"]] = report["name"]
 	_rebuild_business_rows()
 	_refresh()
 
@@ -2593,6 +2624,12 @@ func _refresh() -> void:
 			var gov_text := "Treasury %.1f · tax today %.2f (%.0f%% sales tax)" % [report["treasury"], report["last_tax_collected"], report["sales_tax_rate"] * 100.0]
 			status_label.text = gov_text
 			status_label.tooltip_text = "%s\n\nSales tax on every local sale pays the administrator; builder jobs are not modeled yet." % gov_text
+		elif report["kind"] == "warehouse":
+			var warehouse_text := "Construction fund %.1f · wages paid by the treasury" % report["construction_fund"]
+			status_label.text = warehouse_text
+			status_label.tooltip_text = "%s
+
+The build cost is held here; it will buy inventory for construction projects once those are modeled." % warehouse_text
 		elif report["kind"] == "trader":
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
