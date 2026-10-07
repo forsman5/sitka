@@ -14,8 +14,12 @@ const DAY_NIGHT_CYCLE := preload("res://scripts/world/day_night_cycle.gd")
 ## Established forest / bushes at start; the managers keep spawning more over time.
 const INITIAL_TREES := 60
 const INITIAL_BUSH_CLUSTERS := 12
-## Morning light, as in the RTS start (0.25 = dawn).
-const START_TIME_OF_DAY := 0.3
+## Each day is a dusk challenge: start at 6:30pm with the sun setting and get the
+## flock penned before night falls at 9pm. The cycle is sped up so that stretch
+## lasts DUSK_SECONDS of real time.
+const START_TIME_OF_DAY := 18.5 / 24.0
+const NIGHT_TIME := 21.0 / 24.0
+const DUSK_SECONDS := 120.0
 
 ## Esc often releases mouse capture itself (browser pointer lock, embedded game
 ## window) before the game sees a key press, so a lost capture also opens the menu.
@@ -35,6 +39,7 @@ var _pause_layer: CanvasLayer
 var _auto_paused_at: int = -ESC_DEBOUNCE_MSEC
 var _terrain: Node
 var _sky_mat: ProceduralSkyMaterial
+var _clock: Label
 
 func _ready() -> void:
 	GameState.time_of_day = START_TIME_OF_DAY
@@ -62,6 +67,16 @@ func _ready() -> void:
 	add_child(layer)
 	_build_pause_menu()
 
+	_clock = Label.new()
+	_clock.add_theme_font_size_override("font_size", 28)
+	_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_clock.anchor_left = 1.0
+	_clock.anchor_right = 1.0
+	_clock.offset_left = -260.0
+	_clock.offset_right = -16.0
+	_clock.offset_top = 44.0
+	layer.add_child(_clock)
+
 	var points := Label.new()
 	points.text = "Points: 0"
 	points.add_theme_font_size_override("font_size", 28)
@@ -76,6 +91,7 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	_update_sky(GameState.time_of_day)
+	_update_clock(GameState.time_of_day)
 	if not get_tree().paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_auto_paused_at = Time.get_ticks_msec()
 		_set_paused(true)
@@ -247,7 +263,12 @@ func _build_environment() -> void:
 	var cycle := Node.new()
 	cycle.name = "DayNightCycle"
 	cycle.set_script(DAY_NIGHT_CYCLE)
+	cycle.seconds_per_day = DUSK_SECONDS / (NIGHT_TIME - START_TIME_OF_DAY)
 	add_child(cycle)
+
+func _update_clock(t: float) -> void:
+	var minutes := int(t * 24.0 * 60.0)
+	_clock.text = "%02d:%02d" % [floori(minutes / 60.0), minutes % 60]
 
 func _update_sky(t: float) -> void:
 	var a: Array = _SKY_KEYS[0]
