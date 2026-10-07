@@ -615,7 +615,9 @@ func add_business(b: HEBusiness) -> void:
 func add_new_business(b: HEBusiness) -> void:
 	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
 	b.capacity = crew
-	b.balance += HEScenarioSeeds.startup_cash(b, crew)
+	var startup_allowance: float = HEScenarioSeeds.startup_cash(b, crew)
+	b.balance += startup_allowance
+	b.ledger_add("injection", startup_allowance)
 	var startup_cycle := maxi(b.growth_days, b.startup_cycle_days)
 	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
@@ -861,6 +863,8 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"last_planned_units": b.last_planned_units,
 			"last_actual_units": b.last_actual_units,
 			"balance_history": b.balance_history(),
+			"ledger": b.ledger_history(1).back() if not b.ledger_history(1).is_empty() else {},
+			"ledger_history": b.ledger_history(),
 			"last_wage_per_worker": b.last_wage_per_worker,
 			"rolling_average_wage": b.rolling_average_wage(),
 			"rolling_average_revenue_per_worker": b.rolling_average_revenue_per_worker(),
@@ -1415,6 +1419,10 @@ func _pay_wages(record: Dictionary) -> void:
 		b.last_cash_change = 0.0
 		b.last_wage_shortfall = 0.0
 		b.todays_flows = {}
+		var carried_injection: float = b.ledger_today.get("injection", 0.0)
+		b.open_ledger_day()
+		if carried_injection != 0.0:
+			b.ledger_add("injection", carried_injection)
 		b.last_tax_collected = 0.0
 		# Single reset point for the day, since not every business's
 		# last_revenue gets overwritten later the same tick the way a
@@ -1426,6 +1434,7 @@ func _pay_wages(record: Dictionary) -> void:
 		# each other.
 		b.last_revenue = 0.0
 		var employed := _business_employed_worker_count(business_id)
+		b.ledger_today["employed"] = float(employed)
 		if employed <= 0:
 			b.last_wage_per_worker = 0.0
 			record["wages_paid"][business_id] = 0.0
@@ -1457,6 +1466,7 @@ func _pay_wages(record: Dictionary) -> void:
 			total_paid += pay
 		b.balance -= total_paid
 		b.last_wages_paid = total_paid
+		b.ledger_add("wages", total_paid)
 		b.last_cash_change -= total_paid
 		record["wages_paid"][business_id] = total_paid
 		if shortfall > 0.0001 and b.kind != HEBusiness.Kind.GOVERNMENT:
@@ -1538,6 +1548,7 @@ func _hardship_butcher_if_needed(b: HEBusiness, cash_shortfall: float, record: D
 	b.herd_size -= butchered
 	var proceeds: float = butchered * price
 	b.balance += proceeds
+	b.ledger_add("sales_other", proceeds)
 	b.last_hardship_butchered = butchered
 	# Money-side only (export_revenue) -- NOT record["exported"]. A normal
 	# cull/export moves units OUT OF inventory (produced there by _run_herds,
@@ -1671,6 +1682,7 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 ## revenue-per-worker signal, that just rides along on this same per-
 ## business daily pass rather than getting one of its own.
 func _record_business_revenue_history() -> void:
+	var wage_by_settlement := {}
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		var employed := _business_employed_worker_count(business_id)
@@ -1684,6 +1696,43 @@ func _record_business_revenue_history() -> void:
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
 		b.record_flow_day()
+		if not wage_by_settlement.has(b.settlement_id):
+			wage_by_settlement[b.settlement_id] = _reference_wage_per_worker(b.settlement_id)
+		_close_business_ledger(b, wage_by_settlement[b.settlement_id])
+
+## Finishes today's operating ledger row (see HEBusiness.ledger_*): physical
+## units sold/produced of the business's own outputs, and its stock valued at
+## closing local prices (a ranch's culled animals at what the Trader would pay).
+func _close_business_ledger(b: HEBusiness, reference_wage: float) -> void:
+	var outputs: Array = _business_output_commodities(b)
+	var prices: Dictionary = {}
+	for c in (markets[b.settlement_id] as HEMarket).price.keys():
+		prices[c] = (markets[b.settlement_id] as HEMarket).price[c]
+	if b.kind == HEBusiness.Kind.HERD:
+		prices[b.herd_commodity()] = HERD_EXPORT_PRICE[b.species] * TRADER_BUY_PRICE_FRACTION
+	var sold := 0.0
+	var produced := 0.0
+	for c in outputs:
+		sold += float((b.todays_flows.get(HEBusiness.FLOW_SOLD, {}) as Dictionary).get(c, 0.0))
+		produced += float(b.last_output_produced.get(c, 0.0))
+	if b.kind == HEBusiness.Kind.TRADER:
+		for c in b.last_exported.keys():
+			sold += b.last_exported[c]
+		for c in b.last_imported.keys():
+			sold += b.last_imported[c]
+	b.ledger_today["reference_wage"] = reference_wage
+	b.close_ledger_day(prices, outputs, sold, produced)
+
+## The goods this business makes and sells (empty for a Trader or government).
+func _business_output_commodities(b: HEBusiness) -> Array:
+	if b.kind == HEBusiness.Kind.PRODUCTION and b.recipe != null:
+		return b.recipe.outputs.keys()
+	if b.kind == HEBusiness.Kind.HERD:
+		var out: Array = [b.herd_commodity()]
+		if b.species == HEBusiness.Species.SHEEP:
+			out.append(Commodity.Type.WOOL)
+		return out
+	return []
 
 ## One person's daily use of `commodity` lives in HENeeds, so a household's
 ## need and the reference wage's cost of living can never drift apart.
@@ -2263,15 +2312,10 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# visible, a classic control-loop-period-shorter-than-plant-lag
 			# recipe for overshoot. See _capacity_eval_interval_days.
 			continue
-		var delta := 0
-		var change_reason := ""
-		var avg_revenue := b.rolling_average_revenue_per_worker()
-		if reference_wage > 0.0:
-			var ratio_error := (avg_revenue - reference_wage) / reference_wage
-			if absf(ratio_error) > WAGE_PROFIT_MARGIN:
-				var clamped_error := clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP)
-				delta = roundi(clamped_error * CAPACITY_STEP_MAX_WORKERS)
-				change_reason = "low_revenue" if delta < 0 else "high_revenue"
+		var staffing := _staffing_decision(b, reference_wage)
+		var delta: int = staffing["delta"]
+		var change_reason: String = staffing["reason"]
+		var avg_revenue: float = staffing["return_per_worker"]
 		var cash_runway := INF
 		var required_runway := 0.0
 		if b.capacity > CASH_RUNWAY_GUARD_MIN_CAPACITY:
@@ -2295,10 +2339,154 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 					"reference_wage_per_worker": reference_wage,
 					"cash_runway_days": cash_runway,
 					"required_runway_days": required_runway,
+					"staffing": staffing,
 				}
 	record["reference_wage_by_settlement"] = reference_wages
 	if reference_wages.size() == 1:
 		record["reference_wage"] = reference_wages.values()[0]
+
+## Staffing is steered toward the crew whose output the market will actually
+## take: saleable units per day divided by what one worker makes. These bound
+## how far the current crew may drift from that target before it moves, and how
+## much stock may sit unsold before a bigger crew is even considered.
+const STAFFING_RETURN_WINDOW_DAYS := 90
+const STAFFING_HEADROOM := 0.05
+const STAFFING_SHRINK_TOLERANCE := 0.15
+const STAFFING_GROW_MIN_SELL_THROUGH := 0.95
+const STAFFING_GROW_MAX_STOCK_DAYS := 14.0
+
+## The weekly staffing signal, from the business's own operating ledger over
+## its production cycle (HEBusiness.rolling_window_days) instead of revenue per
+## worker. Two questions, each from the ledger:
+##   1. Does each worker clear the wage? What it actually sold, less the inputs
+##      it used up and the tax it remitted, per worker, against the going wage.
+##   2. Does the output have a buyer? The crew it takes to make what it is
+##      actually SELLING (units sold per day over units one worker makes) is the
+##      target; a bigger crew is cut toward it, never past it, so cutting stops
+##      once production matches sales instead of chasing a lagging window to
+##      zero. Growth needs both a clearing return and sales beyond the current
+##      crew's output while stock is nearly gone (sales merely drawn from a
+##      pile of old stock are not demand for more workers).
+## Judged only once enough ledger rows exist: a field crew's sales (paced from
+## stock) over a recent stretch, its production over the whole cycle, so one
+## quiet week never dismisses it. The move is bounded by
+## CAPACITY_STEP_MAX_WORKERS like every capacity change. Returns {delta, reason,
+## return_per_worker, wage, sell_through, target_workers, employed, sales,
+## input_cost, taxes, units_sold, units_produced, window}.
+func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
+	var window := b.rolling_window_days()
+	var out := {"delta": 0, "reason": "", "return_per_worker": 0.0, "wage": reference_wage, "sell_through": 1.0,
+		"target_workers": -1.0, "employed": 0.0, "sales": 0.0, "input_cost": 0.0, "taxes": 0.0,
+		"units_sold": 0.0, "units_produced": 0.0, "window": window}
+	var needed_rows: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else (window if b.has_long_cycle() else mini(window, 14))
+	var rows := b.ledger_history(window).size()
+	if rows < needed_rows:
+		return out
+	var full_cycle := rows >= window
+	# A field crew's SALES are paced out of stock (see _paced_offer), so the money
+	# side is judged over a recent stretch; only production is lumpy.
+	var money_window: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else window
+	var avg_employed := maxf(1.0, b.ledger_average("employed", money_window))
+	var sales := 0.0
+	for key in ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin"]:
+		sales += b.ledger_average(key, money_window)
+	var input_cost := b.ledger_average("input_consumed_value", money_window)
+	var taxes := b.ledger_average("taxes", money_window)
+	var sold_recent := b.ledger_average("units_sold", money_window)
+	var sold_cycle := b.ledger_average("units_sold", window)
+	var unmet_recent := b.ledger_average("unmet_demand", money_window)
+	var unfunded_recent := b.ledger_average("unfunded_demand", money_window)
+	var made := b.ledger_average("units_produced", window)
+	var return_per_worker := (sales - input_cost - taxes) / avg_employed
+	# Judge the window's return against the window's wage, not today's spot
+	# wage: the wage index jumps with consumer prices while a trailing average
+	# of sales still holds the cheap days, which would read as a loss every time
+	# prices rise.
+	var window_wage := b.ledger_average("reference_wage", money_window)
+	if window_wage > 0.0:
+		reference_wage = window_wage
+		out["wage"] = window_wage
+	out["return_per_worker"] = return_per_worker
+	out["employed"] = avg_employed
+	out["sales"] = sales
+	out["input_cost"] = input_cost
+	out["taxes"] = taxes
+	out["units_sold"] = sold_recent
+	out["unmet_demand"] = unmet_recent
+	out["unfunded_demand"] = unfunded_recent
+	out["units_produced"] = made
+	var measured_output: bool = b.kind == HEBusiness.Kind.PRODUCTION and made > 0.0001
+	if measured_output:
+		out["sell_through"] = minf(2.0, sold_cycle / made)
+	if reference_wage <= 0.0:
+		return out
+	var delta := 0
+	var reason := ""
+	var ratio_error := (return_per_worker - reference_wage) / reference_wage
+	if absf(ratio_error) > WAGE_PROFIT_MARGIN:
+		delta = roundi(clampf(ratio_error, -WAGE_RATIO_CLAMP, WAGE_RATIO_CLAMP) * CAPACITY_STEP_MAX_WORKERS)
+		reason = "low_return" if delta < 0 else "high_return"
+
+	# A Trader's crew is its handling capacity: one worker moves
+	# TRADER_CAPACITY_PER_WORKER units a day, and what it earns is a spread on the
+	# units it actually moves, which the goods on offer (not its crew) decide. So
+	# the crew follows throughput, and it only grows while it is nearly full.
+	if b.kind == HEBusiness.Kind.TRADER:
+		var traded := b.ledger_average("units_sold", window)
+		var trader_target := traded * (1.0 + STAFFING_HEADROOM) / TRADER_CAPACITY_PER_WORKER
+		var trader_current := float(_business_employed_worker_count(b.id))
+		out["target_workers"] = trader_target
+		out["units_sold"] = traded
+		if trader_current > trader_target * (1.0 + STAFFING_SHRINK_TOLERANCE) + 0.5:
+			var trader_cut: int = -clampi(floori(trader_current - trader_target), 1, CAPACITY_STEP_MAX_WORKERS)
+			if trader_cut < delta or delta == 0:
+				delta = trader_cut
+				reason = "unused_capacity"
+		elif delta > 0 and traded < trader_current * TRADER_CAPACITY_PER_WORKER * 0.8:
+			delta = 0
+			reason = ""
+		out["delta"] = delta
+		out["reason"] = reason
+		return out
+
+	# The volume question needs a measured output per worker, so a production
+	# row (a harvest) inside the window; a field crew also needs the full cycle.
+	if measured_output and (full_cycle or not b.uses_field_model()):
+		var window_employed := maxf(1.0, b.ledger_average("employed", window))
+		var per_worker := made / window_employed
+		# Demand is what sold plus what funded buyers could not get: when supply
+		# is the binding limit, sales alone understate it.
+		var demand := sold_recent + unmet_recent + unfunded_recent
+		var target := demand * (1.0 + STAFFING_HEADROOM) / per_worker
+		var current := float(_business_employed_worker_count(b.id))
+		out["target_workers"] = target
+		if current > target * (1.0 + STAFFING_SHRINK_TOLERANCE) + 0.5:
+			var cut: int = -clampi(floori(current - target), 1, CAPACITY_STEP_MAX_WORKERS)
+			if cut < delta or delta == 0:
+				delta = cut
+				reason = "unsold_output"
+		elif delta > 0:
+			var stock_units := 0.0
+			for c in _business_output_commodities(b):
+				stock_units += b.stock(c)
+			var horizon: float = minf(float(b.days_until_next_harvest()), STAFFING_GROW_MAX_STOCK_DAYS) if b.has_long_cycle() else STAFFING_GROW_MAX_STOCK_DAYS
+			var drawn_from_stock := stock_units > demand * horizon
+			# A clearing return is the case for hiring; what blocks it is output
+			# that is not selling through, or sales that are only old stock
+			# leaving. Output unsold while households go short of money for it is
+			# a purchasing-power gap, not a lack of buyers -- new wages close it.
+			var income_constrained := unfunded_recent > sold_recent * 0.05
+			if (drawn_from_stock or float(out["sell_through"]) < STAFFING_GROW_MIN_SELL_THROUGH) and not income_constrained:
+				delta = 0
+				reason = ""
+	elif delta > 0 and b.kind == HEBusiness.Kind.PRODUCTION:
+		# No measured output per worker yet (no harvest in the window): a good
+		# return alone is not enough to add workers.
+		delta = 0
+		reason = ""
+	out["delta"] = delta
+	out["reason"] = reason
+	return out
 
 ## How often (in days, always a whole multiple of CAPACITY_EVAL_INTERVAL_
 ## DAYS so it still only ever fires on one of the ticks the calling
@@ -2543,8 +2731,11 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 		if seller != null:
 			seller.consume(commodity, quantity_traded)
 			seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity_traded)
-			var revenue := quantity_traded * price
-			revenue -= _collect_sales_tax(settlement_id, revenue)
+			var gross_revenue := quantity_traded * price
+			var sales_tax := _collect_sales_tax(settlement_id, gross_revenue)
+			var revenue := gross_revenue - sales_tax
+			seller.ledger_add("sales_household", gross_revenue)
+			seller.ledger_add("taxes", sales_tax)
 			seller.balance += revenue
 			# += , not = -- _pay_wages already zeroed this at the top of the
 			# tick, and _run_input_purchasing may have already added this
@@ -2564,6 +2755,12 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	# and business passes both add to it, nothing adjusts the price here.
 	var signal_today := _price_signal_entry(settlement_id, commodity)
 	signal_today["offer"] = maxf(signal_today["offer"], total_offer + b2b_sold)
+	# A seller whose output is instant offers its whole stock, so what it carries
+	# overnight is working inventory, not a glut: allow one day's output of float
+	# before leftover counts as unsold. (A paced field seller's offer is already
+	# a daily slice, so it gets none.)
+	if seller != null and not seller.has_long_cycle():
+		signal_today["working_stock"] = maxf(signal_today["working_stock"], float(seller.last_output_produced.get(commodity, 0.0)))
 	signal_today["funded_household"] = total_funded_request
 	signal_today["wanted_household"] = total_wanted
 	signal_today["unfunded_household"] = maxf(0.0, total_wanted - total_funded_request)
@@ -2577,7 +2774,7 @@ func _price_signal_entry(settlement_id: int, commodity: Commodity.Type) -> Dicti
 	var by_commodity: Dictionary = _price_signal_today.get_or_add(settlement_id, {})
 	return by_commodity.get_or_add(commodity, {
 		"offer": 0.0, "funded_household": 0.0, "funded_business": 0.0,
-		"business_buffer_request": 0.0, "import_capacity": 0.0,
+		"business_buffer_request": 0.0, "import_capacity": 0.0, "working_stock": 0.0,
 		"wanted_household": 0.0, "unfunded_household": 0.0})
 
 ## Does anyone local ever buy `commodity` -- a household need it satisfies, or
@@ -2621,7 +2818,13 @@ func _apply_price_signals() -> void:
 			if s["import_capacity"] > 0.0:
 				offer = maxf(offer, minf(s["import_capacity"], funded))
 			var shortage := maxf(0.0, funded - offer)
-			var unsold := maxf(0.0, offer - funded)
+			var local_seller := _business_selling(settlement_id, commodity)
+			if local_seller != null:
+				if shortage > 0.0:
+					local_seller.ledger_add("unmet_demand", shortage)
+				if s["unfunded_household"] > 0.0:
+					local_seller.ledger_add("unfunded_demand", s["unfunded_household"])
+			var unsold := maxf(0.0, offer - funded - s["working_stock"])
 			var volume := maxf(offer, funded)
 			var opening: float = local_market.price[commodity]
 			var pressure: float = local_market.price_pressure.get(commodity, 0.0)
@@ -2651,7 +2854,7 @@ func _apply_price_signals() -> void:
 			local_market.last_price_signal[commodity] = {
 				"opening_price": opening, "closing_price": closing,
 				"offer": offer, "funded_household": s["funded_household"], "funded_business": s["funded_business"],
-				"business_buffer_request": s["business_buffer_request"], "import_capacity": s["import_capacity"],
+				"business_buffer_request": s["business_buffer_request"], "import_capacity": s["import_capacity"], "working_stock": s["working_stock"],
 				"shortage": shortage, "unsold": unsold,
 				"wanted_household": s["wanted_household"], "unfunded_household": s["unfunded_household"],
 				"pressure": pressure, "reason": reason, "bound": bound,
@@ -2717,10 +2920,12 @@ func _run_trade(record: Dictionary) -> void:
 			# real producer benefiting from export demand on top of
 			# domestic demand.
 			seller.balance += quantity * pay_price
+			seller.ledger_add("sales_export", quantity * pay_price)
 			seller.last_revenue += quantity * pay_price
 
 			var margin: float = quantity * (local_price - pay_price)
 			trader.balance += margin
+			trader.ledger_add("trade_margin", margin)
 			trader_margin_today += margin
 			total_exported += quantity
 			remaining_capacity -= quantity
@@ -2776,10 +2981,12 @@ func _run_trade(record: Dictionary) -> void:
 			var herd_pay_price: float = reference_price * TRADER_BUY_PRICE_FRACTION
 			herd.consume(herd_commodity, herd_quantity)
 			herd.balance += herd_quantity * herd_pay_price
+			herd.ledger_add("sales_export", herd_quantity * herd_pay_price)
 			herd.last_revenue += herd_quantity * herd_pay_price
 
 			var herd_margin: float = herd_quantity * (reference_price - herd_pay_price)
 			trader.balance += herd_margin
+			trader.ledger_add("trade_margin", herd_margin)
 			herd_margin_today += herd_margin
 			total_exported += herd_quantity
 			remaining_capacity -= herd_quantity
@@ -3009,8 +3216,26 @@ func _settlement_trader(settlement_id: int) -> HEBusiness:
 ## date, so it keeps a flat TRADER_RESERVE_BUFFER_DAYS.
 func _seller_surplus_above_reserve(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type) -> float:
 	var reserve_days: float = float(seller.days_until_next_harvest()) if seller.has_long_cycle() else TRADER_RESERVE_BUFFER_DAYS
-	var reserve: float = _settlement_daily_demand(settlement_id, commodity) * reserve_days
+	var daily_demand := _settlement_daily_demand(settlement_id, commodity) + _business_input_daily_demand(settlement_id, commodity, seller)
+	var reserve: float = daily_demand * reserve_days
 	return max(0.0, seller.stock(commodity) - reserve)
+
+## What staffed local businesses (other than `seller` itself) plan to use of
+## `commodity` per day as a recipe input. Part of the export reserve: a Trader
+## that ships out a harvest at half price leaves workshops that need the same
+## good bidding against a bare warehouse until the next one, which the operating
+## ledger showed as input costs of 4x base for weeks.
+func _business_input_daily_demand(settlement_id: int, commodity: Commodity.Type, seller: HEBusiness) -> float:
+	var total := 0.0
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b == seller or b.settlement_id != settlement_id or b.kind != HEBusiness.Kind.PRODUCTION or b.recipe == null:
+			continue
+		if not b.recipe.inputs.has(commodity):
+			continue
+		var planned: float = float(_business_employed_worker_count(business_id)) * b.recipe.outputs[b.output_commodity()]
+		total += planned * b.recipe.inputs[commodity]
+	return total
 
 ## The `_b2b_today` entry for this seller/commodity, created on first use
 ## with the seller's paced offer as it stood before any business bought from it.
@@ -3217,8 +3442,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				b2b["requested"] += requested * affordable_ratio
 				seller.consume(commodity, bought)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
-				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)
+				var b2b_tax := _collect_sales_tax(buyer.settlement_id, cost)
+				var net_cost := cost - b2b_tax
 				seller.balance += net_cost
+				seller.ledger_add("sales_business", cost)
+				seller.ledger_add("taxes", b2b_tax)
+				buyer.ledger_add("input_local", cost)
 				seller.last_revenue += net_cost
 				seller.last_cash_change += net_cost
 				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
@@ -3233,8 +3462,12 @@ func _run_input_purchasing(record: Dictionary) -> void:
 				# The sale to the local buyer is taxed; the Trader, as seller,
 				# bears it out of its import margin (never out of import_cost,
 				# which leaves the closed system).
-				var margin: float = cost - import_cost - _collect_sales_tax(buyer.settlement_id, cost)
+				var import_tax := _collect_sales_tax(buyer.settlement_id, cost)
+				var margin: float = cost - import_cost - import_tax
 				trader.balance += margin
+				trader.ledger_add("trade_margin", cost - import_cost)
+				trader.ledger_add("taxes", import_tax)
+				buyer.ledger_add("input_import", cost)
 				trader.last_revenue += margin
 				trader.last_cash_change += margin
 				trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
@@ -3360,6 +3593,9 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				herd.add_flow(HEBusiness.FLOW_SOLD, commodity, head)
 				var net_cost := cost - _collect_sales_tax(butcher.settlement_id, cost)
 				herd.balance += net_cost
+				herd.ledger_add("sales_business", cost)
+				herd.ledger_add("taxes", cost - net_cost)
+				butcher.ledger_add("input_local", cost)
 				herd.last_revenue += net_cost
 				herd.last_cash_change += net_cost
 				butcher.balance -= cost
@@ -3458,6 +3694,7 @@ func _collect_sales_tax(settlement_id: int, gross: float) -> float:
 		return 0.0
 	var tax := gross * sales_tax_rate
 	gov.balance += tax
+	gov.ledger_add("tax_income", tax)
 	gov.last_tax_collected += tax
 	gov.last_revenue += tax
 	gov.last_cash_change += tax

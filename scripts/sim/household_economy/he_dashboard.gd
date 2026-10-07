@@ -1875,6 +1875,22 @@ func _refresh_business_detail() -> void:
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
 	])
+	# Operating ledger: cash movements by heading, with cash profit and stock
+	# accumulation kept as separate figures (goods built up are not cash).
+	var ledger: Dictionary = report.get("ledger", {})
+	if not ledger.is_empty():
+		rows.append(["Sales today", "households %.2f · businesses %.2f · export %.2f" % [ledger["sales_household"], ledger["sales_business"], ledger["sales_export"] + ledger["sales_other"] + ledger["trade_margin"]]])
+		rows.append(["Inputs bought today", "local %.2f · imported %.2f" % [ledger["input_local"], ledger["input_import"]]])
+		rows.append(["Wages · sales tax", "%.2f · %.2f" % [ledger["wages"], ledger["taxes"]]])
+		rows.append(["Cash profit today", "%.2f" % ledger["cash_profit"]])
+		rows.append(["Stock accumulated today", "%+.2f of goods (output %.1f, inputs %.1f held)" % [ledger["stock_change_value"], ledger["output_stock_value"], ledger["input_stock_value"]]])
+		var recent: Array = (report["ledger_history"] as Array).slice(-30)
+		var profit_30 := 0.0
+		var stock_30 := 0.0
+		for entry in recent:
+			profit_30 += entry["cash_profit"]
+			stock_30 += entry["stock_change_value"]
+		rows.append(["Last %d days (avg/day)" % recent.size(), "cash profit %.2f · stock accumulated %+.2f" % [profit_30 / recent.size(), stock_30 / recent.size()]])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])

@@ -392,6 +392,102 @@ func flow_history(flow: String) -> Dictionary:
 		out[commodity] = (history[commodity] as Array).duplicate()
 	return out
 
+## Operating ledger: every cash movement of the day under its own heading, kept
+## apart from what the balance happens to do. Sales are gross (tax is its own
+## line); a Trader's trade_margin is what it keeps between buying and selling.
+## cash_profit = inflows - outflows and reconciles to the day's balance change
+## (less one-off startup cash); stock_change_value is the value of goods
+## accumulated or run down, at the day's closing prices, and is NOT in cash_profit.
+const LEDGER_INFLOWS := ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin", "tax_income"]
+const LEDGER_OUTFLOWS := ["input_local", "input_import", "wages", "taxes"]
+const LEDGER_HISTORY_DAYS := 730
+
+var ledger_today: Dictionary = {}
+## Stock held when the day opened, so close_ledger_day can value the change.
+var ledger_open_stock: Dictionary = {}
+var _ledger_history: Array[Dictionary] = []
+
+func ledger_add(key: String, amount: float) -> void:
+	ledger_today[key] = ledger_today.get(key, 0.0) + amount
+
+func open_ledger_day() -> void:
+	ledger_today = {}
+	ledger_open_stock = inventory.duplicate()
+
+## Finalises today's row. `prices` values stock at the day's closing prices;
+## `output_commodities` splits output stock from input stock. `units_*` are
+## physical, for capacity decisions.
+func close_ledger_day(prices: Dictionary, output_commodities: Array, units_sold: float, units_produced: float) -> void:
+	var row: Dictionary = {}
+	# What the day's production actually used up, at closing prices. Purchases
+	# land in lumps while buffers fill; consumption is the running input cost.
+	var consumed_value := 0.0
+	for c in (todays_flows.get(FLOW_CONSUMED, {}) as Dictionary).keys():
+		consumed_value += float(todays_flows[FLOW_CONSUMED][c]) * float(prices.get(c, 0.0))
+	row["input_consumed_value"] = consumed_value
+	var inflow := 0.0
+	var outflow := 0.0
+	for key in LEDGER_INFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		inflow += row[key]
+	for key in LEDGER_OUTFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		outflow += row[key]
+	row["injection"] = ledger_today.get("injection", 0.0)
+	# Units buyers could pay for but the offer could not fill (from the day's
+	# price signal): demand the sales figure cannot see when supply is binding.
+	row["unmet_demand"] = ledger_today.get("unmet_demand", 0.0)
+	# Units households wanted but could not pay for: need without purchasing
+	# power, which a sales figure cannot see either.
+	row["unfunded_demand"] = ledger_today.get("unfunded_demand", 0.0)
+	row["cash_profit"] = inflow - outflow
+	var output_value := 0.0
+	var input_value := 0.0
+	var change_value := 0.0
+	var commodities := {}
+	for c in inventory.keys():
+		commodities[c] = true
+	for c in ledger_open_stock.keys():
+		commodities[c] = true
+	for c in commodities.keys():
+		var price: float = prices.get(c, 0.0)
+		var held: float = stock(c)
+		if output_commodities.has(c):
+			output_value += held * price
+		else:
+			input_value += held * price
+		change_value += (held - float(ledger_open_stock.get(c, 0.0))) * price
+	row["output_stock_value"] = output_value
+	row["input_stock_value"] = input_value
+	row["stock_change_value"] = change_value
+	row["units_sold"] = units_sold
+	row["units_produced"] = units_produced
+	row["employed"] = ledger_today.get("employed", 0.0)
+	row["reference_wage"] = ledger_today.get("reference_wage", 0.0)
+	row["balance"] = balance
+	_ledger_history.append(row)
+	if _ledger_history.size() > LEDGER_HISTORY_DAYS:
+		_ledger_history.pop_front()
+
+## Newest last. Rows are copied so callers cannot change history.
+func ledger_history(days: int = LEDGER_HISTORY_DAYS) -> Array:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var out: Array = []
+	for i in range(start, _ledger_history.size()):
+		out.append((_ledger_history[i] as Dictionary).duplicate())
+	return out
+
+## Average of one ledger column over the last `days` rows (0.0 with no rows).
+func ledger_average(key: String, days: int) -> float:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var n := _ledger_history.size() - start
+	if n <= 0:
+		return 0.0
+	var total := 0.0
+	for i in range(start, _ledger_history.size()):
+		total += float((_ledger_history[i] as Dictionary).get(key, 0.0))
+	return total / n
+
 func record_wage_day(wage_per_worker: float) -> void:
 	_wage_history.append(wage_per_worker)
 	if _wage_history.size() > WAGE_ROLLING_WINDOW_DAYS:
