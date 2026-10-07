@@ -47,6 +47,7 @@ func _init() -> void:
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
 	_check_hardship_butchery_makes_local_meat()
+	_check_cull_without_outlet_is_butchered_at_home()
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
@@ -1164,8 +1165,14 @@ func _check_herds_grow_and_cull() -> void:
 	_assert(sheep["herd_size"] > HEScenarioSeeds.SHEEP_STARTING_HERD, "Sheep herd should have grown from its seeded starting size")
 	_assert(cattle["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE] + EPSILON, "Cattle herd should never exceed its cull target, got %.2f" % cattle["herd_size"])
 	_assert(sheep["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP] + EPSILON, "Sheep herd should never exceed its cull target, got %.2f" % sheep["herd_size"])
-	_assert(cattle["stock"] > 0.0, "Cattle Ranch should have culled at least once by now, stock is still 0")
-	_assert(sheep["stock"] > 0.0, "Sheep Farm should have culled at least once by now, stock is still 0")
+	# Where a cull ends up (an outlet's inventory, or home-butchered into
+	# meat) depends on which businesses survived, so count the culls themselves.
+	var culled := {"Cattle": 0.0, "Sheep": 0.0}
+	for record in sim.get_daily_history(730):
+		for animal in culled.keys():
+			culled[animal] += (record["produced"] as Dictionary).get(animal, 0.0)
+	_assert(culled["Cattle"] > 0.0, "Cattle Ranch should have culled at least once in the last two years")
+	_assert(culled["Sheep"] > 0.0, "Sheep Farm should have culled at least once in the last two years")
 	_assert(sheep["wool_stock"] > 0.0, "Sheep Farm should have accumulated some wool by now")
 
 	var land_used: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD + sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
@@ -1305,7 +1312,7 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 	var day_one: Dictionary = sim.get_daily_history(1)[0]
 	_assert((day_one["exported"] as Dictionary).get("Cattle", 0.0) < 0.0001, "Hardship butchering must not be booked as a Trader export")
 	var made: float = (day_one["produced"] as Dictionary).get("Meat", 0.0)
-	_assert(made >= HESimulation.HARDSHIP_BUTCHER_MEAT_PER_HEAD[HEBusiness.Species.CATTLE], "The slaughter should produce meat, made %.1f" % made)
+	_assert(made >= HESimulation.HOME_BUTCHER_MEAT_PER_HEAD[HEBusiness.Species.CATTLE], "The slaughter should produce meat, made %.1f" % made)
 	_assert(ranch.stock(Commodity.Type.CATTLE) < 0.0001, "Home slaughter should not touch the culled-livestock inventory")
 	print("  slaughtered %.0f head -> %.1f meat on the shelf (herd %.1f -> %.1f)" % [ranch.last_hardship_butchered, made, herd_before, ranch.herd_size])
 
@@ -1321,6 +1328,34 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 	_assert(sim.businesses.has(ranch.id), "The ranch should survive on the meat it sells")
 	_assert(ranch.balance > balance_after_slaughter, "Meat sales should repay the ranch's debt")
 	_check_demographic_invariants(sim)
+
+## With no staffed Trader or Butcher, a ranch butchers its own cull the day it
+## happens: no standing livestock stock, and the meat is sold locally. With an
+## outlet staffed, the cull stays in inventory for it to buy.
+func _check_cull_without_outlet_is_butchered_at_home() -> void:
+	print("\n=== Culls with no Trader or Butcher are butchered at home ===")
+	var sim := _new_sim("build_three_business_economy")
+	for outlet_id in [HEScenarioSeeds.TRADER_BUSINESS_ID, HEScenarioSeeds.BUTCHER_BUSINESS_ID]:
+		var outlet: HEBusiness = sim.businesses[outlet_id]
+		outlet.capacity = 0
+		outlet.max_capacity = 0
+	var ranches := {}
+	for business_id in [HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID, HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID]:
+		ranches[business_id] = sim.businesses[business_id]
+	sim.advance_ticks(24 * HESimulation.HERD_EVAL_INTERVAL_DAYS)
+	var produced_meat := 0.0
+	for record in sim.get_daily_history(24 * HESimulation.HERD_EVAL_INTERVAL_DAYS):
+		produced_meat += (record["produced"] as Dictionary).get("Meat", 0.0)
+	_assert(produced_meat > 0.0, "Home-butchered culls should produce meat")
+	for business_id in ranches.keys():
+		var ranch: HEBusiness = sim.businesses.get(business_id)
+		if ranch == null:
+			continue
+		var animals := ranch.stock(ranch.herd_commodity())
+		print("  %s: %d head of livestock held, %.1f meat made over the run" % [ranch.name, int(animals), produced_meat])
+		_assert(animals < 0.0001, "%s should hold no culled livestock without an outlet, holds %.1f" % [ranch.name, animals])
+	var sees_meat: bool = sim.get_market_summary().has("Meat")
+	_assert(sees_meat, "Meat should be listed in the local market once ranches home-butcher")
 
 ## The Butcher turns a ranch's cull into meat and leather instead of the Trader
 ## exporting it raw, and households eat the meat (twice grain's food value) and
