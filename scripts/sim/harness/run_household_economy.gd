@@ -50,6 +50,7 @@ func _init() -> void:
 	_check_herd_monetization()
 	_check_hardship_butchery_makes_local_meat()
 	_check_cull_without_outlet_is_butchered_at_home()
+	_check_livestock_goods()
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
@@ -246,7 +247,7 @@ func _check_conservation() -> void:
 	## SUBSISTENCE_COMMODITIES itself. Checked here too so the new Trader
 	## export pass is held to the same reconciliation bar as everything else.
 	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
-	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
 
 	var worst_stock_gap := 0.0
 	var worst_money_gap := 0.0
@@ -1561,6 +1562,106 @@ func _check_cull_without_outlet_is_butchered_at_home() -> void:
 	var sees_meat: bool = sim.get_market_summary().has("Meat")
 	_assert(sees_meat, "Meat should be listed in the local market once ranches home-butcher")
 
+## Culled cattle are a saleable good: a herd review moves head into the ranch's
+## inventory (herd_size stays the living herd), the Butcher buys some, the Trader
+## exports only what the Butcher does not take, each transfer is recorded once at
+## its source, and the Goods page reports it by channel with no household buyer.
+func _check_livestock_goods() -> void:
+	print("\n=== Livestock goods: one cull, one Butcher purchase, one Trader export, and the Goods report ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.sales_tax_rate = 0.0
+	var sid: int = sim.get_settlement_ids()[0]
+	var cattle := Commodity.Type.CATTLE
+	var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	for exported_good in HESimulation.EXPORT_PRIORITY:
+		sim.set_trader_export_enabled(trader.id, exported_good, false)
+
+	# One cull: the review lands on the last tick of the first interval.
+	sim.advance_ticks(HESimulation.HERD_EVAL_INTERVAL_DAYS - 1)
+	var target := sim.herd_cull_target(ranch)
+	ranch.herd_size = target - 1.0
+	sim.advance_ticks(1)
+	var culled := ranch.stock(cattle)
+	var review: Dictionary = sim.get_daily_history(1)[0]
+	_assert(culled > 0.0, "A herd review above the cull target should leave culled head in the ranch's inventory")
+	_assert(is_equal_approx(ranch.herd_size, target), "The living herd stays distinct from inventory: back at its cull target %.1f, is %.2f" % [target, ranch.herd_size])
+	_assert(is_equal_approx((review["produced"] as Dictionary).get("Cattle", 0.0), culled), "The cull should be booked as production of exactly the head now in inventory")
+	_assert(is_equal_approx(float((review["closing_stock"] as Dictionary)["Cattle"]), culled), "Culled head should be counted in the day's closing stock")
+
+	# One Butcher purchase and one export, in the same tick: staff the Butcher,
+	# give the ranch plenty to sell, and the Trader takes only what is left.
+	var worker: HEHousehold = null
+	for household_id in sim.households.keys():
+		var h: HEHousehold = sim.households[household_id]
+		if h.worker_capacity() > 0:
+			worker = h
+			break
+	worker.employer_business_id = butcher.id
+	var buffer_head := float(sim._business_employed_worker_count(butcher.id)) * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
+	ranch.add_stock(cattle, buffer_head + 20.0)
+	var stock_before := ranch.stock(cattle)
+	var expected_bought: float = sim._butchery_wanted_head(butcher, HEBusiness.Species.CATTLE)
+	_assert(is_equal_approx(expected_bought, buffer_head), "A freshly staffed Butcher with no livestock should want a full buffer of %.1f head, wants %.1f" % [buffer_head, expected_bought])
+	sim.advance_ticks(1)
+	var bought: float = (butcher.todays_flows[HEBusiness.FLOW_BOUGHT] as Dictionary).get(cattle, 0.0)
+	var sold: float = (ranch.todays_flows[HEBusiness.FLOW_SOLD] as Dictionary).get(cattle, 0.0)
+	var exported := sold - bought
+	var bid := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_BID)
+	var reference := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_REFERENCE)
+	var purchase_price := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	print("  culled %.1f head; then the Butcher bought %.1f and the Trader exported %.1f of %.1f" % [culled, bought, exported, stock_before])
+	_assert(is_equal_approx(bought, expected_bought), "The Butcher should buy exactly the head it wanted: %.2f vs %.2f" % [bought, expected_bought])
+	_assert(exported > 0.0, "Head the Butcher did not take should be exported")
+	_assert(is_equal_approx(ranch.stock(cattle), stock_before - sold), "Ranch inventory should fall by exactly the head sold")
+	_assert(is_equal_approx(ranch.last_revenue, bought * purchase_price + exported * bid), "The ranch is paid the Butcher's quote for local head and the Trader bid for exported head")
+	var day_record: Dictionary = sim.get_daily_history(1)[0]
+	_assert(is_equal_approx((day_record["traded_quantity"] as Dictionary).get("Cattle", 0.0), bought), "Only locally bought head count as traded")
+	_assert(is_equal_approx((day_record["exported"] as Dictionary).get("Cattle", 0.0), exported), "Only the Trader's head count as exported; none is both")
+
+	var transactions := sim.get_livestock_transactions(sid, cattle, 1)
+	var purchase_rows := transactions.filter(func(t): return t["channel"] == "butcher_purchase")
+	var export_rows := transactions.filter(func(t): return t["channel"] == "trader_export")
+	_assert(purchase_rows.size() == 1 and export_rows.size() == 1, "The tick should record one local purchase and one export, got %d and %d" % [purchase_rows.size(), export_rows.size()])
+	if purchase_rows.size() == 1 and export_rows.size() == 1:
+		_assert(is_equal_approx(purchase_rows[0]["quantity"], bought) and is_equal_approx(purchase_rows[0]["unit_price"], purchase_price) \
+			and purchase_rows[0]["seller_id"] == ranch.id and purchase_rows[0]["buyer_id"] == butcher.id, "The purchase record should name the ranch, the Butcher, the head and the Butcher's quote")
+		_assert(is_equal_approx(export_rows[0]["quantity"], exported) and is_equal_approx(export_rows[0]["unit_price"], reference) \
+			and is_equal_approx(export_rows[0]["paid_price"], bid) and export_rows[0]["buyer_id"] == trader.id, "The export record should carry the reference and the bid")
+
+	# The Goods page reads the good like any other: one trading price and the same
+	# row shape, the Butcher's held input at what it paid, the Trader as an export
+	# buyer, and no household.
+	var summary := sim.get_market_summary()
+	_assert(summary.has("Cattle") and summary.has("Sheep"), "Cattle and sheep should be listed while ranches and a Butcher exist")
+	var row: Dictionary = summary["Cattle"]
+	var row_keys := row.keys()
+	var grain_keys: Array = (summary["Grain"] as Dictionary).keys()
+	row_keys.sort()
+	grain_keys.sort()
+	_assert(row_keys == grain_keys, "A livestock row should have exactly the shape of any other good's row, got %s vs %s" % [row_keys, grain_keys])
+	_assert(is_equal_approx(row["price"], purchase_price), "The row's one price is the price local trades happen at, the Butcher's purchase quote")
+	_assert(is_equal_approx(row["last_clearing"]["quantity_traded"], bought) and is_equal_approx(row["last_clearing"]["exported"], exported), "The row's last day should split local sales from exports")
+	var detail := sim.get_market_detail(sid, cattle)
+	var holding: Dictionary = {}
+	for h in detail["holdings"]:
+		if h["business_id"] == butcher.id:
+			holding = h
+	_assert(not holding.is_empty() and is_equal_approx(holding["value"], butcher.stock(cattle) * purchase_price), "The Butcher's held head should be valued at what it paid")
+	var export_buyers: Array = detail["buyers"].filter(func(b): return b.get("kind", "") == "export")
+	_assert(export_buyers.size() == 1 and export_buyers[0].has("capacity") and export_buyers[0].has("available"), "The Trader should appear once, as an export buyer with its capacity, like for any good")
+	_assert(detail["buyers"].all(func(b): return b.get("kind", "") != "household"), "No household buys live cattle")
+	_assert(detail["need"].is_empty() and detail["price_signal"].is_empty(), "Livestock has no household need and no local price drift")
+
+	# No spurious rows: nothing to sell, buy or export means no livestock listing,
+	# and a Trader alone (spare export capacity) does not create one.
+	for included in [[HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID], [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.TRADER_BUSINESS_ID]]:
+		var bare := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, included), true)
+		bare.advance_ticks(30)
+		var bare_summary := bare.get_market_summary()
+		_assert(not bare_summary.has("Cattle") and not bare_summary.has("Sheep"), "A settlement with no ranch or Butcher should list no livestock, roster %s" % [included])
+
 ## The Butcher turns a ranch's cull into meat and leather instead of the Trader
 ## exporting it raw, and households eat the meat (twice grain's food value) and
 ## may wear the leather. Run for four years so both ranches have culled
@@ -1575,7 +1676,7 @@ func _check_butcher_processes_livestock() -> void:
 		"The Butcher should be the local seller of its secondary output too")
 
 	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
-	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
 	var produced := {}
 	var consumed := {}
 	var exported := {}
