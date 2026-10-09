@@ -103,6 +103,7 @@ const BLOTTER_FILTERS := [
 	{"type": "business_failed", "label": "Business closures"},
 	{"type": "herd_birth", "label": "Herd births"},
 	{"type": "herd_cull", "label": "Herd culls"},
+	{"type": "home_butcher", "label": "Home butchering of culls"},
 	{"type": "hardship_butcher", "label": "Hardship butchering"},
 ]
 
@@ -570,7 +571,7 @@ func _build_ui() -> void:
 	_business_detail_cull_target_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_business_detail_herd_events_section.add_child(_business_detail_cull_target_hint)
 	var herd_events_title := Label.new()
-	herd_events_title.text = "Herd events (births, culls, hardship sales)"
+	herd_events_title.text = "Herd events (births, culls, hardship butchering)"
 	herd_events_title.add_theme_font_size_override("font_size", 14)
 	_business_detail_herd_events_section.add_child(herd_events_title)
 	_business_detail_herd_events_display = RichTextLabel.new()
@@ -2807,10 +2808,14 @@ func _format_event(event: Dictionary) -> String:
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
+		"home_butcher":
+			var home_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			return "[color=#e0b080]%s - %s: no Trader or Butcher took the cull, butchered %.1f head at home for %.1f meat to sell locally[/color]" % [
+				day, home_ranch, event["head"], event["meat"]]
 		"hardship_butcher":
 			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#e0b080]%s - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
-				day, owner_name, event["head"], event["proceeds"], event["shortfall"], event["herd_after"]]
+			return "[color=#e0b080]%s - %s: hardship butchering, slaughtered %.1f head at home for %.1f meat to sell locally, covering a %.1f wage shortfall (herd now %.0f)[/color]" % [
+				day, owner_name, event["head"], event["meat"], event["shortfall"], event["herd_after"]]
 		"fired":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var reason: String

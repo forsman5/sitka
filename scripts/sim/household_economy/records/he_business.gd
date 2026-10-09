@@ -146,11 +146,12 @@ var last_culled: Dictionary[Commodity.Type, float] = {}
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
-## Kind.HERD only, reporting: head sold off today via he_simulation.gd's
-## _hardship_butcher_if_needed to cover a wage shortfall the ranch's own
-## cash couldn't. 0.0 on any ordinary day.
+## Kind.HERD only, reporting: head slaughtered at home today via
+## he_simulation.gd's _hardship_butcher_if_needed (their meat then sells
+## locally) to cover a wage shortfall the ranch's own cash couldn't. 0.0 on
+## any ordinary day.
 var last_hardship_butchered: float = 0.0
-## Kind.HERD only: this ranch's own recent births / culls / hardship sales,
+## Kind.HERD only: this ranch's own recent births / culls / hardship butchering,
 ## oldest first, bounded by he_simulation.gd's HERD_EVENT_HISTORY_MAX. Kept
 ## per business (not just in the shared blotter) because the blotter's
 ## 200-entry ring fills with household chatter long before a ranch's rare
