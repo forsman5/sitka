@@ -1052,11 +1052,11 @@ func get_market_summary(settlement_id: int = -1) -> Dictionary:
 			"last_clearing": (local_market.last_clearing.get(c, {}) as Dictionary).duplicate(true),
 		}
 	# Culled livestock follows the priced goods, listed only while a ranch of that
-	# species or a Butcher exists (see _livestock_active) -- never a household
-	# market, so its row carries channel-labelled quotes instead of one clearing price.
+	# species or a Butcher exists (see _livestock_active). Its row reads like any
+	# other good's: one trading price, with the Trader as just another buyer.
 	for c in LIVESTOCK_GOODS:
 		if _livestock_active(settlement_id, c):
-			out[Commodity.name_of(c)] = _livestock_summary_entry(settlement_id, c)
+			out[Commodity.name_of(c)] = _livestock_summary_entry(c)
 	return out
 
 ## Whether culled `commodity` livestock has any real presence in the settlement:
@@ -1075,33 +1075,12 @@ func _livestock_active(settlement_id: int, commodity: Commodity.Type) -> bool:
 			return true
 	return false
 
-## The settlement's channel quotes for one livestock good. A channel appears only
-## while the business behind it exists: "butcher_purchase" needs a Butcher,
-## "trader_bid"/"trader_reference" need a Trader.
-func _livestock_quotes(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
-	var species := livestock_species(commodity)
-	var quotes := {}
-	var has_butcher := false
-	for business_id in businesses.keys():
-		var b: HEBusiness = businesses[business_id]
-		if b.settlement_id == settlement_id and b.processes_livestock:
-			has_butcher = true
-	if has_butcher:
-		quotes["butcher_purchase"] = livestock_quote(species, LivestockQuote.BUTCHER_PURCHASE)
-	if _settlement_trader(settlement_id) != null:
-		quotes["trader_bid"] = livestock_quote(species, LivestockQuote.TRADER_BID)
-		quotes["trader_reference"] = livestock_quote(species, LivestockQuote.TRADER_REFERENCE)
-	return quotes
-
-## The one number a livestock row shows as its "price", and which channel it is
-## for: the Butcher's local purchase quote if there is a Butcher, else the
-## Trader's export bid, else nothing (no buyer exists).
-func _livestock_headline_price(quotes: Dictionary) -> Dictionary:
-	if quotes.has("butcher_purchase"):
-		return {"price": quotes["butcher_purchase"], "channel": "Butcher purchase"}
-	if quotes.has("trader_bid"):
-		return {"price": quotes["trader_bid"], "channel": "Trader export bid"}
-	return {"price": 0.0, "channel": "no buyer"}
+## The price a livestock good's row shows: the price local trades happen at (the
+## Butcher's purchase quote). Like every other good, the Trader pays its own,
+## lower export rate (see livestock_quote) without that becoming a second price on
+## the row -- leather's households and Trader differ the same way.
+func _livestock_price(commodity: Commodity.Type) -> float:
+	return livestock_quote(livestock_species(commodity), LivestockQuote.BUTCHER_PURCHASE)
 
 ## Yesterday's (the latest completed day's) livestock totals for `commodity`:
 ## offered/requested/bought/exported head. All zero before any day has run.
@@ -1111,17 +1090,11 @@ func _livestock_last_day(commodity: Commodity.Type) -> Dictionary:
 		return zero
 	return ((_history.back() as Dictionary)["livestock_market"] as Dictionary).get(Commodity.name_of(commodity), zero)
 
-func _livestock_summary_entry(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
-	var quotes := _livestock_quotes(settlement_id, commodity)
-	var headline := _livestock_headline_price(quotes)
+func _livestock_summary_entry(commodity: Commodity.Type) -> Dictionary:
 	var last := _livestock_last_day(commodity)
 	return {
-		"livestock": true,
-		"price": headline["price"],
-		"price_channel": headline["channel"],
-		"quotes": quotes,
-		# Same shape as a household market's row. "Traded" is local sales only;
-		# exports are reported separately so they never read as local clearing.
+		"price": _livestock_price(commodity),
+		# "Traded" is local sales only; head the Trader took are in "exported".
 		"last_clearing": {
 			"total_offered": last["offered"],
 			"total_requested_funded": last["requested"],
@@ -1305,12 +1278,12 @@ func _livestock_history(commodity: Commodity.Type, key: String) -> Array:
 		out.append(today.get(key, 0.0))
 	return out
 
-## A livestock good's report, in the same shape as a household market's so the
-## Goods page can read it, with the household and price-drift fields honestly
-## empty: no household buys live animals, and no local price moves with demand.
-## "livestock", "quotes" and "price_channel" carry what is real instead.
+## A livestock good's report, in the same shape as any other good's so the Goods
+## page reads it unchanged, with the household and price-drift fields honestly
+## empty (as for iron): no household buys live animals, and no local price moves
+## with demand.
 func _livestock_market_report(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
-	var summary := _livestock_summary_entry(settlement_id, commodity)
+	var summary := _livestock_summary_entry(commodity)
 	var offered := _livestock_history(commodity, "offered")
 	var requested := _livestock_history(commodity, "requested")
 	var exported := _livestock_history(commodity, "exported")
@@ -1322,10 +1295,7 @@ func _livestock_market_report(settlement_id: int, commodity: Commodity.Type) -> 
 	return {
 		"settlement_id": settlement_id,
 		"commodity_id": commodity,
-		"livestock": true,
 		"price": summary["price"],
-		"price_channel": summary["price_channel"],
-		"quotes": summary["quotes"],
 		"last_clearing": summary["last_clearing"],
 		"supplied_history": offered,
 		"demanded_history": requested,
@@ -1343,14 +1313,13 @@ func _livestock_market_report(settlement_id: int, commodity: Commodity.Type) -> 
 
 ## A livestock good's participants and holdings. Sellers are ranches with culled
 ## head; the only local buyer is a staffed Butcher (what its crew would stock up
-## on, within its credit); the Trader appears as an export channel labelled as
-## such, with the reference and bid, and only what the Butcher won't take.
-## Holdings carry each stock's value by channel (see livestock_holding_value).
-## No household ever appears: nothing here is a household need.
+## on, within its credit); the Trader appears as an export buyer, as it does for
+## any good, with only what the Butcher won't take. Holdings also carry each
+## stock's value by channel (see livestock_holding_value). No household ever
+## appears: nothing here is a household need.
 func _livestock_market_detail(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
 	var report := _livestock_market_report(settlement_id, commodity)
 	var species := livestock_species(commodity)
-	var quotes: Dictionary = report["quotes"]
 	var buyers: Array = []
 	var sellers: Array = []
 	var holdings: Array = []
@@ -1372,7 +1341,7 @@ func _livestock_market_detail(settlement_id: int, commodity: Commodity.Type) -> 
 			var requested := _butchery_wanted_head(b, species, false)
 			var affordable: float = maxf(0.0, b.balance + BUTCHERY_CREDIT_LIMIT) / price
 			buyers.append({"owner": b.name, "business_id": b.id, "kind": "local", "requested": requested,
-				"funded": minf(requested, affordable), "stock": holding["quantity"], "price": price})
+				"funded": minf(requested, affordable), "stock": holding["quantity"]})
 	var trader := _settlement_trader(settlement_id)
 	if trader != null and not sellers.is_empty():
 		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
@@ -1381,8 +1350,7 @@ func _livestock_market_detail(settlement_id: int, commodity: Commodity.Type) -> 
 			offered += seller["stock"]
 		var exportable: float = maxf(0.0, offered - _butchery_reserved_head(settlement_id, species))
 		buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
-			"capacity": capacity, "available": minf(capacity, exportable),
-			"price": quotes["trader_bid"], "reference_price": quotes["trader_reference"]})
+			"capacity": capacity, "available": minf(capacity, exportable)})
 	report["buyers"] = buyers
 	report["sellers"] = sellers
 	report["holdings"] = holdings

@@ -1548,13 +1548,18 @@ func _check_livestock_goods() -> void:
 		_assert(is_equal_approx(export_rows[0]["quantity"], exported) and is_equal_approx(export_rows[0]["unit_price"], reference) \
 			and is_equal_approx(export_rows[0]["paid_price"], bid) and export_rows[0]["buyer_id"] == trader.id, "The export record should carry the reference and the bid")
 
-	# The Goods page: the good is listed with its channel quotes, and the detail
-	# shows the Butcher's held input at what it paid, an export channel, and no household.
+	# The Goods page reads the good like any other: one trading price and the same
+	# row shape, the Butcher's held input at what it paid, the Trader as an export
+	# buyer, and no household.
 	var summary := sim.get_market_summary()
 	_assert(summary.has("Cattle") and summary.has("Sheep"), "Cattle and sheep should be listed while ranches and a Butcher exist")
 	var row: Dictionary = summary["Cattle"]
-	_assert(is_equal_approx(row["quotes"]["butcher_purchase"], purchase_price) and is_equal_approx(row["quotes"]["trader_bid"], bid), "The row should carry both channel quotes, not one price")
-	_assert(row["price_channel"] == "Butcher purchase" and is_equal_approx(row["price"], purchase_price), "The headline price should be labelled as the Butcher's purchase")
+	var row_keys := row.keys()
+	var grain_keys: Array = (summary["Grain"] as Dictionary).keys()
+	row_keys.sort()
+	grain_keys.sort()
+	_assert(row_keys == grain_keys, "A livestock row should have exactly the shape of any other good's row, got %s vs %s" % [row_keys, grain_keys])
+	_assert(is_equal_approx(row["price"], purchase_price), "The row's one price is the price local trades happen at, the Butcher's purchase quote")
 	_assert(is_equal_approx(row["last_clearing"]["quantity_traded"], bought) and is_equal_approx(row["last_clearing"]["exported"], exported), "The row's last day should split local sales from exports")
 	var detail := sim.get_market_detail(sid, cattle)
 	var holding: Dictionary = {}
@@ -1563,7 +1568,7 @@ func _check_livestock_goods() -> void:
 			holding = h
 	_assert(not holding.is_empty() and is_equal_approx(holding["value"], butcher.stock(cattle) * purchase_price), "The Butcher's held head should be valued at what it paid")
 	var export_buyers: Array = detail["buyers"].filter(func(b): return b.get("kind", "") == "export")
-	_assert(export_buyers.size() == 1 and is_equal_approx(export_buyers[0]["price"], bid) and is_equal_approx(export_buyers[0]["reference_price"], reference), "The Trader should appear once, as an export channel with its bid and reference")
+	_assert(export_buyers.size() == 1 and export_buyers[0].has("capacity") and export_buyers[0].has("available"), "The Trader should appear once, as an export buyer with its capacity, like for any good")
 	_assert(detail["buyers"].all(func(b): return b.get("kind", "") != "household"), "No household buys live cattle")
 	_assert(detail["need"].is_empty() and detail["price_signal"].is_empty(), "Livestock has no household need and no local price drift")
 

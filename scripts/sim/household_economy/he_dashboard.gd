@@ -1655,9 +1655,6 @@ func _refresh_market_detail() -> void:
 	for child in _market_detail_content.get_children():
 		_market_detail_content.remove_child(child)
 		child.queue_free()
-	if report.get("livestock", false):
-		_refresh_livestock_market_detail(report)
-		return
 	var clearing: Dictionary = report["last_clearing"]
 	_add_market_detail_line("Posted price %.2f  |  Last clearing (all buyers): offered %.1f, affordable requests %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
@@ -1698,81 +1695,6 @@ func _refresh_market_detail() -> void:
 	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
 	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
 	_add_market_detail_section("Stored quantities", report["holdings"], "quantity", "")
-
-## The detail view for culled cattle or sheep. They are not a household market:
-## ranches sell to the Butcher locally or to the Trader for export, at different
-## quotes, so each channel is labelled instead of showing one clearing price, and
-## nothing here mentions household demand or price drift.
-func _refresh_livestock_market_detail(report: Dictionary) -> void:
-	var quotes: Dictionary = report["quotes"]
-	var quote_parts: Array[String] = []
-	if quotes.has("butcher_purchase"):
-		quote_parts.append("Butcher purchase %.2f (local)" % quotes["butcher_purchase"])
-	if quotes.has("trader_bid"):
-		quote_parts.append("Trader export bid %.2f (external reference %.2f)" % [quotes["trader_bid"], quotes["trader_reference"]])
-	_add_market_detail_line("Quoted per head by channel: %s" % ("  |  ".join(quote_parts) if not quote_parts.is_empty() else "no buyer in this settlement"))
-	var last: Dictionary = report["last_clearing"]
-	_add_market_detail_line("Last day: ranches offered %.1f head; the Butcher asked for %.1f and bought %.1f locally  |  %.1f exported through the Trader" % [
-		last.get("total_offered", 0.0), last.get("total_requested_funded", 0.0), last.get("quantity_traded", 0.0), last.get("exported", 0.0)])
-	_add_market_detail_line("Culled animals sell business-to-business. No household buys live animals, and no local price moves with demand.")
-	var offered_color := HESparkline.color_for_series(0)
-	var requested_color := HESparkline.color_for_series(1)
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 12)
-	_market_detail_content.add_child(header)
-	var title := Label.new()
-	title.text = "Offered and requested head (last %d days)" % GameState.sparkline_days
-	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	header.add_child(title)
-	for entry in [["Ranches offered", offered_color], ["Butcher requested", requested_color]]:
-		var legend := Label.new()
-		legend.text = entry[0]
-		legend.add_theme_color_override("font_color", entry[1])
-		header.add_child(legend)
-	var chart := HESparkline.new()
-	chart.custom_minimum_size = Vector2(0, 60)
-	chart.show_max_label = true
-	chart.set_series([
-		{"name": "Ranches offered", "values": _tail(report["supplied_history"]), "color": offered_color},
-		{"name": "Butcher requested", "values": _tail(report["demanded_history"]), "color": requested_color},
-	])
-	_market_detail_content.add_child(chart)
-	_add_market_detail_section("Buyers", report["buyers"], "requested", "funded")
-	_add_market_detail_section("Sellers", report["sellers"], "offered", "stock")
-	var holdings_heading := Label.new()
-	holdings_heading.text = "Held head (%d)" % report["holdings"].size()
-	holdings_heading.add_theme_font_size_override("font_size", 14)
-	_market_detail_content.add_child(holdings_heading)
-	if report["holdings"].is_empty():
-		_add_market_detail_line("None")
-	for holding in report["holdings"]:
-		# Only channels that exist are quoted; with no buyer there is no value to show.
-		var value_parts: Array[String] = []
-		if quotes.has("butcher_purchase"):
-			value_parts.append("at the Butcher's quote %.1f" % holding["local_value"])
-		if quotes.has("trader_bid"):
-			value_parts.append("at the Trader bid %.1f" % holding["export_value"])
-		if value_parts.is_empty():
-			_add_market_owner_line(holding, ": %.1f head, no buyer to value them" % holding["quantity"])
-		else:
-			_add_market_owner_line(holding, ": %.1f head, valued %.1f  (%s)" % [holding["quantity"], holding["value"], ", ".join(value_parts)])
-	var transactions_heading := Label.new()
-	transactions_heading.text = "Recent transfers"
-	transactions_heading.add_theme_font_size_override("font_size", 14)
-	_market_detail_content.add_child(transactions_heading)
-	var shown := 0
-	for transaction in _simulation.get_livestock_transactions(report["settlement_id"], report["commodity_id"], 30):
-		if shown >= 12:
-			break
-		var seller_name: String = _business_names.get(transaction["seller_id"], "Business #%d" % transaction["seller_id"])
-		var buyer_name: String = _business_names.get(transaction["buyer_id"], "Business #%d" % transaction["buyer_id"])
-		var channel := "Butcher purchase" if transaction["channel"] == "butcher_purchase" else "Trader export"
-		_add_market_detail_line("%s  %s: %.1f head from %s to %s, %.2f per head paid (reference %.2f)" % [
-			_format_day(transaction["day"]), channel, transaction["quantity"], seller_name, buyer_name,
-			transaction["paid_price"], transaction["unit_price"]])
-		shown += 1
-	if shown == 0:
-		_add_market_detail_line("None in the last 30 days")
 
 ## Last 90 days of supplied (offered) vs. requested (affordable) quantity on
 ## one shared axis, with a color-keyed legend. Rebuilt with the rest of the
@@ -2655,20 +2577,6 @@ func _on_household_employer_pressed(household_id: int) -> void:
 	if _business_names.has(employer_id):
 		_on_business_row_selected(employer_id)
 
-## A market row's price cell. A household market has one posted price; culled
-## livestock has a quote per channel, so each is labelled rather than collapsed
-## into a single number that would be wrong for one of them.
-func _market_price_text(entry: Dictionary) -> String:
-	if not entry.get("livestock", false):
-		return "%.2f" % entry["price"]
-	var quotes: Dictionary = entry["quotes"]
-	var parts: Array[String] = []
-	if quotes.has("butcher_purchase"):
-		parts.append("Butcher %.2f" % quotes["butcher_purchase"])
-	if quotes.has("trader_bid"):
-		parts.append("Export %.2f" % quotes["trader_bid"])
-	return " | ".join(parts) if not parts.is_empty() else "no buyer"
-
 func _refresh() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
@@ -2687,7 +2595,7 @@ func _refresh() -> void:
 		var labels: Dictionary = _market_labels[commodity_name]
 		var entry: Dictionary = market[commodity_name]
 		var clearing: Dictionary = entry["last_clearing"]
-		(labels["price"] as Label).text = _market_price_text(entry)
+		(labels["price"] as Label).text = "%.2f" % entry["price"]
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
