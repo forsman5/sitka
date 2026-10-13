@@ -184,6 +184,7 @@ var _business_detail_warehouse_section: VBoxContainer
 var _business_detail_warehouse_grid: GridContainer
 var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
 var _warehouse_orders_loaded_for: int = -1
+var _gov_build_popup: PopupMenu
 var _business_detail_herd_events_section: VBoxContainer
 var _business_detail_herd_events_display: RichTextLabel
 var _business_detail_transaction_section: VBoxContainer
@@ -2486,7 +2487,20 @@ func _rebuild_business_rows() -> void:
 	gov_build_button.flat = false
 	gov_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	gov_build_button.tooltip_text = "Build a municipal building. The cost is paid from the town treasury."
-	var gov_popup := gov_build_button.get_popup()
+	_gov_build_popup = gov_build_button.get_popup()
+	for i in HEScenarioSeeds.government_buildings().size():
+		_gov_build_popup.add_item("", i)
+	_gov_build_popup.id_pressed.connect(_on_build_government_pressed)
+	_business_list.add_child(gov_build_button)
+	_refresh_government_build_menu()
+	_rebuild_job_rows()
+
+## Item text and enabled state of the "Government build" menu. Run every
+## refresh, not only when the rows are rebuilt: affordability follows the
+## treasury, which grows (and is spent) as the sim runs.
+func _refresh_government_build_menu() -> void:
+	if _gov_build_popup == null or not is_instance_valid(_gov_build_popup):
+		return
 	var treasury := float(_simulation.get_government_summary(_town_settlement_id()).get("treasury", 0.0))
 	var gov_options := HEScenarioSeeds.government_buildings()
 	for i in gov_options.size():
@@ -2497,12 +2511,9 @@ func _rebuild_business_rows() -> void:
 		if built:
 			item_text = "%s (already built)" % gov_option["label"]
 		elif not affordable:
-			item_text += " - treasury too low"
-		gov_popup.add_item(item_text, i)
-		gov_popup.set_item_disabled(i, built or not affordable)
-	gov_popup.id_pressed.connect(_on_build_government_pressed)
-	_business_list.add_child(gov_build_button)
-	_rebuild_job_rows()
+			item_text += " - treasury too low (%.0f g)" % treasury
+		_gov_build_popup.set_item_text(i, item_text)
+		_gov_build_popup.set_item_disabled(i, built or not affordable)
 
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
@@ -2734,6 +2745,7 @@ func _refresh() -> void:
 	_check_extinction()
 
 	_refresh_town()
+	_refresh_government_build_menu()
 
 	var market := _simulation.get_market_summary()
 	var current_market_commodities := market.keys()
