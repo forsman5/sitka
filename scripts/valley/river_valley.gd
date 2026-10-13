@@ -83,6 +83,8 @@ func _process(delta: float) -> void:
 				_select_settlement(_selected_settlement_id)
 			if _detail_view != null:
 				_detail_view.refresh_external()
+		if _detail_view != null:
+			_detail_view.set_external_town_phase(_day_accumulator)
 	if _day_label != null:
 		_day_label.text = "Day %d   |   %d shipments en route   |   %d delivered" % [_economy.day, _economy.shipments.size(), _economy.delivered_total]
 	# At valley scale labels and route geometry dominate. At settlement scale

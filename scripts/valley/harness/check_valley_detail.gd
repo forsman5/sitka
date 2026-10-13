@@ -32,6 +32,15 @@ func _run() -> void:
 		push_error("Embedded town view does not show the town's businesses")
 		quit(1)
 		return
+	if not detail._speed_buttons[2].visible or not detail._speed_buttons[3].visible:
+		push_error("Embedded town view lost the shared valley speed controls")
+		quit(1)
+		return
+	detail.set_external_town_phase(0.5)
+	if absf(detail._town_view.time_of_day() - 0.5) > 0.0001:
+		push_error("Embedded town view did not follow the valley clock phase")
+		quit(1)
+		return
 	valley.get("_economy").advance_ticks(1)
 	detail.refresh_external()
 	if detail.external_simulation.day != 1:

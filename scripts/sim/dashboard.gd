@@ -80,6 +80,8 @@ func _process(delta: float) -> void:
 	_day_accumulator = minf(_day_accumulator, 8.0)
 	_route_map.tick_fraction = fmod(_day_accumulator, 1.0)
 	_route_map.queue_redraw()
+	if _detail_view != null:
+		_detail_view.set_external_town_phase(_day_accumulator)
 	var days_to_advance := mini(int(_day_accumulator), 4)
 	if days_to_advance <= 0:
 		return
