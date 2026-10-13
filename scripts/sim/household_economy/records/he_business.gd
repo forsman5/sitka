@@ -38,16 +38,34 @@ extends RefCounted
 ## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
 ## pass). It DOES hire and pay wages like any other business -- `growth_days`
 ## is set to HERD_EVAL_INTERVAL_DAYS (see he_scenario_seeds.gd) purely so it
-## gets the same cycle-aware treatment (has_long_cycle(), protected trial
-## hires, revenue smoothed over its own cycle rather than a flat week) a
+## gets the same cycle-aware treatment (has_long_cycle(), revenue smoothed over its own cycle rather than a flat week) a
 ## field-model business gets, even though it has no `fields` of its own --
 ## see has_long_cycle() and he_simulation.gd's _evaluate_business_capacity.
+##
+## A PRODUCTION business with `processes_livestock` set (the Butcher) is a
+## fourth shape: its recipe has outputs only (MEAT and LEATHER), and its
+## input is whichever live CATTLE/SHEEP the settlement's ranches hold. It
+## buys culled head from the ranches locally -- a better price than the
+## Trader's discounted export -- and turns them into goods, limited by labor
+## (see he_simulation.gd's BUTCHERY_* constants, _run_livestock_purchasing
+## and _run_butchery). It is staffed by individual workers and self-tunes
+## its capacity like any other PRODUCTION business.
 ##
 ## A PRODUCTION business's `recipe.inputs` (e.g. the Bloomery: wood +
 ## iron ore -> iron) are bought business-to-business and retained in its
 ## inventory until production consumes them. An input nothing local
 ## produces is supplied by the settlement's Trader, importing it from
 ## outside the settlement; see he_simulation.gd's _run_input_purchasing.
+##
+## Kind.GOVERNMENT (the settlement's "Government") is a fourth odd one out:
+## no recipe, no stock, no sales. Its `balance` is the town treasury, filled
+## by the sales tax every domestic transaction remits to it (see
+## he_simulation.gd's _collect_sales_tax) and drained only by wages. It does
+## not self-tune: its permanent administrator household is assigned by the
+## scenario seed (and re-assigned if that household ever leaves the
+## workforce), and it never goes into debt to pay anyone -- an empty
+## treasury means a rationed wage, not an overdraft. `builder_slots` is the
+## (not yet modeled) number of builder jobs it will fund; see its comment.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -63,7 +81,7 @@ const TRADER_REVENUE_WINDOW_DAYS := 45
 ## cash-trend sparkline (see he_simulation.gd's get_business_reports()),
 ## which reads better over a longer stretch than the weekly self-tuning
 ## signal needs.
-const BALANCE_HISTORY_WINDOW_DAYS := 90
+const BALANCE_HISTORY_WINDOW_DAYS := 730
 
 ## Goods flows tracked for the detail panel's charts. PRODUCED/CONSUMED are
 ## what the production step actually made and used up; SOLD/BOUGHT are what
@@ -81,16 +99,25 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
 enum Species { CATTLE, SHEEP }
 
 var id: int
 var settlement_id: int
 var name: String
 var kind: Kind
+## Which buildable business this is ("farm", "trader", ...), set by the
+## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
+## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
+var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int
+## Capacity self-tuning never lays this business below this many employee
+## slots. 0 (the default) lets any business shut down; the Butcher keeps a
+## skeleton crew because its work arrives in lumps (a ranch's cull), so a
+## business tuned to zero between culls would miss the next one entirely.
+var min_capacity: int = 0
 
 var inventory: Dictionary[Commodity.Type, float] = {}
 var balance: float = 0.0
@@ -103,6 +130,11 @@ var balance: float = 0.0
 ## that exact good (a charcoal burner's timber is raw material) leaves it empty.
 var need_inputs: Dictionary[Commodity.Type, int] = {}
 
+## Kind.PRODUCTION only: this business converts live CATTLE/SHEEP bought from
+## local ranches into its recipe outputs (the Butcher) instead of drawing on
+## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
+var processes_livestock: bool = false
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0
@@ -114,11 +146,12 @@ var last_culled: Dictionary[Commodity.Type, float] = {}
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
-## Kind.HERD only, reporting: head sold off today via he_simulation.gd's
-## _hardship_butcher_if_needed to cover a wage shortfall the ranch's own
-## cash couldn't. 0.0 on any ordinary day.
+## Kind.HERD only, reporting: head slaughtered at home today via
+## he_simulation.gd's _hardship_butcher_if_needed (their meat then sells
+## locally) to cover a wage shortfall the ranch's own cash couldn't. 0.0 on
+## any ordinary day.
 var last_hardship_butchered: float = 0.0
-## Kind.HERD only: this ranch's own recent births / culls / hardship sales,
+## Kind.HERD only: this ranch's own recent births / culls / hardship butchering,
 ## oldest first, bounded by he_simulation.gd's HERD_EVENT_HISTORY_MAX. Kept
 ## per business (not just in the shared blotter) because the blotter's
 ## 200-entry ring fills with household chatter long before a ranch's rare
@@ -171,6 +204,20 @@ var last_cash_change: float = 0.0
 ## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
 
+## Capacity self-tuning leaves this business alone until this day -- a newly
+## created business earns nothing until its first harvest, so judging it on
+## revenue before then would shrink its crew to zero. It can still fail on its
+## credit limit during the grace period. -1 = no grace. Set by
+## HESimulation.add_new_business.
+var startup_grace_until_day: int = -1
+
+## Days until this business's inputs or sales reach a steady flow, for a
+## business with no growth cycle of its own: a charcoal burner is idle-poor
+## until the Woodlot's next harvest supplies cheap timber. Startup cash and the
+## startup grace period cover this long instead of the generic runway; 0 =
+## derive from growth_days. See HEScenarioSeeds.startup_cash.
+var startup_cycle_days: int = 0
+
 ## Rolling daily balance, oldest first, capped at BALANCE_HISTORY_WINDOW_
 ## DAYS -- purely a reporting aid (see balance_history()/record_balance_day()
 ## below), read by nothing that affects simulation outcomes.
@@ -191,14 +238,6 @@ var todays_flows: Dictionary = {}
 ## days, since last_output_produced is 0.0 on every other day.
 var _flow_history: Dictionary = {}
 
-## Set whenever a zero-capacity business gets its trial crew back (see
-## he_simulation.gd's _evaluate_business_capacity) to the day that
-## protection should end -- until then, capacity evaluation leaves this
-## business alone entirely, growth and shrink signals both, regardless of
-## how its average revenue reads. -1 (the initial value) means "not
-## currently protected".
-var protected_until_day: int = -1
-
 ## Rolling wage-per-worker history, oldest first, capped -- smooths the
 ## weekly expand/contract decision against single noisy day. See
 ## he_simulation.gd._evaluate_business_capacity.
@@ -210,6 +249,19 @@ var _wage_history: Array[float] = []
 ## what _evaluate_business_capacity compares against the reference wage to
 ## decide growth/shrink, per he_simulation.gd's doc comment there.
 var _revenue_per_worker_history: Array[float] = []
+
+## Kind.GOVERNMENT only: sales tax remitted to the treasury today / ever, for
+## reporting -- see he_simulation.gd._collect_sales_tax.
+var last_tax_collected: float = 0.0
+var tax_collected_total: float = 0.0
+
+## Kind.GOVERNMENT only: how many builder jobs the government should employ.
+## TODO(builders): not modeled yet. Nothing hires into these slots and
+## _reconcile_employment leaves a government's staffing alone; when builders
+## land they should draw wages from the treasury like the administrator and
+## spend labor on player-ordered construction (new businesses). Kept as a
+## plain variable now so the UI and player actions have a stable name to bind.
+var builder_slots: int = 0
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
@@ -249,19 +301,29 @@ func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_i
 	species = p_species
 	herd_size = p_herd_size
 
-## H1's PRODUCTION businesses each have exactly one recipe output (Farm ->
-## grain, Woodlot -> timber); a business with a multi-output recipe isn't
-## supported by this single-commodity assumption. Never called on a
-## Kind.TRADER or Kind.HERD business, neither of which has a recipe.
+## The primary recipe output (Farm -> grain, Woodlot -> timber, Butcher ->
+## meat). Most PRODUCTION businesses have exactly one; for a multi-output
+## recipe use sells() to ask about the others. Never called on a Kind.TRADER
+## or Kind.HERD business, neither of which has a recipe.
 func output_commodity() -> Commodity.Type:
 	return recipe.outputs.keys()[0]
+
+## Whether this PRODUCTION business sells `commodity`. A multi-output recipe
+## (the Butcher's meat and leather) sells every output; output_commodity() is
+## only the primary one, used for single-good reporting.
+func sells(commodity: Commodity.Type) -> bool:
+	return kind == Kind.PRODUCTION and recipe != null and recipe.outputs.has(commodity)
+
+## The commodity a live animal of `p_species` is held and traded as.
+static func livestock_commodity(p_species: Species) -> Commodity.Type:
+	return Commodity.Type.CATTLE if p_species == Species.CATTLE else Commodity.Type.SHEEP
 
 ## Kind.HERD only: which commodity this ranch's live herd converts into when
 ## culled (see he_simulation.gd's _run_herds). Sheep also produce WOOL, but
 ## that's a passive trickle from herd_size, not this herd's "primary" output,
 ## so it isn't returned here.
 func herd_commodity() -> Commodity.Type:
-	return Commodity.Type.CATTLE if species == Species.CATTLE else Commodity.Type.SHEEP
+	return livestock_commodity(species)
 
 func stock(commodity: Commodity.Type) -> float:
 	return inventory.get(commodity, 0.0)
@@ -330,6 +392,102 @@ func flow_history(flow: String) -> Dictionary:
 	for commodity in history.keys():
 		out[commodity] = (history[commodity] as Array).duplicate()
 	return out
+
+## Operating ledger: every cash movement of the day under its own heading, kept
+## apart from what the balance happens to do. Sales are gross (tax is its own
+## line); a Trader's trade_margin is what it keeps between buying and selling.
+## cash_profit = inflows - outflows and reconciles to the day's balance change
+## (less one-off startup cash); stock_change_value is the value of goods
+## accumulated or run down, at the day's closing prices, and is NOT in cash_profit.
+const LEDGER_INFLOWS := ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin", "tax_income"]
+const LEDGER_OUTFLOWS := ["input_local", "input_import", "wages", "taxes"]
+const LEDGER_HISTORY_DAYS := 730
+
+var ledger_today: Dictionary = {}
+## Stock held when the day opened, so close_ledger_day can value the change.
+var ledger_open_stock: Dictionary = {}
+var _ledger_history: Array[Dictionary] = []
+
+func ledger_add(key: String, amount: float) -> void:
+	ledger_today[key] = ledger_today.get(key, 0.0) + amount
+
+func open_ledger_day() -> void:
+	ledger_today = {}
+	ledger_open_stock = inventory.duplicate()
+
+## Finalises today's row. `prices` values stock at the day's closing prices;
+## `output_commodities` splits output stock from input stock. `units_*` are
+## physical, for capacity decisions.
+func close_ledger_day(prices: Dictionary, output_commodities: Array, units_sold: float, units_produced: float) -> void:
+	var row: Dictionary = {}
+	# What the day's production actually used up, at closing prices. Purchases
+	# land in lumps while buffers fill; consumption is the running input cost.
+	var consumed_value := 0.0
+	for c in (todays_flows.get(FLOW_CONSUMED, {}) as Dictionary).keys():
+		consumed_value += float(todays_flows[FLOW_CONSUMED][c]) * float(prices.get(c, 0.0))
+	row["input_consumed_value"] = consumed_value
+	var inflow := 0.0
+	var outflow := 0.0
+	for key in LEDGER_INFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		inflow += row[key]
+	for key in LEDGER_OUTFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		outflow += row[key]
+	row["injection"] = ledger_today.get("injection", 0.0)
+	# Units buyers could pay for but the offer could not fill (from the day's
+	# price signal): demand the sales figure cannot see when supply is binding.
+	row["unmet_demand"] = ledger_today.get("unmet_demand", 0.0)
+	# Units households wanted but could not pay for: need without purchasing
+	# power, which a sales figure cannot see either.
+	row["unfunded_demand"] = ledger_today.get("unfunded_demand", 0.0)
+	row["cash_profit"] = inflow - outflow
+	var output_value := 0.0
+	var input_value := 0.0
+	var change_value := 0.0
+	var commodities := {}
+	for c in inventory.keys():
+		commodities[c] = true
+	for c in ledger_open_stock.keys():
+		commodities[c] = true
+	for c in commodities.keys():
+		var price: float = prices.get(c, 0.0)
+		var held: float = stock(c)
+		if output_commodities.has(c):
+			output_value += held * price
+		else:
+			input_value += held * price
+		change_value += (held - float(ledger_open_stock.get(c, 0.0))) * price
+	row["output_stock_value"] = output_value
+	row["input_stock_value"] = input_value
+	row["stock_change_value"] = change_value
+	row["units_sold"] = units_sold
+	row["units_produced"] = units_produced
+	row["employed"] = ledger_today.get("employed", 0.0)
+	row["reference_wage"] = ledger_today.get("reference_wage", 0.0)
+	row["balance"] = balance
+	_ledger_history.append(row)
+	if _ledger_history.size() > LEDGER_HISTORY_DAYS:
+		_ledger_history.pop_front()
+
+## Newest last. Rows are copied so callers cannot change history.
+func ledger_history(days: int = LEDGER_HISTORY_DAYS) -> Array:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var out: Array = []
+	for i in range(start, _ledger_history.size()):
+		out.append((_ledger_history[i] as Dictionary).duplicate())
+	return out
+
+## Average of one ledger column over the last `days` rows (0.0 with no rows).
+func ledger_average(key: String, days: int) -> float:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var n := _ledger_history.size() - start
+	if n <= 0:
+		return 0.0
+	var total := 0.0
+	for i in range(start, _ledger_history.size()):
+		total += float((_ledger_history[i] as Dictionary).get(key, 0.0))
+	return total / n
 
 func record_wage_day(wage_per_worker: float) -> void:
 	_wage_history.append(wage_per_worker)

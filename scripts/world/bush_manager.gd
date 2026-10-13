@@ -12,6 +12,12 @@ const BushScene = preload("res://scenes/entities/resource_node_food.tscn")
 func _ready() -> void:
 	_spawn_loop()
 
+## Spawn `clusters` bush clusters immediately so a scene can start with
+## established bushes instead of waiting for the spawn loop.
+func prewarm(clusters: int) -> void:
+	for _i in range(clusters):
+		_attempt_cluster()
+
 func _spawn_loop() -> void:
 	while is_inside_tree():
 		var wait := randf_range(mean_cluster_time * 0.5, mean_cluster_time * 1.5)

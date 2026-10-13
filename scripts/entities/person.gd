@@ -37,13 +37,6 @@ static var _night_assigned: bool = false
 @onready var _anim: AnimationPlayer = $Model/AnimationPlayer
 @onready var _skin_mesh: MeshInstance3D = $Model/CharacterArmature/Skeleton3D/Body2
 
-const SKIN_TONES: Array[Dictionary] = [
-	{"color": Color(0.87, 0.72, 0.59), "weight": 50.0}, # white
-	{"color": Color(0.70, 0.56, 0.40), "weight": 25.0}, # olive
-	{"color": Color(0.30, 0.20, 0.14), "weight": 13.0}, # black
-	{"color": Color(0.52, 0.36, 0.25), "weight": 12.0}, # brown
-]
-
 var _terrain: Node = null
 
 var _mat_normal: Material
@@ -100,25 +93,7 @@ func _on_velocity_computed(safe_velocity: Vector3) -> void:
 	global_position.y = (_terrain.get_height(global_position.x, global_position.z) if _terrain != null else 0.0) as float
 
 func _apply_random_skin_tone() -> void:
-	var skin_surface := -1
-	for i in _skin_mesh.mesh.get_surface_count():
-		if _skin_mesh.mesh.surface_get_name(i) == "Skin":
-			skin_surface = i
-			break
-	if skin_surface == -1:
-		return
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _pick_skin_tone()
-	_skin_mesh.set_surface_override_material(skin_surface, mat)
-
-func _pick_skin_tone() -> Color:
-	var roll := randf() * 100.0
-	var acc := 0.0
-	for entry in SKIN_TONES:
-		acc += entry["weight"] as float
-		if roll < acc:
-			return entry["color"] as Color
-	return (SKIN_TONES[-1]["color"] as Color)
+	SkinTones.apply(_skin_mesh, SkinTones.pick())
 
 func _update_animation(moving: bool) -> void:
 	var carrying := current_weight() > 0.0

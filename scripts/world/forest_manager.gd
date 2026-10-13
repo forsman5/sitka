@@ -9,6 +9,12 @@ const TreeScene = preload("res://scenes/entities/resource_node_wood.tscn")
 func _ready() -> void:
 	_spawn_loop()
 
+## Plant `count` trees immediately (some may fail placement) so a scene can
+## start with an established forest instead of waiting for the spawn loop.
+func prewarm(count: int) -> void:
+	for _i in range(count):
+		_attempt_spawn()
+
 func _spawn_loop() -> void:
 	while is_inside_tree():
 		var wait := randf_range(mean_spawn_time * 0.5, mean_spawn_time * 2.0)

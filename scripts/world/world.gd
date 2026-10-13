@@ -192,6 +192,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_foundations()
 		_deselect_all_ships()
 		_deselect_all_cows()
+		_deselect_all_sheep()
 		if not shift:
 			_deselect_all()
 		person.set_selected(true)
@@ -204,6 +205,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_foundations()
 		_deselect_all_ships()
 		_deselect_all_cows()
+		_deselect_all_sheep()
 		ship.set_selected(true)
 		return
 	var cow := _get_cow_at(screen_pos)
@@ -214,7 +216,19 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_resources()
 		_deselect_all_foundations()
 		_deselect_all_cows()
+		_deselect_all_sheep()
 		cow.set_selected(true)
+		return
+	var sheep := _get_sheep_at(screen_pos)
+	if sheep != null:
+		_deselect_all()
+		_deselect_all_ships()
+		_deselect_all_buildings()
+		_deselect_all_resources()
+		_deselect_all_foundations()
+		_deselect_all_cows()
+		_deselect_all_sheep()
+		sheep.set_selected(true)
 		return
 	var foundation := _get_foundation_at(screen_pos)
 	if foundation != null:
@@ -246,6 +260,7 @@ func _handle_single_click(screen_pos: Vector2) -> void:
 		_deselect_all_resources()
 		_deselect_all_foundations()
 		_deselect_all_cows()
+		_deselect_all_sheep()
 
 func _finish_box_select(end_pos: Vector2) -> void:
 	var shift := Input.is_key_pressed(KEY_SHIFT)
@@ -254,6 +269,7 @@ func _finish_box_select(end_pos: Vector2) -> void:
 	_deselect_all_resources()
 	_deselect_all_foundations()
 	_deselect_all_cows()
+	_deselect_all_sheep()
 	if not shift:
 		_deselect_all()
 		_deselect_all_ships()
@@ -296,6 +312,10 @@ func _deselect_all_foundations() -> void:
 func _deselect_all_cows() -> void:
 	for c: Node3D in get_tree().get_nodes_in_group("cows"):
 		c.set_selected(false)
+
+func _deselect_all_sheep() -> void:
+	for s: Node3D in get_tree().get_nodes_in_group("sheep"):
+		s.set_selected(false)
 
 func _any_selected() -> bool:
 	for p: Node3D in get_tree().get_nodes_in_group("persons"):
@@ -433,6 +453,28 @@ func _get_cow_at(screen_pos: Vector2) -> Node3D:
 	if collider is Area3D:
 		var parent: Node = (collider as Area3D).get_parent()
 		if parent.is_in_group("cows"):
+			return parent as Node3D
+	return null
+
+# TODO: sheep only get bare click-to-select here, unlike cows which also
+# get a HUD info panel (health/food/objective) and a cycle-through button
+# (see hud.gd's _cow_view / _btn_next_cow). Worth mirroring once sheep have
+# real state worth displaying.
+func _get_sheep_at(screen_pos: Vector2) -> Node3D:
+	var camera := get_viewport().get_camera_3d()
+	var space := get_world_3d().direct_space_state
+	var from := camera.project_ray_origin(screen_pos)
+	var to := from + camera.project_ray_normal(screen_pos) * 1000.0
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collide_with_bodies = false
+	var result := space.intersect_ray(query)
+	if result.is_empty():
+		return null
+	var collider: Object = result.get("collider")
+	if collider is Area3D:
+		var parent: Node = (collider as Area3D).get_parent()
+		if parent.is_in_group("sheep"):
 			return parent as Node3D
 	return null
 

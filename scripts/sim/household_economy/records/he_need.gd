@@ -33,9 +33,15 @@ var baseline: Commodity.Type
 ## Whether the fraction of this need met feeds the household lifecycle engine
 ## (stress, migration pressure, starvation, births). Only food does.
 var drives_lifecycle: bool
+## Share of a person's health this need's sustained shortfall can take away
+## (weights across all needs sum to 1.0). Health and morale are reporting
+## signals derived from per-need stress -- see HEHousehold.health().
+var health_weight: float
+## One line shown in the UI: what going without this need does.
+var effect_text: String
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
-		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false) -> void:
+		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "") -> void:
 	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
@@ -43,6 +49,8 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	unit_values = p_unit_values
 	baseline = p_baseline
 	drives_lifecycle = p_drives_lifecycle
+	health_weight = p_health_weight
+	effect_text = p_effect_text
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []
