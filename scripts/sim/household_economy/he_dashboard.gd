@@ -119,6 +119,7 @@ var _simulation: HESimulation
 ## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
 var _town_layout: HETownLayout
 var _town_view: HETownView
+var _housing_label: Label
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
@@ -312,9 +313,9 @@ func _load_scenario() -> void:
 	if not builder.is_valid():
 		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
 	_simulation = HESimulation.new(SEED, builder)
-	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports())
+	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports())
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -1054,6 +1055,15 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 		stats_grid.add_child(value_label)
 		_town_stat_labels[stat[1]] = value_label
 
+	var housing_name := Label.new()
+	housing_name.text = "Housing"
+	housing_name.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	housing_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_grid.add_child(housing_name)
+	_housing_label = Label.new()
+	_housing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	stats_grid.add_child(_housing_label)
+
 	var charts := VBoxContainer.new()
 	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	charts.size_flags_stretch_ratio = 2.0
@@ -1088,6 +1098,15 @@ func _refresh_town() -> void:
 	var city := _simulation.get_city_summary()
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
+	var housing := _simulation.get_housing_report(_town_settlement_id())
+	if housing["modeled"]:
+		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		if housing["homeless_households"] > 0:
+			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
+		elif housing["saturated"]:
+			_housing_label.text += " (full)"
+	else:
+		_housing_label.text = "unlimited"
 	# Extra leading days so the trailing flow sums are full from the first point.
 	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
 	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
@@ -2870,8 +2889,8 @@ func _refresh() -> void:
 	# Create business menu's "already built" state; rebuild rather than leave a
 	# frozen row for a business that no longer exists.
 	var reports := _simulation.get_business_reports()
-	_town_layout.reconcile(reports)
-	_town_view.sync(_town_layout, reports)
+	_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
+	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):

@@ -23,6 +23,11 @@ extends RefCounted
 ##   first candidate that clears every existing footprint by SITE_SPACING, so
 ##   later additions never rearrange earlier ones.
 ## - Site 0 is the civic anchor, reserved for the government.
+## - Occupants come in two kinds with separate id spaces: a business
+##   (`business_id`, from get_business_reports) or a house (`dwelling_id`, from
+##   get_dwelling_reports). A site holds at most one; key an occupant by
+##   (type_key, id). Houses never fail, so a house site is never vacated or
+##   reused, and houses are allocated only in the residential zone.
 
 const CIVIC_SITE_ID := 0
 const NO_BUSINESS := -1
@@ -31,8 +36,10 @@ const ZONE_CIVIC := "civic"
 const ZONE_TOWN := "town"
 const ZONE_FIELD := "field"
 const ZONE_PASTURE := "pasture"
+const ZONE_HOUSING := "housing"
 
 const GOVERNMENT_TYPE_KEY := "government"
+const HOUSE_TYPE_KEY := "house"
 ## Half the side of the square town footprint; sites are kept fully inside it.
 const HALF_EXTENT := 80.0
 ## Minimum clear gap between two site footprints.
@@ -47,6 +54,9 @@ const ZONE_SPECS := {
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
 	ZONE_FIELD: {"footprint": Vector2(22.0, 16.0), "radius": Vector2(28.0, 48.0)},
 	ZONE_PASTURE: {"footprint": Vector2(26.0, 20.0), "radius": Vector2(46.0, 66.0)},
+	# A lattice (`pitch` apart, so houses sit SITE_SPACING from each other) over
+	# the annulus `radius`, filled outward from a seeded `heart_radius` point.
+	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0), "radius": Vector2(30.0, 74.0), "pitch": 9.0, "heart_radius": 46.0},
 }
 ## Where a zone's allocation spills when its own candidates run out.
 const FALLBACK_ORDER := {
@@ -73,10 +83,11 @@ var settlement_id: int = -1
 var _sites: Array[Dictionary] = []
 var _candidates: Dictionary = {} # zone -> Array of {"position": Vector2, "rotation": float}
 var _unplaced: Array[int] = []
+var _unplaced_dwellings: Array[int] = []
 
 ## `scenario_key` distinguishes presets and custom rosters (see
 ## scenario_key_for); `starting_reports` is get_business_reports() at start.
-func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array) -> void:
+func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array, starting_dwellings: Array = []) -> void:
 	scenario_key = p_scenario_key
 	settlement_id = p_settlement_id
 	var starting_ids: Array = []
@@ -87,6 +98,7 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 	var seed_text := "%s|%d|%s" % [scenario_key, settlement_id, ",".join(starting_ids.map(str))]
 	for zone in [ZONE_TOWN, ZONE_FIELD, ZONE_PASTURE]:
 		_candidates[zone] = _make_candidates(zone, seed_text)
+	_candidates[ZONE_HOUSING] = _make_housing_candidates(seed_text)
 	_sites.append({
 		"site_id": CIVIC_SITE_ID,
 		"settlement_id": settlement_id,
@@ -95,11 +107,12 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 		"footprint": ZONE_SPECS[ZONE_CIVIC]["footprint"],
 		"zone": ZONE_CIVIC,
 		"business_id": NO_BUSINESS,
+		"dwelling_id": NO_BUSINESS,
 		"type_key": "",
 		"label": "",
 		"built": false,
 	})
-	reconcile(starting_reports)
+	reconcile(starting_reports, starting_dwellings)
 
 ## A durable identity for the scenario a builder Callable creates: the
 ## method name plus its bound arguments, so "build_custom" with different
@@ -115,8 +128,9 @@ static func scenario_key_for(builder: Callable) -> String:
 
 ## Brings the layout in line with the live businesses. Vacates sites whose
 ## business is gone, then seats unseated businesses (government first, then
-## ascending id). Returns whether anything changed.
-func reconcile(reports: Array) -> bool:
+## ascending id), then seats new houses in the residential zone. `dwellings`
+## is get_dwelling_reports(). Returns whether anything changed.
+func reconcile(reports: Array, dwellings: Array = []) -> bool:
 	var live: Dictionary = {} # business_id -> report
 	for report in reports:
 		if int(report["settlement_id"]) == settlement_id:
@@ -157,6 +171,32 @@ func reconcile(reports: Array) -> bool:
 		site["label"] = str(report.get("name", ""))
 		site["built"] = true
 		changed = true
+	var seated_houses: Dictionary = {}
+	for site in _sites:
+		if site["dwelling_id"] != NO_BUSINESS:
+			seated_houses[site["dwelling_id"]] = true
+	var new_houses: Array[int] = []
+	var house_reports: Dictionary = {}
+	for dwelling in dwellings:
+		if int(dwelling["settlement_id"]) != settlement_id:
+			continue
+		var dwelling_id := int(dwelling["dwelling_id"])
+		house_reports[dwelling_id] = dwelling
+		if not seated_houses.has(dwelling_id):
+			new_houses.append(dwelling_id)
+	new_houses.sort()
+	_unplaced_dwellings.clear()
+	for dwelling_id in new_houses:
+		var site_index := _allocate_from([ZONE_HOUSING])
+		if site_index == -1:
+			_unplaced_dwellings.append(dwelling_id)
+			continue
+		var house_site: Dictionary = _sites[site_index]
+		house_site["dwelling_id"] = dwelling_id
+		house_site["type_key"] = str(house_reports[dwelling_id].get("type_key", HOUSE_TYPE_KEY))
+		house_site["label"] = str(house_reports[dwelling_id].get("name", "House"))
+		house_site["built"] = true
+		changed = true
 	if changed:
 		revision += 1
 	return changed
@@ -184,6 +224,17 @@ func site_of_business(business_id: int) -> Dictionary:
 func unplaced_business_ids() -> Array[int]:
 	return _unplaced.duplicate()
 
+## Houses that found no room in the residential zone.
+func unplaced_dwelling_ids() -> Array[int]:
+	return _unplaced_dwellings.duplicate()
+
+## The site a house occupies, or {} if it has none.
+func site_of_dwelling(dwelling_id: int) -> Dictionary:
+	for site in _sites:
+		if site["dwelling_id"] == dwelling_id:
+			return site.duplicate()
+	return {}
+
 ## Footprint rect in town coordinates, with the 90 degree rotation applied.
 func site_rect(site: Dictionary) -> Rect2:
 	return _rect_for(site["position"], site["footprint"], site["rotation"])
@@ -197,13 +248,17 @@ func _vacant_site_index(type_key: String) -> int:
 	if type_key == GOVERNMENT_TYPE_KEY and _sites[0]["business_id"] == NO_BUSINESS:
 		return 0
 	for i in range(1, _sites.size()):
-		if _sites[i]["business_id"] == NO_BUSINESS:
+		if _sites[i]["business_id"] == NO_BUSINESS and _sites[i]["dwelling_id"] == NO_BUSINESS:
 			return i
 	return -1
 
 func _allocate_site(type_key: String) -> int:
 	var zone: String = TYPE_ZONES.get(type_key, ZONE_TOWN)
-	for candidate_zone in FALLBACK_ORDER[zone]:
+	return _allocate_from(FALLBACK_ORDER[zone])
+
+## First free candidate in `zones` (tried in order) becomes a new, empty site.
+func _allocate_from(zones: Array) -> int:
+	for candidate_zone in zones:
 		var footprint: Vector2 = ZONE_SPECS[candidate_zone]["footprint"]
 		for candidate in _candidates[candidate_zone]:
 			var rect := _rect_for(candidate["position"], footprint, candidate["rotation"])
@@ -217,6 +272,7 @@ func _allocate_site(type_key: String) -> int:
 				"footprint": footprint,
 				"zone": candidate_zone,
 				"business_id": NO_BUSINESS,
+				"dwelling_id": NO_BUSINESS,
 				"type_key": "",
 				"label": "",
 				"built": false,
@@ -240,6 +296,32 @@ static func _rect_for(center: Vector2, footprint: Vector2, rotation: float) -> R
 	if quarter_turns % 2 != 0:
 		size = Vector2(footprint.y, footprint.x)
 	return Rect2(center - size * 0.5, size)
+
+## Residential lattice candidates, nearest the seeded heart first.
+static func _make_housing_candidates(seed_text: String) -> Array:
+	var spec: Dictionary = ZONE_SPECS[ZONE_HOUSING]
+	var band: Vector2 = spec["radius"]
+	var pitch: float = spec["pitch"]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%s|%s" % [seed_text, ZONE_HOUSING])
+	var heart := Vector2.from_angle(rng.randf() * TAU) * float(spec["heart_radius"])
+	var offset := Vector2(snappedf(rng.randf() * pitch, COORD_SNAP), snappedf(rng.randf() * pitch, COORD_SNAP))
+	var steps := int(ceil(HALF_EXTENT / pitch)) + 1
+	var out: Array = []
+	for i in range(-steps, steps + 1):
+		for j in range(-steps, steps + 1):
+			var point := Vector2(i, j) * pitch + offset
+			var radius := point.length()
+			if radius < band.x or radius > band.y:
+				continue
+			out.append({"position": point, "rotation": 0.0, "order": point.distance_to(heart)})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a["order"] != b["order"]:
+			return a["order"] < b["order"]
+		if a["position"].x != b["position"].x:
+			return a["position"].x < b["position"].x
+		return a["position"].y < b["position"].y)
+	return out
 
 ## Seeded candidate centres for one zone: a low-discrepancy spiral through the
 ## zone's radius band, jittered by a local RNG so different scenarios differ.

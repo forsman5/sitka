@@ -792,6 +792,25 @@ func next_dwelling_id() -> int:
 		next_id = maxi(next_id, dwelling_id + 1)
 	return next_id
 
+## One entry per house, ascending id: {dwelling_id, settlement_id, name,
+## type_key}. Houses live in `dwellings`, a separate id space from businesses,
+## so they never appear in get_business_reports(); a town layout reads this.
+func get_dwelling_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	var ids := dwellings.keys()
+	ids.sort()
+	for dwelling_id in ids:
+		var house: HEHouse = dwellings[dwelling_id]
+		if settlement_id != -1 and house.settlement_id != settlement_id:
+			continue
+		out.append({
+			"dwelling_id": house.id,
+			"settlement_id": house.settlement_id,
+			"name": house.name,
+			"type_key": house.type_key,
+		})
+	return out
+
 ## Housing state of one settlement. `modeled` is false for a world that never
 ## set housing up (then nothing below limits it). `capacity` counts
 ## households, `homeless_households` the ones past it, and `saturated` is true
