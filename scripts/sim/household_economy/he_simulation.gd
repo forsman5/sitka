@@ -543,6 +543,10 @@ const WAGE_RATIO_CLAMP := 1.0
 ## cash-runway guard in _evaluate_business_capacity (shrink the business),
 ## not by rationing take-home pay day to day.
 const WAGE_NEGATIVE_BALANCE_FLOOR_DAYS := 60.0
+## Share of its herd's value (at the Trader's bid) a ranch may borrow against to
+## make payroll -- see _wage_overdraft_limit. Half, so the lender's loss is
+## covered even if a cull has to go to the Trader at its bid.
+const HERD_COLLATERAL_FRACTION := 0.5
 
 ## Inputs may be bought on credit beyond cash, up to this many days of the
 ## business's own input cost (and never below the wage floor above). Matches
@@ -1767,7 +1771,7 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
-		var floor: float = 0.0 if b.kind == HEBusiness.Kind.GOVERNMENT else -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+		var floor: float = -_wage_overdraft_limit(b, total_needed)
 		if b.kind == HEBusiness.Kind.HERD:
 			# Not clamped at the floor: debt already BELOW the floor counts
 			# toward what must be raised, so a crew that's hired is always
@@ -1802,6 +1806,26 @@ func _pay_wages(record: Dictionary) -> void:
 			failed_ids.append(business_id)
 	for business_id in failed_ids:
 		_fail_business(business_id, record)
+
+## How far below zero `b` may run while paying wages. A business may owe up to
+## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS of its wage bill; a government none. A ranch
+## has no income until its herd reaches the cull target, so for a ranch the limit
+## is the larger of that and a share of its herd's exit value (_herd_collateral):
+## payroll is then financed by the cull it is waiting for rather than by
+## slaughtering the breeding stock whose care it is paying for.
+func _wage_overdraft_limit(b: HEBusiness, total_needed: float) -> float:
+	if b.kind == HEBusiness.Kind.GOVERNMENT:
+		return 0.0
+	var limit := WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
+	if b.kind == HEBusiness.Kind.HERD:
+		limit = maxf(limit, _herd_collateral(b))
+	return limit
+
+## What a ranch can borrow against its living herd: HERD_COLLATERAL_FRACTION of
+## the herd valued at the Trader's bid, the exit price that is always on offer
+## (the Butcher pays more, but only when one is staffed).
+func _herd_collateral(b: HEBusiness) -> float:
+	return b.herd_size * livestock_quote(b.species, LivestockQuote.TRADER_BID) * HERD_COLLATERAL_FRACTION
 
 ## A business that has used up its whole credit line (the wage floor, see
 ## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) fails outright: it is deleted, its

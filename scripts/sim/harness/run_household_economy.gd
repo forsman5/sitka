@@ -57,6 +57,7 @@ func _init() -> void:
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
 	_check_herd_cull_target_is_configurable()
+	_check_herd_collateral_finances_wages()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
 	_check_hardship_butchery_makes_local_meat()
@@ -2014,7 +2015,8 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 		return
 	worker.employer_business_id = ranch.id
 	var wage_bill: float = sim._reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
-	ranch.balance = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * wage_bill - 20.0
+	# Past what the ranch can borrow against its herd, not just past 60 days of wages.
+	ranch.balance = -sim._wage_overdraft_limit(ranch, wage_bill) - 20.0
 	var herd_before := ranch.herd_size
 	sim.advance_ticks(1)
 
@@ -2040,6 +2042,42 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 	_assert(sim.businesses.has(ranch.id), "The ranch should survive on the meat it sells")
 	_assert(ranch.balance > balance_after_slaughter, "Meat sales should repay the ranch's debt")
 	_check_demographic_invariants(sim)
+
+## A staffed ranch's husbandry is financed by its herd, not paid for in
+## breeding stock: with no income until the cull, it runs an overdraft against
+## the herd's value, so it slaughters nothing for payroll, keeps its care up, and
+## its herd outgrows an unstaffed ranch's. (Hardship slaughter remains the
+## backstop once the borrowing limit is reached -- the test above.)
+func _check_herd_collateral_finances_wages() -> void:
+	print("\n=== Herd collateral: payroll is financed against the herd, not paid in head ===")
+	var results := {}
+	for staffed in [false, true]:
+		var sim := _new_sim("build_three_business_economy")
+		var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+		if staffed:
+			ranch.capacity = ranch.max_capacity
+			ranch.min_capacity = ranch.max_capacity
+		else:
+			ranch.max_capacity = 0
+			ranch.capacity = 0
+		var slaughtered := 0.0
+		var lowest_balance := 0.0
+		var collateral_at_start: float = sim._herd_collateral(ranch)
+		for day in 360:
+			sim.advance_ticks(1)
+			slaughtered += ranch.last_hardship_butchered
+			lowest_balance = minf(lowest_balance, ranch.balance)
+		results[staffed] = {"herd": ranch.herd_size, "care": ranch.last_care_fraction, "slaughtered": slaughtered,
+			"lowest": lowest_balance, "workers": sim._business_employed_worker_count(ranch.id), "collateral": collateral_at_start}
+	var s: Dictionary = results[true]
+	var u: Dictionary = results[false]
+	print("  unstaffed herd %.1f | staffed herd %.1f (care %.2f, %d workers, %.0f head slaughtered, lowest balance %.0f of %.0f borrowable)" % [
+		u["herd"], s["herd"], s["care"], s["workers"], s["slaughtered"], s["lowest"], s["collateral"]])
+	_assert(s["workers"] > 0, "Test setup: the staffed ranch should have a crew")
+	_assert(s["slaughtered"] < 0.0001, "A ranch borrowing against its herd should slaughter nothing to make payroll, slaughtered %.0f" % s["slaughtered"])
+	_assert(s["lowest"] < 0.0 and s["lowest"] >= -s["collateral"] - EPSILON, "It should run an overdraft, within what the herd covers (%.0f of %.0f)" % [-s["lowest"], s["collateral"]])
+	_assert(s["care"] > 0.9, "Care should stay near full when payroll is not paid in carcasses, got %.2f" % s["care"])
+	_assert(s["herd"] > u["herd"] + 5.0, "A staffed ranch's herd should clearly outgrow an unstaffed one (%.1f vs %.1f)" % [s["herd"], u["herd"]])
 
 ## With no staffed Trader or Butcher, a ranch butchers its own cull the day it
 ## happens: no standing livestock stock, and the meat is sold locally. With an
