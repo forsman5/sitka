@@ -1547,7 +1547,10 @@ func _check_field_model_dynamics() -> void:
 			previous_stock[business_id] = report["stock"]
 
 			var employed: int = report["employed_workers"]
-			if employed > report["max_capacity"]:
+			# The land cap: only land-based businesses have one. (A ranch's
+			# max_capacity is a staffing ceiling that a multi-worker household can
+			# step over when it is hired whole.)
+			if report["land_area_acres"] > 0.0 and employed > report["max_capacity"]:
 				over_cap_by = max(over_cap_by, employed - report["max_capacity"])
 			var reference: float = report["reference_wage_per_worker"]
 			var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * reference * employed
@@ -2015,8 +2018,10 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 		return
 	worker.employer_business_id = ranch.id
 	var wage_bill: float = sim._reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
-	# Past what the ranch can borrow against its herd, not just past 60 days of wages.
-	ranch.balance = -sim._wage_overdraft_limit(ranch, wage_bill) - 20.0
+	# Just past what the ranch can borrow against its herd (not 60 days of wages).
+	# Each head slaughtered also lowers that limit by its collateral, so a small
+	# margin is what one slaughter's meat can recover.
+	ranch.balance = -sim._wage_overdraft_limit(ranch, wage_bill) - 1.0
 	var herd_before := ranch.herd_size
 	sim.advance_ticks(1)
 

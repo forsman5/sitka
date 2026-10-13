@@ -1823,9 +1823,14 @@ func _wage_overdraft_limit(b: HEBusiness, total_needed: float) -> float:
 
 ## What a ranch can borrow against its living herd: HERD_COLLATERAL_FRACTION of
 ## the herd valued at the Trader's bid, the exit price that is always on offer
-## (the Butcher pays more, but only when one is staffed).
+## (the Butcher pays more, but only when one is staffed). The herd counted is the
+## one at its last review (HEBusiness.collateral_herd), not today's: a head
+## slaughtered to make payroll must not also shrink the limit it is being
+## slaughtered under, or each day's slaughter raises the next day's need and the
+## ranch spirals into failing. The limit follows the herd at each review.
 func _herd_collateral(b: HEBusiness) -> float:
-	return b.herd_size * livestock_quote(b.species, LivestockQuote.TRADER_BID) * HERD_COLLATERAL_FRACTION
+	var herd: float = maxf(b.herd_size, b.collateral_herd)
+	return herd * livestock_quote(b.species, LivestockQuote.TRADER_BID) * HERD_COLLATERAL_FRACTION
 
 ## A business that has used up its whole credit line (the wage floor, see
 ## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) fails outright: it is deleted, its
@@ -3710,6 +3715,7 @@ func _run_herds(record: Dictionary) -> void:
 				_butcher_stock_at_home(b, excess, record)
 
 		land_claimed[b.settlement_id] = claimed_by_others + b.herd_size * land_per_head
+		b.collateral_herd = b.herd_size
 
 func _accumulate(dict: Dictionary, key, amount: float) -> void:
 	dict[key] = dict.get(key, 0.0) + amount

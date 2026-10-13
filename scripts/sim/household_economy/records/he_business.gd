@@ -143,6 +143,11 @@ var herd_size: float = 0.0
 ## commodity so a future consumer doesn't have to assume which one it was.
 ## Empty on any interval with nothing to cull.
 var last_culled: Dictionary[Commodity.Type, float] = {}
+
+## Kind.HERD only: the herd as of its last review, which is what a ranch's wage
+## overdraft is secured against (he_simulation.gd's _herd_collateral). 0 until the
+## first review, when it is the starting herd.
+var collateral_herd: float = 0.0
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
@@ -305,6 +310,7 @@ func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_i
 	kind = p_kind
 	species = p_species
 	herd_size = p_herd_size
+	collateral_herd = p_herd_size
 
 ## The primary recipe output (Farm -> grain, Woodlot -> timber, Butcher ->
 ## meat). Most PRODUCTION businesses have exactly one; for a multi-output
