@@ -7,7 +7,13 @@ every production business hold tools that wear out and make its workers more
 productive, so the Toolsmith has business-to-business demand and tools matter
 to output.
 
-Status: plan only. The numbers below are proposals to be swept, not measured.
+Status: phase 1 (data and model) is implemented in this PR, dormant behind
+`HESimulation.industrial_tools_enabled` (default off). Phases 2-5 are not built.
+The numbers below are proposals to be swept, not measured.
+
+Why a switch: until tool purchasing (phase 2) lands nothing restocks a worn-out
+tool, so turning it on would sink every business to its productivity floor.
+Phase 2 turns it on by default once businesses can buy tools.
 
 ## Where things stand
 
@@ -71,7 +77,7 @@ size: enough to matter, not enough to dominate.
 
 ## Implementation phases
 
-1. **Data and model.**
+1. **Data and model.** *(implemented in this PR)*
    - `HEBusiness`: `tools_per_worker`, `tool_wear_per_worker_day`, derived
      `tool_coverage()` and `productivity()`; per-kind values set in the
      `make_*` factories in `he_scenario_seeds.gd`.
@@ -140,15 +146,29 @@ Harness additions (`run_household_economy.gd`):
 - **Control-loop noise.** Productivity changes revenue per worker, which the
   capacity tuner reads; expect a transient until stocks settle.
 
-## Decisions assumed (confirm before building)
+## Decisions (confirmed)
 
 1. Hybrid wear-out stock plus floored multiplier (not a hard input).
 2. `FLOOR` = 0.6.
-3. In scope: Farm, Woodlot, Iron Mine, Bloomery, Charcoal Burner, Butcher,
-   Toolsmith; herds deferred to phase 5; Trader and Government excluded.
-4. No Trader import fallback for tools.
+3. In scope: Farm, Woodlot, Iron Mine, Bloomery, Charcoal Burner, Butcher;
+   herds deferred to phase 5; Trader and Government excluded. The Toolsmith is
+   excluded for now (see TODOs).
+4. No Trader import fallback for tools in this step (see TODOs).
 5. Business tool need is independent of household tier; when tiers exist,
    poor households may skip tools, businesses still need them.
+
+## TODOs (deliberately out of scope here)
+
+- **Trader import fallback for tools.** Ore has one (the Trader imports what no
+  local business sells). Decide whether tools should too, so a town with no
+  Toolsmith can still equip its businesses from outside. It would mean a tools
+  economy without a local seller, which the `_tools_in_play` gate currently
+  rules out by design, so it needs its own look at pricing, money leaving the
+  system, and Trader capacity.
+- **Toolsmith's own tools.** Its tools in stock are also its product, so
+  "tools in use" and "tools for sale" are the same inventory. Either hold tools
+  in use as a separate per-business count (included in the stock snapshot) or
+  keep it excluded. Phase 1 excludes it.
 
 ## Out of scope
 

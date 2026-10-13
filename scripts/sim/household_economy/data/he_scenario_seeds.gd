@@ -185,9 +185,29 @@ static func _farm_recipe() -> Recipe:
 ## and no day-one staff. With the trial hire gone, a farm at capacity 0 stays
 ## at zero until the caller passes initial_capacity (TODO: the create-business
 ## flow should seed one).
+##
+## Industrial tool use (see HEBusiness.tools_per_worker and
+## docs/tools-industrial-demand-plan.md): one tool per worker, worn out after
+## this many worker-days. Heavier-handled trades wear faster. The Toolsmith is
+## left out for now -- its tools in stock are also its product, so "tools in use"
+## and "tools for sale" would need separating -- and so are the herds.
+const TOOL_LIFE_WORKER_DAYS := {
+	"farm": 300.0,
+	"woodlot": 200.0,
+	"iron_mine": 150.0,
+	"bloomery": 400.0,
+	"charcoal_burner": 300.0,
+	"butcher": 250.0,
+}
+
+static func _equip(b: HEBusiness) -> void:
+	b.tools_per_worker = 1.0
+	b.tool_wear_per_worker_day = 1.0 / TOOL_LIFE_WORKER_DAYS[b.type_key]
+
 static func make_farm(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var farm := HEBusiness.new(business_id, "Farm", _farm_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	farm.type_key = "farm"
+	_equip(farm)
 	farm.configure_land(FARM_LAND_AREA_ACRES, _make_fields(FARM_FIELD_COUNT, FARM_LAND_AREA_ACRES, field_start_days, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 	return farm
 
@@ -198,6 +218,7 @@ static func make_farm(business_id: int, settlement_id: int, initial_capacity: in
 static func make_woodlot(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var woodlot := HEBusiness.new(business_id, "Woodlot", _woodlot_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	woodlot.type_key = "woodlot"
+	_equip(woodlot)
 	woodlot.configure_land(WOODLOT_LAND_AREA_ACRES, _make_fields(WOODLOT_FIELD_COUNT, WOODLOT_LAND_AREA_ACRES, field_start_days, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
 	return woodlot
 
@@ -224,6 +245,7 @@ static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.
 static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
 	var butcher := HEBusiness.new(business_id, "Butcher", _butcher_recipe(), BUTCHER_MAX_CAPACITY, BUTCHER_MIN_CAPACITY, HEBusiness.Kind.PRODUCTION, settlement_id)
 	butcher.type_key = "butcher"
+	_equip(butcher)
 	butcher.processes_livestock = true
 	butcher.min_capacity = BUTCHER_MIN_CAPACITY
 	# Meat and leather sell down over the following cull cycle, so smooth its
@@ -234,6 +256,7 @@ static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
 static func make_bloomery(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var bloomery := HEBusiness.new(business_id, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	bloomery.type_key = "bloomery"
+	_equip(bloomery)
 	# Its timber input is the furnace's heat, which any heat fuel can supply.
 	bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 	return bloomery
@@ -241,6 +264,7 @@ static func make_bloomery(business_id: int, settlement_id: int, initial_capacity
 static func make_iron_mine(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var iron_mine := HEBusiness.new(business_id, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	iron_mine.type_key = "iron_mine"
+	_equip(iron_mine)
 	return iron_mine
 
 static func make_toolsmith(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
@@ -254,6 +278,7 @@ static func make_toolsmith(business_id: int, settlement_id: int, initial_capacit
 static func make_charcoal_burner(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var burner := HEBusiness.new(business_id, "Charcoal Burner", _charcoal_burner_recipe(), CHARCOAL_BURNER_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	burner.type_key = "charcoal_burner"
+	_equip(burner)
 	# It converts the Woodlot's timber, whose supply and price only settle once a
 	# harvest has landed, so its startup cash must outlast that whole cycle.
 	burner.startup_cycle_days = WOODLOT_GROWTH_DAYS
