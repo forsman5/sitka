@@ -454,6 +454,12 @@ const BUTCHERY_INPUT_BUFFER_DAYS := 30.0
 ## How far into the red the Butcher may go to buy a cull. A cull is a lump
 ## bought up front and paid back as meat sells over the following weeks, the
 ## same way a wage bill may run negative (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS).
+## TODO(butcher credit): this lets the Butcher BUY on credit down to -2000, but its
+## wage overdraft (_wage_overdraft_limit) is only 60 days of wages, ~-50. On its
+## first cull it buys ~630 of animals from a +37 balance, lands at ~-590, cannot
+## meet the next payroll and fails the following day -- it dies BECAUSE it bought
+## its inputs. The livestock it holds should secure the wage overdraft the way a
+## ranch's herd does (_herd_collateral), or purchases should respect the wage floor.
 const BUTCHERY_CREDIT_LIMIT := 2000.0
 
 ## Home butchery: a ranch's culled animals go to a staffed Butcher or Trader
@@ -3044,6 +3050,15 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
 				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _business_employed_worker_count(business_id)
+			# TODO(butcher hiring): this hires to `capacity` whatever the business has to
+			# work with. A Butcher is hired the day workers are free, but a ranch's
+			# first cull is 1.5-3 years out (herds start well below their cull target),
+			# so it pays wages for months with nothing to process and fails around
+			# day 240-360 -- before the first head it was hired for arrives. It should
+			# hire only once a ranch actually holds livestock (or is within a review of
+			# culling), and release its crew when none is expected. Until then the
+			# Butcher checks in run_household_economy.gd seed ranches near their cull
+			# target (_seed_ranches_near_cull_target) so the Butcher has input in year 1.
 			while employed_workers < b.capacity and pool_index < available.size():
 				var household_id: int = available[pool_index]
 				pool_index += 1

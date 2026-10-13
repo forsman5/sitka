@@ -2248,9 +2248,29 @@ func _check_livestock_export_toggle() -> void:
 ## exporting it raw, and households eat the meat (twice grain's food value) and
 ## may wear the leather. Run for four years so both ranches have culled
 ## several times, reconciling goods and money every single day.
+## Starts each ranch within one review's growth of its cull target, so its first
+## cull lands in the first year instead of 1.5-3 years in. The Butcher is hired on
+## day one and pays wages from a small startup reserve; with the seeded herds
+## (100 head against targets of 150 and 200) it fails before it ever sees an
+## animal, which makes any check of what it does vacuous. See the TODO on hiring
+## in he_simulation.gd's _reconcile_employment.
+func _seed_ranches_near_cull_target(sim: HESimulation, share_of_target: float = 0.97) -> void:
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		if b.kind == HEBusiness.Kind.HERD:
+			b.herd_size = floorf(sim.herd_cull_target(b) * share_of_target)
+			b.collateral_herd = b.herd_size
+		elif b.processes_livestock:
+			# Working capital for its first cull: a Butcher's startup cash covers
+			# wages only, and buying ~600 of animals on its purchase credit drops it
+			# far below its wage floor, so it fails on the next payroll (see the
+			# TODO on BUTCHERY_CREDIT_LIMIT).
+			b.balance += 1500.0
+
 func _check_butcher_processes_livestock() -> void:
 	print("\n=== Butcher: ranch culls become meat and leather, which households eat ===")
 	var sim := _new_sim("build_three_business_economy")
+	_seed_ranches_near_cull_target(sim)
 	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
 	_assert(butcher.processes_livestock and butcher.sells(Commodity.Type.MEAT) and butcher.sells(Commodity.Type.LEATHER),
 		"The seeded Butcher should process livestock into meat and leather")

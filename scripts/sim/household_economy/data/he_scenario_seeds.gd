@@ -46,6 +46,8 @@ const STARTING_TREASURY_DAYS := 10.0
 ## business tuned to zero between them would miss the next one -- and may grow
 ## to a second when there is enough to process. Like the ranches it has no
 ## day-one employees: it is hired from the unemployed pool.
+## TODO(butcher hiring): this floor is staffed from day one even though no ranch
+## culls for 1.5-3 years -- see the note in he_simulation.gd's _reconcile_employment.
 const BUTCHER_MIN_CAPACITY := 2
 ## Crew a ranch is authorized to hire from day one. It starts with no employees
 ## and fills this from the unemployed pool at the weekly reconcile; there is no
