@@ -104,6 +104,11 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## can still win on price rather than tie and go unbought.
 	Commodity.Type.MEAT: 1.6,
 	Commodity.Type.LEATHER: 1.6,
+	## Above the pooled model's 6.0 because iron costs 30 here (see its comment):
+	## 9.0 keeps iron to about a quarter of the tool's price at 0.07 per tool.
+	## A small, durable purchase: at 0.005 per person per day a household
+	## spends 0.045 per person, well under a fifth of what it spends on food.
+	Commodity.Type.TOOLS: 9.0,
 }
 ## Largest one-day price move, as a fraction of the opening price.
 const PRICE_ADJUST_STEP := 0.05
@@ -932,6 +937,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"morale": h.morale(),
 		"health_losses": h.health_losses(),
 		"morale_penalties": h.morale_penalties(),
+		"morale_bonuses": h.morale_bonuses(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -957,6 +963,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var morale_total := 0.0
 	var health_factors := {}
 	var morale_factors := {}
+	var morale_bonus_factors := {}
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
 		if not h.is_employed():
@@ -975,6 +982,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 				_add_factor(health_factors, loss["label"], loss["loss"])
 			for penalty in h.morale_penalties(v, member["works"]):
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
+			for bonus in h.morale_bonuses():
+				_add_factor(morale_bonus_factors, bonus["label"], bonus["bonus"])
 	return {
 		"population": population,
 		"unemployed": unemployed,
@@ -982,6 +991,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 		"avg_morale": (morale_total / population) if population > 0 else 1.0,
 		"health_factors": _factor_list(health_factors, population),
 		"morale_factors": _factor_list(morale_factors, population),
+		# Same shape, but avg_loss is points GAINED (needs met that lift morale).
+		"morale_bonus_factors": _factor_list(morale_bonus_factors, population),
 	}
 
 func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
@@ -1055,6 +1066,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"health": h.health(vulnerability),
 		"morale": h.morale(vulnerability, is_worker),
 		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"morale_bonuses": h.morale_bonuses(),
 		"needs": needs,
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
@@ -2336,6 +2348,13 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
 
+## Whether `need` is part of this settlement's economy at all: always, unless
+## the need can only be met by a dedicated business (HENeed.needs_seller) and
+## the settlement has none. Judged by the business existing, not by today's
+## stock, so a Toolsmith's momentary sell-out doesn't flip the cost of living.
+func _need_served(settlement_id: int, need: HENeed) -> bool:
+	return not need.needs_seller or _business_selling(settlement_id, need.baseline) != null
+
 ## Days until `b`'s next supply arrives (a harvest, or a herd review): the
 ## stretch its current stock has to cover. A herd has no fields to count down, so
 ## this is the real countdown to the shared review tick -- not the whole cycle
@@ -2468,7 +2487,7 @@ func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity
 ## instead of the household going without when the cheaper good runs short.
 func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	if need == null:
+	if need == null or not _need_served(h.settlement_id, need):
 		return 0.0
 	if need.unit_values.size() > 1:
 		# Households clear a need's satisfiers in cascade order (cheapest posted
@@ -2578,7 +2597,7 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	h.last_need_provided[need.id] = provided
 
 	var shortfall_units := (needed - provided) / need.value_of(need.baseline)
-	if shortfall_units > 0.0001:
+	if shortfall_units > 0.0001 and _need_served(h.settlement_id, need):
 		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
 
 	var need_record: Dictionary = record["needs"].get_or_add(need.id, {
@@ -4874,6 +4893,8 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	var dependency_ratio := float(total_population) / float(total_workers)
 	var per_person_cost := 0.0
 	for need in HENeeds.all():
+		if not _need_served(settlement_id, need):
+			continue
 		var cheapest_unit_cost := INF
 		for c in _household_cascade(settlement_id, need):
 			cheapest_unit_cost = minf(cheapest_unit_cost, _average_price_history(settlement_id, c) / need.value_of(c))

@@ -65,6 +65,7 @@ func _init() -> void:
 	_check_livestock_goods()
 	_check_livestock_export_toggle()
 	_check_butcher_processes_livestock()
+	_check_toolsmith_supplies_tools()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
@@ -1357,7 +1358,8 @@ func _check_export_settings_derived_from_commodities() -> void:
 === Trader export settings: derived list, fixed order, rows hidden without a seller ===")
 	var priority := HESimulation.EXPORT_PRIORITY
 	_assert(priority.has(Commodity.Type.WOOL), "Wool should be an exportable good")
-	_assert(not priority.has(Commodity.Type.TOOLS), "Tools have no market price and should not be exportable")
+	_assert(priority.has(Commodity.Type.TOOLS), "Tools have a market price (the Toolsmith's) and should be exportable")
+	_assert(not HESimulation.EXPORT_COMMODITIES.has(Commodity.Type.TOOLS), "Tools should start disabled: the Toolsmith serves local households")
 	var seen := {}
 	for commodity in priority:
 		_assert(not seen.has(commodity), "%s listed twice in EXPORT_PRIORITY" % Commodity.name_of(commodity))
@@ -2342,6 +2344,57 @@ func _check_butcher_processes_livestock() -> void:
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
 
+## The Toolsmith buys the Bloomery's iron locally (instead of the Trader
+## exporting all of it at half price) and sells tools to households, which use
+## them at the pooled model's 0.005 per person per day. Two years, reconciling
+## goods and money every day.
+func _check_toolsmith_supplies_tools() -> void:
+	print("\n=== Toolsmith: iron becomes tools, which households use ===")
+	var sim := _new_sim("build_economy_with_toolsmith")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var toolsmith: HEBusiness = sim.businesses[HEScenarioSeeds.TOOLSMITH_BUSINESS_ID]
+	_assert(toolsmith.sells(Commodity.Type.TOOLS) and toolsmith.recipe.inputs.has(Commodity.Type.IRON),
+		"The seeded Toolsmith should turn iron into tools")
+	_assert(sim._business_selling(settlement_id, Commodity.Type.TOOLS) == toolsmith, "The Toolsmith should be the local seller of tools")
+	_assert(not _new_sim("build_economy_with_bloomery_and_iron_mine").businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID),
+		"Only the Toolsmith scenario should seed a Toolsmith")
+
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
+	reconciled_commodities.append(Commodity.Type.IRON)
+	var produced := {}
+	var consumed := {}
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for window in 2:
+		sim.advance_ticks(360)
+		for record in sim.get_daily_history(360):
+			for c in reconciled_commodities:
+				var name := Commodity.name_of(c)
+				var day_produced: float = record["produced"].get(name, 0.0)
+				var day_consumed: float = record["consumed"].get(name, 0.0)
+				var day_exported: float = (record["exported"] as Dictionary).get(name, 0.0)
+				var day_imported: float = (record["imported"] as Dictionary).get(name, 0.0)
+				var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				var expected: float = record["opening_stock"][name] + day_produced + day_imported - day_consumed - day_exported - written_off
+				worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+				produced[name] = produced.get(name, 0.0) + day_produced
+				consumed[name] = consumed.get(name, 0.0) + day_consumed
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+
+	# Survival is deliberately not asserted: a business that exhausts its credit
+	# is deleted, and the Toolsmith's imported iron depends on the Trader, which
+	# the seeded economy can lose.
+	print("  over 2 years: toolsmith made %.0f tools from %.0f iron; households used %.0f | still open: %s" % [
+		produced.get("Tools", 0.0), consumed.get("Iron", 0.0), consumed.get("Tools", 0.0), sim.businesses.has(toolsmith.id)])
+	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(produced.get("Tools", 0.0) > 0.0 and consumed.get("Iron", 0.0) > 0.0, "The Toolsmith should have turned some iron into tools")
+	_assert(consumed.get("Tools", 0.0) > 0.0, "Households should have used some tools")
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Toolsmith present, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
+	_check_demographic_invariants(sim)
+
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
 ## the lifecycle engine.
@@ -2350,8 +2403,8 @@ func _check_needs_catalog() -> void:
 	var ids: Array = []
 	for need in HENeeds.all():
 		ids.append(need.id)
-	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
+	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING, HENeed.Id.TOOLS], "Needs should be food, heat, clothing, tools in that order")
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL, Commodity.Type.TOOLS],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
@@ -2370,6 +2423,27 @@ func _check_needs_catalog() -> void:
 		"Baselines should stay wool and grain")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
 	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
+
+	# The Needs tab lists the catalog, so a new need can't be forgotten there.
+	var tab_order: Array = HENeeds.display_order()
+	for need in HENeeds.all():
+		_assert(tab_order.has(need.id), "%s is missing from the Needs tab" % need.label)
+	_assert(tab_order.size() == HENeeds.all().size(), "The Needs tab should list each need exactly once")
+
+	# Tools: morale only. Going without costs no health, having them lifts
+	# morale, and the lift offsets other penalties (an unemployed household here).
+	var tools_need := HENeeds.get_need(HENeed.Id.TOOLS)
+	_assert(tools_need.health_weight == 0.0 and tools_need.morale_bonus > 0.0, "Tools should be a morale-only need")
+	var bonus_household := HEHousehold.new(1, 2, 2)
+	var base_morale := bonus_household.morale()
+	_assert(not bonus_household.is_employed() and base_morale < 1.0, "Fixture household should start with an unemployment penalty")
+	bonus_household.last_need_required[HENeed.Id.TOOLS] = 0.1
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.05
+	_assert(bonus_household.morale_bonuses().is_empty() and is_equal_approx(bonus_household.morale(), base_morale), "A half-met tools need should give no morale bonus")
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.1
+	_assert(bonus_household.morale_bonuses().size() == 1 and is_equal_approx(bonus_household.morale(), minf(1.0, base_morale + tools_need.morale_bonus)),
+		"A met tools need should lift morale by its bonus")
+	_assert(is_equal_approx(bonus_household.health(), 1.0), "Tools must not change health")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
 	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
