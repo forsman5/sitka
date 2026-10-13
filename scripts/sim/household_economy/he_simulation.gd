@@ -1,4 +1,4 @@
-﻿class_name HESimulation
+class_name HESimulation
 extends RefCounted
 
 ## H1, labor-market cut: deterministic, tick-based household economies with
@@ -589,6 +589,20 @@ var _export_revenue_total := 0.0
 ## explicitly for the same "stays honest about where money went" reason.
 var _import_cost_total := 0.0
 
+## Treasury money spent on constructing government buildings
+## (build_government_building) -- it leaves circulation like _import_cost_total
+## does, and is tracked for the same reason. Goods the warehouse BUYS are not
+## here: that is an ordinary purchase from a local seller or the Trader.
+var _construction_spend_total := 0.0
+
+## Most units of one good a warehouse order buys or sells in a day, so a single
+## order cannot drain a town's stock (or flood the Trader) in one tick.
+const WAREHOUSE_DAILY_TRADE_CAP := 10.0
+
+## Treasury days of wages a warehouse purchase leaves untouched, so stocking
+## the warehouse never starves the administrator and its own crew.
+const WAREHOUSE_WAGE_RESERVE_DAYS := 3.0
+
 ## Today's business-to-business purchases from local sellers, rebuilt every
 ## tick by _run_input_purchasing: settlement_id -> commodity -> {offer: the
 ## seller's paced offer BEFORE any B2B buy, sold: units bought from it,
@@ -682,10 +696,11 @@ func add_new_business(b: HEBusiness) -> void:
 	add_business(b)
 
 ## Builds a government building (HEScenarioSeeds.government_buildings()) out of
-## the settlement's treasury: the cost moves from the treasury into the new
-## building's balance, so money is conserved. Returns false -- building nothing
-## -- for an unknown type, a settlement with no government, a building of that
-## type that already exists, or a treasury that cannot cover the cost.
+## the settlement's treasury. The cost is spent (it leaves the treasury and is
+## booked in _construction_spend_total -- a government building has no cash of
+## its own, it runs on the treasury). Returns false -- building nothing -- for
+## an unknown type, a settlement with no government, a building of that type
+## that already exists, or a treasury that cannot cover the cost.
 func build_government_building(settlement_id: int, type_key: String) -> bool:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null or has_business_of_type(settlement_id, type_key):
@@ -699,10 +714,27 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
 		gov.balance -= cost
 		gov.last_cash_change -= cost
-		building.balance += cost
+		_construction_spend_total += cost
 		add_business(building)
 		return true
 	return false
+
+## Sets a Government Warehouse's standing order for one good: buy until it
+## holds `buy_up_to` units (0 = don't buy), and -- if `sell` -- export whatever
+## it holds above `keep` units through the Trader. Both run daily, paced by
+## WAREHOUSE_DAILY_TRADE_CAP (see _run_warehouse_orders). Returns false for a
+## business that is not a warehouse or a good that has no local market (live
+## animals).
+func set_warehouse_order(business_id: int, commodity: Commodity.Type, buy_up_to: float, sell: bool, keep: float) -> bool:
+	var b: HEBusiness = businesses.get(business_id)
+	if b == null or b.kind != HEBusiness.Kind.WAREHOUSE or is_livestock(commodity):
+		return false
+	var order := {"buy_up_to": maxf(buy_up_to, 0.0), "sell": sell, "keep": maxf(keep, 0.0)}
+	if order["buy_up_to"] <= 0.0 and not sell:
+		b.warehouse_orders.erase(commodity)
+	else:
+		b.warehouse_orders[commodity] = order
+	return true
 
 ## Lowest crew the tuner may set: one worker (or the business's own
 ## min_capacity if higher), unless max_capacity itself is 0.
@@ -980,8 +1012,18 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 		elif b.kind == HEBusiness.Kind.WAREHOUSE:
 			report["recipe_id"] = "warehouse"
 			report["output_commodity"] = "Construction inventory"
-			report["stock"] = 0.0
-			report["construction_fund"] = b.balance
+			var held_units := 0.0
+			for held in b.inventory.values():
+				held_units += held
+			report["stock"] = held_units
+			# No cash of its own: the books it shows are the treasury's.
+			var treasury := _settlement_government(b.settlement_id)
+			if treasury != null:
+				report["balance"] = treasury.balance
+				report["last_cash_change"] = treasury.last_cash_change
+				report["balance_history"] = treasury.balance_history()
+				report["cash_runway_days"] = _business_cash_runway_days(treasury)
+			report["warehouse_orders"] = _warehouse_order_rows(b)
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
@@ -1024,6 +1066,30 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["flow_history"] = flow_history
 		out.append(report)
 	return out
+
+## One row per good the warehouse can trade (everything with a local market
+## except live animals), for the order panel: what it holds, today's price, and
+## the standing order (buy_up_to 0 / sell false when none is set).
+func _warehouse_order_rows(b: HEBusiness) -> Array:
+	var rows: Array = []
+	var market: HEMarket = markets[b.settlement_id]
+	var commodities: Array = market.price.keys()
+	commodities.sort()
+	for commodity in commodities:
+		if is_livestock(commodity):
+			continue
+		var order: Dictionary = b.warehouse_orders.get(commodity, {})
+		rows.append({
+			"commodity": commodity,
+			"name": Commodity.name_of(commodity),
+			"stock": b.stock(commodity),
+			"price": market.price[commodity],
+			"buy_up_to": order.get("buy_up_to", 0.0),
+			"sell": order.get("sell", false),
+			"keep": order.get("keep", 0.0),
+			"has_local_seller": _business_selling(b.settlement_id, commodity) != null,
+		})
+	return rows
 
 func _kind_name(kind: HEBusiness.Kind) -> String:
 	match kind:
@@ -1484,6 +1550,7 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"worker_promotions_total": _worker_promotions_total,
 		"export_revenue_total": _export_revenue_total,
 		"import_cost_total": _import_cost_total,
+		"construction_spend_total": _construction_spend_total,
 		"market": get_market_summary(settlement_id),
 	}
 
@@ -1590,6 +1657,7 @@ func _daily_tick() -> void:
 	_run_production(record)
 	_run_market(record)
 	_run_trade(record)
+	_run_warehouse_orders(record)
 	_apply_price_signals()
 	for market in markets.values():
 		(market as HEMarket).record_supply_demand_history()
@@ -1703,8 +1771,7 @@ func _pay_wages(record: Dictionary) -> void:
 		var total_needed: float = reference_wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
-		# A warehouse's crew is paid by the treasury, which keeps the warehouse's
-		# own balance (the construction fund) untouched.
+		# A warehouse has no cash of its own: its crew is paid by the treasury.
 		var payer: HEBusiness = b
 		if b.kind == HEBusiness.Kind.WAREHOUSE:
 			payer = _settlement_government(b.settlement_id)
@@ -3430,7 +3497,6 @@ func _run_input_purchasing(record: Dictionary) -> void:
 		if planned_units <= 0.0001:
 			continue
 
-		var trader := _settlement_trader(buyer.settlement_id)
 		var local_market: HEMarket = markets[buyer.settlement_id]
 		var purchase_ratio := 1.0
 
@@ -3529,58 +3595,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			var requested: float = requested_by_commodity[commodity]
 			if requested <= 0.0001 or purchase_ratio <= 0.0:
 				continue
-			var bought: float = requested * purchase_ratio
-			var price: float = local_market.price[commodity]
-			var cost: float = bought * price
-			buyer.balance -= cost
-			buyer.last_cash_change -= cost
-			buyer.add_stock(commodity, bought)
-			buyer.add_flow(HEBusiness.FLOW_BOUGHT, commodity, bought)
-			var name := Commodity.name_of(commodity)
-			record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
-
-			var seller := _business_selling(buyer.settlement_id, commodity)
-			if seller != null:
-				var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
-				b2b["sold"] += bought
-				b2b["requested"] += requested * affordable_ratio
-				seller.consume(commodity, bought)
-				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
-				var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)
-				seller.balance += net_cost
-				seller.last_revenue += net_cost
-				seller.last_cash_change += net_cost
-				# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
-				# household or Trader pass records it, so without this the
-				# good's market shows 0 supplied / 0 requested.
-				var offer_before_sale: float = b2b["offer"]
-				local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
-			elif trader != null:
-				var offer_before: float = trader_import_capacity[trader.id]
-				trader_import_capacity[trader.id] -= bought
-				var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
-				# The sale to the local buyer is taxed; the Trader, as seller,
-				# bears it out of its import margin (never out of import_cost,
-				# which leaves the closed system).
-				var margin: float = cost - import_cost - _collect_sales_tax(buyer.settlement_id, cost)
-				trader.balance += margin
-				trader.last_revenue += margin
-				trader.last_cash_change += margin
-				trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
-				record["imported"][name] = record["imported"].get(name, 0.0) + bought
-				record["trader_transactions"].append({
-					"day": day + 1,
-					"business_id": trader.id,
-					"direction": "import",
-					"commodity": name,
-					"quantity": bought,
-					"unit_price": price,
-					"local_value": cost,
-				})
-				record["import_cost"] += import_cost
-				_import_cost_total += import_cost
-
-				local_market.merge_clearing(commodity, offer_before, requested, bought, price)
+			_settle_purchase(buyer, buyer, commodity, requested, requested * purchase_ratio, requested * affordable_ratio, record, trader_import_capacity)
 
 		var production_ratio := 1.0
 		for commodity in needed_by_commodity.keys():
@@ -3593,6 +3608,165 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if slot_needed > 0.0001:
 				production_ratio = minf(production_ratio, minf(slot_needed, slot_need.held(buyer)) / slot_needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+## Executes one business purchase of `bought` units of `commodity` at today's
+## posted price: `payer` is debited (the buyer itself for a recipe input, the
+## treasury for a warehouse), the goods land in `buyer`'s inventory, and they
+## come from the local seller's stock, else from the settlement's Trader as an
+## import out of its shared `trader_import_capacity`. `requested` is what the
+## buyer asked for (for the market's offered/requested record) and
+## `b2b_requested` the funded part of it (for the seller-pair report).
+func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity.Type, requested: float, bought: float, b2b_requested: float, record: Dictionary, trader_import_capacity: Dictionary) -> void:
+	var local_market: HEMarket = markets[buyer.settlement_id]
+	var price: float = local_market.price[commodity]
+	var cost: float = bought * price
+	payer.balance -= cost
+	payer.last_cash_change -= cost
+	buyer.add_stock(commodity, bought)
+	buyer.add_flow(HEBusiness.FLOW_BOUGHT, commodity, bought)
+	var name := Commodity.name_of(commodity)
+	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
+
+	var seller := _business_selling(buyer.settlement_id, commodity)
+	var trader := _settlement_trader(buyer.settlement_id)
+	if seller != null:
+		var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
+		b2b["sold"] += bought
+		b2b["requested"] += b2b_requested
+		seller.consume(commodity, bought)
+		seller.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
+		var net_cost := cost - _collect_sales_tax(buyer.settlement_id, cost)
+		seller.balance += net_cost
+		seller.last_revenue += net_cost
+		seller.last_cash_change += net_cost
+		# Business-to-business sale (e.g. Iron Mine -> Bloomery): no
+		# household or Trader pass records it, so without this the
+		# good's market shows 0 supplied / 0 requested.
+		var offer_before_sale: float = b2b["offer"]
+		local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
+	elif trader != null:
+		var offer_before: float = trader_import_capacity[trader.id]
+		trader_import_capacity[trader.id] -= bought
+		var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
+		# The sale to the local buyer is taxed; the Trader, as seller,
+		# bears it out of its import margin (never out of import_cost,
+		# which leaves the closed system).
+		var margin: float = cost - import_cost - _collect_sales_tax(buyer.settlement_id, cost)
+		trader.balance += margin
+		trader.last_revenue += margin
+		trader.last_cash_change += margin
+		trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
+		record["imported"][name] = record["imported"].get(name, 0.0) + bought
+		record["trader_transactions"].append({
+			"day": day + 1,
+			"business_id": trader.id,
+			"direction": "import",
+			"commodity": name,
+			"quantity": bought,
+			"unit_price": price,
+			"local_value": cost,
+		})
+		record["import_cost"] += import_cost
+		_import_cost_total += import_cost
+
+		local_market.merge_clearing(commodity, offer_before, requested, bought, price)
+
+## Runs after _run_trade, before the day's price signal: every Government
+## Warehouse works its standing orders (set_warehouse_order) against the local
+## market. Households and recipe-input buyers have already cleared, so the
+## warehouse only ever takes what they left -- it can raise a price but never
+## starve a household of the day's offer.
+##
+## BUY (buy_up_to): up to WAREHOUSE_DAILY_TRADE_CAP a day toward the target,
+## from the local seller's remaining paced offer, else imported through the
+## Trader (what is left of its import capacity after today's input
+## purchases), paid out of the treasury down to a few days of wages. A funded
+## request feeds the price signal like any other business's.
+##
+## SELL (sell + keep): up to the same daily cap of whatever is held above
+## `keep`, exported through the Trader at its export bid, within what is left
+## of its daily export capacity; the treasury receives the bid. Selling back
+## into the local market is not offered -- a good with a local seller already
+## has one seller per market (see _business_selling).
+func _run_warehouse_orders(record: Dictionary) -> void:
+	var warehouse_ids: Array[int] = []
+	for business_id in businesses.keys():
+		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.WAREHOUSE:
+			warehouse_ids.append(business_id)
+	warehouse_ids.sort()
+	for warehouse_id in warehouse_ids:
+		var warehouse: HEBusiness = businesses[warehouse_id]
+		var treasury := _settlement_government(warehouse.settlement_id)
+		if treasury == null or warehouse.warehouse_orders.is_empty():
+			continue
+		var settlement_id := warehouse.settlement_id
+		var local_market: HEMarket = markets[settlement_id]
+		var trader := _settlement_trader(settlement_id)
+		# What is left of the Trader's daily import capacity after today's
+		# recipe-input purchases (their `last_imported`).
+		var import_capacity: Dictionary = {}
+		if trader != null:
+			var used := 0.0
+			for imported in trader.last_imported.values():
+				used += imported
+			import_capacity[trader.id] = maxf(0.0, float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER - used)
+		var wage_reserve: float = WAREHOUSE_WAGE_RESERVE_DAYS * _reference_wage_per_worker(settlement_id) \
+			* float(_business_employed_worker_count(treasury.id) + _business_employed_worker_count(warehouse.id))
+
+		var commodities: Array = warehouse.warehouse_orders.keys()
+		commodities.sort()
+		for commodity in commodities:
+			var order: Dictionary = warehouse.warehouse_orders[commodity]
+			var price: float = local_market.price[commodity]
+
+			var shortfall: float = order["buy_up_to"] - warehouse.stock(commodity)
+			if shortfall > 0.0001 and price > 0.0:
+				var requested := minf(shortfall, WAREHOUSE_DAILY_TRADE_CAP)
+				var affordable: float = maxf(0.0, treasury.balance - wage_reserve) / price
+				var funded := minf(requested, affordable)
+				if funded > 0.0001:
+					var signal_today := _price_signal_entry(settlement_id, commodity)
+					signal_today["funded_business"] += funded
+					signal_today["business_buffer_request"] += funded
+					var offer := _business_offer(settlement_id, commodity, import_capacity, true, funded)
+					var bought := minf(funded, offer)
+					if bought > 0.0001:
+						_settle_purchase(warehouse, treasury, commodity, funded, bought, funded, record, import_capacity)
+
+			if order["sell"] and trader != null:
+				var sellable: float = warehouse.stock(commodity) - order["keep"]
+				var capacity_left: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER - trader.last_actual_units
+				var quantity := minf(minf(sellable, WAREHOUSE_DAILY_TRADE_CAP), capacity_left)
+				if quantity > 0.0001:
+					var local_price := _export_reference_price(settlement_id, commodity)
+					var pay_price := local_price * TRADER_BUY_PRICE_FRACTION
+					warehouse.consume(commodity, quantity)
+					warehouse.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
+					treasury.balance += quantity * pay_price
+					treasury.last_revenue += quantity * pay_price
+					treasury.last_cash_change += quantity * pay_price
+					var margin := quantity * (local_price - pay_price)
+					trader.balance += margin
+					trader.last_revenue += margin
+					trader.last_actual_units += quantity
+					trader.last_exported[commodity] = trader.last_exported.get(commodity, 0.0) + quantity
+					var name := Commodity.name_of(commodity)
+					record["exported"][name] = record["exported"].get(name, 0.0) + quantity
+					record["trader_transactions"].append({
+						"day": day + 1,
+						"business_id": trader.id,
+						"settlement_id": settlement_id,
+						"direction": "export",
+						"commodity": name,
+						"seller_id": warehouse.id,
+						"quantity": quantity,
+						"unit_price": local_price,
+						"paid_price": pay_price,
+						"local_value": quantity * local_price,
+					})
+					# New money entering the closed system, as in _run_trade.
+					record["export_revenue"] += quantity * local_price
+					_export_revenue_total += quantity * local_price
 
 ## Splits a business's missing `shortfall` of a need (in need units) across
 ## the satisfiers it can actually obtain today, cheapest per unit first --

@@ -245,7 +245,7 @@ static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
 static func government_buildings() -> Array[Dictionary]:
 	return [
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": WAREHOUSE_BUILD_COST,
-			"hint": "Employs %d admin workers; will buy inventory for construction projects." % WAREHOUSE_WORKERS,
+			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
 	]
 

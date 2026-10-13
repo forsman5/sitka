@@ -69,10 +69,12 @@ extends RefCounted
 
 ## Kind.WAREHOUSE (the "Government Warehouse") is a fifth odd one out, built by
 ## the town government rather than a player-funded business: no recipe, no
-## sales, no self-tuning. Its fixed crew (the admin staff) is paid out of the
-## settlement's treasury, never its own `balance`. The build cost the treasury
-## paid sits in `balance` as its construction fund, which is not spent yet --
-## later the warehouse will buy inventory for construction projects with it.
+## sales, no self-tuning, and no cash of its own: its `balance` stays 0 and its
+## wages AND purchases come out of the settlement's treasury (the same goes
+## for any future government building). It holds an `inventory` that the
+## player manages through `warehouse_orders` (standing buy-up-to / sell-down-to
+## orders against the local market and Trader, see he_simulation.gd's
+## _run_warehouse_orders), to be spent on construction projects later.
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -269,6 +271,13 @@ var tax_collected_total: float = 0.0
 ## spend labor on player-ordered construction (new businesses). Kept as a
 ## plain variable now so the UI and player actions have a stable name to bind.
 var builder_slots: int = 0
+
+## Kind.WAREHOUSE only: the player's standing orders, {Commodity.Type:
+## {"buy_up_to": float, "sell": bool, "keep": float}}. `buy_up_to` > 0 buys the
+## good (local sellers, else the Trader's imports) until the warehouse holds
+## that many; `sell` exports whatever is held above `keep` through the Trader.
+## Both are paced by he_simulation.gd's WAREHOUSE_DAILY_TRADE_CAP.
+var warehouse_orders: Dictionary = {}
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0

@@ -1950,16 +1950,40 @@ func _check_government_warehouse() -> void:
 	var money_before := sim._total_money()
 	_assert(sim.build_government_building(1, "warehouse"), "Warehouse should build once the treasury covers it")
 	_assert(absf(gov.balance - 50.0) < EPSILON, "Treasury should pay exactly the build cost")
-	_assert(absf(sim._total_money() - money_before) < EPSILON, "Building must conserve money")
+	_assert(absf(money_before - sim._total_money() - cost) < EPSILON, "Building should take exactly the cost out of circulation")
+	_assert(absf(sim.get_city_summary()["construction_spend_total"] - cost) < EPSILON, "Construction spend should be booked")
 	_assert(not sim.build_government_building(1, "warehouse"), "Only one warehouse per town")
 	sim.advance_ticks(14)
-	var found := false
+	var warehouse_id := -1
 	for report in sim.get_business_reports(1):
 		if report["kind"] == "warehouse":
-			found = true
+			warehouse_id = report["business_id"]
 			_assert(report["employed_workers"] >= 1 and report["capacity"] == 2 and report["max_capacity"] == 2, "Warehouse should staff its 2 admin slots (employed %d)" % report["employed_workers"])
-			_assert(absf(report["construction_fund"] - cost) < EPSILON, "Warehouse keeps the build cost as its construction fund")
-	_assert(found, "Warehouse should appear in business reports")
+			_assert(absf(report["balance"] - gov.balance) < EPSILON, "Warehouse cash should be the treasury's")
+	_assert(warehouse_id != -1, "Warehouse should appear in business reports")
+	var warehouse: HEBusiness = sim.businesses[warehouse_id]
+	_assert(absf(warehouse.balance) < EPSILON, "Warehouse must hold no cash of its own")
+
+	# Buy orders: the treasury pays for goods that land in the warehouse's
+	# inventory, within the daily cap, and money is only moved, never made.
+	var timber := Commodity.Type.TIMBER
+	gov.balance = 500.0
+	_assert(sim.set_warehouse_order(warehouse_id, timber, 25.0, false, 0.0), "Warehouse should accept a buy order")
+	_assert(not sim.set_warehouse_order(gov.id, timber, 25.0, false, 0.0), "Only a warehouse takes orders")
+	sim.advance_ticks(1)
+	_assert(warehouse.stock(timber) <= HESimulation.WAREHOUSE_DAILY_TRADE_CAP + EPSILON, "A day's buying is capped (bought %.2f)" % warehouse.stock(timber))
+	sim.advance_ticks(20)
+	_assert(warehouse.stock(timber) > 0.0, "Buy order should stock the warehouse with timber")
+	_assert(warehouse.stock(timber) <= 25.0 + EPSILON, "Buy order should stop at its target (held %.2f)" % warehouse.stock(timber))
+	_assert(absf(warehouse.balance) < EPSILON, "Warehouse still has no cash after buying")
+
+	# Sell order: held goods above `keep` are exported through the Trader and
+	# the treasury is paid.
+	var held := warehouse.stock(timber)
+	if held > 0.0:
+		_assert(sim.set_warehouse_order(warehouse_id, timber, 0.0, true, 0.0), "Warehouse should accept a sell order")
+		sim.advance_ticks(10)
+		_assert(warehouse.stock(timber) < held, "Sell order should export held timber (still %.2f of %.2f)" % [warehouse.stock(timber), held])
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.
