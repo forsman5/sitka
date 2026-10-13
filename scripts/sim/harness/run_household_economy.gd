@@ -70,6 +70,7 @@ func _init() -> void:
 	_check_fuel_fallback()
 	_check_government_taxes()
 	_check_government_warehouse()
+	_check_government_build_costs()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -2568,6 +2569,41 @@ func _check_government_warehouse() -> void:
 		_assert(sim.set_warehouse_order(warehouse_id, timber, 0.0, true, 0.0), "Warehouse should accept a sell order")
 		sim.advance_ticks(10)
 		_assert(warehouse.stock(timber) < held, "Sell order should export held timber (still %.2f of %.2f)" % [warehouse.stock(timber), held])
+
+## Government build costs: farm and woodlot are the free starter tier (built
+## through the same path as the warehouse), and a goods cost is drawn from the
+## Government Warehouse's stock and blocked while the warehouse can't cover it.
+func _check_government_build_costs() -> void:
+	print("
+=== Government build costs: free farm/woodlot, goods cost from the warehouse ===")
+	var sim := _new_sim("build_three_business_economy")
+	var settlement: HESettlement = sim.settlements[1]
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	for type_key in ["farm", "woodlot"]:
+		_assert(sim.has_business_of_type(1, type_key), "Seeded town starts with a %s" % type_key)
+		_assert(sim.build_government_building(1, type_key) == false, "A second %s is refused (unique per town)" % type_key)
+		for business_id in sim.businesses.keys():
+			if (sim.businesses[business_id] as HEBusiness).type_key == type_key:
+				sim.businesses.erase(business_id)
+				settlement.business_ids.erase(business_id)
+				break
+		var treasury_before := gov.balance
+		_assert(sim.build_government_building(1, type_key), "%s should build through the Government for free" % type_key)
+		_assert(absf(gov.balance - treasury_before) < EPSILON, "A free %s must not touch the treasury" % type_key)
+		_assert(sim.has_business_of_type(1, type_key), "The new %s should exist" % type_key)
+
+	# Goods cost: no warehouse -> blocked; warehouse without stock -> blocked;
+	# stocked warehouse -> builds and the goods are consumed.
+	var timber := Commodity.Type.TIMBER
+	var option := {"type_key": "test_hall", "cost": HEScenarioSeeds.build_cost(0.0, {timber: 5.0})}
+	_assert(sim.government_build_blocker(1, option).contains("warehouse"), "Goods cost needs a warehouse")
+	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 50.0
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse builds")
+	var warehouse := sim._government_warehouse(1)
+	_assert(sim.government_build_blocker(1, option).contains("has 0"), "Empty warehouse can't cover the goods cost")
+	warehouse.add_stock(timber, 8.0)
+	_assert(sim.government_build_blocker(1, option) == "", "Stocked warehouse covers the goods cost")
+	_assert(HEScenarioSeeds.cost_text(option["cost"]) == "5 Timber" or HEScenarioSeeds.cost_text(option["cost"]).contains("5"), "cost_text lists goods")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.

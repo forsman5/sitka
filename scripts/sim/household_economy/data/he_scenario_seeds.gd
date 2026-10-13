@@ -246,15 +246,51 @@ static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
 	warehouse.type_key = "warehouse"
 	return warehouse
 
-## Buildings the town government builds out of its treasury (not in
-## business_types(): they are not player-funded businesses and are never
-## seeded). Each has a gold `cost` the treasury must hold.
+## A construction cost: `gold` comes out of the treasury, `goods`
+## ({Commodity.Type: units}) out of the town's Government Warehouse stock.
+static func build_cost(gold: float = 0.0, goods: Dictionary = {}) -> Dictionary:
+	return {"gold": gold, "goods": goods}
+
+## "free", "200 g", or "20 g + 10 Timber" -- for build-menu item text.
+static func cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	var gold: float = cost.get("gold", 0.0)
+	if gold > 0.0:
+		parts.append("%.0f g" % gold)
+	var goods: Dictionary = cost.get("goods", {})
+	for commodity in goods:
+		parts.append("%.0f %s" % [goods[commodity], Commodity.name_of(commodity)])
+	return "free" if parts.is_empty() else " + ".join(parts)
+
+## What the government charges to build each player business kind, by
+## business_types() `type_key`. Kinds not listed here cannot be built through the
+## Government menu. A zero cost is the free starter tier (no warehouse needed);
+## later kinds pay gold and/or warehouse goods via build_cost().
+static func government_business_costs() -> Dictionary:
+	return {
+		"farm": build_cost(),
+		"woodlot": build_cost(),
+	}
+
+## Buildings the town government builds: the Warehouse (never seeded, not in
+## business_types()) plus the player business kinds priced in
+## government_business_costs(). Each carries a `cost` from build_cost().
+## `startup` marks a business that gets the new-business crew and seed cash
+## (HESimulation.add_new_business); the Warehouse runs on the treasury instead.
 static func government_buildings() -> Array[Dictionary]:
-	return [
-		{"type_key": "warehouse", "label": "Government Warehouse", "cost": WAREHOUSE_BUILD_COST,
+	var options: Array[Dictionary] = [
+		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
+			"startup": false,
 			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
 	]
+	var costs := government_business_costs()
+	for business_type in business_types():
+		if costs.has(business_type["type_key"]):
+			options.append({"type_key": business_type["type_key"], "label": business_type["label"],
+				"cost": costs[business_type["type_key"]], "hint": business_type["hint"],
+				"startup": true, "make": business_type["make"]})
+	return options
 
 ## THE registry of business kinds a player can pick: the dashboard's "Create
 ## business" menu and the setup page's checkboxes are both built from it, so a

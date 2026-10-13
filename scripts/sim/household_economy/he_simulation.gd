@@ -752,12 +752,44 @@ func add_new_business(b: HEBusiness) -> void:
 	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
 
+## The settlement's Government Warehouse, or null if it has not built one.
+func _government_warehouse(settlement_id: int) -> HEBusiness:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.WAREHOUSE and b.settlement_id == settlement_id:
+			return b
+	return null
+
+## Why `option` (an entry of HEScenarioSeeds.government_buildings()) cannot be
+## built in `settlement_id` right now -- "" when it can. Checks, in order: a
+## government exists, the type is not already built, the treasury covers the
+## gold cost, and the Government Warehouse holds the goods cost.
+func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
+	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
+	if gov == null:
+		return "no government"
+	if has_business_of_type(settlement_id, option["type_key"]):
+		return "already built"
+	var cost: Dictionary = option["cost"]
+	if gov.balance < float(cost.get("gold", 0.0)):
+		return "treasury too low (%.0f g)" % gov.balance
+	var goods: Dictionary = cost.get("goods", {})
+	if not goods.is_empty():
+		var warehouse := _government_warehouse(settlement_id)
+		for commodity in goods:
+			var held := warehouse.stock(commodity) if warehouse != null else 0.0
+			if held < float(goods[commodity]):
+				return "needs %.0f %s in the warehouse (has %.0f)" % [goods[commodity], Commodity.name_of(commodity), held]
+	return ""
+
 ## Builds a government building (HEScenarioSeeds.government_buildings()) out of
-## the settlement's treasury. The cost is spent (it leaves the treasury and is
-## booked in _construction_spend_total -- a government building has no cash of
-## its own, it runs on the treasury). Returns false -- building nothing -- for
-## an unknown type, a settlement with no government, a building of that type
-## that already exists, or a treasury that cannot cover the cost.
+## the settlement's treasury and warehouse. The gold cost is spent (it leaves
+## the treasury and is booked in _construction_spend_total -- a government
+## building has no cash of its own, it runs on the treasury); the goods cost is
+## consumed from the Government Warehouse. A `startup` option is a player
+## business kind and goes through add_new_business (crew + seed cash) rather
+## than add_business. Returns false -- building nothing -- for an unknown type
+## or when government_build_blocker() says no.
 ## TODO(multiple-buildings): every government building is unique per town
 ## today (has_business_of_type) -- no second warehouse, and the UI/orders
 ## assume exactly one. If that is ever relaxed, order panels, the treasury
@@ -770,14 +802,23 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 	for option in HEScenarioSeeds.government_buildings():
 		if option["type_key"] != type_key:
 			continue
-		var cost: float = option["cost"]
-		if gov.balance < cost:
+		if government_build_blocker(settlement_id, option) != "":
 			return false
+		var cost: Dictionary = option["cost"]
+		var gold: float = cost.get("gold", 0.0)
+		var goods: Dictionary = cost.get("goods", {})
+		if not goods.is_empty():
+			var warehouse := _government_warehouse(settlement_id)
+			for commodity in goods:
+				warehouse.consume(commodity, goods[commodity])
 		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
-		gov.balance -= cost
-		gov.last_cash_change -= cost
-		_construction_spend_total += cost
-		add_business(building)
+		gov.balance -= gold
+		gov.last_cash_change -= gold
+		_construction_spend_total += gold
+		if option.get("startup", false):
+			add_new_business(building)
+		else:
+			add_business(building)
 		return true
 	return false
 
