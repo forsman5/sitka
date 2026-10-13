@@ -67,6 +67,21 @@ extends RefCounted
 ## treasury means a rationed wage, not an overdraft. `builder_slots` is the
 ## (not yet modeled) number of builder jobs it will fund; see its comment.
 
+## Kind.WAREHOUSE (the "Government Warehouse") is a fifth odd one out, built by
+## the town government rather than a player-funded business: no recipe, no
+## sales, no self-tuning, and no cash of its own: its `balance` stays 0 and its
+## wages AND purchases come out of the settlement's treasury (the same goes
+## for any future government building). It holds an `inventory` that the
+## player manages through `warehouse_orders` (standing buy-up-to / sell-down-to
+## orders against the local market and Trader, see he_simulation.gd's
+## _run_warehouse_orders), to be spent on construction projects later.
+## TODO(warehouse-capacity): the inventory has no storage limit (only the
+## per-order target and the daily trade cap bound it) and goods never spoil.
+## Give each good a size/weight per unit and the building a capacity, so a
+## warehouse fills up and buying has to be selective; an upgrade could raise
+## it. Likely to matter once there can be more than one (see the unique-
+## building TODO on HESimulation.build_government_building).
+
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
@@ -99,7 +114,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
 enum Species { CATTLE, SHEEP }
 
 var id: int
@@ -267,6 +282,13 @@ var tax_collected_total: float = 0.0
 ## spend labor on player-ordered construction (new businesses). Kept as a
 ## plain variable now so the UI and player actions have a stable name to bind.
 var builder_slots: int = 0
+
+## Kind.WAREHOUSE only: the player's standing orders, {Commodity.Type:
+## {"buy_up_to": float, "sell": bool, "keep": float}}. `buy_up_to` > 0 buys the
+## good (local sellers, else the Trader's imports) until the warehouse holds
+## that many; `sell` exports whatever is held above `keep` through the Trader.
+## Both are paced by he_simulation.gd's WAREHOUSE_DAILY_TRADE_CAP.
+var warehouse_orders: Dictionary = {}
 
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
