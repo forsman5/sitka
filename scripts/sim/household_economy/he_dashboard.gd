@@ -119,7 +119,11 @@ var _simulation: HESimulation
 ## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
 var _town_layout: HETownLayout
 var _town_view: HETownView
+## Top-bar second line, and the Housing tab's readouts.
 var _housing_label: Label
+var _housing_detail_labels: Dictionary = {} # key -> Label
+var _housing_build_button: Button
+var _housing_blocker_label: Label
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
@@ -449,6 +453,8 @@ func _build_ui() -> void:
 	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
 	_known_market_commodities = _simulation.get_market_summary().keys()
+
+	_build_housing_tab(top_tabs)
 
 	var lower_row := HBoxContainer.new()
 	lower_row.add_theme_constant_override("separation", 16)
@@ -929,7 +935,10 @@ func _build_population_summary() -> Control:
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.mouse_entered.connect(_on_population_hover.bind(true))
 	box.mouse_exited.connect(_on_population_hover.bind(false))
-	margin.add_child(box)
+	var lines := VBoxContainer.new()
+	lines.add_theme_constant_override("separation", 0)
+	margin.add_child(lines)
+	lines.add_child(box)
 	_population_box = box
 
 	# Same live-refreshing popup approach as the treasury tip: a built-in
@@ -979,6 +988,17 @@ func _build_population_summary() -> Control:
 	_avg_morale_label = Label.new()
 	_avg_morale_label.add_theme_font_size_override("font_size", 22)
 	box.add_child(_avg_morale_label)
+
+	# Second line, under the health/morale row: how full the town's housing is.
+	var housing_row := HBoxContainer.new()
+	housing_row.add_theme_constant_override("separation", 8)
+	lines.add_child(housing_row)
+	var housing_caption := Label.new()
+	housing_caption.text = "Housing"
+	housing_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	housing_row.add_child(housing_caption)
+	_housing_label = Label.new()
+	housing_row.add_child(_housing_label)
 	return margin
 
 ## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
@@ -1055,15 +1075,6 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 		stats_grid.add_child(value_label)
 		_town_stat_labels[stat[1]] = value_label
 
-	var housing_name := Label.new()
-	housing_name.text = "Housing"
-	housing_name.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	housing_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stats_grid.add_child(housing_name)
-	_housing_label = Label.new()
-	_housing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	stats_grid.add_child(_housing_label)
-
 	var charts := VBoxContainer.new()
 	charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	charts.size_flags_stretch_ratio = 2.0
@@ -1071,6 +1082,92 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 	_town_population_chart = _add_town_chart(charts, "", TOWN_POPULATION_SERIES)
 	_town_population_title = _town_population_chart.get_meta("title_label")
 	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
+
+## Housing tab (after Goods): a large readout of the town's housing pool and
+## the government "build house" action. Houses are a settlement-wide pool --
+## see HESimulation.get_housing_report.
+func _build_housing_tab(top_tabs: TabContainer) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.name = "Housing"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	top_tabs.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 10)
+	scroll.add_child(box)
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 48)
+	box.add_child(grid)
+	for stat in [["houses", "Houses"], ["households", "Households"], ["free", "Free houses"], ["homeless", "Homeless households"]]:
+		var cell := VBoxContainer.new()
+		grid.add_child(cell)
+		var caption := Label.new()
+		caption.text = stat[1]
+		caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		cell.add_child(caption)
+		var value := Label.new()
+		value.add_theme_font_size_override("font_size", 32)
+		cell.add_child(value)
+		_housing_detail_labels[stat[0]] = value
+
+	var rules := Label.new()
+	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rules.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
+	box.add_child(rules)
+
+	_housing_build_button = Button.new()
+	_housing_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_housing_build_button.pressed.connect(_on_build_house_pressed)
+	box.add_child(_housing_build_button)
+	_housing_blocker_label = Label.new()
+	_housing_blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+	box.add_child(_housing_blocker_label)
+
+func _house_option_index() -> int:
+	var options := HEScenarioSeeds.government_buildings()
+	for i in options.size():
+		if options[i]["type_key"] == "house":
+			return i
+	return -1
+
+func _on_build_house_pressed() -> void:
+	var index := _house_option_index()
+	if index >= 0:
+		_on_build_government_pressed(index)
+
+func _refresh_housing() -> void:
+	var housing := _simulation.get_housing_report(_town_settlement_id())
+	if housing["modeled"]:
+		var free := maxi(0, int(housing["capacity"]) - int(housing["households"]))
+		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		var color := Color(0.4, 0.75, 0.45)
+		if housing["homeless_households"] > 0:
+			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
+			color = Color(0.85, 0.35, 0.3)
+		elif housing["saturated"]:
+			_housing_label.text += " (full)"
+			color = Color(0.9, 0.7, 0.3)
+		_housing_label.add_theme_color_override("font_color", color)
+		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["houses"]
+		(_housing_detail_labels["households"] as Label).text = "%d" % housing["households"]
+		(_housing_detail_labels["free"] as Label).text = "%d" % free
+		(_housing_detail_labels["homeless"] as Label).text = "%d" % housing["homeless_households"]
+	else:
+		_housing_label.text = "unlimited"
+		_housing_label.remove_theme_color_override("font_color")
+		for key in _housing_detail_labels:
+			(_housing_detail_labels[key] as Label).text = "-"
+	var index := _house_option_index()
+	if index < 0:
+		return
+	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
+	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
+	_housing_build_button.text = "Build house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	_housing_build_button.disabled = blocker != ""
+	_housing_blocker_label.text = blocker
 
 ## A title row with a color-keyed legend above a hoverable chart.
 func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
@@ -1098,15 +1195,6 @@ func _refresh_town() -> void:
 	var city := _simulation.get_city_summary()
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
-	var housing := _simulation.get_housing_report(_town_settlement_id())
-	if housing["modeled"]:
-		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
-		if housing["homeless_households"] > 0:
-			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
-		elif housing["saturated"]:
-			_housing_label.text += " (full)"
-	else:
-		_housing_label.text = "unlimited"
 	# Extra leading days so the trailing flow sums are full from the first point.
 	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
 	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
@@ -2858,6 +2946,7 @@ func _refresh() -> void:
 	_check_extinction()
 
 	_refresh_town()
+	_refresh_housing()
 	_refresh_government_build_menu()
 
 	var market := _simulation.get_market_summary()
