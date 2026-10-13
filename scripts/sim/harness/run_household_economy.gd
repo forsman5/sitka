@@ -305,7 +305,10 @@ func _check_conservation() -> void:
 		# nobody left to ration, so only check businesses that employ people.
 		if report["employed_workers"] <= 0:
 			continue
-		var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * report["reference_wage_per_worker"] * report["employed_workers"]
+		# The business's ACTUAL overdraft limit (a ranch's is backed by its herd),
+		# not the generic 60-day floor.
+		var business: HEBusiness = sim.businesses[report["business_id"]]
+		var floor: float = -sim._wage_overdraft_limit(business, report["reference_wage_per_worker"] * report["employed_workers"])
 		worst_business_floor_breach = max(worst_business_floor_breach, floor - report["balance"])
 	print("  minimum stock=%.3f, minimum household balance=%.3f, worst business wage-floor breach=%.4f" % [min_stock, min_household_balance, worst_business_floor_breach])
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)

@@ -3398,6 +3398,11 @@ func _run_trade(record: Dictionary) -> void:
 ## The seller a Trader buys `commodity` from: whichever business sells it
 ## locally (_business_selling resolves a livestock good to the ranch holding
 ## culled head, and meat to a Butcher or a ranch's home slaughter).
+## ASSUMPTION: one seller per good per settlement (buildings are unique today).
+## _business_selling returns the first match, so a second ranch or workshop of the
+## same kind would have its stock stranded. When placeable buildings allow
+## duplicates, _run_trade should collect offers per seller and allocate capacity
+## across them.
 func _trade_seller(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
 	return _business_selling(settlement_id, commodity)
 
@@ -3509,6 +3514,11 @@ func _adjust_trader_bids(trader: HEBusiness, offers: Array[Dictionary], capacity
 ## the reserve PLUS SELLER_SALVAGE_COVER_DAYS more of routine use are excess and
 ## go at any bid (`salvage_quantity`). A good no one locally uses has no reserve
 ## and no cover to protect, so everything is salvage.
+## KNOWN LIMIT (measured, see the PR): that means an export-only good (iron, and
+## livestock no Butcher buys) is never held to `min_price`. Holding its first 30
+## days of output behind the floor stopped iron exporting at all (the Trader's
+## bid ceiling leaves a wage of spread, below iron's cost ratio) and starved the
+## Bloomery, so the bypass is load-bearing until iron's recipe/price is retuned.
 func _seller_trade_offer(seller: HEBusiness, commodity: Commodity.Type) -> Dictionary:
 	var horizon := float(_days_until_next_supply(seller))
 	var routine := _routine_local_use(seller, commodity)
