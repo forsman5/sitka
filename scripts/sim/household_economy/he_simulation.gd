@@ -1765,6 +1765,7 @@ func _daily_tick() -> void:
 	_run_livestock_purchasing(record)
 	_run_production(record)
 	_run_market(record)
+	_register_business_only_offers()
 	_run_trade(record)
 	_run_warehouse_orders(record)
 	_apply_price_signals()
@@ -3279,6 +3280,32 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	signal_today["funded_household"] = total_funded_request
 	signal_today["wanted_household"] = total_wanted
 	signal_today["unfunded_household"] = maxf(0.0, total_wanted - total_funded_request)
+
+## A good only businesses buy (iron ore) never goes through _clear_market_for,
+## which is what feeds a seller's offer into the price signal. Without this its
+## signal would carry business requests but no offer, so every request read as a
+## funded shortage and the price could only climb -- to its ceiling, however much
+## unsold ore the mine was holding. Registers the local seller's offer the same
+## way _clear_market_for does for household goods.
+func _register_business_only_offers() -> void:
+	for business_id in businesses.keys():
+		var seller: HEBusiness = businesses[business_id]
+		if seller.kind != HEBusiness.Kind.PRODUCTION or seller.recipe == null:
+			continue
+		for commodity in seller.recipe.outputs.keys():
+			if HENeeds.for_commodity(commodity) != null or _business_selling(seller.settlement_id, commodity) != seller:
+				continue
+			if not _has_local_buyers(seller.settlement_id, commodity):
+				continue
+			var b2b: Dictionary = _b2b_today.get(seller.settlement_id, {}).get(commodity, {})
+			var sold: float = b2b.get("sold", 0.0)
+			var remaining := _household_offer(seller.settlement_id, commodity)
+			if not b2b.is_empty():
+				remaining = minf(seller.stock(commodity), maxf(0.0, b2b["offer"] - sold))
+			var signal_today := _price_signal_entry(seller.settlement_id, commodity)
+			signal_today["offer"] = maxf(signal_today["offer"], remaining + sold)
+			if not seller.has_long_cycle():
+				signal_today["working_stock"] = maxf(signal_today["working_stock"], float(seller.last_output_produced.get(commodity, 0.0)))
 
 ## Today's accumulating inputs to each good's price signal, by settlement then
 ## commodity. Reset when input purchasing starts the day; consumed (and cleared)
