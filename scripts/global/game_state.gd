@@ -13,9 +13,9 @@ const MAX_BLOTTER_DAYS := 730
 var sparkline_days: int = 360
 ## Days of events the household-economy blotter shows.
 var blotter_days: int = 365
-## Experiments: hides the household-economy dashboard's free "Create business"
-## menu so new buildings have to go through the Government build menu.
-var dev_mode: bool = false
+## Dev mode shows the household-economy dashboard's free "Create business"
+## menu. Turn it off to force new buildings through the Government build menu.
+var dev_mode: bool = true
 
 @export var gather_speed: float = 1.3
 @export var game_speed: float = 1.0
