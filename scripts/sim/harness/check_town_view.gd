@@ -1,0 +1,123 @@
+extends SceneTree
+
+## Town view check against the real household dashboard scene. Run with:
+##   godot --headless --path . --script res://scripts/sim/harness/check_town_view.gd
+
+const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+
+var failures := 0
+
+func _initialize() -> void:
+	call_deferred("_run")
+
+func check(condition: bool, message: String) -> void:
+	if not condition:
+		failures += 1
+		push_error("FAIL: " + message)
+
+func _positions(layout: HETownLayout) -> Dictionary:
+	var out := {}
+	for site in layout.get_sites():
+		out[site["site_id"]] = site["position"]
+	return out
+
+func _run() -> void:
+	# Loaded at runtime: the dashboard script needs the GameState autoload, which
+	# is not registered yet while this script itself is being compiled.
+	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
+	dashboard_script.pending_builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+	var dashboard: Control = (load("res://scenes/sim/he_dashboard.tscn") as PackedScene).instantiate()
+	root.add_child(dashboard)
+	dashboard._speed_multiplier = 0.0
+	await process_frame
+	await process_frame
+	var view = dashboard._town_view
+	var layout: HETownLayout = dashboard._town_layout
+	check(view != null and not view.visible, "Town view exists and starts hidden")
+	var business_count: int = dashboard._simulation.get_business_reports().size()
+	check(view.site_node_count() == business_count, "Every live business is drawn (%d sites, %d businesses)" % [view.site_node_count(), business_count])
+	for key in ["government", "farm", "cattle_ranch", "sheep_farm"]:
+		var found := false
+		for site in layout.get_sites():
+			found = found or site["type_key"] == key
+		check(found, "Default scenario should place a %s" % key)
+
+	var before := _positions(layout)
+	dashboard._set_town_mode(true)
+	await process_frame
+	await process_frame
+	check(view.visible and not dashboard._dashboard_body[0].visible, "Town mode hides the dashboard body")
+	check(view.size.y > 300.0, "Town view should get real space (height %.0f)" % view.size.y)
+
+	# Click the farm's site and read back the selection.
+	var farm_site := layout.site_of_business(HEScenarioSeeds.FARM_BUSINESS_ID)
+	check(not farm_site.is_empty(), "Farm should have a site")
+	var screen: Vector2 = _screen_of(view, farm_site["position"])
+	_click(view, screen)
+	check(view.selected_business_id() == HEScenarioSeeds.FARM_BUSINESS_ID, "Clicking the farm should select it (got %d)" % view.selected_business_id())
+	var requested := []
+	view.details_requested.connect(func(id: int) -> void: requested.append(id))
+	view._on_details_pressed()
+	check(requested == [HEScenarioSeeds.FARM_BUSINESS_ID], "Details button should request the farm's detail panel")
+	check(not view.visible and dashboard._selected_business_id == HEScenarioSeeds.FARM_BUSINESS_ID, "Details should return to the dashboard with the farm open")
+	dashboard._set_town_mode(true)
+
+	# Zoom and pan keep the camera on the town.
+	var size_before: float = view.camera().size
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = view.size * 0.5
+	view._gui_input(wheel)
+	check(view.camera().size < size_before, "Wheel up should zoom in")
+
+	# Advancing days and a new business must not move existing sites.
+	dashboard._simulation.advance_ticks(30)
+	dashboard._refresh()
+	check(_positions(layout) == before, "Advancing days moved a site")
+	var woodlot_option: Dictionary = {}
+	for option in HEScenarioSeeds.business_types():
+		if option["type_key"] == "woodlot":
+			woodlot_option = option
+	# The default preset has no woodlot only if the roster says so; otherwise
+	# any unbuilt type will do.
+	for option in HEScenarioSeeds.business_types():
+		if not dashboard._simulation.has_business_of_type(dashboard._town_settlement_id(), option["type_key"]):
+			woodlot_option = option
+			break
+	if not woodlot_option.is_empty():
+		var index := HEScenarioSeeds.business_types().find(woodlot_option)
+		dashboard._on_create_business_pressed(index)
+		var after := _positions(layout)
+		for site_id in before:
+			check(after[site_id] == before[site_id], "Creating a business moved site %d" % site_id)
+		check(after.size() == before.size() + 1, "A new business should add exactly one site")
+		check(view.site_node_count() == after.size() - (1 if not layout.get_site(0)["built"] else 0), "View should draw every built site")
+
+	# A failed business leaves its building, vacant, for the next business.
+	var after_count: int = view.site_node_count()
+	var ranch_site := layout.site_of_business(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
+	dashboard._simulation.businesses.erase(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
+	dashboard._refresh()
+	var vacated := layout.get_site(ranch_site["site_id"])
+	check(vacated["business_id"] == HETownLayout.NO_BUSINESS and vacated["built"], "A failed ranch should leave a vacant building")
+	check(view.site_node_count() == after_count, "The vacant building stays drawn")
+	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
+	quit(0 if failures == 0 else 1)
+
+## Screen position (view-local) of a town-coordinate point, via the camera.
+func _screen_of(view, town_point: Vector2) -> Vector2:
+	return view.camera().unproject_position(Vector3(town_point.x, 0.0, town_point.y))
+
+func _click(view, position: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = position
+	view._gui_input(down)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = position
+	view._gui_input(up)

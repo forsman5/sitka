@@ -600,6 +600,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 ## builder jobs are modeled (see HEBusiness.builder_slots).
 static func add_government(settlement: HESettlement, households: Dictionary, businesses: Dictionary, government_id: int) -> HEBusiness:
 	var gov := HEBusiness.new(government_id, "Government", null, WORKER_CAPACITY, WORKER_CAPACITY, HEBusiness.Kind.GOVERNMENT, settlement.id)
+	gov.type_key = "government"
 	# A small float so day-one wages aren't rationed while the first sales
 	# tax trickles in (probed: an empty treasury rationed the administrator
 	# for ~9 days); from then on tax alone sustains the wage.
