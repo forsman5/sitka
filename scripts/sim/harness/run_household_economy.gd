@@ -33,6 +33,7 @@ func _init() -> void:
 	_check_need_vs_funded_demand()
 	_check_price_signal()
 	_check_business_ledger_reconciles()
+	_check_butcher_ledger_values_animals()
 	_check_staffing_decisions()
 	_check_staffing_outcomes()
 	_check_trader_stays_solvent()
@@ -819,6 +820,36 @@ func _check_business_ledger_reconciles() -> void:
 	_assert(stock_moved and cash_and_stock_differ, "Stock accumulation should be its own figure, not folded into cash profit")
 	for key in ["sales_household", "sales_business", "sales_export", "input_local", "wages", "taxes", "trade_margin", "tax_income"]:
 		_assert(kinds_with_sales.has(key), "Ledger heading %s never recorded anything in 150 days" % key)
+
+## A Butcher that really processes head: the animals it uses up are costed at
+## what it pays a ranch (the livestock quote), not at zero, and the ledger row of
+## the day it works includes a review's wool and culls when one lands that day.
+func _check_butcher_ledger_values_animals() -> void:
+	print("\n=== Ledger: a Butcher's animals are valued at what it paid ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var butcher: HEBusiness = null
+	for business_id in sim.businesses.keys():
+		if (sim.businesses[business_id] as HEBusiness).processes_livestock:
+			butcher = sim.businesses[business_id]
+	_assert(butcher != null, "Test setup: the scenario should include a Butcher")
+	if butcher == null:
+		return
+	var seated := 0
+	for household_id in sim.get_household_ids():
+		if seated >= 4:
+			break
+		var h: HEHousehold = sim.households[household_id]
+		h.employer_business_id = butcher.id
+		seated += h.worker_capacity()
+	var cattle := Commodity.Type.CATTLE
+	butcher.add_stock(cattle, 5.0)
+	sim.advance_ticks(1)
+	var consumed: float = float((butcher.todays_flows.get(HEBusiness.FLOW_CONSUMED, {}) as Dictionary).get(cattle, 0.0))
+	var row: Dictionary = butcher.ledger_history(1)[0]
+	var price := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	print("  Butcher used %.1f head at %.1f each: ledger input cost %.1f, output stock %.1f, input stock %.1f" % [consumed, price, row["input_consumed_value"], row["output_stock_value"], row["input_stock_value"]])
+	_assert(consumed > 0.0, "Test setup: the staffed Butcher should process some of its head")
+	_assert(absf(row["input_consumed_value"] - consumed * price) < EPSILON, "Consumed animals should be costed at the Butcher's purchase price, got %.2f for %.1f head at %.1f" % [row["input_consumed_value"], consumed, price])
 
 ## A throwaway workshop with a crew and a synthetic ledger, so the staffing
 ## decision can be judged on stated books instead of on a scenario's luck.

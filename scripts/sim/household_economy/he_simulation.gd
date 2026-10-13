@@ -1572,6 +1572,9 @@ func _daily_tick() -> void:
 	_run_consumption(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
 		_run_herds(record)
+	# After herd production, so a review's wool and culled head land in the day
+	# they were made (and in its stock change), not in a row already closed.
+	_close_business_ledgers()
 	if (day + 1) % MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_migration_pressure()
 	if (day + 1) % EMIGRATION_EVAL_INTERVAL_DAYS == 0:
@@ -1971,7 +1974,6 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 ## revenue-per-worker signal, that just rides along on this same per-
 ## business daily pass rather than getting one of its own.
 func _record_business_revenue_history() -> void:
-	var wage_by_settlement := {}
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		var employed := _business_employed_worker_count(business_id)
@@ -1985,6 +1987,13 @@ func _record_business_revenue_history() -> void:
 		b.record_revenue_per_worker_day(revenue_per_worker)
 		b.record_balance_day()
 		b.record_flow_day()
+
+## Closes every business's operating-ledger row for the day (see HEBusiness's
+## ledger_*). One reference wage per settlement per day.
+func _close_business_ledgers() -> void:
+	var wage_by_settlement := {}
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
 		if not wage_by_settlement.has(b.settlement_id):
 			wage_by_settlement[b.settlement_id] = _reference_wage_per_worker(b.settlement_id)
 		_close_business_ledger(b, wage_by_settlement[b.settlement_id])
@@ -1997,8 +2006,12 @@ func _close_business_ledger(b: HEBusiness, reference_wage: float) -> void:
 	var prices: Dictionary = {}
 	for c in (markets[b.settlement_id] as HEMarket).price.keys():
 		prices[c] = (markets[b.settlement_id] as HEMarket).price[c]
-	if b.kind == HEBusiness.Kind.HERD:
-		prices[b.herd_commodity()] = HERD_EXPORT_PRICE[b.species] * TRADER_BUY_PRICE_FRACTION
+	# Live animals have no household market, so they are valued by who holds them:
+	# a Butcher at what it pays a ranch (so the head it holds and uses are neither
+	# free nor marked to a price it never sees), a ranch at what the Trader pays.
+	for species in BUTCHERY_SPECIES_ORDER:
+		var held_quote := LivestockQuote.BUTCHER_PURCHASE if b.processes_livestock else LivestockQuote.TRADER_BID
+		prices[HEBusiness.livestock_commodity(species)] = livestock_quote(species, held_quote)
 	var sold := 0.0
 	var produced := 0.0
 	for c in outputs:
