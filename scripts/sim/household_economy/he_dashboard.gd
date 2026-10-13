@@ -19,8 +19,8 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 
-## Row order of the Needs tab.
-const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
+## Row order of the Needs tab comes from HENeeds.display_order(): every need in
+## the catalog, so a new need can't be left off the tab.
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 ## Offered by the Businesses tab's "Create business" menu: every kind in
 ## HEScenarioSeeds.business_types(), so a new kind shows up here by being
@@ -984,6 +984,8 @@ func _refresh_population_summary() -> void:
 	var tip := "%d people. Averages are per person." % w["population"]
 	tip += _factor_tip_section("Health", w["avg_health"], w["health_factors"], w["population"])
 	tip += _factor_tip_section("Morale", w["avg_morale"], w["morale_factors"], w["population"])
+	for bonus in w["morale_bonus_factors"]:
+		tip += "\n  %s: +%.1f pts (lifts %d of %d people)" % [bonus["label"], bonus["avg_loss"] * 100.0, bonus["people"], w["population"]]
 	_population_tip_label.text = tip
 	_population_tip.reset_size()
 
@@ -1262,6 +1264,8 @@ func _refresh_household_detail() -> void:
 	_add_meter_row(_household_detail_content, "Morale", h["morale"])
 	for penalty in h["morale_penalties"]:
 		_add_household_detail_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+	for bonus in h["morale_bonuses"]:
+		_add_household_detail_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
@@ -1412,6 +1416,8 @@ func _refresh_person_detail() -> void:
 	_add_meter_row(_person_detail_content, "Morale", p["morale"])
 	for penalty in p["morale_penalties"]:
 		_add_person_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+	for bonus in p["morale_bonuses"]:
+		_add_person_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
 	_add_person_heading("Needs (today, equal share of the household's)")
 	for need in p["needs"]:
@@ -1566,7 +1572,7 @@ func _build_needs_tab(top_tabs: TabContainer) -> void:
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(header)
-	for need_id in NEEDS_TAB_ORDER:
+	for need_id in HENeeds.display_order():
 		var need := HENeeds.get_need(need_id)
 		var name_button := Button.new()
 		name_button.text = need.label

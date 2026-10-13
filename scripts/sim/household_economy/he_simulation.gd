@@ -936,6 +936,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"morale": h.morale(),
 		"health_losses": h.health_losses(),
 		"morale_penalties": h.morale_penalties(),
+		"morale_bonuses": h.morale_bonuses(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -961,6 +962,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var morale_total := 0.0
 	var health_factors := {}
 	var morale_factors := {}
+	var morale_bonus_factors := {}
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
 		if not h.is_employed():
@@ -979,6 +981,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 				_add_factor(health_factors, loss["label"], loss["loss"])
 			for penalty in h.morale_penalties(v, member["works"]):
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
+			for bonus in h.morale_bonuses():
+				_add_factor(morale_bonus_factors, bonus["label"], bonus["bonus"])
 	return {
 		"population": population,
 		"unemployed": unemployed,
@@ -986,6 +990,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 		"avg_morale": (morale_total / population) if population > 0 else 1.0,
 		"health_factors": _factor_list(health_factors, population),
 		"morale_factors": _factor_list(morale_factors, population),
+		# Same shape, but avg_loss is points GAINED (needs met that lift morale).
+		"morale_bonus_factors": _factor_list(morale_bonus_factors, population),
 	}
 
 func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
@@ -1059,6 +1065,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"health": h.health(vulnerability),
 		"morale": h.morale(vulnerability, is_worker),
 		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"morale_bonuses": h.morale_bonuses(),
 		"needs": needs,
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}

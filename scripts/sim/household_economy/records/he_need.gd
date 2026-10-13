@@ -46,10 +46,15 @@ var effect_text: String
 ## leave this false -- grain, timber and wool are the staples every
 ## settlement is assumed able to get.
 var needs_seller: bool
+## Morale a household gains while this need is fully met today (0 = none).
+## Unmet needs already cost morale through health_weight; this is the other
+## side, for wants whose absence isn't harmful but whose presence is welcome
+## (tools). It offsets penalties -- morale still tops out at 100%.
+var morale_bonus: float
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
 		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "",
-		p_needs_seller: bool = false) -> void:
+		p_needs_seller: bool = false, p_morale_bonus: float = 0.0) -> void:
 	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
@@ -60,6 +65,7 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	health_weight = p_health_weight
 	effect_text = p_effect_text
 	needs_seller = p_needs_seller
+	morale_bonus = p_morale_bonus
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []

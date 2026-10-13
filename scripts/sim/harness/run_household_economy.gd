@@ -2423,6 +2423,27 @@ func _check_needs_catalog() -> void:
 		"Baselines should stay wool and grain")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
 	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
+
+	# The Needs tab lists the catalog, so a new need can't be forgotten there.
+	var tab_order: Array = HENeeds.display_order()
+	for need in HENeeds.all():
+		_assert(tab_order.has(need.id), "%s is missing from the Needs tab" % need.label)
+	_assert(tab_order.size() == HENeeds.all().size(), "The Needs tab should list each need exactly once")
+
+	# Tools: morale only. Going without costs no health, having them lifts
+	# morale, and the lift offsets other penalties (an unemployed household here).
+	var tools_need := HENeeds.get_need(HENeed.Id.TOOLS)
+	_assert(tools_need.health_weight == 0.0 and tools_need.morale_bonus > 0.0, "Tools should be a morale-only need")
+	var bonus_household := HEHousehold.new(1, 2, 2)
+	var base_morale := bonus_household.morale()
+	_assert(not bonus_household.is_employed() and base_morale < 1.0, "Fixture household should start with an unemployment penalty")
+	bonus_household.last_need_required[HENeed.Id.TOOLS] = 0.1
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.05
+	_assert(bonus_household.morale_bonuses().is_empty() and is_equal_approx(bonus_household.morale(), base_morale), "A half-met tools need should give no morale bonus")
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.1
+	_assert(bonus_household.morale_bonuses().size() == 1 and is_equal_approx(bonus_household.morale(), minf(1.0, base_morale + tools_need.morale_bonus)),
+		"A met tools need should lift morale by its bonus")
+	_assert(is_equal_approx(bonus_household.health(), 1.0), "Tools must not change health")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
 	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
