@@ -185,7 +185,7 @@ func _dispatch_shipments() -> void:
 		var source: HESimulation = towns[source_id]
 		var destination: HESimulation = towns[destination_id]
 		var quantity: float = minf(source.get_valley_trade_offer(commodity),
-			minf(remaining_edges[edge_id], remaining_traders[source_id]))
+			minf(remaining_edges[edge_id], minf(remaining_traders[source_id], remaining_traders[destination_id])))
 		quantity = minf(quantity, destination.get_valley_trader_purchase_capacity(opportunity["price"]))
 		if quantity <= 0.0001:
 			continue
@@ -204,3 +204,4 @@ func _dispatch_shipments() -> void:
 		_next_shipment_id += 1
 		remaining_edges[edge_id] -= quantity
 		remaining_traders[source_id] -= quantity
+		remaining_traders[destination_id] -= quantity
