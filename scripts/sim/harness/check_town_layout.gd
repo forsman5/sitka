@@ -18,6 +18,7 @@ func _init() -> void:
 	_check_scenarios_differ()
 	_check_incremental_allocation_keeps_sites()
 	_check_failure_vacates_and_reuse_fills_it()
+	_check_houses_fill_the_residential_zone()
 	_check_full_roster_fits()
 	_check_no_overlap_and_bounds_under_load()
 	_check_scenario_key_identity()
@@ -35,10 +36,13 @@ func _reports(builder: Callable) -> Array:
 func _default_builder() -> Callable:
 	return Callable(HEScenarioSeeds, "build_three_business_economy")
 
+## [layout, business reports, dwelling reports]
 func _layout_for(builder: Callable) -> Array:
-	var reports := _reports(builder)
-	var layout := HETownLayout.new(HETownLayout.scenario_key_for(builder), HEScenarioSeeds.SETTLEMENT_ID, reports)
-	return [layout, reports]
+	var sim := HESimulation.new(SEED, builder)
+	var reports := sim.get_business_reports()
+	var dwellings := sim.get_dwelling_reports()
+	var layout := HETownLayout.new(HETownLayout.scenario_key_for(builder), HEScenarioSeeds.SETTLEMENT_ID, reports, dwellings)
+	return [layout, reports, dwellings]
 
 func _positions(layout) -> Dictionary:
 	var out := {}
@@ -132,6 +136,43 @@ func _check_failure_vacates_and_reuse_fills_it() -> void:
 	_assert(layout.site_of_business(101).get("site_id", -2) == victim_site["site_id"], "The next business should reuse the vacant site regardless of type")
 	_assert(_positions(layout) == before, "Reuse must not add or move sites")
 
+func _dwelling_report(dwelling_id: int) -> Dictionary:
+	return {"dwelling_id": dwelling_id, "settlement_id": HEScenarioSeeds.SETTLEMENT_ID, "type_key": "house", "name": "House"}
+
+func _check_houses_fill_the_residential_zone() -> void:
+	var built := _layout_for(_default_builder())
+	var layout = built[0]
+	var dwellings: Array = built[2].duplicate()
+	_assert(dwellings.size() == 41, "Seeded town should start with 41 houses (got %d)" % dwellings.size())
+	var house_sites := 0
+	for site in layout.get_sites():
+		if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
+			house_sites += 1
+			_assert(site["zone"] == HETownLayout.ZONE_HOUSING, "A house belongs in the residential zone")
+			_assert(site["business_id"] == HETownLayout.NO_BUSINESS and site["type_key"] == "house", "A house site holds only a house")
+			_assert(site["site_id"] != HETownLayout.CIVIC_SITE_ID, "Houses stay off the civic anchor")
+	_assert(house_sites == 41 and layout.unplaced_dwelling_ids().is_empty(), "All 41 houses should be placed (got %d, %d unplaced)" % [house_sites, layout.unplaced_dwelling_ids().size()])
+	# A new house adds one site and moves nothing.
+	var before := _positions(layout)
+	dwellings.append(_dwelling_report(9999))
+	_assert(layout.reconcile(built[1], dwellings), "A new house should change the layout")
+	var after := _positions(layout)
+	for site_id in before:
+		_assert(after[site_id] == before[site_id], "Site %d moved when a house was added" % site_id)
+	_assert(after.size() == before.size() + 1, "A new house should add exactly one site")
+	_assert(layout.site_of_dwelling(9999).get("zone", "") == HETownLayout.ZONE_HOUSING, "The new house should land in the residential zone")
+	# Houses never vacate and are never reused by a business.
+	layout.reconcile(built[1], [])
+	_assert(not layout.site_of_dwelling(9999).is_empty(), "A house site must never be vacated")
+	var reports: Array = built[1].duplicate()
+	reports.append(_live_report(500, "butcher", "Butcher 2"))
+	for report in built[1]:
+		if report["type_key"] == "farm":
+			reports.erase(report)
+	layout.reconcile(reports, dwellings)
+	_assert(layout.site_of_business(500).get("zone", HETownLayout.ZONE_HOUSING) != HETownLayout.ZONE_HOUSING, "A business must not move into a house")
+	_assert(layout.site_of_dwelling(9999).get("business_id", 0) == HETownLayout.NO_BUSINESS, "A house site stays a house site")
+
 func _check_full_roster_fits() -> void:
 	# Every unique business type plus the government and its warehouse: the
 	# most one town can hold, so none may be left unplaced.
@@ -146,8 +187,9 @@ func _check_full_roster_fits() -> void:
 		if not have.has(option["type_key"]):
 			reports.append(_live_report(next_id, option["type_key"], option["label"]))
 			next_id += 1
-	layout.reconcile(reports)
+	layout.reconcile(reports, built[2])
 	_assert(layout.unplaced_business_ids().is_empty(), "A full roster of %d businesses should all be placed" % reports.size())
+	_assert(layout.unplaced_dwelling_ids().is_empty(), "Every house should still have a plot beside a full roster")
 
 func _check_no_overlap_and_bounds_under_load() -> void:
 	var built := _layout_for(_default_builder())
@@ -156,7 +198,7 @@ func _check_no_overlap_and_bounds_under_load() -> void:
 	for i in 80:
 		var kinds := ["farm", "cattle_ranch", "butcher", "sheep_farm", "woodlot"]
 		reports.append(_live_report(200 + i, kinds[i % kinds.size()], "Extra %d" % i))
-	layout.reconcile(reports)
+	layout.reconcile(reports, built[2])
 	var sites: Array = layout.get_sites()
 	var limit := Rect2(Vector2.ONE * -HETownLayout.HALF_EXTENT, Vector2.ONE * HETownLayout.HALF_EXTENT * 2.0)
 	for i in sites.size():
