@@ -132,13 +132,49 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
 const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
-## Priority is fixed so changing checkboxes never silently reorders which
-## good gets first use of shared Trader capacity. Ore, meat and leather start
-## disabled: the Butcher's output is for the settlement's own households, and
-## a Trader dumping it at half price would only undercut them. Culled cattle and
-## sheep come last, and start enabled: they are a ranch's only export, and the
-## Butcher gets first call on them anyway (see _run_livestock_purchasing).
-const EXPORT_PRIORITY: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER, Commodity.Type.IRON_ORE, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+## Goods that jump the queue for shared Trader capacity, in order. Everything
+## else exportable follows in Commodity.ALL order, then EXPORT_PINNED_LAST. Only
+## goods whose place matters belong here: iron first (see above), and culled
+## livestock last because the Butcher gets first call on it anyway (see
+## _run_livestock_purchasing).
+const EXPORT_PINNED_FIRST: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER]
+const EXPORT_PINNED_LAST: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+## Every good the Trader can export, in the fixed order it draws on shared
+## capacity -- so changing checkboxes never silently reorders which good gets
+## first use of it. Derived rather than hand-listed: a good is exportable if it
+## has a market price (BASE_PRICE) or is livestock (which has no household market
+## but a posted price), so a new commodity shows up as an export setting without
+## anyone remembering to add it. It starts disabled unless it is also in
+## EXPORT_COMMODITIES: ore, meat and leather stay off because the Butcher's
+## output is for the settlement's own households and a Trader dumping it at half
+## price would only undercut them, and any newly added good (wool included)
+## starts off for the same reason. Culled cattle and sheep start enabled: they
+## are a ranch's only export. The settings page additionally hides goods with no
+## seller in the Trader's settlement (see get_trader_export_settings).
+static var EXPORT_PRIORITY: Array[Commodity.Type] = _build_export_priority()
+
+static func _build_export_priority() -> Array[Commodity.Type]:
+	var out: Array[Commodity.Type] = []
+	var exportable: Array[Commodity.Type] = []
+	for commodity in Commodity.ALL:
+		if BASE_PRICE.has(commodity) or LIVESTOCK_GOODS.has(commodity):
+			exportable.append(commodity)
+	for commodity in EXPORT_PINNED_FIRST:
+		if exportable.has(commodity):
+			out.append(commodity)
+	for commodity in exportable:
+		if not out.has(commodity) and not EXPORT_PINNED_LAST.has(commodity):
+			out.append(commodity)
+	for commodity in EXPORT_PINNED_LAST:
+		if exportable.has(commodity):
+			out.append(commodity)
+	return out
+
+static func _default_export_enabled() -> Dictionary:
+	var enabled := {}
+	for commodity in EXPORT_PRIORITY:
+		enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
+	return enabled
 
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
@@ -625,10 +661,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	for business_id in businesses.keys():
 		if (businesses[business_id] as HEBusiness).kind != HEBusiness.Kind.TRADER:
 			continue
-		var enabled := {}
-		for commodity in EXPORT_PRIORITY:
-			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
-		_trader_export_enabled[business_id] = enabled
+		_trader_export_enabled[business_id] = _default_export_enabled()
 	for settlement_id in settlements.keys():
 		markets[settlement_id] = HEMarket.new(BASE_PRICE.duplicate())
 	# Normalize business locality first so the household pass can reject any
@@ -661,10 +694,7 @@ func add_business(b: HEBusiness) -> void:
 	businesses[b.id] = b
 	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
 	if b.kind == HEBusiness.Kind.TRADER:
-		var enabled := {}
-		for commodity in EXPORT_PRIORITY:
-			enabled[commodity] = EXPORT_COMMODITIES.has(commodity)
-		_trader_export_enabled[b.id] = enabled
+		_trader_export_enabled[b.id] = _default_export_enabled()
 
 ## Adds a business the player created mid-run, with a startup allowance so it
 ## can actually get going (see HEScenarioSeeds.startup_cash): a starting crew,
@@ -1218,11 +1248,18 @@ func _market_need_report(settlement_id: int, commodity: Commodity.Type) -> Dicti
 		"provided_history": provided_history,
 	}
 
+## One row per good this Trader could export, in EXPORT_PRIORITY order. Goods
+## nothing in the Trader's settlement sells are left out -- a checkbox for them
+## would do nothing -- but the order of the rest never changes, and the hidden
+## goods keep their stored setting for when a seller appears.
 func get_trader_export_settings(business_id: int) -> Array:
 	var out: Array = []
 	if not _trader_export_enabled.has(business_id):
 		return out
+	var settlement_id: int = (businesses[business_id] as HEBusiness).settlement_id
 	for commodity in EXPORT_PRIORITY:
+		if _business_selling(settlement_id, commodity) == null:
+			continue
 		out.append({"commodity_id": commodity, "name": Commodity.name_of(commodity),
 			"enabled": _trader_export_enabled[business_id].get(commodity, false)})
 	return out
