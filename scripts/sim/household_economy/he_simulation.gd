@@ -1108,14 +1108,36 @@ func get_market_summary(settlement_id: int = -1) -> Dictionary:
 		out[Commodity.name_of(c)] = {
 			"price": local_market.price[c],
 			"last_clearing": (local_market.last_clearing.get(c, {}) as Dictionary).duplicate(true),
+			"stored": _town_stored(settlement_id, c),
 		}
 	# Culled livestock follows the priced goods, listed only while a ranch of that
 	# species or a Butcher exists (see _livestock_active). Its row reads like any
 	# other good's: one trading price, with the Trader as just another buyer.
 	for c in LIVESTOCK_GOODS:
 		if _livestock_active(settlement_id, c):
-			out[Commodity.name_of(c)] = _livestock_summary_entry(c)
+			var entry := _livestock_summary_entry(c)
+			entry["stored"] = _town_stored(settlement_id, c)
+			out[Commodity.name_of(c)] = entry
 	return out
+
+## Total `commodity` physically held in `settlement_id` right now: every
+## household's and business's stock added up (the same holdings
+## get_market_detail lists individually). Livestock is held only by businesses.
+func _town_stored(settlement_id: int, commodity: Commodity.Type) -> float:
+	var total := 0.0
+	if is_livestock(commodity):
+		for business_id in businesses.keys():
+			var b: HEBusiness = businesses[business_id]
+			if b.settlement_id == settlement_id:
+				total += livestock_holding_value(b, commodity)["quantity"]
+		return total
+	for household_id in get_household_ids(settlement_id):
+		total += (households[household_id] as HEHousehold).stock(commodity)
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if b.settlement_id == settlement_id:
+			total += b.stock(commodity)
+	return total
 
 ## Whether culled `commodity` livestock has any real presence in the settlement:
 ## a ranch of that species can offer it, or a Butcher (which buys either species)
