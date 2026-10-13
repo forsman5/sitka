@@ -21,6 +21,8 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var bark_cooldown: float = 0.45
 ## A bark carries this many times farther than the normal scare radius.
 @export var bark_range_multiplier: float = 2.0
+## How fast (rad/s) the model turns to face its direction of travel.
+@export var model_turn_speed: float = 10.0
 
 signal barked(world_position: Vector3)
 
@@ -269,8 +271,23 @@ func _physics_process(delta: float) -> void:
 	velocity.z = horiz.z
 
 	move_and_slide()
+	_update_model_facing(delta)
 	_update_camera(delta)
 	_update_animation()
+
+## The camera yaw drives the body, but the model turns to face where it is
+## actually moving, so strafing and backpedalling read as a turn instead of
+## sliding sideways in the forward-walk pose. Standing still eases the model
+## back to face where the camera looks.
+func _update_model_facing(delta: float) -> void:
+	var horiz := Vector3(velocity.x, 0.0, velocity.z)
+	# Models face +Z at identity; the body's forward is -Z.
+	var target_yaw := rotation.y + PI
+	if horiz.length() > 0.5:
+		target_yaw = atan2(horiz.x, horiz.z)
+	var current_yaw := rotation.y + _model.rotation.y
+	var new_yaw := lerp_angle(current_yaw, target_yaw, clampf(model_turn_speed * delta, 0.0, 1.0))
+	_model.rotation.y = new_yaw - rotation.y
 
 func _update_camera(delta: float) -> void:
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
