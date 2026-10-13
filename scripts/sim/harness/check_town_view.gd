@@ -63,7 +63,14 @@ func _run() -> void:
 	check(not view.visible and dashboard._selected_business_id == HEScenarioSeeds.FARM_BUSINESS_ID, "Details should return to the dashboard with the farm open")
 	dashboard._set_town_mode(true)
 
-	# Zoom and pan keep the camera on the town.
+	# The shared RTS rig: rotating the view must not break click selection.
+	view.rotate_view(90.0)
+	await process_frame
+	view.clear_selection()
+	_click(view, _screen_of(view, farm_site["position"]))
+	check(view.selected_business_id() == HEScenarioSeeds.FARM_BUSINESS_ID, "Selection should still work after rotating the camera")
+
+	# Wheel zoom goes through the shared RTS rig.
 	var size_before: float = view.camera().size
 	var wheel := InputEventMouseButton.new()
 	wheel.button_index = MOUSE_BUTTON_WHEEL_UP

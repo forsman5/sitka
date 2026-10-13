@@ -9,8 +9,10 @@ extends Control
 ## Art is visual-only: the RTS building models are instanced for their
 ## meshes, none of the RTS building scripts run. The ranch "barn" mirrors
 ## scenes/entities/building/barn.tscn (a 6x3x4 brown box) without its script.
-## Controls: wheel zooms toward the cursor, left or right drag pans, click
-## selects a site.
+## Camera: the same RTSCamera rig the RTS and valley scenes use (wheel zoom,
+## middle-drag / WASD pan, Q/E rotate, Alt+mouse tilt), instanced inside this
+## view's own viewport. Input reaches it by forwarding events from this
+## control; a plain left click selects a site.
 
 signal business_selected(business_id: int)
 signal details_requested(business_id: int)
@@ -32,13 +34,12 @@ const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
 const BARN_COLOR := Color(0.55, 0.27, 0.07)
 
-const CAMERA_PITCH_DEGREES := 55.0
-const CAMERA_DISTANCE := 160.0
+const CAMERA_SCENE := preload("res://scenes/camera/rts_camera.tscn")
 const ZOOM_MIN := 20.0
 const ZOOM_MAX := 170.0
 const ZOOM_DEFAULT := 100.0
-const ZOOM_STEP := 1.12
-const CLICK_DRAG_THRESHOLD := 6.0
+## Half the side of the ground plane; the camera may pan anywhere on it.
+const GROUND_HALF_EXTENT := 200.0
 
 const GROUND_COLOR := Color(0.36, 0.52, 0.27)
 const FIELD_COLOR := Color(0.58, 0.44, 0.24)
@@ -56,12 +57,8 @@ var _layout: HETownLayout
 var _reports: Dictionary = {} # business_id -> report
 var _site_nodes: Dictionary = {} # site_id -> {"root": Node3D, "signature": String, "label": Label3D}
 var _selected_site_id: int = -1
-var _focus := Vector3.ZERO
-var _zoom_size := ZOOM_DEFAULT
-var _panning := false
-var _left_down_at := Vector2.ZERO
 var _left_down := false
-var _drag_moved := false
+var _rig: Node3D
 
 var _viewport: SubViewport
 var _camera: Camera3D
@@ -78,7 +75,6 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build_world()
 	_build_overlay()
-	_update_camera()
 	_refresh_info()
 
 # ---------------------------------------------------------------------------
@@ -158,17 +154,21 @@ func _build_world() -> void:
 	sun.shadow_enabled = true
 	_viewport.add_child(sun)
 
-	_camera = Camera3D.new()
-	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.keep_aspect = Camera3D.KEEP_HEIGHT
-	_camera.near = 1.0
-	_camera.far = 500.0
-	_camera.rotation_degrees = Vector3(-CAMERA_PITCH_DEGREES, 0.0, 0.0)
-	_viewport.add_child(_camera)
+	_rig = CAMERA_SCENE.instantiate()
+	_rig.zoom_min = ZOOM_MIN
+	_rig.zoom_max = ZOOM_MAX
+	_rig.pivot_height = 60.0
+	_rig.pan_limit = Vector2.ONE * GROUND_HALF_EXTENT
+	_viewport.add_child(_rig)
+	_camera = _rig.get_node("Camera3D")
+	_camera.size = ZOOM_DEFAULT
+	# The rig polls the keyboard globally; keep it quiet while the dashboard
+	# is showing instead.
+	visibility_changed.connect(func() -> void: _rig.set_process(is_visible_in_tree()))
 
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	plane.size = Vector2.ONE * 400.0
+	plane.size = Vector2.ONE * GROUND_HALF_EXTENT * 2.0
 	ground.mesh = plane
 	ground.material_override = _flat_material(GROUND_COLOR)
 	ground.name = "Ground"
@@ -191,7 +191,7 @@ func _build_world() -> void:
 
 func _build_overlay() -> void:
 	var hint := Label.new()
-	hint.text = "Wheel: zoom   Drag: pan   Click a building to select"
+	hint.text = "Wheel: zoom   Middle-drag / WASD: pan   Q/E: rotate   Alt+mouse: tilt   Click: select"
 	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	hint.add_theme_constant_override("outline_size", 4)
@@ -447,15 +447,6 @@ func _on_details_pressed() -> void:
 # Camera and input
 # ---------------------------------------------------------------------------
 
-func _update_camera() -> void:
-	if _camera == null:
-		return
-	_focus.x = clampf(_focus.x, -HETownLayout.HALF_EXTENT, HETownLayout.HALF_EXTENT)
-	_focus.z = clampf(_focus.z, -HETownLayout.HALF_EXTENT, HETownLayout.HALF_EXTENT)
-	_camera.size = _zoom_size
-	var back := Vector3(0.0, sin(deg_to_rad(CAMERA_PITCH_DEGREES)), cos(deg_to_rad(CAMERA_PITCH_DEGREES)))
-	_camera.position = _focus + back * CAMERA_DISTANCE
-
 ## The ground point (y = 0) under a position in this control, or null when
 ## the camera has no usable ray there.
 func ground_point(screen_position: Vector2) -> Variant:
@@ -468,32 +459,16 @@ func ground_point(screen_position: Vector2) -> Variant:
 	return origin + direction * (-origin.y / direction.y)
 
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 		var button := event as InputEventMouseButton
-		match button.button_index:
-			MOUSE_BUTTON_WHEEL_UP:
-				if button.pressed:
-					_zoom_at(button.position, 1.0 / ZOOM_STEP)
-			MOUSE_BUTTON_WHEEL_DOWN:
-				if button.pressed:
-					_zoom_at(button.position, ZOOM_STEP)
-			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
-				_panning = button.pressed
-			MOUSE_BUTTON_LEFT:
-				if button.pressed:
-					_left_down = true
-					_drag_moved = false
-					_left_down_at = button.position
-				else:
-					if _left_down and not _drag_moved:
-						_click(button.position)
-					_left_down = false
-	elif event is InputEventMouseMotion:
-		var motion := event as InputEventMouseMotion
-		if _left_down and not _drag_moved and motion.position.distance_to(_left_down_at) > CLICK_DRAG_THRESHOLD:
-			_drag_moved = true
-		if _panning or (_left_down and _drag_moved):
-			_pan(motion.position, motion.relative)
+		if button.pressed:
+			_left_down = true
+		elif _left_down:
+			_left_down = false
+			_click(button.position)
+		return
+	# Everything else (wheel, middle-drag, Alt tilt) belongs to the camera rig.
+	_viewport.push_input(event)
 
 func _click(position: Vector2) -> void:
 	var point: Variant = ground_point(position)
@@ -507,21 +482,6 @@ func _click(position: Vector2) -> void:
 		return
 	_select_site(site_id)
 
-func _pan(position: Vector2, relative: Vector2) -> void:
-	var before: Variant = ground_point(position - relative)
-	var after: Variant = ground_point(position)
-	if before == null or after == null:
-		return
-	_focus += (before as Vector3) - (after as Vector3)
-	_update_camera()
-
-func _zoom_at(position: Vector2, factor: float) -> void:
-	var anchor: Variant = ground_point(position)
-	_zoom_size = clampf(_zoom_size * factor, ZOOM_MIN, ZOOM_MAX)
-	_update_camera()
-	if anchor == null:
-		return
-	var moved: Variant = ground_point(position)
-	if moved != null:
-		_focus += (anchor as Vector3) - (moved as Vector3)
-		_update_camera()
+## Rotates the view by `degrees` about the town centre (same as Q/E).
+func rotate_view(degrees: float) -> void:
+	_rig.call("rotate_view", degrees)
