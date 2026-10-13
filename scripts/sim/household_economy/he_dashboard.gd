@@ -2600,11 +2600,11 @@ func _rebuild_job_rows() -> void:
 	_unemployed_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_jobs_list.add_child(_unemployed_label)
 
-func _refresh_job_rows() -> void:
+func _refresh_job_rows(reports: Array) -> void:
 	var total_employed := 0
 	var total_capacity := 0
 	var total_max := 0
-	for report in _simulation.get_business_reports():
+	for report in reports:
 		total_employed += report["employed_workers"]
 		total_capacity += report["capacity"]
 		total_max += report["max_capacity"]
@@ -2860,7 +2860,7 @@ func _refresh() -> void:
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
 
-	_refresh_job_rows()
+	_refresh_job_rows(reports)
 
 	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
