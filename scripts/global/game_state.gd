@@ -13,6 +13,9 @@ const MAX_BLOTTER_DAYS := 730
 var sparkline_days: int = 360
 ## Days of events the household-economy blotter shows.
 var blotter_days: int = 365
+## Dev mode shows the household-economy dashboard's free "Create business"
+## menu. Turn it off to force new buildings through the Government build menu.
+var dev_mode: bool = true
 
 @export var gather_speed: float = 1.3
 @export var game_speed: float = 1.0
@@ -87,11 +90,22 @@ func reset() -> void:
 func set_history_settings(new_sparkline_days: int, new_blotter_days: int) -> void:
 	sparkline_days = clampi(new_sparkline_days, 1, MAX_SPARKLINE_DAYS)
 	blotter_days = clampi(new_blotter_days, 1, MAX_BLOTTER_DAYS)
+	_save_settings()
+	settings_changed.emit()
+
+func set_dev_mode(enabled: bool) -> void:
+	if dev_mode == enabled:
+		return
+	dev_mode = enabled
+	_save_settings()
+	settings_changed.emit()
+
+func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("history", "sparkline_days", sparkline_days)
 	cfg.set_value("history", "blotter_days", blotter_days)
+	cfg.set_value("dev", "dev_mode", dev_mode)
 	cfg.save(SETTINGS_PATH)
-	settings_changed.emit()
 
 func _load_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -99,3 +113,4 @@ func _load_settings() -> void:
 		return
 	sparkline_days = clampi(int(cfg.get_value("history", "sparkline_days", sparkline_days)), 1, MAX_SPARKLINE_DAYS)
 	blotter_days = clampi(int(cfg.get_value("history", "blotter_days", blotter_days)), 1, MAX_BLOTTER_DAYS)
+	dev_mode = bool(cfg.get_value("dev", "dev_mode", dev_mode))
