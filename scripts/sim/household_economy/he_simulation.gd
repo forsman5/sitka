@@ -844,6 +844,21 @@ func _homeless_household_ids(settlement_id: int) -> Array[int]:
 		homeless.append(ids[i])
 	return homeless
 
+## "housed", "homeless", or "unlimited" (housing not modeled). Same ordering
+## rule as _homeless_household_ids: the lowest-id households fill the houses.
+func _housing_status_of(h: HEHousehold) -> String:
+	var s: HESettlement = settlements[h.settlement_id]
+	if not s.housing_modeled:
+		return "unlimited"
+	var capacity := 0
+	for dwelling_id in s.dwelling_ids:
+		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
+	var lower := 0
+	for household_id in s.household_ids:
+		if household_id < h.id:
+			lower += 1
+	return "homeless" if lower >= capacity else "housed"
+
 ## The settlement's Government Warehouse, or null if it has not built one.
 func _government_warehouse(settlement_id: int) -> HEBusiness:
 	for business_id in businesses.keys():
@@ -1019,6 +1034,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"headcount": h.headcount(),
 		"employer_business_id": h.employer_business_id,
 		"is_employed": h.is_employed(),
+		"housing_status": _housing_status_of(h),
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,

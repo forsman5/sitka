@@ -1383,6 +1383,10 @@ func _refresh_household_detail() -> void:
 		unemployed.text = "Unemployed"
 		employer_row.add_child(unemployed)
 	_household_detail_content.add_child(employer_row)
+	if h["housing_status"] != "unlimited":
+		var housing_line := Label.new()
+		housing_line.text = "Housing: %s" % ("Homeless" if h["housing_status"] == "homeless" else "Housed")
+		_household_detail_content.add_child(housing_line)
 
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
@@ -2839,7 +2843,7 @@ func _rebuild_household_rows() -> void:
 	var goods_columns: Array[String] = []
 	for c in HESimulation.SUBSISTENCE_COMMODITIES:
 		goods_columns.append(Commodity.name_of(c))
-	var col_labels: Array[String] = ["ID", "Employer", "Workers", "Dependents"]
+	var col_labels: Array[String] = ["ID", "Employer", "Housing", "Workers", "Dependents"]
 	col_labels.append_array(goods_columns)
 	col_labels.append_array(["Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"])
 	grid.columns = col_labels.size()
@@ -2865,6 +2869,10 @@ func _rebuild_household_rows() -> void:
 		employer_label.custom_minimum_size = Vector2(80, 0)
 		employer_label.pressed.connect(_on_household_employer_pressed.bind(household_id))
 		grid.add_child(employer_label)
+
+		var housing_status_label := Label.new()
+		housing_status_label.custom_minimum_size = Vector2(70, 0)
+		grid.add_child(housing_status_label)
 
 		var workers_label := Label.new()
 		workers_label.custom_minimum_size = Vector2(50, 0)
@@ -2903,7 +2911,7 @@ func _rebuild_household_rows() -> void:
 		grid.add_child(unaffordable_label)
 
 		_household_rows[household_id] = {
-			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
+			"id": id_label, "employer": employer_label, "housing": housing_status_label, "workers": workers_label, "dependents": dependents_label,
 			"goods": goods_labels, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
@@ -3075,6 +3083,16 @@ func _refresh() -> void:
 		employer_button.text = _business_names.get(h["employer_business_id"], "Unemployed")
 		employer_button.disabled = not _business_names.has(h["employer_business_id"])
 		employer_button.tooltip_text = "Open employer detail" if not employer_button.disabled else ""
+		var housing_status_label := row["housing"] as Label
+		match h["housing_status"]:
+			"homeless":
+				housing_status_label.text = "Homeless"
+				housing_status_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+			"housed":
+				housing_status_label.text = "Housed"
+				housing_status_label.remove_theme_color_override("font_color")
+			_:
+				housing_status_label.text = ""
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
 		if worker_ages.is_empty():

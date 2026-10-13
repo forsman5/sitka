@@ -2656,6 +2656,8 @@ func _check_housing() -> void:
 	evicted_settlement.dwelling_ids.clear()
 	var report: Dictionary = evicted.get_housing_report(1)
 	_assert(report["saturated"] and report["homeless_households"] == report["households"], "Without houses the whole town is homeless")
+	_assert(evicted.get_household_summary(evicted.get_household_ids()[0])["housing_status"] == "homeless", "An evicted household reports homeless")
+	_assert(housed.get_household_summary(housed.get_household_ids()[0])["housing_status"] == "housed", "A housed household reports housed")
 	var pop_start: int = housed.get_city_summary()["population"]
 	housed.advance_ticks(720)
 	evicted.advance_ticks(720)
