@@ -395,7 +395,7 @@ func _build_ui() -> void:
 	goods_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	top_tabs.add_child(goods_scroll)
 	_market_grid = GridContainer.new()
-	_market_grid.columns = 5
+	_market_grid.columns = 6
 	_market_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
@@ -2279,7 +2279,7 @@ func _rebuild_market_grid() -> void:
 		child.queue_free()
 	_market_labels.clear()
 
-	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded"]:
+	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded", "Stored"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -2300,7 +2300,7 @@ func _rebuild_market_grid() -> void:
 		_market_grid.add_child(name_button)
 
 		var labels := {}
-		for key in ["price", "offered", "funded", "traded"]:
+		for key in ["price", "offered", "funded", "traded", "stored"]:
 			var value_label := Label.new()
 			value_label.custom_minimum_size = Vector2(110, 0)
 			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
@@ -2618,6 +2618,7 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
+		(labels["stored"] as Label).text = "%.1f" % entry.get("stored", 0.0)
 	# The detail panels below are rebuilt from scratch, link buttons included. At
 	# high speed this runs nearly every frame, which would swap a button out
 	# between mouse-down and mouse-up and eat the click, so hold off while a

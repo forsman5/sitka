@@ -44,6 +44,7 @@ func _init() -> void:
 	_check_no_export_reserve_left()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
+	_check_export_settings_derived_from_commodities()
 	_check_bloomery_stays_off_when_not_seeded()
 	_check_firing_is_logged_with_reason()
 	_check_event_history_survives_busy_categories()
@@ -1341,6 +1342,57 @@ func _check_local_iron_mine_supplies_bloomery_first() -> void:
 		_assert(not (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore"), "Local-mine Trader history should not contain an Iron Ore import")
 	_assert(maximum_buffered_timber > 0.0 and maximum_buffered_ore > 0.0, "Bloomery should retain both recipe inputs between production days")
 	_assert(worst_input_stock_gap < EPSILON, "Buffered Timber/Iron Ore stock did not reconcile, worst gap %.4f" % worst_input_stock_gap)
+
+## The export list is derived from the commodity catalogue, not hand-listed, so
+## a new good can't be silently left off the settings page: it must appear in the
+## fixed order, start disabled, and only be shown while something sells it.
+func _check_export_settings_derived_from_commodities() -> void:
+	print("
+=== Trader export settings: derived list, fixed order, rows hidden without a seller ===")
+	var priority := HESimulation.EXPORT_PRIORITY
+	_assert(priority.has(Commodity.Type.WOOL), "Wool should be an exportable good")
+	_assert(not priority.has(Commodity.Type.TOOLS), "Tools have no market price and should not be exportable")
+	var seen := {}
+	for commodity in priority:
+		_assert(not seen.has(commodity), "%s listed twice in EXPORT_PRIORITY" % Commodity.name_of(commodity))
+		seen[commodity] = true
+	for commodity in HESimulation.EXPORT_PINNED_FIRST + HESimulation.EXPORT_PINNED_LAST:
+		_assert(priority.has(commodity), "Pinned good %s is not exportable" % Commodity.name_of(commodity))
+	_assert(priority[0] == Commodity.Type.IRON, "Iron must keep first call on Trader capacity")
+	_assert(priority[priority.size() - 1] == Commodity.Type.SHEEP and priority[priority.size() - 2] == Commodity.Type.CATTLE, "Livestock must stay last")
+	for commodity in HESimulation.EXPORT_COMMODITIES:
+		_assert(priority.has(commodity), "Default-enabled %s is not exportable" % Commodity.name_of(commodity))
+
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	# Farm + Woodlot + Trader only: no Sheep Farm, ranch, Butcher or mine.
+	var bare := HESimulation.new(SEED, func(rng: RandomNumberGenerator) -> Dictionary:
+		return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, trader_id]))
+	var bare_rows := bare.get_trader_export_settings(trader_id)
+	var bare_goods: Array = []
+	for option in bare_rows:
+		bare_goods.append(option["commodity_id"])
+	for hidden in [Commodity.Type.WOOL, Commodity.Type.IRON_ORE, Commodity.Type.IRON, Commodity.Type.CATTLE, Commodity.Type.SHEEP, Commodity.Type.MEAT]:
+		_assert(not bare_goods.has(hidden), "%s has no local seller in this settlement, so its row should be hidden" % Commodity.name_of(hidden))
+	_assert(bare_goods.has(Commodity.Type.GRAIN) and bare_goods.has(Commodity.Type.TIMBER), "Grain and Timber have sellers and should be shown")
+	# Toggling a hidden good is remembered but never makes its row appear.
+	bare.set_trader_export_enabled(trader_id, Commodity.Type.WOOL, true)
+	_assert(bare.get_trader_export_settings(trader_id).size() == bare_rows.size(), "Toggling a hidden good must not make its row appear")
+
+	# Full economy: a Sheep Farm exists, so Wool appears -- off by default.
+	var full := _new_sim("build_three_business_economy")
+	var shown := {}
+	var shown_order: Array = []
+	for option in full.get_trader_export_settings(trader_id):
+		shown[option["commodity_id"]] = option["enabled"]
+		shown_order.append(option["commodity_id"])
+	_assert(shown.has(Commodity.Type.WOOL), "Wool should be a Trader export setting once a Sheep Farm exists")
+	_assert(shown.get(Commodity.Type.WOOL, true) == false, "Wool should start disabled")
+	# Hiding must never reorder what remains.
+	var last_index := -1
+	for commodity in shown_order:
+		var index := priority.find(commodity)
+		_assert(index > last_index, "%s shown out of EXPORT_PRIORITY order" % Commodity.name_of(commodity))
+		last_index = index
 
 func _check_trader_export_settings() -> void:
 	print("\n=== Trader export settings: ore opt-in and local input reserve ===")
