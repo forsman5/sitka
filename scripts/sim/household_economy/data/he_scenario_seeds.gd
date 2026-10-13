@@ -336,8 +336,8 @@ static func _woodlot_recipe() -> Recipe:
 ##
 ## Per worker per day at full input supply: pays for 1 wood (1.0) + 0.5 ore
 ## (2.0 each -- see HESimulation.BASE_PRICE) = 2.0 spent, and sells 0.5 iron
-## through the Trader's export at HALF its 15.0 base price = 3.75 earned --
-## net ~1.75/worker/day against a reference wage of roughly 1.0, chosen
+## through the Trader's export at HALF its 30.0 base price = 7.5 earned --
+## net ~5.5/worker/day against a reference wage of roughly 1.0 (which swings to ~3.5 in a grain spike), chosen
 ## deliberately high (see BASE_PRICE's Iron comment) since, unlike Farm/
 ## Woodlot, EVERY unit the Bloomery sells goes through that same export
 ## discount rather than mostly selling to local households at full price.
