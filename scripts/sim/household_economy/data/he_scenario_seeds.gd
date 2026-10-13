@@ -13,6 +13,7 @@ const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd
 const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
+const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 
 const SETTLEMENT_ID := 1
@@ -40,6 +41,15 @@ const CHARCOAL_BURNER_BUSINESS_ID := 10
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
 const WAREHOUSE_BUILD_COST := 200.0
+## A house costs gold from the treasury plus timber from the Government
+## Warehouse -- the first build priced in warehouse goods. One house shelters
+## one household (HEHouse.capacity_households).
+const HOUSE_BUILD_GOLD := 50.0
+const HOUSE_BUILD_TIMBER := 50.0
+## Seeded housing: one house per starting household, plus this fraction extra
+## so early births and coming-of-age splits have somewhere to go before the
+## player builds more.
+const HOUSING_STARTING_HEADROOM := 0.35
 const WAREHOUSE_WORKERS := 2
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
@@ -278,7 +288,18 @@ static func government_business_costs() -> Dictionary:
 ## `startup` marks a business that gets the new-business crew and seed cash
 ## (HESimulation.add_new_business); the Warehouse runs on the treasury instead.
 static func government_buildings() -> Array[Dictionary]:
+	# TODO(auto-order): choosing a goods-priced build should also create the
+	# warehouse's standing buy order for the missing goods, instead of leaving
+	# the player to set it by hand.
+	# TODO(construction): government builds are instant and need no labor. Add
+	# construction jobs at the government building, and longer term a
+	# construction business that does the work.
 	var options: Array[Dictionary] = [
+		{"type_key": "house", "label": "House", "category": "housing", "repeatable": true,
+			"cost": build_cost(HOUSE_BUILD_GOLD, {Commodity.Type.TIMBER: HOUSE_BUILD_TIMBER}),
+			"hint": "Shelters one household. Needs a Government Warehouse holding the timber.",
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"startup": false,
@@ -585,8 +606,23 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		settlement.household_ids.append(household_id)
 
 	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
+	var dwellings := seed_housing(settlement, HOUSEHOLD_COUNT)
 
-	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses}
+	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses, "dwellings": dwellings}
+
+## Gives `settlement` a house for each of `household_count` starting households
+## plus HOUSING_STARTING_HEADROOM, marks housing as modeled there, and returns
+## the dwellings dict for the builder's world. Public so a multi-town builder
+## can house each settlement.
+static func seed_housing(settlement: HESettlement, household_count: int) -> Dictionary[int, HEHouse]:
+	var dwellings: Dictionary[int, HEHouse] = {}
+	var house_count := ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM))
+	for i in house_count:
+		var house := HEHouse.new(i + 1, settlement.id, "House %d" % (i + 1))
+		dwellings[house.id] = house
+		settlement.dwelling_ids.append(house.id)
+	settlement.housing_modeled = true
+	return dwellings
 
 ## Adds a Government business to `settlement` and employs one existing
 ## household as its permanent administrator (the last unemployed household,

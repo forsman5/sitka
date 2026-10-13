@@ -11,6 +11,12 @@ var id: int
 var name: String
 var household_ids: Array[int] = []
 var business_ids: Array[int] = []
+## Ids into HESimulation.dwellings (houses). Separate id space from businesses.
+var dwelling_ids: Array[int] = []
+## Whether housing limits this settlement. Seeds that provide houses set it;
+## a hand-built world that never mentions housing stays unlimited, so the
+## lifecycle/emigration rules only bite where housing is actually modeled.
+var housing_modeled: bool = false
 
 func _init(p_id: int, p_name: String) -> void:
 	id = p_id
