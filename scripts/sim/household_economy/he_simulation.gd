@@ -1068,6 +1068,7 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"business_id": b.id,
 			"settlement_id": b.settlement_id,
 			"name": b.name,
+			"type_key": b.type_key,
 			"kind": _kind_name(b.kind),
 			"capacity": b.capacity,
 			"max_capacity": b.max_capacity,
