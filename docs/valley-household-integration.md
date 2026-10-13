@@ -8,7 +8,7 @@ Click a town, then **View household economy** to inspect its live H1 dashboard. 
 
 In the single valley graph, click a node or choose a town from the picker, then press **View household economy** in the Valley tab. Its prices, shipment markers and town panel read the same live household economies. The large valleys graph remains on the older pooled simulation.
 
-The household detail shows Pause, 1x, 10x and 100x buttons. When opened from a valley, they control the shared valley clock; the direct standalone household economy button controls its own clock.
+The household detail shows Pause, 1x, 10x and 100x buttons. When opened from a valley, they control the shared valley clock; the direct standalone household economy button controls its own clock. Its **Town view** button shows the same town's buildings and returns to the dashboard for business details.
 
 The route chooser and price spread are deliberately simple. The five town economies retain H1 business rules and generated household composition; they do not reuse the older pooled `Simulation` inventory or workplace records. The standalone H1 dashboard still uses its original external Trader market.
 

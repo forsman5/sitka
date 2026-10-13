@@ -14,6 +14,8 @@ const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
@@ -118,6 +120,12 @@ static var pending_builder: Callable = Callable()
 var _simulation: HESimulation
 var external_simulation: HESimulation
 var embedded_mode := false
+## Where each business stands in the town view. Owned here, not by the view, so
+## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
+var _town_layout: HETownLayout
+var _town_view: HETownView
+var _town_mode_button: Button
+var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
@@ -234,9 +242,8 @@ var _end_screen_summary: Label
 var _ended := false
 
 func _ready() -> void:
-	# The valley hosting an embedded view has its own menu. get() because
-	# embedded_mode only exists once the valley integration lands.
-	if not get("embedded_mode"):
+	# The valley hosting an embedded view has its own menu.
+	if not embedded_mode:
 		EscapeMenu.attach_to(self)
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
@@ -244,6 +251,8 @@ func _ready() -> void:
 	GameState.settings_changed.connect(_on_history_settings_changed)
 	if external_simulation != null:
 		_simulation = external_simulation
+		_town_layout = HETownLayout.new("valley:%s" % _simulation.get_city_summary()["name"],
+			_town_settlement_id(), _simulation.get_business_reports())
 		for report in _simulation.get_business_reports():
 			_business_names[report["business_id"]] = report["name"]
 	else:
@@ -297,6 +306,10 @@ func _load_scenario() -> void:
 	if not builder.is_valid():
 		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
 	_simulation = HESimulation.new(SEED, builder)
+	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports())
+	if _town_view != null:
+		_town_view.sync(_town_layout, _simulation.get_business_reports())
+		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
@@ -394,6 +407,11 @@ func _build_ui() -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
 
+	_town_mode_button = Button.new()
+	_town_mode_button.text = "Town view"
+	_town_mode_button.tooltip_text = "Switch between the dashboard and a map of the town's buildings."
+	_town_mode_button.pressed.connect(func() -> void: _set_town_mode(not _town_view.visible))
+	top_bar.add_child(_town_mode_button)
 	top_bar.add_child(_make_settings_button())
 	top_bar.add_child(_make_speed_button("Pause", 0.0))
 	top_bar.add_child(_make_speed_button("1x", 1.0))
@@ -406,6 +424,7 @@ func _build_ui() -> void:
 	var top_tabs := TabContainer.new()
 	top_tabs.custom_minimum_size = Vector2(0, 250)
 	vbox.add_child(top_tabs)
+	_dashboard_body.append(top_tabs)
 
 	_build_town_tab(top_tabs)
 
@@ -437,6 +456,16 @@ func _build_ui() -> void:
 	lower_row.add_theme_constant_override("separation", 16)
 	lower_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(lower_row)
+	_dashboard_body.append(lower_row)
+
+	# The town view takes over the space below the top bar, so the 250 px Town
+	# statistics tab above stays a statistics tab.
+	_town_view = HETownView.new()
+	_town_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_town_view.visible = false
+	_town_view.details_requested.connect(_on_town_details_requested)
+	vbox.add_child(_town_view)
 
 	var household_column := VBoxContainer.new()
 	household_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2558,6 +2587,20 @@ func _refresh_government_build_menu() -> void:
 		_gov_build_popup.set_item_text(i, item_text)
 		_gov_build_popup.set_item_disabled(i, blocker != "")
 
+## Dashboard <-> town map. The simulation keeps running either way; only which
+## half of the window is shown changes.
+func _set_town_mode(enabled: bool) -> void:
+	_town_view.visible = enabled
+	for body in _dashboard_body:
+		body.visible = not enabled
+	_town_mode_button.text = "Dashboard" if enabled else "Town view"
+
+## "Open business details" in the town view: back to the dashboard with that
+## business's detail panel open.
+func _on_town_details_requested(business_id: int) -> void:
+	_set_town_mode(false)
+	_on_business_row_selected(business_id)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -2630,11 +2673,11 @@ func _rebuild_job_rows() -> void:
 	_unemployed_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_jobs_list.add_child(_unemployed_label)
 
-func _refresh_job_rows() -> void:
+func _refresh_job_rows(reports: Array) -> void:
 	var total_employed := 0
 	var total_capacity := 0
 	var total_max := 0
-	for report in _simulation.get_business_reports():
+	for report in reports:
 		total_employed += report["employed_workers"]
 		total_capacity += report["capacity"]
 		total_max += report["max_capacity"]
@@ -2819,6 +2862,8 @@ func _refresh() -> void:
 	# Create business menu's "already built" state; rebuild rather than leave a
 	# frozen row for a business that no longer exists.
 	var reports := _simulation.get_business_reports()
+	_town_layout.reconcile(reports)
+	_town_view.sync(_town_layout, reports)
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):
@@ -2890,7 +2935,7 @@ func _refresh() -> void:
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
 
-	_refresh_job_rows()
+	_refresh_job_rows(reports)
 
 	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()

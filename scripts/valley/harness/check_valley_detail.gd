@@ -22,6 +22,16 @@ func _run() -> void:
 		push_error("Valley controls remained over the town detail")
 		quit(1)
 		return
+	if detail._town_layout == null or detail._town_view == null:
+		push_error("Embedded town detail has no town layout or view")
+		quit(1)
+		return
+	detail._set_town_mode(true)
+	await process_frame
+	if not detail._town_view.visible or detail._town_view.site_node_count() != detail.external_simulation.get_business_reports().size():
+		push_error("Embedded town view does not show the town's businesses")
+		quit(1)
+		return
 	valley.get("_economy").advance_ticks(1)
 	detail.refresh_external()
 	if detail.external_simulation.day != 1:
