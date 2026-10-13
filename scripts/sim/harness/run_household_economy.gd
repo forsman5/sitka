@@ -2396,10 +2396,10 @@ func _check_toolsmith_supplies_tools() -> void:
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
 
-## Industrial tools, phase 1 (docs/tools-industrial-demand-plan.md): tool-using
-## businesses wear tools out and lose output without them, down to a floor, but
-## only when the switch is on AND the town has a seller of tools. Off by default,
-## so every other scenario here is unaffected.
+## Industrial tools (docs/tools-industrial-demand-plan.md): tool-using
+## businesses wear tools out, buy replacements from the Toolsmith and lose
+## output without them, down to a floor -- but only in a town with a seller of
+## tools, so every scenario without a Toolsmith is unaffected.
 func _check_industrial_tools_model() -> void:
 	print("\n=== Industrial tools: coverage, floor, wear, gate ===")
 	var floor_value := HEBusiness.TOOL_PRODUCTIVITY_FLOOR
@@ -2414,42 +2414,65 @@ func _check_industrial_tools_model() -> void:
 	_assert(is_equal_approx(farm.tool_productivity(4), 1.0), "More tools than workers should not exceed 1.0")
 	_assert(is_equal_approx(farm.tool_productivity(0), 1.0), "No workers need no tools")
 
-	# Off by default: nothing changes, wear included.
-	var sim := _new_sim("build_economy_with_toolsmith")
-	var town_farm: HEBusiness = sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
-	_assert(not sim.industrial_tools_enabled, "Industrial tools should be off by default")
-	_assert(is_equal_approx(sim._tool_productivity(town_farm), 1.0), "With the switch off, productivity should be 1.0")
-	town_farm.add_stock(Commodity.Type.TOOLS, 50.0)
-	sim.advance_ticks(3)
-	_assert(is_equal_approx(town_farm.stock(Commodity.Type.TOOLS), 50.0), "With the switch off, tools should not wear")
-
 	# On, with a toolsmith in town: floor without tools, wear when held.
 	var worn_sim := _new_sim("build_economy_with_toolsmith")
-	worn_sim.industrial_tools_enabled = true
 	var worn_farm: HEBusiness = worn_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	worn_farm.inventory[Commodity.Type.TOOLS] = 0.0
 	_assert(is_equal_approx(worn_sim._tool_productivity(worn_farm), floor_value), "A toolless Farm should sit at the floor when tools are on and sold in town")
 	var crew := worn_sim._business_employed_worker_count(worn_farm.id)
-	worn_farm.add_stock(Commodity.Type.TOOLS, float(crew))
+	# Exactly its purchase target, so today's purchasing has nothing to add and
+	# the day's change is pure wear.
+	var target: float = float(crew) * (worn_farm.tools_per_worker + worn_farm.tool_wear_per_worker_day * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS)
+	worn_farm.inventory[Commodity.Type.TOOLS] = target
 	_assert(is_equal_approx(worn_sim._tool_productivity(worn_farm), 1.0), "A fully equipped Farm should be at 1.0")
 	worn_sim.advance_ticks(1)
-	var expected_left: float = float(crew) - float(crew) * worn_farm.tool_wear_per_worker_day
+	var expected_left: float = target - float(crew) * worn_farm.tool_wear_per_worker_day
 	_assert(absf(worn_farm.stock(Commodity.Type.TOOLS) - expected_left) < 0.0001,
 		"One day should wear workers x wear-rate tools: have %.4f, expected %.4f" % [worn_farm.stock(Commodity.Type.TOOLS), expected_left])
 
 	# On, no toolsmith: no tools economy, so no wear and no productivity loss.
 	var bare_sim := _new_sim("build_three_business_economy")
-	bare_sim.industrial_tools_enabled = true
 	var bare_farm: HEBusiness = bare_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
 	_assert(is_equal_approx(bare_sim._tool_productivity(bare_farm), 1.0), "Without a tools seller, productivity should stay 1.0")
 	bare_farm.add_stock(Commodity.Type.TOOLS, 5.0)
 	bare_sim.advance_ticks(3)
 	_assert(is_equal_approx(bare_farm.stock(Commodity.Type.TOOLS), 5.0), "Without a tools seller, tools should not wear")
-	print("  coverage maths, floor, switch, gate and wear as expected")
+	print("  coverage maths, floor, gate and wear as expected")
+
+	# Bootstrap: a town with a Toolsmith starts every tool user equipped for its
+	# day-one crew; a town without one holds no tools at all.
+	var seeded := _new_sim("build_economy_with_toolsmith")
+	var equipped_users := 0
+	for business in seeded.businesses.values():
+		if business.uses_tools():
+			equipped_users += 1
+			_assert(business.stock(Commodity.Type.TOOLS) >= float(business.capacity) * business.tools_per_worker - 0.0001,
+				"%s should start equipped for its day-one crew" % business.name)
+	_assert(equipped_users >= 2, "The toolsmith scenario should have tool users to equip")
+	_assert(bare_farm.stock(Commodity.Type.TOOLS) == 5.0 and _new_sim("build_three_business_economy").businesses[HEScenarioSeeds.FARM_BUSINESS_ID].stock(Commodity.Type.TOOLS) == 0.0,
+		"A town without a Toolsmith should seed no tools")
+	# A business built mid-run gets the money for its first tools.
+	var created := HEScenarioSeeds.make_iron_mine(seeded.next_business_id(), HEScenarioSeeds.SETTLEMENT_ID)
+	var created_crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, seeded._capacity_floor(created), created.max_capacity)
+	seeded.add_new_business(created)
+	var tool_price: float = (seeded.markets[HEScenarioSeeds.SETTLEMENT_ID] as HEMarket).price[Commodity.Type.TOOLS]
+	var expected_cash: float = HEScenarioSeeds.startup_cash(created, created_crew) + float(created_crew) * created.tools_per_worker * tool_price
+	_assert(absf(created.balance - expected_cash) < 0.0001, "A created tool user's startup cash should include its first tools: %.2f vs %.2f" % [created.balance, expected_cash])
+
+	# Purchasing: a business with no tools buys them from the Toolsmith and climbs
+	# back off the floor.
+	var buy_sim := _new_sim("build_economy_with_toolsmith")
+	var buy_farm: HEBusiness = buy_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	buy_farm.inventory[Commodity.Type.TOOLS] = 0.0
+	buy_sim.advance_ticks(40)
+	var restocked := buy_farm.stock(Commodity.Type.TOOLS)
+	var restocked_productivity := buy_sim._tool_productivity(buy_farm)
+	print("  farm restocked from nothing: %.1f tools, productivity %.2f after 40 days" % [restocked, restocked_productivity])
+	_assert(restocked > 1.0 and restocked_productivity > floor_value + 0.1, "An unequipped Farm should buy tools from the Toolsmith and recover")
 
 	# Goods and money reconcile with wear in the books. Every tool user starts
 	# equipped so wear actually runs.
 	var run_sim := _new_sim("build_economy_with_toolsmith")
-	run_sim.industrial_tools_enabled = true
 	for business_id in run_sim.businesses.keys():
 		var b: HEBusiness = run_sim.businesses[business_id]
 		if b.uses_tools():

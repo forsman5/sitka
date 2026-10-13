@@ -7,13 +7,10 @@ every production business hold tools that wear out and make its workers more
 productive, so the Toolsmith has business-to-business demand and tools matter
 to output.
 
-Status: phase 1 (data and model) is implemented in this PR, dormant behind
-`HESimulation.industrial_tools_enabled` (default off). Phases 2-5 are not built.
-The numbers below are proposals to be swept, not measured.
-
-Why a switch: until tool purchasing (phase 2) lands nothing restocks a worn-out
-tool, so turning it on would sink every business to its productivity floor.
-Phase 2 turns it on by default once businesses can buy tools.
+Status: phases 1-3 (model, purchasing, bootstrap) are implemented in this PR
+and always on, gated only by a tools seller existing in the town. Phases 4-5
+(UI, herds) are not built. There is deliberately no on/off setting: it is
+tuned as one addition. See "Tuning" below for the measured numbers.
 
 ## Where things stand
 
@@ -108,6 +105,24 @@ size: enough to matter, not enough to dominate.
    - Needs tab is unaffected (businesses have no need entries).
 5. **Optional: herds.** Apply to care accrual once the rest is calibrated; herd
    husbandry is already a delicate model (see `HERD_LABOR_PER_HEAD_PER_DAY`).
+
+## Tuning (measured, phases 1-3 as built)
+
+Probe: `build_economy_with_toolsmith`, 720 days, seeds 4242/1/2/3, toolsmith
+output rate swept with industrial demand in the books (iron 0.07 per tool,
+tools 9.0 base, wear rates as in the table above).
+
+| Toolsmith output / worker-day | Result |
+|---|---|
+| 0.065 (the household-only setting) | tools short: price averages 31 (ceiling 36), wages inflate, the Trader dies ~day 330 and the Toolsmith ~day 640 |
+| 0.08 | both survive, productivity 0.99, price avg 13, wage 0.79 |
+| **0.09** | **both survive in all four seeds, productivity 0.99, price avg 11, wage ~0.79 (the middle of the band)** |
+| 0.10 | both survive, price avg 9-10 |
+| 0.11 and up | oversupply: price to its floor, Toolsmith bankrupt |
+
+Halving wear changed little at 0.065-0.08 and made 0.10 fragile, so the wear
+table stands. There is no on/off setting: the model is always on, gated by a
+tools seller existing in the town.
 
 ## Calibration and verification
 

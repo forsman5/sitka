@@ -619,13 +619,17 @@ var day: int = 0
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
 
-## Industrial tools (docs/tools-industrial-demand-plan.md): when on, businesses
-## that use tools (HEBusiness.uses_tools) wear them out and produce less
-## without them -- but only in a town where a business sells tools. Off by
-## default until tool purchasing lands (the follow-up phase), since until then
-## nothing restocks a worn-out tool and every business would sink to its
-## productivity floor.
-var industrial_tools_enabled: bool = false
+## Industrial tools (docs/tools-industrial-demand-plan.md): businesses that use
+## tools (HEBusiness.uses_tools) wear them out, buy replacements from the
+## town's tool seller (_run_tool_purchasing) and produce less without them --
+## but only in a town where a business sells tools, so towns without a
+## Toolsmith are unaffected.
+##
+## A business short of its target tool stock asks for at most this share of the
+## shortfall a day (or three days of wear, whichever is more), so equipping a
+## new crew from nothing takes a couple of weeks instead of draining the
+## Toolsmith in a day and crowding households out.
+const TOOL_FILL_FRACTION_PER_DAY := 0.1
 
 ## Sales tax fraction, a plain variable (not the const) so harnesses and a
 ## future player policy can change it per sim. 0.0 turns the tax off.
@@ -763,6 +767,10 @@ func add_new_business(b: HEBusiness) -> void:
 	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
 	b.capacity = crew
 	var startup_allowance: float = HEScenarioSeeds.startup_cash(b, crew)
+	# A crew of tool users also needs its first tools, bought from the town's
+	# tool seller -- but only in a town that has one.
+	if b.uses_tools() and _tools_in_play(b.settlement_id):
+		startup_allowance += float(crew) * b.tools_per_worker * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.TOOLS]
 	b.balance += startup_allowance
 	b.ledger_add("injection", startup_allowance)
 	var startup_cycle := maxi(b.growth_days, b.startup_cycle_days)
@@ -1817,6 +1825,7 @@ func _daily_tick() -> void:
 	var record := _new_daily_record()
 	_pay_wages(record)
 	_run_input_purchasing(record)
+	_run_tool_purchasing(record)
 	_run_livestock_purchasing(record)
 	_run_production(record)
 	_run_tool_wear(record)
@@ -2218,12 +2227,47 @@ func _run_production(record: Dictionary) -> void:
 ## (without one there is no tools economy to be short of). See
 ## HEBusiness.tool_productivity.
 func _tool_productivity(b: HEBusiness) -> float:
-	if not industrial_tools_enabled or not b.uses_tools() or not _tools_in_play(b.settlement_id):
+	if not b.uses_tools() or not _tools_in_play(b.settlement_id):
 		return 1.0
 	return b.tool_productivity(_business_employed_worker_count(b.id))
 
 func _tools_in_play(settlement_id: int) -> bool:
 	return _business_selling(settlement_id, Commodity.Type.TOOLS) != null
+
+## Tool-using businesses top their tools up to one per worker plus a buffer of
+## wear (PRODUCTION_INPUT_BUFFER_DAYS), buying from the town's tool seller out
+## of the same paced offer households draw on (_business_offer -- no reserve for
+## households, no Trader import: with no local seller there is no tools economy).
+## It runs after recipe inputs so a cash-short business pays for what it
+## consumes first, and a missing tool only lowers productivity -- it never
+## enters last_input_fulfillment_ratio.
+func _run_tool_purchasing(record: Dictionary) -> void:
+	var tools := Commodity.Type.TOOLS
+	var ids: Array = businesses.keys()
+	ids.sort()
+	for business_id in ids:
+		var buyer: HEBusiness = businesses[business_id]
+		if not buyer.uses_tools() or not _tools_in_play(buyer.settlement_id):
+			continue
+		var employed := _business_employed_worker_count(business_id)
+		if employed <= 0:
+			continue
+		var target: float = float(employed) * (buyer.tools_per_worker + buyer.tool_wear_per_worker_day * PRODUCTION_INPUT_BUFFER_DAYS)
+		var shortfall: float = maxf(0.0, target - buyer.stock(tools))
+		if shortfall <= 0.0001:
+			continue
+		var daily_wear: float = float(employed) * buyer.tool_wear_per_worker_day
+		var requested: float = minf(shortfall, maxf(daily_wear * TARGET_BUFFER_DAYS, shortfall * TOOL_FILL_FRACTION_PER_DAY))
+		var price: float = (markets[buyer.settlement_id] as HEMarket).price[tools]
+		var offer := _business_offer(buyer.settlement_id, tools, {}, false, requested)
+		var budget := _input_budget(buyer, employed, daily_wear * price)
+		var affordable_ratio: float = clampf(budget / (requested * price), 0.0, 1.0) if price > 0.0 else 1.0
+		var purchase_ratio := minf(minf(requested, offer) / requested, affordable_ratio)
+		var signal_today := _price_signal_entry(buyer.settlement_id, tools)
+		signal_today["funded_business"] += requested * affordable_ratio
+		signal_today["business_buffer_request"] += shortfall * affordable_ratio
+		if purchase_ratio > 0.0:
+			_settle_purchase(buyer, buyer, tools, requested, requested * purchase_ratio, requested * affordable_ratio, record, {})
 
 ## Daily wear: each tool-using business loses tool_wear_per_worker_day per
 ## employed worker from its held tools, booked as consumed goods and charged
@@ -2231,8 +2275,6 @@ func _tools_in_play(settlement_id: int) -> bool:
 ## capacity tuning sees the cost as the tool is used up. Runs after production,
 ## which used today's opening stock.
 func _run_tool_wear(record: Dictionary) -> void:
-	if not industrial_tools_enabled:
-		return
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
 		if not b.uses_tools() or not _tools_in_play(b.settlement_id):

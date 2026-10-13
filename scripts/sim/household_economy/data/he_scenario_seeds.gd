@@ -104,12 +104,12 @@ const TRADER_MAX_CAPACITY := 20
 ## so this IS the hard ceiling, not a land-derived one.
 const BLOOMERY_MAX_CAPACITY := 20
 
-## The Toolsmith serves only the settlement's own households (its Trader export
-## starts disabled), whose demand is about 0.6 tools a day -- roughly twelve
-## workers at _toolsmith_recipe's rate. It keeps a core crew year-round: demand
-## is smooth, and a business tuned to zero would only trial-hire a crew the
-## town can't feed. Starting at the full demand-sized crew avoids a first-month
-## shortage that would pin the price at its ceiling.
+## The Toolsmith serves only the settlement's own households and tool-using
+## businesses (its Trader export starts disabled): about 0.8-1.0 tools a day, or
+## nine to eleven workers at _toolsmith_recipe's rate. It keeps a core crew
+## year-round: demand is smooth, and a business tuned to zero would only
+## trial-hire a crew the town can't feed. Starting at a full demand-sized crew
+## avoids a first-month shortage that would pin the price at its ceiling.
 const TOOLSMITH_MIN_CAPACITY := 6
 const TOOLSMITH_STARTING_CAPACITY := 12
 const TOOLSMITH_MAX_CAPACITY := 16
@@ -403,18 +403,19 @@ static func _bloomery_recipe() -> Recipe:
 ## Iron in, tools out. Iron's price here is inflated (see BASE_PRICE's Iron
 ## comment: 30), so 0.07 iron per tool (2.1) is about a quarter of the 9.0
 ## tool price; the pooled smithy's 1.5 iron per tool would cost more than the
-## tool sells for. A worker makes 0.065 tools a day (0.59 of sales), and a
-## twelve-worker crew 0.78 a day against about 0.6-0.9 that 30 households use
-## at 0.005 per person.
-## The output rate is deliberately narrow: swept over four seeds for two
-## years, 0.06 and 0.065 keep the business open in all of them (average price
-## about 17 and 14.5), while 0.07 and 0.09 oversupply, drive the price to its
-## floor and the business bankrupt (by day 270-570). The crew averages only
-## 7-8 workers (the unemployed pool is empty), so supply sits just under demand
-## and the price runs above its base. Re-sweep if the wage basket or iron's
-## price moves.
+## tool sells for.
+## Output rate: the demand it serves is households (0.005 a person a day, about
+## 0.6-0.9 for 30 households) PLUS the tool-using businesses' wear, so it was
+## re-swept with industrial demand in. Over four seeds for two years: 0.065
+## leaves tools short (price at its ceiling, average 31), the Trader dies by day
+## ~330 on the wage inflation and the Toolsmith follows; 0.08-0.10 keep both
+## alive in every seed with productivity ~0.99 and the average price at 9-13
+## (base 9); 0.11 and up oversupply, drive the price to its floor and bankrupt
+## the business. 0.09 is the middle of the safe band. The crew averages 8 of the
+## 12-16 slots because the unemployed pool is empty. Re-sweep if the wage
+## basket, iron's price or any tool wear rate moves.
 static func _toolsmith_recipe() -> Recipe:
-	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.07}, {Commodity.Type.TOOLS: 0.065})
+	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.07}, {Commodity.Type.TOOLS: 0.09})
 
 ## Charcoal burner: 2.5 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
@@ -655,6 +656,15 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 
 		households[household_id] = household
 		settlement.household_ids.append(household_id)
+
+	# With a Toolsmith in town, every tool-using business starts equipped for its
+	# day-one crew (plus the wear buffer it would hold), the way a field business
+	# starts with its crop already in store -- otherwise the first month would sit
+	# on the productivity floor while the Toolsmith tools up a whole town.
+	if toolsmith != null:
+		for tool_user in businesses.values():
+			if tool_user.uses_tools():
+				tool_user.add_stock(Commodity.Type.TOOLS, float(tool_user.capacity) * (tool_user.tools_per_worker + tool_user.tool_wear_per_worker_day * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS))
 
 	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
 
