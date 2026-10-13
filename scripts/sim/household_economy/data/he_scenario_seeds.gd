@@ -100,6 +100,11 @@ const BLOOMERY_MAX_CAPACITY := 20
 ## like the Bloomery: legacy (non-field) business, so this is its hard ceiling.
 const CHARCOAL_BURNER_MAX_CAPACITY := 10
 const CHARCOAL_BURNER_GRACE_DAYS := 21
+## Households' whole heat need is about 3 charcoal a day (0.1 heat per person,
+## 4 heat per charcoal) and a worker makes 1.5, so two workers meet it. A
+## bigger starting crew only makes charcoal nobody buys, which the operating
+## ledger showed collapsing its price within weeks.
+const CHARCOAL_BURNER_STARTING_CREW := 2
 
 ## Starting herd sizes -- deliberately well under either species' cull
 ## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
@@ -293,16 +298,22 @@ static func _butcher_recipe() -> Recipe:
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
-## Charcoal burner: 3 timber -> 1 charcoal per unit of output (inputs are a
+## Charcoal burner: 2.5 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
-## 4 heat against 3 heat of timber burned to make it, so the burner nets heat.
-## Per worker per day at full input supply: buys 4.5 timber (4.5) and sells 1.5
-## charcoal at BASE_PRICE 3.8 (5.7) = ~1.2 net, just above the ~1.1 reference
+## 4 heat against 2.5 heat of timber burned to make it, so the burner nets heat.
+## Per worker per day at full input supply: buys 3.75 timber (3.75) and sells
+## 1.5 charcoal at BASE_PRICE 3.8 (5.7) = ~1.95 net against a ~1.1 reference
 ## wage. Priced per heat unit that is 3.8 / 4 = 0.95 against timber's 1.0, so
 ## households switch to it -- a slim edge on purpose; the posted prices move
 ## with supply and demand.
+##
+## Why 2.5 and not 3: charcoal cannot sell for more than the 4 timber it
+## replaces (above that households heat with timber), so at 3 timber in the
+## most a worker could clear was ~0.1/day over the wage -- the operating
+## ledger showed any timber price above 1.0 ate it. 2.5 leaves room for timber
+## to run to roughly 1.5 before the workshop loses money.
 static func _charcoal_burner_recipe() -> Recipe:
-	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 3.0}, {Commodity.Type.CHARCOAL: 1.5})
+	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 2.5}, {Commodity.Type.CHARCOAL: 1.5})
 
 static func _iron_mine_recipe() -> Recipe:
 	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
@@ -608,7 +619,7 @@ static func build_economy_with_charcoal_burner(_rng: RandomNumberGenerator) -> D
 	var trader := 8
 	var bloomery := 8
 	var iron_mine := 8
-	var charcoal_burner := 4
+	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader, bloomery, iron_mine, charcoal_burner)
@@ -635,7 +646,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
-	var charcoal_burner: int = 4 if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
+	var charcoal_burner: int = CHARCOAL_BURNER_STARTING_CREW if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner
 	var has_farm := included.has(FARM_BUSINESS_ID)
 	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
