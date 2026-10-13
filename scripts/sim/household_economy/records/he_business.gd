@@ -75,6 +75,12 @@ extends RefCounted
 ## player manages through `warehouse_orders` (standing buy-up-to / sell-down-to
 ## orders against the local market and Trader, see he_simulation.gd's
 ## _run_warehouse_orders), to be spent on construction projects later.
+## TODO(warehouse-capacity): the inventory has no storage limit (only the
+## per-order target and the daily trade cap bound it) and goods never spoil.
+## Give each good a size/weight per unit and the building a capacity, so a
+## warehouse fills up and buying has to be selective; an upgrade could raise
+## it. Likely to matter once there can be more than one (see the unique-
+## building TODO on HESimulation.build_government_building).
 
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")

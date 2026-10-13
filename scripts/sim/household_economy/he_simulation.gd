@@ -733,6 +733,11 @@ func add_new_business(b: HEBusiness) -> void:
 ## its own, it runs on the treasury). Returns false -- building nothing -- for
 ## an unknown type, a settlement with no government, a building of that type
 ## that already exists, or a treasury that cannot cover the cost.
+## TODO(multiple-buildings): every government building is unique per town
+## today (has_business_of_type) -- no second warehouse, and the UI/orders
+## assume exactly one. If that is ever relaxed, order panels, the treasury
+## wage reserve and _ensure_warehouse_staff all need to handle several, and
+## the build cost should probably scale with how many already exist.
 func build_government_building(settlement_id: int, type_key: String) -> bool:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null or has_business_of_type(settlement_id, type_key):
