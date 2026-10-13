@@ -104,10 +104,11 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## can still win on price rather than tie and go unbought.
 	Commodity.Type.MEAT: 1.6,
 	Commodity.Type.LEATHER: 1.6,
-	## Matches Simulation.BASE_PRICE[TOOLS]. A small, durable purchase: at the
-	## pooled model's 0.005 per person per day, a household spends well under a
-	## tenth of what it spends on food.
-	Commodity.Type.TOOLS: 6.0,
+	## Above the pooled model's 6.0 because iron costs 30 here (see its comment):
+	## 9.0 keeps iron to about a quarter of the tool's price at 0.07 per tool.
+	## A small, durable purchase: at 0.005 per person per day a household
+	## spends 0.045 per person, well under a fifth of what it spends on food.
+	Commodity.Type.TOOLS: 9.0,
 }
 ## Largest one-day price move, as a fraction of the opening price.
 const PRICE_ADJUST_STEP := 0.05

@@ -375,16 +375,21 @@ static func _butcher_recipe() -> Recipe:
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
-## Iron in, tools out. Calibrated so the price settles near the 6.0 base
-## (the pooled model's) rather than at a floor or ceiling: wages in these
-## scenarios run 0.2-0.4 a day, so a worker clears that at 6.0 by making about
-## 0.06 tools a day (0.36 of sales). At that rate twelve workers make 0.72
-## tools a day, a little over what 30 households use at 0.005 per person.
-## Iron's price here is inflated (see BASE_PRICE's Iron comment), so 0.1 iron
-## per tool (1.5) is a quarter of the tool's price; the pooled smithy's 1.5
-## iron per tool would cost more than the tool sells for.
+## Iron in, tools out. Iron's price here is inflated (see BASE_PRICE's Iron
+## comment: 30), so 0.07 iron per tool (2.1) is about a quarter of the 9.0
+## tool price; the pooled smithy's 1.5 iron per tool would cost more than the
+## tool sells for. A worker makes 0.065 tools a day (0.59 of sales), and a
+## twelve-worker crew 0.78 a day against about 0.6-0.9 that 30 households use
+## at 0.005 per person.
+## The output rate is deliberately narrow: swept over four seeds for two
+## years, 0.06 and 0.065 keep the business open in all of them (average price
+## about 17 and 14.5), while 0.07 and 0.09 oversupply, drive the price to its
+## floor and the business bankrupt (by day 270-570). The crew averages only
+## 7-8 workers (the unemployed pool is empty), so supply sits just under demand
+## and the price runs above its base. Re-sweep if the wage basket or iron's
+## price moves.
 static func _toolsmith_recipe() -> Recipe:
-	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.1}, {Commodity.Type.TOOLS: 0.06})
+	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.07}, {Commodity.Type.TOOLS: 0.065})
 
 ## Charcoal burner: 2.5 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
