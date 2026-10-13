@@ -185,6 +185,7 @@ var _business_detail_warehouse_grid: GridContainer
 var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
 var _warehouse_orders_loaded_for: int = -1
 var _gov_build_popup: PopupMenu
+var _create_business_button: MenuButton
 var _business_detail_herd_events_section: VBoxContainer
 var _business_detail_herd_events_display: RichTextLabel
 var _business_detail_transaction_section: VBoxContainer
@@ -1079,6 +1080,14 @@ func _open_settings_dialog() -> void:
 		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
 	sparkline_box.value_changed.connect(apply)
 	blotter_box.value_changed.connect(apply)
+	var dev_label := Label.new()
+	dev_label.text = "Dev mode"
+	grid.add_child(dev_label)
+	var dev_check := CheckBox.new()
+	dev_check.text = "Hide free \"Create business\" (build via Government)"
+	dev_check.button_pressed = GameState.dev_mode
+	dev_check.toggled.connect(GameState.set_dev_mode)
+	grid.add_child(dev_check)
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
@@ -1101,6 +1110,8 @@ func _tail(values: Array) -> Array:
 	return values.slice(values.size() - keep) if values.size() > keep else values
 
 func _on_history_settings_changed() -> void:
+	if _create_business_button != null and is_instance_valid(_create_business_button):
+		_create_business_button.visible = not GameState.dev_mode
 	_update_history_titles()
 	_set_blotter_minimized(_blotter_minimized)
 	_refresh()
@@ -2480,6 +2491,8 @@ func _rebuild_business_rows() -> void:
 		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
 		create_popup.set_item_disabled(i, already_built)
 	create_popup.id_pressed.connect(_on_create_business_pressed)
+	create_button.visible = not GameState.dev_mode
+	_create_business_button = create_button
 	_business_list.add_child(create_button)
 
 	var gov_build_button := MenuButton.new()
