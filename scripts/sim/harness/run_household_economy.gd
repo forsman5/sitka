@@ -2264,17 +2264,29 @@ func _seed_ranches_near_cull_target(sim: HESimulation, share_of_target: float = 
 		if b.kind == HEBusiness.Kind.HERD:
 			b.herd_size = floorf(sim.herd_cull_target(b) * share_of_target)
 			b.collateral_herd = b.herd_size
-		elif b.processes_livestock:
-			# Working capital for its first cull: a Butcher's startup cash covers
-			# wages only, and buying ~600 of animals on its purchase credit drops it
-			# far below its wage floor, so it fails on the next payroll (see the
-			# TODO on BUTCHERY_CREDIT_LIMIT).
-			b.balance += 1500.0
+
+## The Butcher's first cull is bought on credit; the animals it holds must secure
+## its wage overdraft (as a ranch's herd does) and it starts with working capital
+## for a first buffer of cattle, so it does not fail the day after buying.
+func _check_butcher_credit(sim: HESimulation) -> void:
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	var wage_bill := 2.0 * 0.8
+	var empty_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var start_cash := butcher.balance
+	butcher.add_stock(Commodity.Type.CATTLE, 20.0)
+	var held_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var collateral := 20.0 * HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_BID) * HESimulation.HERD_COLLATERAL_FRACTION
+	butcher.consume(Commodity.Type.CATTLE, 20.0)
+	print("  Butcher: start cash %.0f | overdraft limit %.1f empty, %.1f holding 20 cattle (collateral %.1f)" % [start_cash, empty_limit, held_limit, collateral])
+	_assert(held_limit > empty_limit and absf(held_limit - maxf(empty_limit, collateral)) < EPSILON, "Held livestock should secure the Butcher's wage overdraft")
+	var buffer_cost := 2.0 * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE] 		* HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	_assert(start_cash >= buffer_cost - EPSILON, "The Butcher should start with cash for its first buffer of cattle (%.0f vs %.0f)" % [start_cash, buffer_cost])
 
 func _check_butcher_processes_livestock() -> void:
 	print("\n=== Butcher: ranch culls become meat and leather, which households eat ===")
 	var sim := _new_sim("build_three_business_economy")
 	_seed_ranches_near_cull_target(sim)
+	_check_butcher_credit(sim)
 	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
 	_assert(butcher.processes_livestock and butcher.sells(Commodity.Type.MEAT) and butcher.sells(Commodity.Type.LEATHER),
 		"The seeded Butcher should process livestock into meat and leather")

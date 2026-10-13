@@ -454,12 +454,10 @@ const BUTCHERY_INPUT_BUFFER_DAYS := 30.0
 ## How far into the red the Butcher may go to buy a cull. A cull is a lump
 ## bought up front and paid back as meat sells over the following weeks, the
 ## same way a wage bill may run negative (WAGE_NEGATIVE_BALANCE_FLOOR_DAYS).
-## TODO(butcher credit): this lets the Butcher BUY on credit down to -2000, but its
-## wage overdraft (_wage_overdraft_limit) is only 60 days of wages, ~-50. On its
-## first cull it buys ~630 of animals from a +37 balance, lands at ~-590, cannot
-## meet the next payroll and fails the following day -- it dies BECAUSE it bought
-## its inputs. The livestock it holds should secure the wage overdraft the way a
-## ranch's herd does (_herd_collateral), or purchases should respect the wage floor.
+## Inputs are bought on credit down to this balance, but the wage overdraft
+## still applies on the next payroll, so a Butcher is expected to hold working
+## capital for its first cull (HEScenarioSeeds seeds it) and the livestock it
+## holds secures that overdraft (_butchery_collateral).
 const BUTCHERY_CREDIT_LIMIT := 2000.0
 
 ## Home butchery: a ranch's culled animals go to a staffed Butcher or Trader
@@ -1933,7 +1931,19 @@ func _wage_overdraft_limit(b: HEBusiness, total_needed: float) -> float:
 	var limit := WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * total_needed
 	if b.kind == HEBusiness.Kind.HERD:
 		limit = maxf(limit, _herd_collateral(b))
+	elif b.processes_livestock:
+		limit = maxf(limit, _butchery_collateral(b))
 	return limit
+
+## What a Butcher can borrow against the animals it holds: HERD_COLLATERAL_FRACTION
+## of their value at the Trader's bid -- the same always-available exit price a
+## ranch's herd is valued at -- so a first cull bought on credit does not leave it
+## below a wage floor it cannot pay from.
+func _butchery_collateral(b: HEBusiness) -> float:
+	var value := 0.0
+	for species in BUTCHERY_SPECIES_ORDER:
+		value += b.stock(HEBusiness.livestock_commodity(species)) * livestock_quote(species, LivestockQuote.TRADER_BID)
+	return value * HERD_COLLATERAL_FRACTION
 
 ## What a ranch can borrow against its living herd: HERD_COLLATERAL_FRACTION of
 ## the herd valued at the Trader's bid, the exit price that is always on offer
