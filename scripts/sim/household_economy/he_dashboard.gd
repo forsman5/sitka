@@ -395,7 +395,7 @@ func _build_ui() -> void:
 	goods_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	top_tabs.add_child(goods_scroll)
 	_market_grid = GridContainer.new()
-	_market_grid.columns = 5
+	_market_grid.columns = 6
 	_market_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
@@ -1876,6 +1876,22 @@ func _refresh_business_detail() -> void:
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
 	])
+	# Operating ledger: cash movements by heading, with cash profit and stock
+	# accumulation kept as separate figures (goods built up are not cash).
+	var ledger: Dictionary = report.get("ledger", {})
+	if not ledger.is_empty():
+		rows.append(["Sales today", "households %.2f · businesses %.2f · export %.2f" % [ledger["sales_household"], ledger["sales_business"], ledger["sales_export"] + ledger["sales_other"] + ledger["trade_margin"]]])
+		rows.append(["Inputs bought today", "local %.2f · imported %.2f" % [ledger["input_local"], ledger["input_import"]]])
+		rows.append(["Wages · sales tax", "%.2f · %.2f" % [ledger["wages"], ledger["taxes"]]])
+		rows.append(["Cash profit today", "%.2f" % ledger["cash_profit"]])
+		rows.append(["Stock accumulated today", "%+.2f of goods (output %.1f, inputs %.1f held)" % [ledger["stock_change_value"], ledger["output_stock_value"], ledger["input_stock_value"]]])
+		var recent: Array = (report["ledger_history"] as Array).slice(-30)
+		var profit_30 := 0.0
+		var stock_30 := 0.0
+		for entry in recent:
+			profit_30 += entry["cash_profit"]
+			stock_30 += entry["stock_change_value"]
+		rows.append(["Last %d days (avg/day)" % recent.size(), "cash profit %.2f · stock accumulated %+.2f" % [profit_30 / recent.size(), stock_30 / recent.size()]])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
@@ -2261,7 +2277,7 @@ func _rebuild_market_grid() -> void:
 		child.queue_free()
 	_market_labels.clear()
 
-	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded"]:
+	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded", "Stored"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -2282,7 +2298,7 @@ func _rebuild_market_grid() -> void:
 		_market_grid.add_child(name_button)
 
 		var labels := {}
-		for key in ["price", "offered", "funded", "traded"]:
+		for key in ["price", "offered", "funded", "traded", "stored"]:
 			var value_label := Label.new()
 			value_label.custom_minimum_size = Vector2(110, 0)
 			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
@@ -2600,6 +2616,7 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
+		(labels["stored"] as Label).text = "%.1f" % entry.get("stored", 0.0)
 	# The detail panels below are rebuilt from scratch, link buttons included. At
 	# high speed this runs nearly every frame, which would swap a button out
 	# between mouse-down and mouse-up and eat the click, so hold off while a
