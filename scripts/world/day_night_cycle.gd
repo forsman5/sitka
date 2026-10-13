@@ -32,6 +32,12 @@ func _process(delta: float) -> void:
 	_apply(GameState.time_of_day)
 
 func _apply(t: float) -> void:
+	apply_time(t, light, world_env.environment, min_ambient_energy)
+
+## Sets `sun` and `env` (light, ambient and background colour) for time of day
+## `t` in 0..1 (0 = midnight, 0.5 = noon). Static so other scenes -- the
+## household town view -- can light themselves without a GameState clock.
+static func apply_time(t: float, sun: DirectionalLight3D, env: Environment, min_ambient: float) -> void:
 	var a: Array = _KEYS[0]
 	var b: Array = _KEYS[1]
 	for i in range(_KEYS.size() - 1):
@@ -42,10 +48,9 @@ func _apply(t: float) -> void:
 	var span: float = b[0] - a[0]
 	var f: float = (t - a[0]) / span if span > 0.0 else 0.0
 
-	light.light_energy = lerpf(a[1], b[1], f)
-	light.light_color = (a[2] as Color).lerp(b[2], f)
+	sun.light_energy = lerpf(a[1], b[1], f)
+	sun.light_color = (a[2] as Color).lerp(b[2], f)
 
-	var env := world_env.environment
-	env.ambient_light_energy = maxf(lerpf(a[3], b[3], f), min_ambient_energy)
+	env.ambient_light_energy = maxf(lerpf(a[3], b[3], f), min_ambient)
 	env.ambient_light_color = (a[4] as Color).lerp(b[4], f)
 	env.background_color = (a[5] as Color).lerp(b[5], f)

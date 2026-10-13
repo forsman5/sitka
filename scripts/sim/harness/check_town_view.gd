@@ -79,6 +79,40 @@ func _run() -> void:
 	view._gui_input(wheel)
 	check(view.camera().size < size_before, "Wheel up should zoom in")
 
+	# Town time: one sim day per visual day, ticked at dawn, never scaled by
+	# the dashboard's speed buttons. (Direct assignment, not the setter, so the
+	# check does not rewrite the user's settings file.)
+	var game_state: Node = root.get_node("GameState")
+	var saved_day_seconds: float = game_state.town_day_seconds
+	game_state.town_day_seconds = 60.0
+	dashboard._speed_multiplier = 1.0
+	dashboard._town_phase = dashboard.TOWN_TICK_PHASE
+	var day_before: int = dashboard._simulation.day
+	for i in 250: # a little over one 60 s day of 0.25 s frames
+		dashboard._advance_town_time(0.25)
+	check(dashboard._simulation.day == day_before + 1, "One 60 s town day should tick the sim exactly once (day %d -> %d)" % [day_before, dashboard._simulation.day])
+	check(absf(view.time_of_day() - dashboard._town_phase) < 0.0001, "The view clock should follow the town phase")
+	dashboard._speed_multiplier = 0.0
+	var paused_day: int = dashboard._simulation.day
+	for i in 400:
+		dashboard._process(0.25)
+	check(dashboard._simulation.day == paused_day, "Paused town time must not tick the sim")
+	check(not dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "Play", "Town mode shows Pause/Play only")
+	dashboard._set_town_mode(false)
+	check(dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "1x", "Dashboard mode restores the speed buttons")
+	dashboard._set_town_mode(true)
+	game_state.town_day_seconds = saved_day_seconds
+
+	# The shared day/night function the RTS also uses.
+	var sun := DirectionalLight3D.new()
+	var env := Environment.new()
+	var day_night: GDScript = load("res://scripts/world/day_night_cycle.gd")
+	day_night.apply_time(0.5, sun, env, 0.15)
+	check(is_equal_approx(sun.light_energy, 1.2), "Noon light energy should be 1.2 (got %f)" % sun.light_energy)
+	day_night.apply_time(0.0, sun, env, 0.15)
+	check(is_equal_approx(sun.light_energy, 0.0) and is_equal_approx(env.ambient_light_energy, 0.15), "Midnight is dark but keeps the minimum ambient")
+	sun.free()
+
 	# Advancing days and a new business must not move existing sites.
 	dashboard._simulation.advance_ticks(30)
 	dashboard._refresh()

@@ -18,6 +18,7 @@ signal business_selected(business_id: int)
 signal details_requested(business_id: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
 const MODEL_DIR := "res://assets/models/buildings/"
 ## type_key -> {"model": file name or "barn", "width": world units}. Anything
@@ -59,6 +60,10 @@ var _site_nodes: Dictionary = {} # site_id -> {"root": Node3D, "signature": Stri
 var _selected_site_id: int = -1
 var _left_down := false
 var _rig: Node3D
+var _sun: DirectionalLight3D
+var _environment: Environment
+var _clock_label: Label
+var _time_of_day := 0.25
 
 var _viewport: SubViewport
 var _camera: Camera3D
@@ -98,6 +103,19 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 	_unplaced_label.visible = not unplaced.is_empty()
 	_unplaced_label.text = "%d business(es) have no room in the town" % unplaced.size()
 	_refresh_info()
+
+## Sets the town's time of day (0 = midnight, 0.5 = noon): lighting through
+## the shared RTS day/night keyframes, plus the HH:MM readout.
+func set_time_of_day(t: float) -> void:
+	_time_of_day = fposmod(t, 1.0)
+	if _clock_label == null or _sun == null:
+		return
+	DayNightCycle.apply_time(_time_of_day, _sun, _environment, 0.15)
+	var minutes := int(_time_of_day * 24.0 * 60.0)
+	_clock_label.text = "%02d:%02d" % [minutes / 60, minutes % 60]
+
+func time_of_day() -> float:
+	return _time_of_day
 
 ## Selects the site holding `business_id` (no-op if it has none).
 func select_business(business_id: int) -> void:
@@ -139,6 +157,7 @@ func _build_world() -> void:
 	container.add_child(_viewport)
 
 	var environment := Environment.new()
+	_environment = environment
 	environment.background_mode = Environment.BG_COLOR
 	environment.background_color = Color(0.5, 0.68, 0.82)
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -152,6 +171,7 @@ func _build_world() -> void:
 	sun.rotation_degrees = Vector3(-58.0, -35.0, 0.0)
 	sun.light_energy = 1.0
 	sun.shadow_enabled = true
+	_sun = sun
 	_viewport.add_child(sun)
 
 	_rig = CAMERA_SCENE.instantiate()
@@ -198,6 +218,21 @@ func _build_overlay() -> void:
 	hint.position = Vector2(10, 6)
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(hint)
+
+	_clock_label = Label.new()
+	_clock_label.add_theme_font_size_override("font_size", 20)
+	_clock_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	_clock_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_clock_label.add_theme_constant_override("outline_size", 5)
+	_clock_label.anchor_left = 1.0
+	_clock_label.anchor_right = 1.0
+	_clock_label.offset_left = -110.0
+	_clock_label.offset_right = -12.0
+	_clock_label.offset_top = 6.0
+	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_clock_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_clock_label)
+	set_time_of_day(_time_of_day)
 
 	_unplaced_label = Label.new()
 	_unplaced_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))

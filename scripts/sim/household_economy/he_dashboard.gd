@@ -121,6 +121,13 @@ var _town_layout: HETownLayout
 var _town_view: HETownView
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
+var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
+## Town view clock, 0..1 (0.25 = 06:00). The sim ticks one day each time it
+## passes TOWN_TICK_PHASE, so villagers will later walk out to work the day
+## that was just computed. GameState.town_day_seconds is the real-time length
+## of that day; the dashboard's own 1x/10x/100x scale does not apply here.
+const TOWN_TICK_PHASE := 5.5 / 24.0 # same as Person.WAKE_TIME in the RTS
+var _town_phase: float = TOWN_TICK_PHASE
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
@@ -274,6 +281,9 @@ func _configure_tooltip_theme() -> void:
 func _process(delta: float) -> void:
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
+	if _town_view != null and _town_view.visible:
+		_advance_town_time(delta)
+		return
 	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
 	_day_accumulator = minf(_day_accumulator, 8.0) # bound interactive work, same as dashboard.gd
 	var days_to_advance := mini(int(_day_accumulator), 4)
@@ -283,6 +293,19 @@ func _process(delta: float) -> void:
 		_simulation.advance_ticks(1)
 		_day_accumulator -= 1.0
 	_refresh()
+
+## Advances the Town view clock by `delta` real seconds and steps the sim one
+## day when it passes dawn. Stepped (not scaled) so there is never more than
+## one tick per visual day.
+func _advance_town_time(delta: float) -> void:
+	var before := _town_phase
+	var after := before + minf(delta, 0.25) / GameState.town_day_seconds
+	var ticked := before < TOWN_TICK_PHASE and after >= TOWN_TICK_PHASE
+	_town_phase = fposmod(after, 1.0)
+	_town_view.set_time_of_day(_town_phase)
+	if ticked:
+		_simulation.advance_ticks(1)
+		_refresh()
 
 func _load_scenario() -> void:
 	var builder := pending_builder
@@ -1108,6 +1131,15 @@ func _open_settings_dialog() -> void:
 		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
 	sparkline_box.value_changed.connect(apply)
 	blotter_box.value_changed.connect(apply)
+	var day_label := Label.new()
+	day_label.text = "Town view day length"
+	grid.add_child(day_label)
+	var day_picker := OptionButton.new()
+	for seconds in GameState.TOWN_DAY_SECONDS_OPTIONS:
+		day_picker.add_item("%d s per day%s" % [int(seconds), " (RTS pace)" if seconds == 120.0 else ""])
+	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
+	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
+	grid.add_child(day_picker)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)
@@ -1155,6 +1187,7 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
+	_speed_buttons.append(btn)
 	return btn
 
 func _on_blotter_toggle_pressed() -> void:
@@ -2563,6 +2596,12 @@ func _set_town_mode(enabled: bool) -> void:
 	for body in _dashboard_body:
 		body.visible = not enabled
 	_town_mode_button.text = "Dashboard" if enabled else "Town view"
+	# Town time has one pace (the day-length setting): Pause and Play only.
+	_speed_buttons[1].text = "Play" if enabled else "1x"
+	_speed_buttons[2].visible = not enabled
+	_speed_buttons[3].visible = not enabled
+	if enabled:
+		_town_view.set_time_of_day(_town_phase)
 
 ## "Open business details" in the town view: back to the dashboard with that
 ## business's detail panel open.
