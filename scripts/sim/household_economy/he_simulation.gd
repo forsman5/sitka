@@ -90,7 +90,11 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## which sell most of their output to local households at full price and
 	## only route surplus through that same discount. See he_scenario_
 	## seeds.gd's _bloomery_recipe doc comment for the worked-out numbers.
-	Commodity.Type.IRON: 15.0,
+	## 30, not 15: its income is pinned (export bid x 0.5 recipe output) while the
+	## reference wage it pays swings ~0.3 to 3.5 with grain, so at 15 it was
+	## insolvent through every price spike. Swept 15/25/30/40 over five rosters:
+	## 30 is the lowest value that kept it solvent in all of them.
+	Commodity.Type.IRON: 30.0,
 	## Meat packs twice grain's food into a unit (see he_needs.gd) and leather
 	## is a one-for-one substitute for wool's clothing, so households compare
 	## each by price per need-unit. Both start a little under parity (grain
@@ -3039,7 +3043,11 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 	if b.kind == HEBusiness.Kind.TRADER:
 		var traded := b.ledger_average("units_sold", window)
 		var trader_target := traded * (1.0 + STAFFING_HEADROOM) / TRADER_CAPACITY_PER_WORKER
-		var trader_current := float(_business_employed_worker_count(b.id))
+		# Judged against the slots authorized, not just the ones filled: with labor
+		# scarce a Trader can sit at 2 employed under a ceiling of 20, and growing
+		# on "nearly full" of the 2 kept raising it until an unemployment wave
+		# filled every open slot at once for throughput that needed 2.
+		var trader_current := float(maxi(_business_employed_worker_count(b.id), b.capacity))
 		out["target_workers"] = trader_target
 		out["units_sold"] = traded
 		if trader_current > trader_target * (1.0 + STAFFING_SHRINK_TOLERANCE) + 0.5:
