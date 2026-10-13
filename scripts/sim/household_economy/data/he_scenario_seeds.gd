@@ -50,6 +50,8 @@ const STARTING_TREASURY_DAYS := 10.0
 ## business tuned to zero between them would miss the next one -- and may grow
 ## to a second when there is enough to process. Like the ranches it has no
 ## day-one employees: it is hired from the unemployed pool.
+## TODO(butcher hiring): this floor is staffed from day one even though no ranch
+## culls for 1.5-3 years -- see the note in he_simulation.gd's _reconcile_employment.
 const BUTCHER_MIN_CAPACITY := 2
 ## Crew a ranch is authorized to hire from day one. It starts with no employees
 ## and fills this from the unemployed pool at the weekly reconcile; there is no
@@ -415,6 +417,15 @@ static func startup_input_cash(b: HEBusiness, crew: int) -> float:
 		cost += units_per_day * b.recipe.inputs[commodity] * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS * HESimulation.BASE_PRICE[commodity]
 	return cost
 
+## Working capital for a Butcher's first buffer of animals: what it costs, at
+## the Butcher's purchase quote, to fill HESimulation.BUTCHERY_INPUT_BUFFER_DAYS of
+## `crew` worker-days with cattle (the species it buys first). Without it its
+## first cull is bought on credit far below its wage floor and it fails.
+static func startup_livestock_cash(crew: int) -> float:
+	var species := HEBusiness.Species.CATTLE
+	var head: float = float(crew) * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[species]
+	return head * HESimulation.livestock_quote(species, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
 	var per_person_cost: float = HESimulation.BASE_PRICE[Commodity.Type.GRAIN] * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) \
@@ -478,7 +489,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	farm.balance = startup_cash(farm, farm_capacity)
 	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
-	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY
+	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY + startup_livestock_cash(BUTCHER_MIN_CAPACITY)
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 
