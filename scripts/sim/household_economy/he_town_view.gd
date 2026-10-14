@@ -30,12 +30,29 @@ const ART := {
 	"trader": {"model": "building_tavern_blue.gltf", "width": 7.0},
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
+	# Actual house rendering always goes through HOUSE_ART_POOL below; this
+	# entry only documents the type and matches the pool's index 0.
 	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
-	# Placeholder: the tavern is the biggest non-civic model in the pack.
-	"tenement": {"model": "building_tavern_blue.gltf", "width": 5.5},
+	# Barracks reads as communal housing (bunk rows, multiple doors/windows)
+	# rather than a business, closer to a 4-household tenement than the tavern.
+	"tenement": {"model": "building_barracks_blue.gltf", "width": 6.5},
 }
-## Houses alternate between this and ART["house"] by site id, for variety.
-const HOUSE_ALT_ART := {"model": "building_home_B_blue.gltf", "width": 4.5}
+## Houses cycle through this pool by site id, for variety. Index 0 matches
+## ART["house"] so a plain lookup and a pool lookup agree for site 0.
+## Blue-only by design: every building in town shares one team color, so
+## variety here comes from model shape, not tint.
+const HOUSE_ART_POOL: Array[Dictionary] = [
+	{"model": "building_home_A_blue.gltf", "width": 4.5},
+	{"model": "building_home_B_blue.gltf", "width": 4.5},
+	{"model": "tent.gltf", "width": 4.0},
+	# This model's mesh bundles a splayed fence/stilt frame and a ground-puddle
+	# decal into the same primitives as its door/window trim, so they can't be
+	# dropped without losing the trim too. scale_ref sizes the building off its
+	# actual walls+roof+chimney footprint instead of the full (fence-inflated)
+	# bounds, so the house itself matches the others; the fence yard is wider
+	# than the 6x6 house plot and may slightly overlap the plot's margin.
+	{"model": "building_house_builder_blue.glb", "width": 4.5, "scale_ref": Vector2(0.98, 1.12)},
+]
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
 const BARN_COLOR := Color(0.55, 0.27, 0.07)
@@ -411,8 +428,8 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		_:
 			_add_plaza(body, footprint)
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
-	if type_key == HETownLayout.HOUSE_TYPE_KEY and int(site["site_id"]) % 2 == 1:
-		art = HOUSE_ALT_ART
+	if type_key == HETownLayout.HOUSE_TYPE_KEY:
+		art = HOUSE_ART_POOL[int(site["site_id"]) % HOUSE_ART_POOL.size()]
 	_add_door_path(root, site, art)
 	var building := _make_building(art, occupied)
 	building.position = building_offset
@@ -482,6 +499,10 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	return model
 
 ## Scales a freshly built model to the art's width and sits it on the ground.
+## art["scale_ref"] (optional Vector2 x/z), when present, replaces the live
+## mesh bounds for the scale-factor math, so a model whose true bounds are
+## inflated by non-building decoration (see building_house_builder_blue's
+## entry in HOUSE_ART_POOL) can still be sized off its actual footprint.
 func _place_on_ground(building: Node3D, art: Dictionary, offset: Vector3) -> void:
 	var bounds := AABB()
 	var first := true
@@ -493,7 +514,10 @@ func _place_on_ground(building: Node3D, art: Dictionary, offset: Vector3) -> voi
 		first = false
 	if first:
 		return
-	var factor: float = float(art["width"]) / maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
+	var ref_size := Vector2(bounds.size.x, bounds.size.z)
+	if art.has("scale_ref"):
+		ref_size = art["scale_ref"]
+	var factor: float = float(art["width"]) / maxf(maxf(ref_size.x, ref_size.y), 0.001)
 	if art["model"] == "barn":
 		factor = float(art["width"]) / BARN_SIZE.x
 	building.scale = Vector3.ONE * factor
