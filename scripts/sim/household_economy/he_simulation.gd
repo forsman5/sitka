@@ -923,6 +923,21 @@ func _government_warehouse(settlement_id: int) -> HEBusiness:
 			return b
 	return null
 
+## What the settlement's Government Warehouse holds, as
+## [{"commodity", "name", "units"}] with units > 0, most units first. Empty
+## when no warehouse is built (or it holds nothing).
+func get_warehouse_inventory(settlement_id: int) -> Array:
+	var rows: Array = []
+	var warehouse := _government_warehouse(settlement_id)
+	if warehouse == null:
+		return rows
+	for commodity in warehouse.inventory:
+		var units: float = warehouse.inventory[commodity]
+		if units > 0.0001:
+			rows.append({"commodity": commodity, "name": Commodity.name_of(commodity), "units": units})
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["units"] > b["units"])
+	return rows
+
 ## What `option` costs in `settlement_id` right now: its `upgrade_cost` while
 ## it would upgrade an existing house in place (a tenement with a plain house
 ## left), otherwise its `cost`. Every build-cost reader goes through this.
