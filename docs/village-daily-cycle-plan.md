@@ -168,3 +168,13 @@ Slices 1–3 are independent and can be built in parallel. Slice 4 needs all thr
 - `scripts/sim/household_economy/he_town_view.gd`: `sync()`, `set_time_of_day()`, selection and info panel
 - `scripts/sim/household_economy/he_dashboard.gd`: `_advance_town_time`, `TOWN_TICK_PHASE`, the town view `sync` call sites
 - `scripts/on_foot/on_foot_player.gd`: the `Casual_Male.fbx` instancing and animation clip names to reuse
+
+## Implementation status (slice 2: road paths)
+
+Done: `scripts/sim/household_economy/he_town_paths.gd` (`HETownPaths`, `RefCounted`) with `scripts/sim/harness/check_town_paths.gd`.
+
+- `HETownPaths.new(layout: HETownLayout)`
+- `path(from_site_id, to_site_id) -> PackedVector2Array`: door, road graph vertices, door. Empty if a site is unknown or unreachable. Cached per pair; computed in canonical order (lower id first) so a return trip is the exact reverse. Collinear vertices are dropped so a route is unchanged when unrelated sites are inserted into its road segments.
+- `refresh() -> bool`: rebuilds the graph and clears the cache when `layout.revision` changed. `path()` calls it automatically.
+- `static path_length(points) -> float`.
+- Off-road sites remember their road attach point, so later lanes never reroute them. The road graph is a tree (lanes are dead-end branches), so existing routes survive road growth.
