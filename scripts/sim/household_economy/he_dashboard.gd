@@ -15,6 +15,8 @@ const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+## Housing builds the Housing tab offers, in button order.
+const HOUSING_BUILD_KEYS := ["house", "tenement"]
 const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
@@ -128,8 +130,9 @@ var _town_view: HETownView
 ## Top-bar second line, and the Housing tab's readouts.
 var _housing_label: Label
 var _housing_detail_labels: Dictionary = {} # key -> Label
-var _housing_build_button: Button
-var _housing_blocker_label: Label
+var _housing_hint_label: Label
+var _housing_buttons: Dictionary = {} # type_key ("house"/"tenement") -> Button
+var _housing_blocker_labels: Dictionary = {} # type_key -> Label
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
@@ -1184,23 +1187,31 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
 	box.add_child(rules)
 
-	_housing_build_button = Button.new()
-	_housing_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	_housing_build_button.pressed.connect(_on_build_house_pressed)
-	box.add_child(_housing_build_button)
-	_housing_blocker_label = Label.new()
-	_housing_blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
-	box.add_child(_housing_blocker_label)
+	# Both housing builds are always offered; the hint says which one the
+	# layout recommends (see HETownLayout.prefers_densify).
+	_housing_hint_label = Label.new()
+	_housing_hint_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	box.add_child(_housing_hint_label)
+	for type_key in HOUSING_BUILD_KEYS:
+		var button := Button.new()
+		button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		button.pressed.connect(_on_build_housing_pressed.bind(type_key))
+		box.add_child(button)
+		_housing_buttons[type_key] = button
+		var blocker_label := Label.new()
+		blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+		box.add_child(blocker_label)
+		_housing_blocker_labels[type_key] = blocker_label
 
-func _house_option_index() -> int:
+func _housing_option_index(type_key: String) -> int:
 	var options := HEScenarioSeeds.government_buildings()
 	for i in options.size():
-		if options[i]["type_key"] == "house":
+		if options[i]["type_key"] == type_key:
 			return i
 	return -1
 
-func _on_build_house_pressed() -> void:
-	var index := _house_option_index()
+func _on_build_housing_pressed(type_key: String) -> void:
+	var index := _housing_option_index(type_key)
 	if index >= 0:
 		_on_build_government_pressed(index)
 
@@ -1226,22 +1237,42 @@ func _refresh_housing() -> void:
 		_housing_label.remove_theme_color_override("font_color")
 		for key in _housing_detail_labels:
 			(_housing_detail_labels[key] as Label).text = "-"
-	var index := _house_option_index()
+	var upgradable := int(housing.get("upgradable_houses", 0))
+	var crowded := _town_layout != null and _town_layout.prefers_densify()
+	if crowded and upgradable > 0:
+		_housing_hint_label.text = "The street grid is nearly full: upgrading a house to a tenement is cheaper than a new lot."
+	else:
+		_housing_hint_label.text = ""
+	for type_key in HOUSING_BUILD_KEYS:
+		_refresh_housing_build(type_key, upgradable)
+
+## One housing build button: label, price and blocker line for `type_key`.
+func _refresh_housing_build(type_key: String, upgradable: int) -> void:
+	var button: Button = _housing_buttons[type_key]
+	var blocker_label: Label = _housing_blocker_labels[type_key]
+	var index := _housing_option_index(type_key)
 	if index < 0:
+		button.visible = false
+		blocker_label.visible = false
 		return
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
-	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
-	var order_state := _simulation.build_goods_order_state(_town_settlement_id(), option)
-	_housing_build_button.text = "Build house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	var settlement_id := _town_settlement_id()
+	var blocker := _simulation.government_build_blocker(settlement_id, option)
+	var order_state := _simulation.build_goods_order_state(settlement_id, option)
+	var noun := "house"
+	if type_key == "tenement":
+		noun = "tenement upgrade" if upgradable > 0 else "tenement"
+	var cost_text := HEScenarioSeeds.cost_text(_simulation.build_cost_for(settlement_id, option))
+	button.text = "Build %s (%s)" % [noun, cost_text]
 	if order_state == "can_order":
-		_housing_build_button.text = "Order timber for a house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
-	_housing_build_button.disabled = blocker != "" and order_state != "can_order"
+		button.text = "Order timber for a %s (%s)" % [noun, cost_text]
+	button.disabled = blocker != "" and order_state != "can_order"
 	if order_state == "can_order":
-		_housing_blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
+		blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
 	elif order_state == "ordered":
-		_housing_blocker_label.text = "Goods on order: %s" % blocker
+		blocker_label.text = "Goods on order: %s" % blocker
 	else:
-		_housing_blocker_label.text = blocker
+		blocker_label.text = blocker
 
 ## A title row with a color-keyed legend above a hoverable chart.
 func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
@@ -2822,7 +2853,7 @@ func _refresh_government_build_menu() -> void:
 		var gov_option: Dictionary = gov_options[i]
 		var blocker := _simulation.government_build_blocker(_town_settlement_id(), gov_option)
 		var order_state := _simulation.build_goods_order_state(_town_settlement_id(), gov_option)
-		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(gov_option["cost"])]
+		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(_simulation.build_cost_for(_town_settlement_id(), gov_option))]
 		if blocker == "already built":
 			item_text = "%s (already built)" % gov_option["label"]
 		elif order_state == "can_order":

@@ -51,6 +51,10 @@ const ZONE_HOUSING := "housing"
 
 const GOVERNMENT_TYPE_KEY := "government"
 const HOUSE_TYPE_KEY := "house"
+const DENSE_HOUSE_TYPE_KEY := "tenement"
+## House count at which the static road network is nearly full (it caps near
+## 54); past it, prefers_densify() says to upgrade houses rather than grow out.
+const DENSIFY_HOUSE_COUNT := 48
 ## Half the side of the square town footprint; sites are kept fully inside it.
 const HALF_EXTENT := 80.0
 ## Minimum clear gap between two site footprints.
@@ -253,6 +257,15 @@ func reconcile(reports: Array, dwellings: Array = []) -> bool:
 		if not seated_houses.has(dwelling_id):
 			new_houses.append(dwelling_id)
 	new_houses.sort()
+	# A seated house may have been upgraded in place: same site, new kind.
+	for site in _sites:
+		var seated_id: int = site["dwelling_id"]
+		if seated_id != NO_BUSINESS and house_reports.has(seated_id):
+			var seated_type := str(house_reports[seated_id].get("type_key", HOUSE_TYPE_KEY))
+			if site["type_key"] != seated_type:
+				site["type_key"] = seated_type
+				site["label"] = str(house_reports[seated_id].get("name", site["label"]))
+				changed = true
 	_unplaced_dwellings.clear()
 	for dwelling_id in new_houses:
 		var site_index := _allocate_from([ZONE_HOUSING])
@@ -299,6 +312,21 @@ func unplaced_business_ids() -> Array[int]:
 ## Houses that found no room in the residential zone.
 func unplaced_dwelling_ids() -> Array[int]:
 	return _unplaced_dwellings.duplicate()
+
+static func is_housing_type(type_key: String) -> bool:
+	return type_key == HOUSE_TYPE_KEY or type_key == DENSE_HOUSE_TYPE_KEY
+
+## Whether more housing should come from upgrading an existing house rather
+## than a new lot: the road network had to grow, a house found no room, or the
+## static network is nearly full.
+func prefers_densify() -> bool:
+	if _growth_steps > 0 or not _unplaced_dwellings.is_empty():
+		return true
+	var houses := 0
+	for site in _sites:
+		if site["dwelling_id"] != NO_BUSINESS:
+			houses += 1
+	return houses >= DENSIFY_HOUSE_COUNT
 
 ## The site a house occupies, or {} if it has none.
 func site_of_dwelling(dwelling_id: int) -> Dictionary:

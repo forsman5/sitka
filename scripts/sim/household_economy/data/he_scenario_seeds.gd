@@ -52,6 +52,13 @@ const WAREHOUSE_BUILD_COST := 100.0
 ## one household (HEHouse.capacity_households).
 const HOUSE_BUILD_GOLD := 15.0
 const HOUSE_BUILD_TIMBER := 50.0
+## Tenement prices follow the house rate per household gained: a new tenement
+## adds HEHouse.DENSE_CAPACITY households, an upgrade adds one fewer (the house
+## it replaces already counted), so both cost more than a house.
+const TENEMENT_BUILD_GOLD := 60.0
+const TENEMENT_BUILD_TIMBER := 200.0
+const TENEMENT_UPGRADE_GOLD := 45.0
+const TENEMENT_UPGRADE_TIMBER := 150.0
 ## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -350,6 +357,17 @@ static func government_buildings() -> Array[Dictionary]:
 			"hint": "Shelters one household. Needs a Government Warehouse; the build button orders the timber.",
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
+		{"type_key": "tenement", "label": "Tenement", "category": "housing", "repeatable": true,
+			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER}),
+			# Charged instead of `cost` while a plain house is left to upgrade
+			# (see HESimulation.build_cost_for).
+			"upgrade_cost": build_cost(TENEMENT_UPGRADE_GOLD, {Commodity.Type.TIMBER: TENEMENT_UPGRADE_TIMBER}),
+			"hint": "Upgrades the innermost house in place to shelter %d households (a new tenement if none is left to upgrade)." % HEHouse.DENSE_CAPACITY,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_dense()
+				return house},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"startup": false,
@@ -708,7 +726,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
 	var gov: HEBusiness = businesses[GOVERNMENT_BUSINESS_ID]
 	gov.balance += float(options.get("treasury_bonus", 0.0))
-	var dwellings := seed_housing(settlement, household_count, int(options.get("houses", -1)), int(options.get("house_capacity", 1)))
+	var dwellings := seed_housing(settlement, household_count, int(options.get("houses", -1)), int(options.get("tenements", 0)))
 	var warehouse_stock: Dictionary = options.get("warehouse_stock", {})
 	if options.get("warehouse", false):
 		# Staffed at the first weekly reconcile (HESimulation._ensure_warehouse_staff).
@@ -724,14 +742,15 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 ## plus HOUSING_STARTING_HEADROOM, marks housing as modeled there, and returns
 ## the dwellings dict for the builder's world. Public so a multi-town builder
 ## can house each settlement.
-static func seed_housing(settlement: HESettlement, household_count: int, house_count: int = -1, capacity_per_house: int = 1) -> Dictionary[int, HEHouse]:
+static func seed_housing(settlement: HESettlement, household_count: int, house_count: int = -1, tenement_count: int = 0) -> Dictionary[int, HEHouse]:
 	var dwellings: Dictionary[int, HEHouse] = {}
 	if house_count < 0:
-		house_count = ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM) / capacity_per_house)
+		house_count = ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM))
 	for i in house_count:
-		var label := "Dwelling block %d" if capacity_per_house > 1 else "House %d"
-		var house := HEHouse.new(i + 1, settlement.id, label % (i + 1))
-		house.capacity_households = capacity_per_house
+		var house := HEHouse.new(i + 1, settlement.id, "House %d" % (i + 1))
+		# The innermost (lowest-id) houses are the ones already densified.
+		if i < tenement_count:
+			house.upgrade_to_dense()
 		dwellings[house.id] = house
 		settlement.dwelling_ids.append(house.id)
 	settlement.housing_modeled = true
@@ -801,6 +820,7 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"households": households,
 		"settlement_name": str(spec.get("settlement_name", spec.get("label", "Village"))),
 		"houses": int(spec.get("housing", {}).get("houses", -1)),
+		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
 	}
 	var warehouse: Dictionary = spec.get("warehouse", {})
@@ -831,9 +851,11 @@ static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dict
 	var remainder := household_count * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
 	var farm_share := 0.2 if town_id == ValleySeed.HIGH_FELL else 0.5
 	var farm := int(round(float(remainder) * farm_share / 2.0)) * 2
+	var tenement_count := ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM) / VALLEY_HOUSEHOLDS_PER_DWELLING)
 	var options := {
 		"households": household_count,
-		"house_capacity": VALLEY_HOUSEHOLDS_PER_DWELLING,
+		"houses": tenement_count,
+		"tenements": tenement_count,
 	}
 	return build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
 
