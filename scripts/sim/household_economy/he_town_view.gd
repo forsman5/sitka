@@ -30,13 +30,24 @@ const ART := {
 	"trader": {"model": "building_tavern_blue.gltf", "width": 7.0},
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
+	# Actual house rendering always goes through HOUSE_ART_POOL below; this
+	# entry only documents the type and matches the pool's index 0.
 	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
 	# Barracks reads as communal housing (bunk rows, multiple doors/windows)
 	# rather than a business, closer to a 4-household tenement than the tavern.
 	"tenement": {"model": "building_barracks_blue.gltf", "width": 6.5},
 }
-## Houses alternate between this and ART["house"] by site id, for variety.
-const HOUSE_ALT_ART := {"model": "building_home_B_blue.gltf", "width": 4.5}
+## Houses cycle through this pool by site id, for variety. Index 0 matches
+## ART["house"] so a plain lookup and a pool lookup agree for site 0.
+const HOUSE_ART_POOL: Array[Dictionary] = [
+	{"model": "building_home_A_blue.gltf", "width": 4.5},
+	{"model": "building_home_B_blue.gltf", "width": 4.5},
+	{"model": "building_home_A_green.gltf", "width": 4.5},
+	{"model": "building_home_B_green.gltf", "width": 4.5},
+	{"model": "building_home_A_yellow.gltf", "width": 4.5},
+	{"model": "building_home_B_yellow.gltf", "width": 4.5},
+	{"model": "tent.gltf", "width": 4.0},
+]
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
 const BARN_COLOR := Color(0.55, 0.27, 0.07)
@@ -412,8 +423,8 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		_:
 			_add_plaza(body, footprint)
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
-	if type_key == HETownLayout.HOUSE_TYPE_KEY and int(site["site_id"]) % 2 == 1:
-		art = HOUSE_ALT_ART
+	if type_key == HETownLayout.HOUSE_TYPE_KEY:
+		art = HOUSE_ART_POOL[int(site["site_id"]) % HOUSE_ART_POOL.size()]
 	_add_door_path(root, site, art)
 	var building := _make_building(art, occupied)
 	building.position = building_offset
