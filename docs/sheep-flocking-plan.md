@@ -5,6 +5,41 @@ herding dog (border collie)", *Communications Biology* 7:1543 (2024),
 doi:10.1038/s42003-024-07245-8. 14 merino sheep + 1 border collie, UWB-tracked
 over 80 m x 50 m, plus an agent-based model that reproduces the data.
 
+## Status
+
+| Phase | State |
+|---|---|
+| 1. `on_foot_sheep.gd` tuning deltas + harness | **Implemented in this PR, awaiting sign-off** |
+| 2. Shared `FlockSteering` module, port island `Sheep` | Not started |
+| 3. Herding dog brain (drive/collect) | **Out of scope for now** (approved deferral) |
+
+Phase 1 results (`check_flock_steering.gd`, 14 sheep, scripted dog trailing 5 m,
+60 s after 10 s warm-up, fixed seed):
+
+| | Paper | Before | After |
+|---|---|---|---|
+| Cohesion C (mean radius) | 1.21 m | 6.00 m | 1.54 m |
+| Polarization P | 0.85 | 0.35 | 0.90 |
+| Median elongation E | ~0.8 | 1.16 | 0.81 |
+| Max straggle from barycentre | n/a | 13.6 m | 4.7 m |
+| Distance driven in 60 s | n/a | 19 m | 116 m |
+
+Phase 1 checklist (section 4 items):
+
+- [x] 1. Attraction + alignment while fleeing (`w_dog 1.0, w_rep 2.0, w_att 1.5, w_ali 1.3`, paper weights)
+- [x] 2. Nearest-k neighbours for wander cohesion instead of the global centroid
+- [x] 3. One per-physics-frame snapshot of the flock; drops per-sheep `get_nodes_in_group` scans
+- [x] 4. Heading inertia term (`w_inertia`)
+- [x] 5. Noise + neighbour subset re-rolled ~1 Hz, staggered per sheep
+- [x] 6. Flee-speed ratio reviewed, **left unchanged** (see section 4)
+- [x] Acceptance harness `scripts/sim/harness/check_flock_steering.gd`
+- [ ] Sign-off (user)
+
+Not changed: `_react_step` bark hop, `_avoid_water`, penning, animation.
+Known limits: neighbour scan is still O(N) per sheep once per second (fine for
+tens of sheep, grid is phase 2); harness runs without terrain, so it does not
+exercise `_avoid_water`; not yet eyeballed in the real On Foot scene.
+
 ## 1. Where we are
 
 There are two unrelated sheep implementations:
@@ -128,7 +163,7 @@ One `FlockGrid` node (or autoload-lite on the world) rebuilds a hash of sheep
 positions each physics tick; `OnFootSheep` asks it for k nearest. Removes the
 per-sheep `get_nodes_in_group` scans. Cell size ~ `d_rep * 2`.
 
-### Dog brain
+### Dog brain (out of scope for now)
 
 `HerdingDogBrain.next_target(dog_pos, flock_positions, goal) -> Vector3` returns
 `P_drive` or the collect point. Today only the player plays the dog, so this is
@@ -164,10 +199,12 @@ Even before the refactor, these are cheap and map directly to the paper:
 4. Add a velocity-heading inertia term (blend with previous heading ~0.5)
    before the `accel` clamp.
 5. Add small heading noise (eta ~0.5 on unit vectors) re-rolled at ~1 Hz.
-6. Match the paper's speed ratio: flee speed should be ~1.1-1.3x
-   *player* speed, not 4.6x wander speed, or the flock will always outrun the
-   dog and herding becomes a "teleport the sheep" mechanic. Currently
-   `flee_speed 5.5` vs `wander_speed 1.2`; check against player run speed.
+6. Match the paper's speed ratio. **Reviewed, no change:** the player's walk
+   speeds are 3.5 / 5.0 and sprint 8.0 / 8.5 (`on_foot_player.gd`), and
+   `flee_speed` is 5.5. So walking never catches a fleeing flock, but sprinting
+   gains ~2.5-3 m/s, which reads as "run to herd, walk to keep pressure".
+   That is a deliberate-feeling gap rather than the paper's 1.15x, so leave it
+   as a tuning knob.
 
 ## 5. Acceptance harness
 
@@ -187,7 +224,7 @@ These are the paper's own observables, so regressions are measurable instead of
 
 ## 6. Phasing
 
-1. **Phase 1 (small PR):** section 4 deltas inside `on_foot_sheep.gd` + the
+1. **Phase 1 (this PR, done pending sign-off):** section 4 deltas inside `on_foot_sheep.gd` + the
    harness check. Biggest visible win, low risk.
 2. **Phase 2:** extract `FlockSteering`/`FlockGrid`/`FlockParams`; port
    `OnFootSheep` onto it; port `Sheep` (island) with navmesh target picking.
