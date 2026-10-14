@@ -7,9 +7,10 @@ every production business hold tools that wear out and make its workers more
 productive, so the Toolsmith has business-to-business demand and tools matter
 to output.
 
-Status: phases 1-3 (model, purchasing, bootstrap) are implemented in this PR
-and always on, gated only by a tools seller existing in the town. Phases 4-5
-(UI, herds) are not built. There is deliberately no on/off setting: it is
+Status: built in this PR and always on, gated only by a tools seller existing
+in the town: the wear-and-productivity model, tool purchasing, and starting
+stock / startup cash (steps 1-3 under "Implementation phases"). Not built: the
+UI (step 4) and herds (step 5). There is deliberately no on/off setting: it is
 tuned as one addition. See "Tuning" below for the measured numbers.
 
 ## Where things stand
@@ -66,7 +67,7 @@ harness baseline stays identical.
 | Charcoal Burner | 1 | 1/300 | |
 | Butcher | 1 | 1/250 | blades |
 | Toolsmith | 1 | 1/400 | uses its own; bootstrap risk, see below |
-| Cattle Ranch, Sheep Farm | 0.5 | 1/400 | optional, phase 5 |
+| Cattle Ranch, Sheep Farm | 0.5 | 1/400 | optional, herds step (5) |
 
 At about 60 working households' workers this is roughly 0.2-0.3 tools a day of
 industrial demand, i.e. 30-40% on top of household demand. That is the intended
@@ -106,7 +107,7 @@ size: enough to matter, not enough to dominate.
 5. **Optional: herds.** Apply to care accrual once the rest is calibrated; herd
    husbandry is already a delicate model (see `HERD_LABOR_PER_HEAD_PER_DAY`).
 
-## Tuning (measured, phases 1-3 as built)
+## Tuning (measured, as built)
 
 Probe: `build_economy_with_toolsmith`, 720 days, seeds 4242/1/2/3, toolsmith
 output rate swept with industrial demand in the books (iron 0.07 per tool,
@@ -166,7 +167,7 @@ Harness additions (`run_household_economy.gd`):
 1. Hybrid wear-out stock plus floored multiplier (not a hard input).
 2. `FLOOR` = 0.6.
 3. In scope: Farm, Woodlot, Iron Mine, Bloomery, Charcoal Burner, Butcher;
-   herds deferred to phase 5; Trader and Government excluded. The Toolsmith is
+   herds deferred (step 5); Trader and Government excluded. The Toolsmith is
    excluded for now (see TODOs).
 4. No Trader import fallback for tools in this step (see TODOs).
 5. Business tool need is independent of household tier; when tiers exist,
@@ -183,7 +184,7 @@ Harness additions (`run_household_economy.gd`):
 - **Toolsmith's own tools.** Its tools in stock are also its product, so
   "tools in use" and "tools for sale" are the same inventory. Either hold tools
   in use as a separate per-business count (included in the stock snapshot) or
-  keep it excluded. Phase 1 excludes it.
+  keep it excluded. This PR excludes it.
 
 ## Out of scope
 
