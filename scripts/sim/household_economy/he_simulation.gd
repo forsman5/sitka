@@ -1401,6 +1401,17 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true) 
 						flow_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
 					flow_history[flow] = flow_series
 				report["flow_history"] = flow_history
+		if include_detail and b.uses_tools():
+			var tool_crew := _business_employed_worker_count(b.id)
+			report["tools"] = {
+				"active": _tools_in_play(b.settlement_id),
+				"stock": b.stock(Commodity.Type.TOOLS),
+				"needed": float(tool_crew) * b.tools_per_worker,
+				"wear_per_day": float(tool_crew) * b.tool_wear_per_worker_day,
+				"coverage": b.tool_coverage(tool_crew),
+				"productivity": _tool_productivity(b),
+				"floor": HEBusiness.TOOL_PRODUCTIVITY_FLOOR,
+			}
 		out.append(report)
 	return out
 
