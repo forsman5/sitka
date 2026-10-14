@@ -1,34 +1,23 @@
 extends Control
 
-## Setup page shown before the household economy sim starts: pick a preset
-## from the dropdown, or tick the businesses to include by hand, then Start.
-## Ticking a box by hand flips the dropdown to "Custom". Presets keep their
-## own authored staffing; Custom uses HEScenarioSeeds.build_custom.
+## Setup page shown before the household economy sim starts: pick a starting
+## town (HEPresets: small / mining / large village), then Start. Each preset is
+## a spec dictionary -- see data/he_presets.gd -- built by
+## HEScenarioSeeds.build_preset.
 
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEPresets = preload("res://scripts/sim/household_economy/data/he_presets.gd")
 const HEDashboard = preload("res://scripts/sim/household_economy/he_dashboard.gd")
 const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 
-## "include" mirrors which businesses each builder in HEScenarioSeeds creates,
-## so choosing a preset ticks the matching boxes.
-const PRESETS := [
-	{"label": "Six businesses, evenly staffed", "builder": "build_three_business_economy", "include": [1, 2, 3, 6, 7, 8]},
-	{"label": "Six businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7, 8]},
-	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
-	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
-	{"label": "Seven businesses, with Toolsmith (imports iron)", "builder": "build_economy_with_toolsmith", "include": [1, 2, 3, 6, 7, 8, 11]},
-	{"label": "Nine businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8, 10]},
-]
-
 var _preset_picker: OptionButton
-var _checks: Dictionary = {} # business_id -> CheckBox
-var _start_button: Button
-var _warning_label: Label
+var _blurb_label: Label
+var _detail_label: Label
 
 func _ready() -> void:
 	EscapeMenu.attach_to(self)
 	_build_ui()
-	_apply_preset(0)
+	_apply_preset(HEPresets.keys().find(HEPresets.DEFAULT_KEY))
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -47,31 +36,21 @@ func _build_ui() -> void:
 	vbox.add_child(title)
 
 	var preset_label := Label.new()
-	preset_label.text = "Preset"
+	preset_label.text = "Starting town"
 	vbox.add_child(preset_label)
 	_preset_picker = OptionButton.new()
-	for preset in PRESETS:
-		_preset_picker.add_item(preset["label"])
-	_preset_picker.add_item("Custom")
-	_preset_picker.item_selected.connect(_on_preset_selected)
+	for key in HEPresets.keys():
+		_preset_picker.add_item(str(HEPresets.spec(key)["label"]))
+	_preset_picker.item_selected.connect(_apply_preset)
 	vbox.add_child(_preset_picker)
 
-	var businesses_label := Label.new()
-	businesses_label.text = "Businesses to include"
-	vbox.add_child(businesses_label)
-	for business in HEScenarioSeeds.business_types():
-		var check := CheckBox.new()
-		check.text = business["label"]
-		check.tooltip_text = business["hint"]
-		check.toggled.connect(_on_check_toggled)
-		vbox.add_child(check)
-		_checks[business["id"]] = check
-
-	_warning_label = Label.new()
-	_warning_label.text = "Include at least a Farm or a Woodlot -- nothing else produces food or fuel."
-	_warning_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
-	_warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(_warning_label)
+	_blurb_label = Label.new()
+	_blurb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_blurb_label)
+	_detail_label = Label.new()
+	_detail_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_detail_label)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
@@ -80,46 +59,24 @@ func _build_ui() -> void:
 	back.text = "Back"
 	back.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn"))
 	buttons.add_child(back)
-	_start_button = Button.new()
-	_start_button.text = "Start"
-	_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_start_button.pressed.connect(_on_start_pressed)
-	buttons.add_child(_start_button)
+	var start_button := Button.new()
+	start_button.text = "Start"
+	start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	start_button.pressed.connect(_on_start_pressed)
+	buttons.add_child(start_button)
 
 func _apply_preset(index: int) -> void:
 	_preset_picker.select(index)
-	var include: Array = PRESETS[index]["include"]
-	for id in _checks:
-		(_checks[id] as CheckBox).set_pressed_no_signal(include.has(id))
-	_update_start_state()
-
-func _on_preset_selected(index: int) -> void:
-	if index < PRESETS.size():
-		_apply_preset(index)
-	else:
-		_update_start_state()
-
-func _on_check_toggled(_pressed: bool) -> void:
-	_preset_picker.select(PRESETS.size())
-	_update_start_state()
-
-func _included_ids() -> Array:
-	var ids: Array = []
-	for business in HEScenarioSeeds.business_types():
-		if (_checks[business["id"]] as CheckBox).button_pressed:
-			ids.append(business["id"])
-	return ids
-
-func _update_start_state() -> void:
-	var ids := _included_ids()
-	var valid := ids.has(HEScenarioSeeds.FARM_BUSINESS_ID) or ids.has(HEScenarioSeeds.WOODLOT_BUSINESS_ID)
-	_start_button.disabled = not valid
-	_warning_label.visible = not valid
+	var spec := HEPresets.spec(HEPresets.keys()[index])
+	_blurb_label.text = str(spec["blurb"])
+	var housing: Dictionary = spec.get("housing", {})
+	var crews: Dictionary = spec.get("crews", {})
+	var trades: Array[String] = ["Farm", "Woodlot"]
+	for crew_key in crews:
+		trades.append(str(crew_key).capitalize())
+	_detail_label.text = "%d households, %d houses. Trades: %s." % [int(spec["households"]), int(housing.get("houses", 0)), ", ".join(trades)]
 
 func _on_start_pressed() -> void:
-	var index := _preset_picker.selected
-	if index < PRESETS.size():
-		HEDashboard.pending_builder = Callable(HEScenarioSeeds, PRESETS[index]["builder"])
-	else:
-		HEDashboard.pending_builder = Callable(HEScenarioSeeds, "build_custom").bind(_included_ids())
+	var key: String = HEPresets.keys()[_preset_picker.selected]
+	HEDashboard.pending_builder = Callable(HEScenarioSeeds, "build_preset").bind(key)
 	get_tree().change_scene_to_file("res://scenes/sim/he_dashboard.tscn")
