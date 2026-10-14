@@ -11,6 +11,7 @@ const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 ## Housing builds the Housing tab offers, in button order.
 const HOUSING_BUILD_KEYS := ["house", "tenement"]
@@ -1503,6 +1504,8 @@ func _refresh_household_detail() -> void:
 		_add_household_detail_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
 	for bonus in h["morale_bonuses"]:
 		_add_household_detail_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
+	if h["morale"] > 1.0 and h["is_employed"]:
+		_add_household_detail_line("    Morale above 100%%: +%.0f%% output at their workplace" % ((h["morale"] - 1.0) * HEHousehold.MORALE_PRODUCTIVITY_PER_POINT * 100.0))
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
@@ -2209,6 +2212,15 @@ func _refresh_business_detail() -> void:
 		else:
 			var boost: float = tools["productivity"] / tools["floor"] - 1.0
 			rows.append(["Tool use", "using %.2f tools/day to boost productivity by %.0f%% (running at %.0f%% of full output)" % [tools["wear_per_day"], boost * 100.0, tools["productivity"] * 100.0]])
+	if report.has("crew_morale") and report["crew_morale"]["workers"] > 0:
+		var crew: Dictionary = report["crew_morale"]
+		var morale_boost: float = crew["multiplier"] - 1.0
+		var morale_text := "crew morale %.0f%% (avg of %d workers)" % [crew["avg_morale"] * 100.0, crew["workers"]]
+		if morale_boost > 0.0005:
+			morale_text += ", boosting output by %.0f%%" % (morale_boost * 100.0)
+		else:
+			morale_text += ", no output bonus (needs morale above 100%)"
+		rows.append(["Productivity from morale", morale_text])
 	rows.append_array([
 		["Treasury" if report["kind"] == "warehouse" else "Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],

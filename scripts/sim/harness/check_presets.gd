@@ -21,6 +21,7 @@ func _init() -> void:
 	for key in HEPresets.keys():
 		_check_preset(key)
 	_check_large_village_densifies()
+	_check_custom_roster()
 	_check_rejects_bad_specs()
 	print("PRESETS %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
@@ -81,6 +82,37 @@ func _check_large_village_densifies() -> void:
 		if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
 			tenements += 1
 	_assert(tenements == 1, "The layout shows one tenement site (got %d)" % tenements)
+
+## The setup page's Custom roster: a spec with `include` builds only the ticked
+## businesses at the chosen household count and runs.
+func _check_custom_roster() -> void:
+	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
+	var roster := ["farm", "woodlot", "trader", "bloomery", "iron_mine"]
+	var spec := HEPresets.custom_spec(roster, 24)
+	_assert(HEPresets.validate(spec).is_empty(), "A custom spec validates: %s" % str(HEPresets.validate(spec)))
+	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_spec").bind(spec), true)
+	_assert(sim.get_household_ids().size() == 24, "Custom household count is honored")
+	for entry in HEScenarioSeeds.business_types():
+		_assert(sim.has_business_of_type(settlement_id, entry["type_key"]) == roster.has(entry["type_key"]),
+			"Custom roster presence for %s" % entry["type_key"])
+	_assert(sim._government_warehouse(settlement_id) != null, "A custom town keeps its warehouse")
+	sim.advance_ticks(180)
+	_assert(int(sim.get_city_summary()["population"]) > 0, "A custom town runs")
+	var restored: Variant = JSON.parse_string(JSON.stringify(spec))
+	_assert(restored is Dictionary and (restored as Dictionary)["include"].size() == roster.size(), "A custom spec survives JSON")
+	_assert(not HEPresets.custom_roster_valid(["trader", "butcher"]), "A roster with no Farm or Woodlot is invalid")
+	_assert(HEPresets.custom_roster_valid(["woodlot"]), "A Woodlot alone is enough to start")
+	var woodlot_only := HEPresets.custom_spec(["woodlot"], 20)
+	_assert(float(woodlot_only["farm_share"]) == 0.0, "A woodlot-only roster puts everyone on the Woodlot")
+	# Housing, gold and the field split are settable.
+	var tuned := HEPresets.custom_spec(["farm", "woodlot"], 20, {"houses": 10, "tenements": 2, "treasury_bonus": 500.0, "farm_share": 0.75})
+	_assert(HEPresets.validate(tuned).is_empty(), "A tuned custom spec validates: %s" % str(HEPresets.validate(tuned)))
+	var tuned_sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_spec").bind(tuned), true)
+	var housing := tuned_sim.get_housing_report(settlement_id)
+	_assert(int(housing["houses"]) == 12, "10 houses + 2 tenements make 12 buildings (got %d)" % int(housing["houses"]))
+	_assert(int(housing["capacity"]) == 10 + 2 * 4, "Tenements shelter four households each (capacity %d)" % int(housing["capacity"]))
+	_assert(int(housing["upgradable_houses"]) == 10, "Only the plain houses are upgradable")
+	_assert(_treasury(tuned_sim) >= 500.0, "Starting gold lands in the treasury (%.0f)" % _treasury(tuned_sim))
 
 func _check_rejects_bad_specs() -> void:
 	var bad := HEPresets.spec("small_village")

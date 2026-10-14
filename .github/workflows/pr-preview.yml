@@ -2,15 +2,16 @@ name: PR preview
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, edited, closed]
 
 permissions:
   contents: read
   pull-requests: write
 
 # A newer push cancels a stale build; closing cancels any in-flight build before teardown.
+# Title/body edits get their own group so they never cancel a build in progress.
 concurrency:
-  group: preview-${{ github.event.number }}
+  group: preview-${{ github.event.number }}${{ github.event.action == 'edited' && '-meta' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -18,14 +19,32 @@ jobs:
   # so fork PRs must never reach it. Do not switch this to pull_request_target.
   preview:
     if: >-
-      github.event.action != 'closed' &&
+      github.event.action != 'closed' && github.event.action != 'edited' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: sitka
     steps:
       - uses: actions/checkout@v4
+      # github-script rather than jq: the stock runner image doesn't guarantee jq.
+      # PR text is untrusted but only ever lands in a JSON file via JSON.stringify.
+      - name: Write preview metadata
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const meta = {
+              number: pr.number,
+              title: pr.title,
+              body: (pr.body || '').slice(0, 1500),
+              branch: pr.head.ref,
+              sha: pr.head.sha,
+              url: pr.html_url,
+              built_at: new Date().toISOString(),
+            };
+            require('fs').writeFileSync(`${process.env.RUNNER_TEMP}/_preview.json`, JSON.stringify(meta));
       - uses: ./.github/actions/deploy-web
         with:
           dest: previews/sitka-pr-${{ github.event.number }}
+          meta-file: ${{ runner.temp }}/_preview.json
       # Posted only after the copy succeeds, so the link never points at a missing build.
       - uses: marocchino/sticky-pull-request-comment@v3.0.5
         with:
@@ -34,6 +53,60 @@ jobs:
             **Preview ready:** https://gamedev.tail6f8350.ts.net/previews/sitka-pr-${{ github.event.number }}/
 
             Built from `${{ github.event.pull_request.head.sha }}`. Tailnet-only; the link is removed when this PR closes.
+
+  # Title/description edits refresh only _preview.json in the existing preview (no rebuild).
+  # No checkout: nothing here needs the repo, and kubectl is installed inline like teardown.
+  meta:
+    if: >-
+      github.event.action == 'edited' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: sitka
+    steps:
+      - name: Install kubectl
+        run: |
+          curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-1.35.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mkdir -p "$HOME/bin"
+          mv kubectl "$HOME/bin/kubectl"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Fetch current metadata
+        id: fetch
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::bad PR number: $PR_NUMBER"; exit 1; }
+          POD=$(kubectl -n gamedev get pod -l app.kubernetes.io/name=gamedev-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+          test -n "$POD"
+          echo "pod=$POD" >> "$GITHUB_OUTPUT"
+          # Skip the rest if the first build hasn't landed yet; it will carry current text.
+          if kubectl -n gamedev exec "$POD" -- sh -c '[ -f "$1/_preview.json" ] && cat "$1/_preview.json"' _ "/app/exports/web/previews/sitka-pr-${PR_NUMBER}" > "$RUNNER_TEMP/old.json"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Merge into the existing JSON so sha/built_at keep describing the actual build.
+      - name: Merge edited fields
+        if: steps.fetch.outputs.found == 'true'
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const meta = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/old.json`, 'utf8'));
+            Object.assign(meta, {
+              title: pr.title,
+              body: (pr.body || '').slice(0, 1500),
+              branch: pr.head.ref,
+              url: pr.html_url,
+            });
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/new.json`, JSON.stringify(meta));
+
+      - name: Upload refreshed metadata
+        if: steps.fetch.outputs.found == 'true'
+        env:
+          POD: ${{ steps.fetch.outputs.pod }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          kubectl -n gamedev exec -i "$POD" -- sh -c 'cat > "$1/_preview.json.new" && mv "$1/_preview.json.new" "$1/_preview.json"' _ "/app/exports/web/previews/sitka-pr-${PR_NUMBER}" < "$RUNNER_TEMP/new.json"
 
   teardown:
     if: >-
