@@ -25,6 +25,7 @@ var _detail_view
 var _day_label: Label
 var _day_accumulator := 0.0
 var _speed_multiplier := 1.0
+var _speed_before_town_view := -1.0
 var _camera: Camera3D
 var _valley_canvas: CanvasLayer
 var _selection_panel: PanelContainer
@@ -423,14 +424,25 @@ func _open_detail_view() -> void:
 	_detail_view.embedded_mode = true
 	_detail_view.back_requested.connect(_close_detail_view)
 	_detail_view.speed_requested.connect(func(speed: float) -> void: _speed_multiplier = speed)
+	_detail_view.town_mode_changed.connect(_on_detail_town_mode_changed)
 	get_tree().root.add_child(_detail_view)
 	_valley_canvas.visible = false
 
 func _close_detail_view() -> void:
 	if _detail_view != null:
+		_on_detail_town_mode_changed(false)
 		_detail_view.queue_free()
 		_detail_view = null
 		_valley_canvas.visible = true
+
+func _on_detail_town_mode_changed(enabled: bool) -> void:
+	if enabled:
+		if _speed_before_town_view < 0.0:
+			_speed_before_town_view = _speed_multiplier
+		_speed_multiplier = 0.0
+	elif _speed_before_town_view >= 0.0:
+		_speed_multiplier = _speed_before_town_view
+		_speed_before_town_view = -1.0
 
 func _add_route(id: String) -> void:
 	var spec: Dictionary = map_definition.roads[id]

@@ -26,8 +26,19 @@ func _run() -> void:
 		push_error("Embedded town detail has no town layout or view")
 		quit(1)
 		return
+	valley.set("_speed_multiplier", 100.0)
 	detail._set_town_mode(true)
 	await process_frame
+	if valley.get("_speed_multiplier") != 0.0:
+		push_error("Town view did not pause the valley clock")
+		quit(1)
+		return
+	var paused_day: int = valley.get("_economy").day
+	valley._process(0.25)
+	if valley.get("_economy").day != paused_day:
+		push_error("Valley time advanced while Town view was open")
+		quit(1)
+		return
 	if not detail._town_view.visible or detail._town_view.site_node_count() < detail.external_simulation.get_business_reports().size():
 		push_error("Embedded town view does not show the town's businesses")
 		quit(1)
@@ -37,10 +48,11 @@ func _run() -> void:
 		push_error("Embedded town view could not place the town's businesses or houses")
 		quit(1)
 		return
-	if not detail._speed_buttons[2].visible or not detail._speed_buttons[3].visible:
-		push_error("Embedded town view lost the shared valley speed controls")
-		quit(1)
-		return
+	for button in detail._speed_buttons:
+		if button.visible:
+			push_error("Embedded town view still exposes valley speed controls")
+			quit(1)
+			return
 	detail.set_external_town_phase(0.5)
 	if absf(detail._town_view.time_of_day() - 0.5) > 0.0001:
 		push_error("Embedded town view did not follow the valley clock phase")
@@ -53,6 +65,11 @@ func _run() -> void:
 		quit(1)
 		return
 	valley.call("_close_detail_view")
+	if valley.get("_speed_multiplier") != 100.0:
+		push_error("Closing Town view did not restore the previous valley speed")
+		quit(1)
+		return
+	valley.set("_speed_multiplier", 0.0)
 	if not valley.get("_valley_canvas").visible:
 		push_error("Valley controls did not return")
 		quit(1)

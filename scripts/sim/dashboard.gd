@@ -31,6 +31,7 @@ var _simulation
 var _valley_economy: ValleyEconomy
 var _detail_view
 var _speed_multiplier: float = 1.0
+var _speed_before_town_view: float = -1.0
 var _day_accumulator: float = 0.0
 var _game_over_shown := false
 
@@ -255,14 +256,25 @@ func _open_household_detail(town_id: int) -> void:
 	_detail_view.embedded_mode = true
 	_detail_view.back_requested.connect(_close_household_detail)
 	_detail_view.speed_requested.connect(func(speed: float) -> void: _speed_multiplier = speed)
+	_detail_view.town_mode_changed.connect(_on_detail_town_mode_changed)
 	get_tree().root.add_child(_detail_view)
 	visible = false
 
 func _close_household_detail() -> void:
 	if _detail_view != null:
+		_on_detail_town_mode_changed(false)
 		_detail_view.queue_free()
 		_detail_view = null
 		visible = true
+
+func _on_detail_town_mode_changed(enabled: bool) -> void:
+	if enabled:
+		if _speed_before_town_view < 0.0:
+			_speed_before_town_view = _speed_multiplier
+		_speed_multiplier = 0.0
+	elif _speed_before_town_view >= 0.0:
+		_speed_multiplier = _speed_before_town_view
+		_speed_before_town_view = -1.0
 
 func _build_settlement_panel(parent: VBoxContainer, settlement_id: int) -> Dictionary:
 	var panel := PanelContainer.new()

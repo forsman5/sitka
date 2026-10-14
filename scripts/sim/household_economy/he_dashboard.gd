@@ -2,6 +2,7 @@ extends Control
 
 signal back_requested
 signal speed_requested(speed: float)
+signal town_mode_changed(enabled: bool)
 
 ## H1 equivalent of scripts/sim/dashboard.gd: a live, speed-controllable
 ## read-out of HESimulation. This is a view only -- it holds one
@@ -3147,20 +3148,26 @@ func _build_town_gov_build_button() -> MenuButton:
 	button.about_to_popup.connect(_refresh_government_build_menu)
 	return button
 
-## Dashboard <-> town map. The simulation keeps running either way; only which
-## half of the window is shown changes.
+## Dashboard <-> town map. Embedded hosts pause their valley clock in Town view.
 func _set_town_mode(enabled: bool) -> void:
+	var changed := _town_view.visible != enabled
 	_town_view.visible = enabled
 	for body in _dashboard_body:
 		body.visible = not enabled
-	_town_mode_button.text = "Dashboard" if enabled else "Town view"
+	_town_mode_button.text = "Dashboard (resume)" if enabled and embedded_mode else ("Dashboard" if enabled else "Town view")
+	_town_mode_button.tooltip_text = "Return to the dashboard and resume the valley clock." if enabled and embedded_mode else "Switch between the dashboard and a map of the town's buildings."
 	# Standalone Town view has one pace. An embedded view uses the valley clock.
 	var standalone_town_time := enabled and not embedded_mode
 	_speed_buttons[1].text = "Play" if standalone_town_time else "1x"
 	_speed_buttons[2].visible = not standalone_town_time
 	_speed_buttons[3].visible = not standalone_town_time
+	if embedded_mode:
+		for button in _speed_buttons:
+			button.visible = not enabled
 	if enabled:
 		_town_view.set_time_of_day(_town_phase)
+	if changed:
+		town_mode_changed.emit(enabled)
 
 ## "Open business details" in the town view: back to the dashboard with that
 ## business's detail panel open.
