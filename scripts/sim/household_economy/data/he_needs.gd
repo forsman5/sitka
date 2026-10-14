@@ -37,8 +37,27 @@ static func all() -> Array[HENeed]:
 			# whichever posts the lower price (see _satisfier_cascade).
 			HENeed.new(HENeed.Id.CLOTHING, "Clothing", 0.01, {Commodity.Type.LEATHER: 1.0, Commodity.Type.WOOL: 1.0}, Commodity.Type.WOOL, false, 0.15,
 				"Threadbare clothes slowly wear down health and morale. Reporting only: does not (yet) cause emigration."),
+			# Matches Simulation.TOOLS_PER_PERSON_PER_DAY. Like clothing it does
+			# not feed the lifecycle engine; only a Toolsmith supplies it, so a
+			# town without one simply has no tools need (needs_seller). Health
+			# weights already sum to 1.0 across the other needs, so going without
+			# tools costs no health -- a household that has them gets a morale
+			# lift instead (morale_bonus).
+			HENeed.new(HENeed.Id.TOOLS, "Tools", 0.005, {Commodity.Type.TOOLS: 1.0}, Commodity.Type.TOOLS, false, 0.0,
+				"Good tools lift morale; going without costs no health. Reporting only: no effect on output yet.", true, 0.1),
 		]
 	return _all
+
+## Top-to-bottom order of the dashboard's Needs tab. Only a preference: every
+## need in the catalog appears, so adding one here can't leave it off the tab.
+const DISPLAY_PREFERRED_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
+
+static func display_order() -> Array:
+	var order: Array = DISPLAY_PREFERRED_ORDER.duplicate()
+	for need in all():
+		if not order.has(need.id):
+			order.append(need.id)
+	return order
 
 static func get_need(id: HENeed.Id) -> HENeed:
 	for need in all():

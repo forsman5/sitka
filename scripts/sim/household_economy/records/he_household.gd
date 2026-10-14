@@ -444,11 +444,25 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[D
 			break
 	return out
 
+## Morale gained from needs fully met today (HENeed.morale_bonus), as
+## [{label, bonus}]. Everyone in the household shares it.
+func morale_bonuses() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for need in HENeeds.all():
+		if need.morale_bonus <= 0.0:
+			continue
+		var required: float = last_need_required.get(need.id, 0.0)
+		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
+			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
+	return out
+
 func morale(vulnerability: float = 1.0, works: bool = true) -> float:
 	var total := 0.0
 	for entry in morale_penalties(vulnerability, works):
-		total += entry["penalty"]
-	return clampf(1.0 - total, 0.0, 1.0)
+		total -= entry["penalty"]
+	for entry in morale_bonuses():
+		total += entry["bonus"]
+	return clampf(1.0 + total, 0.0, 1.0)
 
 ## 1.0 for most people; VULNERABILITY_MULTIPLIER for children and the frail.
 static func vulnerability_of(is_worker: bool, age_days: int) -> float:
