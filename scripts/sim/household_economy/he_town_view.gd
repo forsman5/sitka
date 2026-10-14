@@ -52,6 +52,12 @@ const PASTURE_COLOR := Color(0.5, 0.72, 0.34)
 const PASTURE_EDGE_COLOR := Color(0.36, 0.58, 0.25)
 const STAND_COLOR := Color(0.2, 0.38, 0.2)
 const PLAZA_COLOR := Color(0.7, 0.62, 0.46)
+const ROAD_COLOR := Color(0.62, 0.55, 0.42)
+const LANE_COLOR := Color(0.66, 0.6, 0.47)
+## Front-door footpath to the road, in the road's own colour.
+const PATH_WIDTH := 1.4
+## How far the path starts inside the building's footprint, so no gap shows.
+const PATH_BUILDING_TUCK := 0.3
 const VACANT_OVERLAY := Color(0.45, 0.45, 0.45, 0.55)
 const SELECTION_COLOR := Color(1.0, 0.9, 0.2, 0.45)
 
@@ -71,6 +77,9 @@ var _time_of_day := 0.25
 var _viewport: SubViewport
 var _camera: Camera3D
 var _sites_root: Node3D
+var _roads_root: Node3D
+var _roads_for: HETownLayout
+var _roads_drawn := 0
 var _selection_marker: MeshInstance3D
 var _info_panel: PanelContainer
 var _info_title: Label
@@ -102,6 +111,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> voi
 		_reports[int(report["business_id"])] = report
 	if _sites_root == null:
 		return
+	_sync_roads(layout)
 	for site in layout.get_sites():
 		if not site["built"]:
 			continue
@@ -310,6 +320,51 @@ static func _flat_material(color: Color) -> StandardMaterial3D:
 # Sites
 # ---------------------------------------------------------------------------
 
+## Roads are only ever added, so the view keeps what it drew and adds the new
+## ones (a different layout instance redraws all): a flat ribbon per segment
+## plus a disc at every joint to hide the wedge gaps.
+func _sync_roads(layout: HETownLayout) -> void:
+	if _roads_for == layout and _roads_root != null and layout.road_count() == _roads_drawn:
+		return
+	var roads := layout.get_roads()
+	if _roads_for != layout or _roads_root == null or roads.size() < _roads_drawn:
+		_roads_for = layout
+		_roads_drawn = 0
+		if _roads_root != null:
+			_roads_root.queue_free()
+		_roads_root = Node3D.new()
+		_roads_root.name = "Roads"
+		_viewport.add_child(_roads_root)
+	for index in range(_roads_drawn, roads.size()):
+		_draw_road(roads[index])
+	_roads_drawn = roads.size()
+
+func _draw_road(road: Dictionary) -> void:
+	var width: float = road["width"]
+	var color := ROAD_COLOR if road["class"] == "main" else LANE_COLOR
+	var points: PackedVector2Array = road["points"]
+	for i in range(points.size() - 1):
+		var delta := points[i + 1] - points[i]
+		var ribbon := MeshInstance3D.new()
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(delta.length(), 0.1, width)
+		ribbon.mesh = mesh
+		ribbon.material_override = _flat_material(color)
+		var middle := (points[i] + points[i + 1]) * 0.5
+		ribbon.position = Vector3(middle.x, 0.03, middle.y)
+		ribbon.rotation.y = -delta.angle()
+		_roads_root.add_child(ribbon)
+	for point in points:
+		var disc := MeshInstance3D.new()
+		var cylinder := CylinderMesh.new()
+		cylinder.top_radius = width * 0.5
+		cylinder.bottom_radius = width * 0.5
+		cylinder.height = 0.1
+		disc.mesh = cylinder
+		disc.material_override = _flat_material(color)
+		disc.position = Vector3(point.x, 0.03, point.y)
+		_roads_root.add_child(disc)
+
 func _sync_site(site: Dictionary) -> void:
 	var site_id: int = site["site_id"]
 	var occupied: bool = site["business_id"] != HETownLayout.NO_BUSINESS or site["dwelling_id"] != HETownLayout.NO_BUSINESS
@@ -356,6 +411,7 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
 	if type_key == HETownLayout.HOUSE_TYPE_KEY and int(site["site_id"]) % 2 == 1:
 		art = HOUSE_ALT_ART
+	_add_door_path(root, site, art)
 	var building := _make_building(art, occupied)
 	building.position = building_offset
 	body.add_child(building)
@@ -375,6 +431,31 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	label.position = Vector3(0.0, 9.0, 0.0) + Vector3(building_offset.x, 0.0, 0.0).rotated(Vector3.UP, body.rotation.y)
 	root.add_child(label)
 	return {"root": root, "label": label}
+
+## A footpath from the building's front face to the site's access point on the
+## road centreline. It starts under the building and ends under the road
+## ribbon, and is sunk just below both surfaces (road top 0.08, plaza top
+## 0.10), so only the stretch of bare ground between them shows and the road
+## is never recoloured. Drawn in the site's root space.
+func _add_door_path(root: Node3D, site: Dictionary, art: Dictionary) -> void:
+	var access: Vector2 = site["access"]
+	if not access.is_finite():
+		return
+	var origin: Vector2 = site["position"]
+	var direction := (access - origin).normalized()
+	var door := maxf(float(art["width"]) * 0.5 - PATH_BUILDING_TUCK, 0.0)
+	var length := origin.distance_to(access) - door
+	if length < 0.3:
+		return
+	var path := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(length, 0.1, PATH_WIDTH)
+	path.mesh = mesh
+	path.material_override = _flat_material(ROAD_COLOR)
+	var middle := direction * (door + length * 0.5)
+	path.position = Vector3(middle.x, 0.02, middle.y)
+	path.rotation.y = -direction.angle()
+	root.add_child(path)
 
 func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	if art["model"] == "barn":
@@ -472,7 +553,7 @@ func _site_at(point: Vector2) -> int:
 	if _layout == null:
 		return -1
 	for site in _layout.get_sites():
-		if site["built"] and _layout.site_rect(site).has_point(point):
+		if site["built"] and _layout.site_contains(site, point):
 			return site["site_id"]
 	return -1
 
@@ -486,9 +567,11 @@ func _refresh_info() -> void:
 	_info_panel.visible = not site.is_empty()
 	if site.is_empty():
 		return
-	var rect := _layout.site_rect(site)
-	(_selection_marker.mesh as BoxMesh).size = Vector3(rect.size.x + 1.0, 0.15, rect.size.y + 1.0)
-	_selection_marker.position = Vector3(rect.get_center().x, 0.2, rect.get_center().y)
+	var footprint: Vector2 = site["footprint"]
+	var center: Vector2 = site["position"]
+	(_selection_marker.mesh as BoxMesh).size = Vector3(footprint.x + 1.0, 0.15, footprint.y + 1.0)
+	_selection_marker.position = Vector3(center.x, 0.2, center.y)
+	_selection_marker.rotation.y = -float(site["rotation"])
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
