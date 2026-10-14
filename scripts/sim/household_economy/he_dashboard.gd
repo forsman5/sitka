@@ -74,6 +74,7 @@ const TOWN_STATS := [
 	["Money written off", "money_written_off_total", "%.1f"],
 	["Export revenue (lifetime)", "export_revenue_total", "%.1f"],
 	["Import cost (lifetime)", "import_cost_total", "%.1f"],
+	["Construction spend (lifetime)", "construction_spend_total", "%.1f"],
 ]
 ## Births, emigrations and deaths are evaluated monthly, so the daily record is
 ## mostly zeros with a spike every 30 days; the flow chart plots a trailing
@@ -103,6 +104,7 @@ const BLOTTER_FILTERS := [
 	{"type": "business_failed", "label": "Business closures"},
 	{"type": "herd_birth", "label": "Herd births"},
 	{"type": "herd_cull", "label": "Herd culls"},
+	{"type": "home_butcher", "label": "Home butchering of culls"},
 	{"type": "hardship_butcher", "label": "Hardship butchering"},
 ]
 
@@ -178,6 +180,12 @@ var _business_detail_cull_target_hint: Label
 ## (re)loaded when the selection changes -- the detail view refreshes every
 ## tick, and rewriting the box then would clobber whatever's being typed.
 var _cull_target_loaded_for: int = -1
+var _business_detail_warehouse_section: VBoxContainer
+var _business_detail_warehouse_grid: GridContainer
+var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
+var _warehouse_orders_loaded_for: int = -1
+var _gov_build_popup: PopupMenu
+var _create_business_button: MenuButton
 var _business_detail_herd_events_section: VBoxContainer
 var _business_detail_herd_events_display: RichTextLabel
 var _business_detail_transaction_section: VBoxContainer
@@ -216,6 +224,9 @@ var _person_detail_title: Label
 var _person_detail_content: VBoxContainer
 var _selected_person_household_id: int = -1
 var _selected_person_number: int = -1
+var _end_screen: ColorRect
+var _end_screen_summary: Label
+var _ended := false
 
 func _ready() -> void:
 	# The valley hosting an embedded view has its own menu. get() because
@@ -253,7 +264,7 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
-	if _simulation == null or _speed_multiplier <= 0.0:
+	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
 	_day_accumulator = minf(_day_accumulator, 8.0) # bound interactive work, same as dashboard.gd
@@ -391,7 +402,7 @@ func _build_ui() -> void:
 	goods_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	top_tabs.add_child(goods_scroll)
 	_market_grid = GridContainer.new()
-	_market_grid.columns = 5
+	_market_grid.columns = 6
 	_market_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
@@ -567,7 +578,7 @@ func _build_ui() -> void:
 	_business_detail_cull_target_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_business_detail_herd_events_section.add_child(_business_detail_cull_target_hint)
 	var herd_events_title := Label.new()
-	herd_events_title.text = "Herd events (births, culls, hardship sales)"
+	herd_events_title.text = "Herd events (births, culls, hardship butchering)"
 	herd_events_title.add_theme_font_size_override("font_size", 14)
 	_business_detail_herd_events_section.add_child(herd_events_title)
 	_business_detail_herd_events_display = RichTextLabel.new()
@@ -575,6 +586,25 @@ func _build_ui() -> void:
 	_business_detail_herd_events_display.fit_content = true
 	_business_detail_herd_events_display.scroll_active = false
 	_business_detail_herd_events_section.add_child(_business_detail_herd_events_display)
+
+	# Warehouse standing orders: the section is built once, its rows (one per
+	# tradeable good) the first time a warehouse report arrives -- see
+	# _refresh_warehouse_orders.
+	_business_detail_warehouse_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_warehouse_section)
+	var warehouse_title := Label.new()
+	warehouse_title.text = "Market orders (paid from the treasury)"
+	warehouse_title.add_theme_font_size_override("font_size", 14)
+	_business_detail_warehouse_section.add_child(warehouse_title)
+	var warehouse_hint := Label.new()
+	warehouse_hint.text = "Buy up to: stock the warehouse from local sellers, else the Trader's imports (up to %.0f units a day). Sell: export what is held above Keep through the Trader at its export bid." % HESimulation.WAREHOUSE_DAILY_TRADE_CAP
+	warehouse_hint.add_theme_font_size_override("font_size", 12)
+	warehouse_hint.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	warehouse_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_business_detail_warehouse_section.add_child(warehouse_hint)
+	_business_detail_warehouse_grid = GridContainer.new()
+	_business_detail_warehouse_grid.columns = 6
+	_business_detail_warehouse_section.add_child(_business_detail_warehouse_grid)
 
 	var employment_section := VBoxContainer.new()
 	detail_content.add_child(employment_section)
@@ -779,6 +809,63 @@ func _build_ui() -> void:
 
 	_rebuild_business_rows()
 	_rebuild_household_rows()
+	_build_end_screen()
+
+## Full-window overlay shown once the town's population reaches 0. Added last
+## so it draws over everything and swallows clicks meant for the dashboard.
+func _build_end_screen() -> void:
+	_end_screen = ColorRect.new()
+	_end_screen.color = Color(0.0, 0.0, 0.0, 0.8)
+	_end_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_screen.mouse_filter = Control.MOUSE_FILTER_STOP
+	_end_screen.visible = false
+	add_child(_end_screen)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_end_screen.add_child(center)
+
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "The town is empty"
+	title.add_theme_font_size_override("font_size", 32)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+
+	_end_screen_summary = Label.new()
+	_end_screen_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_end_screen_summary.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
+	box.add_child(_end_screen_summary)
+
+	var restart := Button.new()
+	restart.text = "Restart this scenario"
+	restart.pressed.connect(func() -> void: get_tree().reload_current_scene())
+	box.add_child(restart)
+	var setup := Button.new()
+	setup.text = "Back to setup"
+	setup.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/sim/he_config.tscn"))
+	box.add_child(setup)
+	var menu := Button.new()
+	menu.text = "Main menu"
+	menu.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn"))
+	box.add_child(menu)
+
+## Stops the simulation and shows the end screen the first time population hits 0.
+func _check_extinction() -> void:
+	if _ended or _simulation.get_population_wellbeing()["population"] > 0:
+		return
+	_ended = true
+	_speed_multiplier = 0.0
+	var city := _simulation.get_city_summary()
+	_end_screen_summary.text = "Everyone is gone after %s.\nBirths %d  |  Emigrations %d  |  Old-age deaths %d" % [
+		_format_day(_simulation.get_clock_summary()["day"]),
+		city["births_total"], city["emigrations_total"], city["old_age_deaths_total"]]
+	_end_screen.visible = true
 
 ## "<person icon> 123 (12 unemployed)    Health 82%    Morale 64%" -- town-wide headcount and
 ## per-person averages, colored by _wellbeing_color().
@@ -993,6 +1080,14 @@ func _open_settings_dialog() -> void:
 		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
 	sparkline_box.value_changed.connect(apply)
 	blotter_box.value_changed.connect(apply)
+	var dev_label := Label.new()
+	dev_label.text = "Dev mode"
+	grid.add_child(dev_label)
+	var dev_check := CheckBox.new()
+	dev_check.text = "Show free \"Create business\" (off = build via Government)"
+	dev_check.button_pressed = GameState.dev_mode
+	dev_check.toggled.connect(GameState.set_dev_mode)
+	grid.add_child(dev_check)
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
@@ -1015,6 +1110,8 @@ func _tail(values: Array) -> Array:
 	return values.slice(values.size() - keep) if values.size() > keep else values
 
 func _on_history_settings_changed() -> void:
+	if _create_business_button != null and is_instance_valid(_create_business_button):
+		_create_business_button.visible = GameState.dev_mode
 	_update_history_titles()
 	_set_blotter_minimized(_blotter_minimized)
 	_refresh()
@@ -1333,6 +1430,7 @@ func _on_business_row_selected(business_id: int) -> void:
 	_clear_person_detail()
 	_selected_business_id = business_id
 	_cull_target_loaded_for = -1
+	_warehouse_orders_loaded_for = -1
 	_trader_settings_open = false
 	_business_detail_panel.visible = true
 	_refresh_business_detail()
@@ -1403,12 +1501,14 @@ func _rebuild_trader_settings() -> void:
 	title.add_theme_font_size_override("font_size", 16)
 	_trader_settings_list.add_child(title)
 	var note := Label.new()
-	note.text = "Changes take effect on the next day and reset when you load a scenario. Enabled goods use shared export capacity in the order shown. Local households and businesses buy before exports."
+	note.text = "Changes take effect on the next day and reset when you load a scenario. Local households and businesses buy first; each seller then decides how much it can spare and the least it will take, and the Trader takes what it can use at its bid, widest spread first, until its capacity is used. The bid moves a little each day."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trader_settings_list.add_child(note)
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
 		checkbox.text = option["name"]
+		if option["reference_price"] > 0.0:
+			checkbox.text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
 		var option_icon := Commodity.icon_of(option["commodity_id"])
 		if option_icon != null:
 			checkbox.icon = option_icon
@@ -1596,9 +1696,39 @@ func _refresh_market_detail() -> void:
 		_market_detail_content.remove_child(child)
 		child.queue_free()
 	var clearing: Dictionary = report["last_clearing"]
-	_add_market_detail_line("Posted price %.2f  |  Last clearing: offered %.1f, affordable request %.1f, traded %.1f" % [
+	_add_market_detail_line("Posted price %.2f  |  Last clearing (all buyers): offered %.1f, affordable requests %.1f, traded %.1f" % [
 		report["price"], clearing.get("total_offered", 0.0),
 		clearing.get("total_requested_funded", 0.0), clearing.get("quantity_traded", 0.0)])
+	var household: Dictionary = report["household_demand"]
+	_add_market_detail_line("Households: %.1f wanted for stock  |  %.1f affordable  |  %.1f bought" % [
+		household["wanted"], household["funded"], household["bought"]])
+	var price_signal: Dictionary = report["price_signal"]
+	if not price_signal.is_empty():
+		var imbalance := "funded shortage %.1f" % price_signal["shortage"] if price_signal["shortage"] > 0.0001 \
+			else "unsold offer %.1f" % price_signal["unsold"]
+		_add_market_detail_line("Price %.2f -> %.2f (%s)  |  %s  |  households wanted but could not fund %.1f%s" % [
+			price_signal["opening_price"], price_signal["closing_price"], price_signal["reason"],
+			imbalance, price_signal["unfunded_household"],
+			"  |  at price %s" % price_signal["bound"] if price_signal["bound"] != "" else ""])
+	var seller: Dictionary = report["seller"]
+	if not seller.is_empty():
+		_add_market_detail_line("%s: %.1f in warehouse, %.1f offered today%s" % [
+			seller["name"], seller["stock"], seller["paced_offer"],
+			" (sales paced; harvest in %d days)" % seller["days_until_harvest"] if seller["paced"] else ""])
+	var need: Dictionary = report["need"]
+	if not need.is_empty() and not (need["required_history"] as Array).is_empty():
+		var need_line := HBoxContainer.new()
+		var need_link := Button.new()
+		need_link.text = "%s need" % need["label"]
+		need_link.flat = true
+		need_link.tooltip_text = "Open %s need detail" % need["label"]
+		need_link.pressed.connect(_on_linked_need_pressed.bind(need["id"]))
+		need_line.add_child(need_link)
+		var need_rest := Label.new()
+		need_rest.text = ": %.1f required, %.1f provided (latest day)" % [
+			need["required_history"].back(), need["provided_history"].back()]
+		need_line.add_child(need_rest)
+		_market_detail_content.add_child(need_line)
 	_add_market_detail_chart(report)
 	_add_market_detail_line("Potential buyers: %d  |  Potential sellers: %d" % [report["buyers"].size(), report["sellers"].size()])
 	_add_market_detail_line("Requests and offers estimate the next clearing; affordable does not mean purchased.")
@@ -1619,9 +1749,12 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	title.text = "Supply and demand (last %d days)" % GameState.sparkline_days
 	title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	header.add_child(title)
-	var requested_name := "Requested (incl. export capacity)" if _market_chart_export_appetite else "Requested"
+	var wanted_color := HESparkline.color_for_series(2)
+	var bought_color := HESparkline.color_for_series(3)
+	var requested_name := "Affordable requests (incl. export capacity)" if _market_chart_export_appetite else "Affordable requests"
 	var requested_history: Array = report["demanded_with_export_history"] if _market_chart_export_appetite else report["demanded_history"]
-	for entry in [["Supplied", supplied_color], [requested_name, requested_color]]:
+	for entry in [["Supplied", supplied_color], [requested_name, requested_color],
+			["Households wanted", wanted_color], ["Households bought", bought_color]]:
 		var legend := Label.new()
 		legend.text = entry[0]
 		legend.add_theme_color_override("font_color", entry[1])
@@ -1631,7 +1764,9 @@ func _add_market_detail_chart(report: Dictionary) -> void:
 	chart.show_max_label = true
 	chart.set_series([
 		{"name": "Supplied", "values": _tail(report["supplied_history"]), "color": supplied_color},
-		{"name": "Requested", "values": _tail(requested_history), "color": requested_color},
+		{"name": "Affordable requests", "values": _tail(requested_history), "color": requested_color},
+		{"name": "Households wanted", "values": _tail(report["household_wanted_history"]), "color": wanted_color},
+		{"name": "Households bought", "values": _tail(report["household_bought_history"]), "color": bought_color},
 	])
 	_market_detail_content.add_child(chart)
 
@@ -1762,7 +1897,16 @@ func _refresh_business_detail() -> void:
 		rows.append(["Last review culled", [[report["output_commodity"], "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]]]])
 	else:
 		rows.append(["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]])
-	if report["kind"] != "trader":
+	if report["kind"] == "warehouse":
+		var held_parts: Array = []
+		for order_row in report["warehouse_orders"]:
+			if order_row["stock"] > 0.0001:
+				held_parts.append([order_row["name"], "%s %.1f" % [order_row["name"], order_row["stock"]]])
+		if held_parts.is_empty():
+			rows.append(["Inventory", "empty"])
+		else:
+			rows.append(["Inventory", held_parts])
+	elif report["kind"] != "trader":
 		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
 		var input_parts: Array = []
@@ -1770,7 +1914,7 @@ func _refresh_business_detail() -> void:
 			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
 		rows.append(["Input inventory", input_parts])
 	rows.append_array([
-		["Cash", "%.1f" % report["balance"]],
+		["Treasury" if report["kind"] == "warehouse" else "Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
 		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
 		["Reference wage", "%.3f" % report["reference_wage_per_worker"]],
@@ -1780,6 +1924,22 @@ func _refresh_business_detail() -> void:
 		["Last wages paid", "%.2f" % report["last_wages_paid"]],
 		["Last cash change", "%.2f" % report["last_cash_change"]],
 	])
+	# Operating ledger: cash movements by heading, with cash profit and stock
+	# accumulation kept as separate figures (goods built up are not cash).
+	var ledger: Dictionary = report.get("ledger", {})
+	if not ledger.is_empty():
+		rows.append(["Sales today", "households %.2f · businesses %.2f · export %.2f" % [ledger["sales_household"], ledger["sales_business"], ledger["sales_export"] + ledger["sales_other"] + ledger["trade_margin"]]])
+		rows.append(["Inputs bought today", "local %.2f · imported %.2f" % [ledger["input_local"], ledger["input_import"]]])
+		rows.append(["Wages · sales tax", "%.2f · %.2f" % [ledger["wages"], ledger["taxes"]]])
+		rows.append(["Cash profit today", "%.2f" % ledger["cash_profit"]])
+		rows.append(["Stock accumulated today", "%+.2f of goods (output %.1f, inputs %.1f held)" % [ledger["stock_change_value"], ledger["output_stock_value"], ledger["input_stock_value"]]])
+		var recent: Array = (report["ledger_history"] as Array).slice(-30)
+		var profit_30 := 0.0
+		var stock_30 := 0.0
+		for entry in recent:
+			profit_30 += entry["cash_profit"]
+			stock_30 += entry["stock_change_value"]
+		rows.append(["Last %d days (avg/day)" % recent.size(), "cash profit %.2f · stock accumulated %+.2f" % [profit_30 / recent.size(), stock_30 / recent.size()]])
 	if report["land_area_acres"] > 0.0:
 		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
 		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
@@ -1823,11 +1983,78 @@ func _refresh_business_detail() -> void:
 				herd_lines.append(_format_event(herd_events[i]))
 			_business_detail_herd_events_display.text = "\n".join(herd_lines)
 
+	_business_detail_warehouse_section.visible = report["kind"] == "warehouse"
+	if _business_detail_warehouse_section.visible:
+		_refresh_warehouse_orders(report)
+
 	_business_detail_transaction_section.visible = report["kind"] == "trader"
 	if _business_detail_transaction_section.visible:
 		_refresh_trader_transactions()
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
+
+## The warehouse's order table. Rows are created once (a per-refresh rebuild
+## would split a click across two widget instances, like the HUD's buttons);
+## the stock/price labels update every refresh, while the spin boxes and
+## checkbox are loaded from the sim only when this warehouse is first shown, so
+## the daily refresh never clobbers a value being typed.
+func _refresh_warehouse_orders(report: Dictionary) -> void:
+	var order_rows: Array = report["warehouse_orders"]
+	if _warehouse_rows.is_empty():
+		for header in ["Good", "Held", "Price", "Buy up to", "Sell", "Keep"]:
+			var header_label := Label.new()
+			header_label.text = header
+			header_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+			_business_detail_warehouse_grid.add_child(header_label)
+		for order_row in order_rows:
+			var commodity: int = order_row["commodity"]
+			var name_label := Label.new()
+			name_label.text = order_row["name"]
+			_business_detail_warehouse_grid.add_child(name_label)
+			var held_label := Label.new()
+			_business_detail_warehouse_grid.add_child(held_label)
+			var price_label := Label.new()
+			_business_detail_warehouse_grid.add_child(price_label)
+			var buy_box := SpinBox.new()
+			buy_box.min_value = 0.0
+			buy_box.max_value = 1000.0
+			buy_box.step = 5.0
+			buy_box.custom_minimum_size = Vector2(90, 0)
+			buy_box.value_changed.connect(_on_warehouse_order_edited.bind(commodity))
+			_business_detail_warehouse_grid.add_child(buy_box)
+			var sell_box := CheckBox.new()
+			sell_box.toggled.connect(_on_warehouse_order_edited.bind(commodity))
+			_business_detail_warehouse_grid.add_child(sell_box)
+			var keep_box := SpinBox.new()
+			keep_box.min_value = 0.0
+			keep_box.max_value = 1000.0
+			keep_box.step = 5.0
+			keep_box.custom_minimum_size = Vector2(90, 0)
+			keep_box.value_changed.connect(_on_warehouse_order_edited.bind(commodity))
+			_business_detail_warehouse_grid.add_child(keep_box)
+			_warehouse_rows[commodity] = {"held": held_label, "price": price_label, "buy": buy_box, "sell": sell_box, "keep": keep_box}
+		_warehouse_orders_loaded_for = -1
+	var load_values := _warehouse_orders_loaded_for != _selected_business_id
+	_warehouse_orders_loaded_for = _selected_business_id
+	for order_row in order_rows:
+		var widgets: Dictionary = _warehouse_rows.get(order_row["commodity"], {})
+		if widgets.is_empty():
+			continue
+		(widgets["held"] as Label).text = "%.1f" % order_row["stock"]
+		(widgets["price"] as Label).text = "%.2f" % order_row["price"]
+		(widgets["buy"] as SpinBox).tooltip_text = "Buys from the local seller" if order_row["has_local_seller"] else "No local seller: bought through the Trader's imports"
+		if load_values:
+			(widgets["buy"] as SpinBox).set_value_no_signal(order_row["buy_up_to"])
+			(widgets["sell"] as CheckBox).set_pressed_no_signal(order_row["sell"])
+			(widgets["keep"] as SpinBox).set_value_no_signal(order_row["keep"])
+
+## Any of a row's three controls changed: send the row's whole order.
+func _on_warehouse_order_edited(_value, commodity: int) -> void:
+	if _selected_business_id == -1 or not _warehouse_rows.has(commodity):
+		return
+	var widgets: Dictionary = _warehouse_rows[commodity]
+	_simulation.set_warehouse_order(_selected_business_id, commodity,
+		(widgets["buy"] as SpinBox).value, (widgets["sell"] as CheckBox).button_pressed, (widgets["keep"] as SpinBox).value)
 
 ## Built once (not per refresh) so the tab buttons stay clickable.
 func _build_flow_chart(parent: Control) -> Dictionary:
@@ -2022,6 +2249,9 @@ func _goods_cell(commodity_name: String, text: String, min_width: float = 0.0, l
 	box.add_child(label)
 	return box
 
+func _on_linked_need_pressed(need_id: int) -> void:
+	_open_linked(_on_need_row_selected.bind(need_id))
+
 func _on_linked_market_pressed(commodity: int) -> void:
 	_open_linked(_on_market_row_selected.bind(commodity))
 
@@ -2162,7 +2392,7 @@ func _rebuild_market_grid() -> void:
 		child.queue_free()
 	_market_labels.clear()
 
-	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded"]:
+	for col_label in ["Good", "Price", "Offered", "Affordable request", "Traded", "Stored"]:
 		var header := Label.new()
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -2183,7 +2413,7 @@ func _rebuild_market_grid() -> void:
 		_market_grid.add_child(name_button)
 
 		var labels := {}
-		for key in ["price", "offered", "funded", "traded"]:
+		for key in ["price", "offered", "funded", "traded", "stored"]:
 			var value_label := Label.new()
 			value_label.custom_minimum_size = Vector2(110, 0)
 			value_label.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
@@ -2263,8 +2493,40 @@ func _rebuild_business_rows() -> void:
 		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
 		create_popup.set_item_disabled(i, already_built)
 	create_popup.id_pressed.connect(_on_create_business_pressed)
+	create_button.visible = GameState.dev_mode
+	_create_business_button = create_button
 	_business_list.add_child(create_button)
+
+	var gov_build_button := MenuButton.new()
+	gov_build_button.text = "Government build ▾"
+	gov_build_button.flat = false
+	gov_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	gov_build_button.tooltip_text = "Build a municipal building. The cost is paid from the town treasury."
+	_gov_build_popup = gov_build_button.get_popup()
+	for i in HEScenarioSeeds.government_buildings().size():
+		_gov_build_popup.add_item("", i)
+	_gov_build_popup.id_pressed.connect(_on_build_government_pressed)
+	_business_list.add_child(gov_build_button)
+	_refresh_government_build_menu()
 	_rebuild_job_rows()
+
+## Item text and enabled state of the "Government build" menu. Run every
+## refresh, not only when the rows are rebuilt: affordability follows the
+## treasury, which grows (and is spent) as the sim runs.
+func _refresh_government_build_menu() -> void:
+	if _gov_build_popup == null or not is_instance_valid(_gov_build_popup):
+		return
+	var gov_options := HEScenarioSeeds.government_buildings()
+	for i in gov_options.size():
+		var gov_option: Dictionary = gov_options[i]
+		var blocker := _simulation.government_build_blocker(_town_settlement_id(), gov_option)
+		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(gov_option["cost"])]
+		if blocker == "already built":
+			item_text = "%s (already built)" % gov_option["label"]
+		elif blocker != "":
+			item_text += " - %s" % blocker
+		_gov_build_popup.set_item_text(i, item_text)
+		_gov_build_popup.set_item_disabled(i, blocker != "")
 
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
@@ -2277,6 +2539,15 @@ func _on_create_business_pressed(index: int) -> void:
 	var business: HEBusiness = option["make"].call(_simulation.next_business_id(), settlement_id)
 	_simulation.add_new_business(business)
 	_business_names[business.id] = business.name
+	_rebuild_business_rows()
+	_refresh()
+
+func _on_build_government_pressed(index: int) -> void:
+	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
+	if not _simulation.build_government_building(_town_settlement_id(), option["type_key"]):
+		return
+	for report in _simulation.get_business_reports():
+		_business_names[report["business_id"]] = report["name"]
 	_rebuild_business_rows()
 	_refresh()
 
@@ -2484,8 +2755,10 @@ func _refresh() -> void:
 	_day_label.text = _format_day(clock["day"])
 	_refresh_treasury()
 	_refresh_population_summary()
+	_check_extinction()
 
 	_refresh_town()
+	_refresh_government_build_menu()
 
 	var market := _simulation.get_market_summary()
 	var current_market_commodities := market.keys()
@@ -2500,6 +2773,7 @@ func _refresh() -> void:
 		(labels["offered"] as Label).text = "%.1f" % clearing.get("total_offered", 0.0)
 		(labels["funded"] as Label).text = "%.1f" % clearing.get("total_requested_funded", 0.0)
 		(labels["traded"] as Label).text = "%.1f" % clearing.get("quantity_traded", 0.0)
+		(labels["stored"] as Label).text = "%.1f" % entry.get("stored", 0.0)
 	# The detail panels below are rebuilt from scratch, link buttons included. At
 	# high speed this runs nearly every frame, which would swap a button out
 	# between mouse-down and mouse-up and eat the click, so hold off while a
@@ -2555,6 +2829,10 @@ func _refresh() -> void:
 			var gov_text := "Treasury %.1f · tax today %.2f (%.0f%% sales tax)" % [report["treasury"], report["last_tax_collected"], report["sales_tax_rate"] * 100.0]
 			status_label.text = gov_text
 			status_label.tooltip_text = "%s\n\nSales tax on every local sale pays the administrator; builder jobs are not modeled yet." % gov_text
+		elif report["kind"] == "warehouse":
+			var warehouse_text := "Holding %.1f units · wages and purchases paid by the treasury" % report["stock"]
+			status_label.text = warehouse_text
+			status_label.tooltip_text = "%s\n\nOpen the warehouse to set buy/sell orders against the local market and the Trader." % warehouse_text
 		elif report["kind"] == "trader":
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
@@ -2708,10 +2986,14 @@ func _format_event(event: Dictionary) -> String:
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]
+		"home_butcher":
+			var home_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
+			return "[color=#e0b080]%s - %s: no Trader or Butcher took the cull, butchered %.1f head at home for %.1f meat to sell locally[/color]" % [
+				day, home_ranch, event["head"], event["meat"]]
 		"hardship_butcher":
 			var owner_name: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
-			return "[color=#e0b080]%s - %s: hardship butchering, sold %.1f head for %.1f to cover a %.1f wage shortfall (herd now %.0f)[/color]" % [
-				day, owner_name, event["head"], event["proceeds"], event["shortfall"], event["herd_after"]]
+			return "[color=#e0b080]%s - %s: hardship butchering, slaughtered %.1f head at home for %.1f meat to sell locally, covering a %.1f wage shortfall (herd now %.0f)[/color]" % [
+				day, owner_name, event["head"], event["meat"], event["shortfall"], event["herd_after"]]
 		"fired":
 			var employer: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var reason: String

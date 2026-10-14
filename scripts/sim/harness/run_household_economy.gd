@@ -30,8 +30,21 @@ func _init() -> void:
 	_check_input_purchases_on_credit()
 	_check_goods_flow_history_reconciles_with_stock()
 	_check_market_supply_demand_history()
+	_check_need_vs_funded_demand()
+	_check_price_signal()
+	_check_business_ledger_reconciles()
+	_check_butcher_ledger_values_animals()
+	_check_staffing_decisions()
+	_check_staffing_outcomes()
+	_check_trader_stays_solvent()
+	_check_seller_trade_offers()
+	_check_trader_bids()
+	_check_trade_allocation_and_cash()
+	_check_herd_export_path()
+	_check_no_export_reserve_left()
 	_check_local_iron_mine_supplies_bloomery_first()
 	_check_trader_export_settings()
+	_check_export_settings_derived_from_commodities()
 	_check_bloomery_stays_off_when_not_seeded()
 	_check_firing_is_logged_with_reason()
 	_check_event_history_survives_busy_categories()
@@ -44,14 +57,21 @@ func _init() -> void:
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
 	_check_herd_cull_target_is_configurable()
+	_check_herd_collateral_finances_wages()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
+	_check_hardship_butchery_makes_local_meat()
+	_check_cull_without_outlet_is_butchered_at_home()
+	_check_livestock_goods()
+	_check_livestock_export_toggle()
 	_check_butcher_processes_livestock()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
 	_check_mill_and_bakery_chain()
 	_check_government_taxes()
+	_check_government_warehouse()
+	_check_government_build_costs()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -206,6 +226,14 @@ func _check_multi_settlement_locality() -> void:
 		"Disconnected settlements with different supply should develop independent prices")
 	_assert(sim.get_household_summary(1001)["settlement_id"] == 1 and sim.get_household_summary(2001)["settlement_id"] == 2,
 		"Every household summary should retain authoritative settlement identity")
+	# Need history is per town, not valley-wide.
+	var food: int = HENeed.Id.FOOD
+	for town in [1, 2]:
+		var household: HEHousehold = sim.households[sim.get_household_ids(town)[0]]
+		var town_need: Dictionary = sim.get_market_report(town, Commodity.Type.GRAIN)["need"]
+		var valley_total: float = sim.get_daily_history(1)[0]["needs"][food]["required"]
+		_assert(absf(town_need["required_history"].back() - household.last_need_required[food]) < EPSILON, "Town %d need history should hold only its own households' requirement" % town)
+		_assert(town_need["required_history"].back() < valley_total - EPSILON, "Town %d need history must not equal the valley-wide total" % town)
 	print("  two settlements enumerate, hire, clear markets, and report independently")
 
 ## Goods and money reconcile as opening + produced - consumed - exported
@@ -235,7 +263,7 @@ func _check_conservation() -> void:
 	## SUBSISTENCE_COMMODITIES itself. Checked here too so the new Trader
 	## export pass is held to the same reconciliation bar as everything else.
 	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
-	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
 
 	var worst_stock_gap := 0.0
 	var worst_money_gap := 0.0
@@ -280,7 +308,10 @@ func _check_conservation() -> void:
 		# nobody left to ration, so only check businesses that employ people.
 		if report["employed_workers"] <= 0:
 			continue
-		var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * report["reference_wage_per_worker"] * report["employed_workers"]
+		# The business's ACTUAL overdraft limit (a ranch's is backed by its herd),
+		# not the generic 60-day floor.
+		var business: HEBusiness = sim.businesses[report["business_id"]]
+		var floor: float = -sim._wage_overdraft_limit(business, report["reference_wage_per_worker"] * report["employed_workers"])
 		worst_business_floor_breach = max(worst_business_floor_breach, floor - report["balance"])
 	print("  minimum stock=%.3f, minimum household balance=%.3f, worst business wage-floor breach=%.4f" % [min_stock, min_household_balance, worst_business_floor_breach])
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
@@ -529,7 +560,9 @@ func _check_market_supply_demand_history() -> void:
 		var report := sim.get_market_detail(settlement_id, commodity)
 		var supplied: Array = report["supplied_history"]
 		var demanded: Array = report["demanded_history"]
-		_assert(supplied.size() == window and demanded.size() == window, "%s history should be capped at %d days, got %d/%d" % [Commodity.name_of(commodity), window, supplied.size(), demanded.size()])
+		# One point per simulated day, capped at the window: 100 days in, 100 points.
+		var expected_days := mini(window, 100)
+		_assert(supplied.size() == expected_days and demanded.size() == expected_days, "%s history should hold one point per day (%d), got %d/%d" % [Commodity.name_of(commodity), expected_days, supplied.size(), demanded.size()])
 		for v in supplied + demanded:
 			if v > 0.0:
 				any_activity = true
@@ -566,6 +599,642 @@ func _check_market_supply_demand_history() -> void:
 	_assert(appetite_higher_somewhere, "With ore export enabled, appetite should exceed shipped quantity on some day")
 	var off_report := mine_sim.get_market_detail(mine_settlement_id, Commodity.Type.IRON_ORE)
 	_assert(off_report["demanded_with_export_history"] == off_report["demanded_history"], "With export disabled, both demand series should match")
+
+## Need, wanted-for-stock, affordable and bought are four different numbers.
+## Each case sets every household into one state, clears one day's market, and
+## checks how the household-only signals diverge.
+func _check_need_vs_funded_demand() -> void:
+	print("\n=== Household demand signals: wanted vs affordable vs bought ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"no cash": {"balance": 0.0, "household_stock": 0.0, "seller_stock": 1000.0},
+		"cash but no supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 0.0},
+		"already stocked": {"balance": 1000.0, "household_stock": 1000.0, "seller_stock": 1000.0},
+		"cash and supply": {"balance": 1000.0, "household_stock": 0.0, "seller_stock": 1000.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			if c["household_stock"] > 0.0:
+				h.add_stock(grain, c["household_stock"])
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var market: HEMarket = sim.markets[settlement_id]
+		var offer: float = sim._household_offer(settlement_id, grain)
+		sim._run_market(sim._new_daily_record())
+		var d := market.household_demand(grain)
+		print("  %-20s wanted=%.1f affordable=%.1f bought=%.1f" % [label, d["wanted"], d["funded"], d["bought"]])
+		_assert(d["funded"] <= d["wanted"] + EPSILON, "%s: affordable cannot exceed wanted" % label)
+		_assert(d["bought"] <= d["funded"] + EPSILON, "%s: bought cannot exceed affordable" % label)
+		match label:
+			"no cash":
+				_assert(d["wanted"] > 1.0 and d["funded"] < EPSILON and d["bought"] < EPSILON, "No cash: wanted but nothing affordable or bought")
+			"cash but no supply":
+				_assert(d["wanted"] > 1.0 and absf(d["funded"] - d["wanted"]) < EPSILON and d["bought"] < EPSILON, "No supply: fully affordable but nothing bought")
+			"already stocked":
+				_assert(d["wanted"] < EPSILON and d["funded"] < EPSILON and d["bought"] < EPSILON, "Stocked households want nothing")
+			"cash and supply":
+				_assert(d["bought"] > 1.0 and absf(d["bought"] - minf(offer, d["funded"])) < EPSILON, "Cash and supply: bought is the funded request capped by the (paced) offer")
+		# A stocked household still NEEDS grain; need is independent of wanting.
+		sim._run_consumption(sim._new_daily_record())
+		var any_household: HEHousehold = sim.households[sim.get_household_ids()[0]]
+		_assert(any_household.last_need_required.get(HENeed.Id.FOOD, 0.0) > 0.0, "%s: food is still required regardless of cash or stock" % label)
+		_assert(not sim._market_need_report(settlement_id, grain).is_empty(), "%s: grain should map to the food need" % label)
+
+	# Histories align by day, and a shared need is reported once, not per good.
+	var run := _new_sim("build_economy_with_charcoal_burner")
+	run.advance_ticks(60)
+	var settlement: int = run.get_settlement_ids()[0]
+	var report := run.get_market_report(settlement, Commodity.Type.TIMBER)
+	var wanted: Array = report["household_wanted_history"]
+	var funded: Array = report["household_funded_history"]
+	var bought: Array = report["household_bought_history"]
+	var plain: Array = report["demanded_history"]
+	_assert(wanted.size() == plain.size() and funded.size() == plain.size() and bought.size() == plain.size(), "Household series should have one point per day like the existing ones")
+	for i in wanted.size():
+		_assert(funded[i] <= wanted[i] + EPSILON and bought[i] <= funded[i] + EPSILON, "Day %d: wanted >= affordable >= bought" % i)
+		_assert(bought[i] <= plain[i] + EPSILON, "Day %d: household purchases fit within all-buyer affordable requests" % i)
+	var timber_need: Dictionary = report["need"]
+	var charcoal_need: Dictionary = run.get_market_report(settlement, Commodity.Type.CHARCOAL)["need"]
+	_assert(timber_need["id"] == charcoal_need["id"] and timber_need["required_history"] == charcoal_need["required_history"], "Timber and charcoal should report the same heat requirement")
+	_assert(timber_need["required_history"].size() == plain.size(), "Need history should cover the same days as market history")
+	var record: Dictionary = run.get_daily_history(1)[0]
+	_assert(absf(timber_need["required_history"].back() - record["needs"][timber_need["id"]]["required"]) < EPSILON, "Need history's last point is the latest day's requirement")
+	print("  histories align over %d days; heat need reported once for timber and charcoal" % plain.size())
+
+## One controlled grain market day: every household has this balance and no
+## stock, the grain seller holds exactly this much, then clear and price.
+func _run_grain_day(sim: HESimulation, settlement_id: int, balance: float, seller_stock: float) -> void:
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		h.inventory.clear()
+		h.balance = balance
+	var seller := sim._business_selling(settlement_id, Commodity.Type.GRAIN)
+	seller.inventory.clear()
+	seller.add_stock(Commodity.Type.GRAIN, seller_stock)
+	sim._run_market(sim._new_daily_record())
+	sim._apply_price_signals()
+
+## One price move per good per day: funded shortage up, unsold offer down,
+## need without purchasing power neither, exports outside the signal.
+func _check_price_signal() -> void:
+	print("\n=== Price signal: funded shortage up, unsold down, unfunded need neutral ===")
+	var grain := Commodity.Type.GRAIN
+	var cases := {
+		"funded shortage": {"balance": 1000.0, "seller_stock": 10.0},
+		"unsold offer": {"balance": 1000.0, "seller_stock": 100000.0},
+		"unfunded households": {"balance": 0.0, "seller_stock": 1000.0},
+		"no supply, no cash": {"balance": 0.0, "seller_stock": 0.0},
+	}
+	for label in cases.keys():
+		var c: Dictionary = cases[label]
+		var sim := _new_sim("build_three_business_economy")
+		var settlement_id: int = sim.get_settlement_ids()[0]
+		var market: HEMarket = sim.markets[settlement_id]
+		for household_id in sim.get_household_ids():
+			var h: HEHousehold = sim.households[household_id]
+			h.inventory.clear()
+			h.balance = c["balance"]
+		var seller := sim._business_selling(settlement_id, grain)
+		seller.inventory.clear()
+		if c["seller_stock"] > 0.0:
+			seller.add_stock(grain, c["seller_stock"])
+		var opening: float = market.price[grain]
+		sim._run_market(sim._new_daily_record())
+		_assert(market.price[grain] == opening, "%s: price must not move during clearing" % label)
+		sim._apply_price_signals()
+		var closing: float = market.price[grain]
+		var s: Dictionary = market.last_price_signal.get(grain, {})
+		_assert(not s.is_empty() and s["opening_price"] == opening and s["closing_price"] == closing, "%s: signal records opening and closing price" % label)
+		print("  %-20s %.3f -> %.3f  %s (shortage %.1f, unsold %.1f, unfunded household %.1f)" % [label, opening, closing, s.get("reason", "?"), s.get("shortage", 0.0), s.get("unsold", 0.0), s.get("unfunded_household", 0.0)])
+		_assert(absf(closing / opening - 1.0) <= HESimulation.PRICE_ADJUST_STEP + 0.00001, "%s: one day's move is capped" % label)
+		match label:
+			"funded shortage":
+				_assert(closing > opening and s["shortage"] > 1.0 and s["reason"] == "funded shortage", "A funded shortage should raise the price")
+			"unsold offer":
+				_assert(closing < opening and s["unsold"] > 1.0 and s["reason"] == "unsold offer", "Unsold offer should lower the price")
+			"unfunded households":
+				_assert(closing < opening and s["unfunded_household"] > 1.0 and s["shortage"] < EPSILON, "Households that want but cannot pay leave offer unsold: price falls, never rises")
+			"no supply, no cash":
+				_assert(closing == opening and s["reason"] == "no activity", "Need without purchasing power or supply should not move the price")
+
+	# Smoothing: a persistent shortage keeps raising the price, but a single
+	# shortage day in the middle of a glut trend does not reverse it.
+	var persistent := _new_sim("build_three_business_economy")
+	var p_settlement: int = persistent.get_settlement_ids()[0]
+	var p_market: HEMarket = persistent.markets[p_settlement]
+	var start: float = p_market.price[grain]
+	for d in 3:
+		_run_grain_day(persistent, p_settlement, 1000.0, 10.0)
+	var after_three: float = p_market.price[grain]
+	_assert(after_three > start, "A persistent funded shortage keeps raising the price")
+	var trend := _new_sim("build_three_business_economy")
+	var t_settlement: int = trend.get_settlement_ids()[0]
+	for d in 5:
+		_run_grain_day(trend, t_settlement, 1000.0, 100000.0)
+	var before_blip: float = trend.markets[t_settlement].price[grain]
+	_run_grain_day(trend, t_settlement, 1000.0, 10.0)
+	_assert(trend.markets[t_settlement].price[grain] < before_blip, "One shortage day should not reverse a falling trend")
+
+	# A business's 14-day buffer refill is a planning figure; only its 3-day
+	# claim competes for today's offer and counts toward the price signal.
+	var biz := _new_sim("build_economy_with_charcoal_burner")
+	var b_settlement: int = biz.get_settlement_ids()[0]
+	# No household demand: businesses may take the whole offer, and the signal
+	# must agree with what they actually bought.
+	for household_id in biz.get_household_ids():
+		biz.households[household_id].balance = 0.0
+	var timber_before: float = biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
+	biz._run_input_purchasing(biz._new_daily_record())
+	var timber_sold: float = timber_before - biz.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(Commodity.Type.TIMBER)
+	biz._run_market(biz._new_daily_record())
+	var timber_signal: Dictionary = biz._price_signal_today[b_settlement][Commodity.Type.TIMBER]
+	_assert(timber_signal["funded_business"] >= timber_sold - EPSILON, "Signal demand (%.1f) must cover what businesses actually bought (%.1f)" % [timber_signal["funded_business"], timber_sold])
+	_assert(timber_sold < timber_signal["funded_business"] + EPSILON, "Businesses cannot buy more than their capped request")
+	# Timber starts at zero in every buyer's hands, so the claim is exactly
+	# TARGET_BUFFER_DAYS of the PRODUCTION_INPUT_BUFFER_DAYS refill.
+	var claim_share: float = HESimulation.TARGET_BUFFER_DAYS / HESimulation.PRODUCTION_INPUT_BUFFER_DAYS
+	_assert(timber_signal["funded_business"] > EPSILON, "Test setup: businesses should be asking for timber")
+	_assert(absf(timber_signal["funded_business"] - timber_signal["business_buffer_request"] * claim_share) < 0.01 * timber_signal["business_buffer_request"], "Signal demand (%.1f) should be the %.0f-day claim, not the full buffer refill (%.1f)" % [timber_signal["funded_business"], HESimulation.TARGET_BUFFER_DAYS, timber_signal["business_buffer_request"]])
+
+	# Import capacity is not unsold local supply: the Trader's unused capacity
+	# must never push the ore price down, and imports that met the request
+	# create no pressure.
+	var imp := _new_sim("build_three_business_economy_with_bloomery")
+	var imp_market: HEMarket = imp.markets[imp.get_settlement_ids()[0]]
+	var ore_signal: Dictionary = {}
+	# The Bloomery buys ore on the days its buffer needs topping up, so wait for one.
+	for day in 80:
+		imp.advance_ticks(1)
+		ore_signal = imp_market.last_price_signal.get(Commodity.Type.IRON_ORE, {})
+		if not ore_signal.is_empty() and ore_signal["funded_business"] > EPSILON:
+			break
+	print("  ore signal: %s" % [ore_signal])
+	_assert(not ore_signal.is_empty() and ore_signal["import_capacity"] > ore_signal["funded_business"], "Test setup: ore should be imported with spare Trader capacity")
+	_assert(ore_signal.get("unsold", 1.0) < EPSILON, "Spare import capacity must not read as unsold supply")
+
+	# Exports are not local demand: iron (only the Trader buys it) has no
+	# signal and keeps its posted price while exporting.
+	var iron_sim := _new_sim("build_three_business_economy_with_bloomery")
+	iron_sim.advance_ticks(60)
+	var iron_market: HEMarket = iron_sim.markets[iron_sim.get_settlement_ids()[0]]
+	_assert(iron_market.price[Commodity.Type.IRON] == HESimulation.BASE_PRICE[Commodity.Type.IRON], "Export appetite must not move iron's local price")
+
+	# Price bounds: a long glut hits the floor and the day count is recorded.
+	var glut := _new_sim("build_three_business_economy")
+	var g_settlement: int = glut.get_settlement_ids()[0]
+	for d in 120:
+		for household_id in glut.get_household_ids():
+			glut.households[household_id].balance = 0.0
+		glut._business_selling(g_settlement, grain).add_stock(grain, 100000.0)
+		glut._run_market(glut._new_daily_record())
+		glut._apply_price_signals()
+	_assert(glut.markets[g_settlement].floor_days.get(grain, 0) > 0, "A persistent glut should record days at the price floor")
+	print("  persistent shortage 3 days: %.3f -> %.3f; glut floor days: %d" % [start, after_three, glut.markets[g_settlement].floor_days.get(grain, 0)])
+
+## Operating ledger: every cash movement of a business lands under its own
+## heading, the day's cash profit reconciles to the balance change (less any
+## startup cash), and stock accumulation is a separate figure that moves on its
+## own -- so a business's books can be read without inferring costs from its
+## balance.
+func _check_business_ledger_reconciles() -> void:
+	print("\n=== Operating ledger: cash profit reconciles to balance; stock change kept apart ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	sim.advance_ticks(150)
+	var worst_gap := 0.0
+	var rows_checked := 0
+	var stock_moved := false
+	var cash_and_stock_differ := false
+	var kinds_with_sales := {}
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		var rows := b.ledger_history()
+		for i in range(1, rows.size()):
+			var balance_change: float = rows[i]["balance"] - rows[i - 1]["balance"]
+			worst_gap = maxf(worst_gap, absf(balance_change - (rows[i]["cash_profit"] + rows[i]["injection"])))
+			rows_checked += 1
+			if absf(rows[i]["stock_change_value"]) > 0.01:
+				stock_moved = true
+				if absf(rows[i]["stock_change_value"] - rows[i]["cash_profit"]) > 0.01:
+					cash_and_stock_differ = true
+			for key in ["sales_household", "sales_business", "sales_export", "input_local", "input_import", "wages", "taxes", "trade_margin", "tax_income"]:
+				if rows[i][key] > 0.0:
+					kinds_with_sales[key] = true
+	print("  %d business-days reconciled, worst gap %.4f; headings used: %s" % [rows_checked, worst_gap, kinds_with_sales.keys()])
+	_assert(rows_checked > 500, "Expected many ledger rows, got %d" % rows_checked)
+	_assert(worst_gap < EPSILON, "Ledger cash profit should equal the balance change, worst gap %.4f" % worst_gap)
+	_assert(stock_moved and cash_and_stock_differ, "Stock accumulation should be its own figure, not folded into cash profit")
+	for key in ["sales_household", "sales_business", "sales_export", "input_local", "wages", "taxes", "trade_margin", "tax_income"]:
+		_assert(kinds_with_sales.has(key), "Ledger heading %s never recorded anything in 150 days" % key)
+
+## A Butcher that really processes head: the animals it uses up are costed at
+## what it pays a ranch (the livestock quote), not at zero, and the ledger row of
+## the day it works includes a review's wool and culls when one lands that day.
+func _check_butcher_ledger_values_animals() -> void:
+	print("\n=== Ledger: a Butcher's animals are valued at what it paid ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var butcher: HEBusiness = null
+	for business_id in sim.businesses.keys():
+		if (sim.businesses[business_id] as HEBusiness).processes_livestock:
+			butcher = sim.businesses[business_id]
+	_assert(butcher != null, "Test setup: the scenario should include a Butcher")
+	if butcher == null:
+		return
+	var seated := 0
+	for household_id in sim.get_household_ids():
+		if seated >= 4:
+			break
+		var h: HEHousehold = sim.households[household_id]
+		h.employer_business_id = butcher.id
+		seated += h.worker_capacity()
+	var cattle := Commodity.Type.CATTLE
+	butcher.add_stock(cattle, 5.0)
+	sim.advance_ticks(1)
+	var consumed: float = float((butcher.todays_flows.get(HEBusiness.FLOW_CONSUMED, {}) as Dictionary).get(cattle, 0.0))
+	var row: Dictionary = butcher.ledger_history(1)[0]
+	var price := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	print("  Butcher used %.1f head at %.1f each: ledger input cost %.1f, output stock %.1f, input stock %.1f" % [consumed, price, row["input_consumed_value"], row["output_stock_value"], row["input_stock_value"]])
+	_assert(consumed > 0.0, "Test setup: the staffed Butcher should process some of its head")
+	_assert(absf(row["input_consumed_value"] - consumed * price) < EPSILON, "Consumed animals should be costed at the Butcher's purchase price, got %.2f for %.1f head at %.1f" % [row["input_consumed_value"], consumed, price])
+
+## A throwaway workshop with a crew and a synthetic ledger, so the staffing
+## decision can be judged on stated books instead of on a scenario's luck.
+func _synthetic_workshop(sim: HESimulation, crew: int, row: Dictionary, held_output: float = 0.0) -> HEBusiness:
+	var b: HEBusiness = HEScenarioSeeds.make_charcoal_burner(900, HEScenarioSeeds.SETTLEMENT_ID)
+	var seated := 0
+	for household_id in sim.get_household_ids():
+		if seated >= crew:
+			break
+		var h: HEHousehold = sim.households[household_id]
+		h.employer_business_id = 900
+		seated += h.worker_capacity()
+	var defaults := {
+		"employed": float(seated), "reference_wage": 1.0, "sales_household": 0.0, "sales_business": 0.0, "sales_export": 0.0,
+		"sales_other": 0.0, "trade_margin": 0.0, "input_consumed_value": 0.0, "taxes": 0.0, "units_sold": 0.0,
+		"units_produced": 0.0, "unmet_demand": 0.0, "unfunded_demand": 0.0, "cash_profit": 0.0, "balance": 0.0}
+	for i in 21:
+		b._ledger_history.append(defaults.merged(row, true))
+	if held_output > 0.0:
+		b.add_stock(Commodity.Type.CHARCOAL, held_output)
+	return b
+
+## The staffing decision, explained from the books: a workshop whose sales
+## cover its inputs and wages keeps (or adds to) its crew; one whose inputs cost
+## more than it sells shrinks; output with no buyer is cut toward what sells;
+## shortage and unfunded need call for hands; sales that are only old stock
+## leaving do not.
+func _check_staffing_decisions() -> void:
+	print("\n=== Staffing: decisions follow operating return and saleable volume ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var wage := 1.0
+	# 6 charcoal a day, sold at 3.8 each; inputs 2.5 timber per unit at timber price t.
+	var sold_all := {"units_produced": 6.0, "units_sold": 6.0, "sales_household": 22.8, "taxes": 0.5}
+
+	var viable := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 15.0}, true))
+	var viable_d := sim._staffing_decision(viable, wage)
+	print("  viable (inputs 15/day):        return/worker %.2f vs wage %.2f -> delta %d %s" % [viable_d["return_per_worker"], wage, viable_d["delta"], viable_d["reason"]])
+	_assert(viable_d["return_per_worker"] > wage, "Viable workshop should clear the wage")
+	_assert(viable_d["delta"] >= 0, "A workshop whose sales cover inputs and wages should not shrink")
+
+	var unviable := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 30.0}, true))
+	var unviable_d := sim._staffing_decision(unviable, wage)
+	print("  unviable (inputs 30/day):      return/worker %.2f vs wage %.2f -> delta %d %s" % [unviable_d["return_per_worker"], wage, unviable_d["delta"], unviable_d["reason"]])
+	_assert(unviable_d["return_per_worker"] < 0.0 and unviable_d["delta"] < 0 and unviable_d["reason"] == "low_return", "Inputs dearer than sales should shrink the crew for low return")
+
+	var oversupplied := _synthetic_workshop(sim, 4, {"units_produced": 6.0, "units_sold": 3.0, "sales_household": 11.4, "input_consumed_value": 3.0, "taxes": 0.25})
+	var oversupplied_d := sim._staffing_decision(oversupplied, wage)
+	print("  oversupplied (sells half):     target crew %.1f of %d -> delta %d %s" % [oversupplied_d["target_workers"], sim._business_employed_worker_count(900), oversupplied_d["delta"], oversupplied_d["reason"]])
+	_assert(oversupplied_d["return_per_worker"] > wage, "Test setup: the units that do sell should look profitable")
+	_assert(oversupplied_d["delta"] < 0 and oversupplied_d["reason"] == "unsold_output", "Output with no buyer should be cut even while the units that sell are profitable")
+
+	var short := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 3.0, "unmet_demand": 3.0}, true))
+	var short_d := sim._staffing_decision(short, wage)
+	print("  supply-limited (3/day unmet):  target crew %.1f -> delta %d %s" % [short_d["target_workers"], short_d["delta"], short_d["reason"]])
+	_assert(short_d["delta"] > 0, "Funded demand the crew could not fill, at a clearing return, should add workers")
+
+	var drawn := _synthetic_workshop(sim, 4, sold_all.merged({"input_consumed_value": 3.0}, true), 500.0)
+	var drawn_d := sim._staffing_decision(drawn, wage)
+	print("  sales from a pile of stock:    delta %d" % drawn_d["delta"])
+	_assert(drawn_d["delta"] == 0, "Sales that are only old stock leaving are not demand for more workers")
+
+	var broke := _synthetic_workshop(sim, 4, {"units_produced": 6.0, "units_sold": 3.0, "sales_household": 11.4, "input_consumed_value": 3.0, "taxes": 0.25, "unfunded_demand": 3.0})
+	var broke_d := sim._staffing_decision(broke, wage)
+	print("  unsold but households broke:   delta %d %s" % [broke_d["delta"], broke_d["reason"]])
+	_assert(broke_d["delta"] >= 0 and broke_d["reason"] != "unsold_output", "Output unsold because households lack money is a wage gap, not a reason to cut jobs")
+
+## Three businesses, each with an explicit expected outcome and the books that
+## explain it. Operating return and staffing are asserted BEFORE survival, so a
+## failure says which constraint broke rather than just "business missing".
+func _check_staffing_outcomes() -> void:
+	print("\n=== Staffing outcomes: oversupplied Woodlot sheds, viable workshop keeps its crew, unviable one closes ===")
+	var wood := HEScenarioSeeds.WOODLOT_BUSINESS_ID
+	var burner_id := HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID
+
+	# 1. An oversupplied Woodlot sheds workers before debt destroys it.
+	var town := _new_sim("build_three_business_economy_with_bloomery")
+	var woodlot: HEBusiness = town.businesses[wood]
+	var start_crew: int = woodlot.capacity
+	var smallest_crew := start_crew
+	var lowest_balance := woodlot.balance
+	var shed_events := 0
+	var unexplained_sheds := 0
+	for day in 450:
+		town.advance_ticks(1)
+		if not town.businesses.has(wood):
+			break
+		smallest_crew = mini(smallest_crew, woodlot.capacity)
+		lowest_balance = minf(lowest_balance, woodlot.balance)
+		var change: Dictionary = town.get_daily_history(1)[0]["capacity_changes"].get(wood, {})
+		if not change.is_empty() and change["new_capacity"] < change["old_capacity"]:
+			shed_events += 1
+			var why: Dictionary = change.get("staffing", {})
+			var explained: bool = change["reason"] == "cash_runway" \
+				or (change["reason"] == "low_return" and why.get("return_per_worker", 0.0) < why.get("wage", 0.0)) \
+				or (change["reason"] == "unsold_output" and why.get("target_workers", 0.0) < why.get("employed", 0.0))
+			if not explained:
+				unexplained_sheds += 1
+	print("  Woodlot crew %d -> %d at its smallest, %d shed decisions (%d unexplained by the books), lowest balance %.0f" % [start_crew, smallest_crew, shed_events, unexplained_sheds, lowest_balance])
+	_assert(shed_events > 0 and smallest_crew <= start_crew - 3, "An oversupplied Woodlot should shed workers (start %d, smallest %d)" % [start_crew, smallest_crew])
+	_assert(unexplained_sheds == 0, "Every Woodlot shed should be explained by its ledger (%d were not)" % unexplained_sheds)
+	_assert(town.businesses.has(wood) and lowest_balance > 0.0, "The Woodlot should shed before debt: survived=%s lowest balance %.0f" % [town.businesses.has(wood), lowest_balance])
+
+	# 2. A workshop with affordable inputs and buyers retains a crew. Prices held
+	# at their intended base values are those conditions.
+	var intended := _new_sim("build_economy_with_charcoal_burner", false)
+	intended.advance_ticks(300)
+	for id in [burner_id, HEScenarioSeeds.BLOOMERY_BUSINESS_ID]:
+		var workshop: HEBusiness = intended.businesses.get(id)
+		_assert(workshop != null, "Workshop %d should survive 300 days at intended prices" % id)
+		if workshop == null:
+			continue
+		var profit: float = workshop.ledger_average("cash_profit", 100)
+		var workers := intended._business_employed_worker_count(id)
+		var wage := intended._reference_wage_per_worker(workshop.settlement_id)
+		var books := intended._staffing_decision(workshop, wage)
+		print("  %s at intended prices: crew %d, cash profit %.2f/day over 100 days, return/worker %.2f vs wage %.2f" % [workshop.name, workers, profit, books["return_per_worker"], wage])
+		_assert(profit > 0.0, "%s at intended prices should make a cash profit, got %.2f/day" % [workshop.name, profit])
+		_assert(workers >= 1 and workshop.capacity >= 1, "%s should keep a crew when its sales cover its costs" % workshop.name)
+
+	# 3. A workshop whose inputs cost more than it can sell for shrinks, then closes.
+	var starved := _new_sim("build_economy_with_charcoal_burner", false)
+	(starved.markets[starved.get_settlement_ids()[0]] as HEMarket).price[Commodity.Type.TIMBER] = 6.0
+	var closed_day := -1
+	var crew_floor_day := -1
+	for day in 200:
+		starved.advance_ticks(1)
+		var failing: HEBusiness = starved.businesses.get(burner_id)
+		if failing == null:
+			closed_day = day
+			break
+		if crew_floor_day < 0 and failing.capacity <= 1:
+			crew_floor_day = day
+			_assert(failing.ledger_average("cash_profit", 14) < 0.0, "A crew cut to the floor should be losing money on the books")
+	print("  burner with timber at 6.0: crew at the floor by day %d, closed on day %d" % [crew_floor_day, closed_day])
+	_assert(crew_floor_day >= 0, "A workshop losing money on every unit should shrink its crew")
+	_assert(closed_day >= 0, "A workshop that cannot cover its inputs should close once its credit is gone")
+
+## A Trader earns a spread on the units it moves, and what it can move is set by
+## the goods on offer, not by its crew. Its crew therefore follows throughput
+## (one worker moves TRADER_CAPACITY_PER_WORKER units a day): through years in
+## which grain and timber swing between floor and ceiling and exports dry up for
+## months, it must stay solvent instead of carrying a crew its volume cannot pay.
+func _check_trader_stays_solvent() -> void:
+	print("\n=== Trader: crew follows throughput, stays solvent through price swings ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	var lowest_balance := INF
+	var most_workers_idle := 0.0
+	for day in 1200:
+		sim.advance_ticks(1)
+		var trader: HEBusiness = sim.businesses.get(trader_id)
+		if trader == null:
+			break
+		lowest_balance = minf(lowest_balance, trader.balance)
+		if day >= 60 and day % 30 == 0:
+			var moved := trader.ledger_average("units_sold", 30)
+			var workers := float(sim._business_employed_worker_count(trader_id))
+			most_workers_idle = maxf(most_workers_idle, workers - moved / HESimulation.TRADER_CAPACITY_PER_WORKER)
+	var alive := sim.businesses.has(trader_id)
+	print("  Trader alive after 1200 days: %s, lowest balance %.0f, most workers beyond what its volume needed: %.1f" % [alive, lowest_balance, most_workers_idle])
+	_assert(alive, "The Trader should stay in business for 1200 days")
+	_assert(lowest_balance > 0.0, "The Trader should never run into debt, lowest balance %.0f" % lowest_balance)
+	_assert(most_workers_idle <= 8.0, "The Trader's crew should follow its throughput, but carried %.1f workers beyond it" % most_workers_idle)
+
+## A throwaway business with `rows` days of synthetic ledger, each carrying the
+## given row plus per-good units, so a seller's cost and forecast can be judged
+## on stated books.
+func _workshop_with_rows(sim: HESimulation, business: HEBusiness, rows: int, row: Dictionary, goods: Dictionary) -> HEBusiness:
+	var defaults := {
+		"employed": 2.0, "reference_wage": 1.0, "sales_household": 0.0, "sales_business": 0.0, "sales_export": 0.0,
+		"sales_other": 0.0, "trade_margin": 0.0, "input_consumed_value": 0.0, "taxes": 0.0, "units_sold": 0.0,
+		"units_produced": 0.0, "unmet_demand": 0.0, "unfunded_demand": 0.0, "cash_profit": 0.0, "balance": 0.0,
+		"wages": 0.0, "goods": goods}
+	for i in rows:
+		business._ledger_history.append(defaults.merged(row, true))
+	return business
+
+## A seller's export decision, before any Trader is involved: what it can spare
+## (its own forecast of local use until its next supply, plus a backlog counted
+## once, plus workshops' known input needs tomorrow) and the least it will take
+## (cost per unit of output value over its production cycle, shared costs split by
+## value, a documented starting quote until a cycle has been seen).
+func _check_seller_trade_offers() -> void:
+	print("\n=== Seller offers: forecast of local use, backlog counted once, cost-based floor ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var timber := Commodity.Type.TIMBER
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	woodlot.inventory.clear()
+	woodlot.add_stock(timber, 2000.0)
+
+	var offer := sim._seller_trade_offer(woodlot, timber)
+	var known := sim._known_daily_local_use(woodlot, timber)
+	print("  Woodlot, 2000 timber: routine use %.1f/day x %.0f days + next-day input %.1f -> reserve %.1f, offers %.1f (salvage %.1f), floor %.2f" % [
+		offer["routine_use"], offer["horizon"], offer["next_day_need"], offer["reserve"], offer["quantity"], offer["salvage_quantity"], offer["min_price"]])
+	_assert(known > 0.0 and offer["next_day_need"] > 0.0, "Households and staffed workshops should give the Woodlot local use to protect")
+	_assert(absf(offer["reserve"] - (known * offer["horizon"] + offer["outstanding"] + offer["next_day_need"])) < EPSILON, "Reserve should be routine use x horizon + backlog + next-day input")
+	_assert(absf(offer["quantity"] - (2000.0 - offer["reserve"])) < EPSILON, "The seller offers what is left above its reserve")
+	_assert(offer["salvage_quantity"] <= offer["quantity"] + EPSILON, "Salvage units are part of what the seller can spare, never more")
+	_assert(absf(offer["min_price"] - HESimulation.SELLER_STARTING_COST_RATIO * HESimulation.BASE_PRICE[timber]) < EPSILON, "Before a cycle is observed the floor is the documented starting quote")
+
+	# Today's unfilled funded requests are a backlog, counted once: the reserve
+	# rises by the backlog and not by backlog x days to the next harvest.
+	sim._price_signal_today = {settlement_id: {timber: {"funded_household": 50.0, "funded_business": 0.0, "offer": 10.0}}}
+	var with_backlog := sim._seller_trade_offer(woodlot, timber)
+	sim._price_signal_today = {}
+	_assert(absf(with_backlog["outstanding"] - 40.0) < EPSILON and absf((with_backlog["reserve"] - offer["reserve"]) - 40.0) < EPSILON,
+		"A 40-unit backlog should add exactly 40 to the reserve, not 40 x %.0f days" % offer["horizon"])
+
+	# Floor from the books: (wages + inputs) / (units produced x value), over a cycle.
+	var burner := HEScenarioSeeds.make_charcoal_burner(900, HEScenarioSeeds.SETTLEMENT_ID)
+	var charcoal := Commodity.Type.CHARCOAL
+	_workshop_with_rows(sim, burner, 40, {"wages": 2.0, "input_consumed_value": 6.0}, {"produced": {charcoal: 3.0}})
+	var expected_ratio := 8.0 / (3.0 * HESimulation.BASE_PRICE[charcoal])
+	var ratio := sim._seller_cost_ratio(burner)
+	print("  Burner books: cost 8.0/day for 3 charcoal -> cost ratio %.3f, floor %.2f per charcoal" % [ratio, sim._seller_min_price(burner, charcoal)])
+	_assert(absf(ratio - expected_ratio) < 0.001, "Cost ratio should be cost / (units produced x value), got %.3f vs %.3f" % [ratio, expected_ratio])
+	var young := HEScenarioSeeds.make_charcoal_burner(901, HEScenarioSeeds.SETTLEMENT_ID)
+	_workshop_with_rows(sim, young, 10, {"wages": 2.0, "input_consumed_value": 6.0}, {"produced": {charcoal: 3.0}})
+	_assert(sim._seller_cost_ratio(young) == HESimulation.SELLER_STARTING_COST_RATIO, "Fewer rows than a cycle should use the starting quote, not zero or infinity")
+
+	# Shared costs: a Butcher's meat and leather carry the same cost-to-value ratio.
+	var butcher := HEScenarioSeeds.make_butcher(902, HEScenarioSeeds.SETTLEMENT_ID)
+	_workshop_with_rows(sim, butcher, maxi(40, butcher.rolling_window_days()), {"wages": 3.0, "input_consumed_value": 3.0}, {"produced": {Commodity.Type.MEAT: 2.0, Commodity.Type.LEATHER: 1.0}})
+	var meat_ratio: float = sim._seller_min_price(butcher, Commodity.Type.MEAT) / HESimulation.BASE_PRICE[Commodity.Type.MEAT]
+	var leather_ratio: float = sim._seller_min_price(butcher, Commodity.Type.LEATHER) / HESimulation.BASE_PRICE[Commodity.Type.LEATHER]
+	_assert(absf(meat_ratio - leather_ratio) < 0.0001 and absf(meat_ratio - 6.0 / (2.0 * 1.6 + 1.0 * 1.6)) < 0.001, "Meat and leather should share one cost ratio (%.3f vs %.3f)" % [meat_ratio, leather_ratio])
+
+	# What a seller will sell at a given bid: all it can spare if the bid reaches
+	# its floor; otherwise only the units beyond its cover period.
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	var market: HEMarket = sim.markets[settlement_id]
+	woodlot.inventory.clear()
+	woodlot.add_stock(timber, 4000.0)
+	var good_view := sim._trader_offer_view(trader, woodlot, timber)
+	market.price[timber] = 0.25
+	var glut_view := sim._trader_offer_view(trader, woodlot, timber)
+	market.price[timber] = 1.0
+	print("  bid reaches the floor: sells %.1f | bid %.3f under the %.2f floor: sells only the %.1f beyond cover" % [good_view["eligible"], glut_view["bid"], glut_view["offer"]["min_price"], glut_view["eligible"]])
+	_assert(absf(good_view["eligible"] - good_view["offer"]["quantity"]) < EPSILON, "A bid at or above the floor should take everything the seller can spare")
+	_assert(absf(glut_view["eligible"] - glut_view["offer"]["salvage_quantity"]) < EPSILON and glut_view["eligible"] < glut_view["offer"]["quantity"], "A bid under the floor should take only the excess beyond cover")
+
+## The Trader's bid moves by a small step toward whatever fills its capacity
+## with offers it can take, and only then: capacity binding lowers the bids of
+## goods it turned away, refusals with spare capacity raise them (up to a ceiling
+## that still pays a wage), and nothing on offer leaves them alone.
+func _check_trader_bids() -> void:
+	print("\n=== Trader bids: controller behaviour at both capacity extremes ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	var grain := Commodity.Type.GRAIN
+	var reference := 1.0
+	var ceiling := sim._trader_max_bid_fraction(settlement_id, reference)
+	_assert(ceiling < 1.0 and ceiling > HESimulation.TRADER_BID_FRACTION_MIN, "The ceiling should leave the Trader a wage's spread, got %.3f" % ceiling)
+
+	var run := func(eligible: float, accepted: float, offered: float, capacity: float, remaining: float, days: int) -> float:
+		trader.bid_fraction.clear()
+		var fraction := HESimulation.TRADER_STARTING_BID_FRACTION
+		for i in days:
+			var offers: Array[Dictionary] = [{"commodity": grain, "fraction": fraction, "reference": reference,
+				"eligible": eligible, "accepted": accepted, "offer": {"quantity": offered}}]
+			sim._adjust_trader_bids(trader, offers, capacity, remaining)
+			fraction = trader.bid_fraction[grain]
+		return fraction
+
+	# Capacity binding: more offers sellers would take than the Trader can carry.
+	var squeezed: float = run.call(100.0, 10.0, 100.0, 10.0, 0.0, 200)
+	# Spare capacity with offers refused for being under the floor.
+	var refused: float = run.call(0.0, 0.0, 50.0, 100.0, 100.0, 200)
+	# Nothing on offer at all.
+	var idle: float = run.call(0.0, 0.0, 0.0, 100.0, 100.0, 200)
+	# Everything offered is taken with room to spare.
+	var satisfied: float = run.call(40.0, 40.0, 40.0, 100.0, 60.0, 200)
+	print("  capacity binding -> %.2f | refused with spare capacity -> %.2f (ceiling %.2f) | no offers -> %.2f | all taken -> %.2f" % [squeezed, refused, ceiling, idle, satisfied])
+	_assert(absf(squeezed - HESimulation.TRADER_BID_FRACTION_MIN) < 0.0001, "A Trader at capacity should widen its spread down to the minimum bid")
+	_assert(absf(refused - ceiling) < 0.0001, "Refused offers with spare capacity should raise the bid to, and no further than, the ceiling")
+	_assert(absf(idle - HESimulation.TRADER_STARTING_BID_FRACTION) < 0.0001, "With nothing on offer the bid should not move (an idle Trader must not talk itself into a loop)")
+	_assert(absf(satisfied - HESimulation.TRADER_STARTING_BID_FRACTION) < 0.0001, "When every offer is taken with room to spare the bid should stay put")
+
+## Allocation and cash: capacity goes to the widest Trader margin per unit, and
+## the cash entering the economy is the reference value whatever the bid, so the
+## bid only splits it between the seller and the Trader.
+func _check_trade_allocation_and_cash() -> void:
+	print("\n=== Trade: widest margin first; export cash independent of the bid ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	var trader: HEBusiness = sim.businesses[trader_id]
+	# One worker's worth of capacity.
+	var kept := false
+	for household_id in sim.get_household_ids():
+		var h: HEHousehold = sim.households[household_id]
+		if h.employer_business_id == trader_id:
+			if kept:
+				h.employer_business_id = -1
+			kept = true
+	var capacity: float = float(sim._business_employed_worker_count(trader_id)) * HESimulation.TRADER_CAPACITY_PER_WORKER
+	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	bloomery.inventory.clear()
+	bloomery.add_stock(Commodity.Type.IRON, 500.0)
+	woodlot.inventory.clear()
+	woodlot.add_stock(Commodity.Type.TIMBER, 5000.0)
+	var record := sim._new_daily_record()
+	sim._run_trade(record)
+	var iron_shipped: float = record["exported"].get("Iron", 0.0)
+	var timber_shipped: float = record["exported"].get("Timber", 0.0)
+	print("  capacity %.0f units: iron (margin %.2f/unit) shipped %.1f, timber (margin %.2f/unit) shipped %.1f" % [
+		capacity, 15.0 * 0.5, iron_shipped, 1.0 * 0.5, timber_shipped])
+	_assert(capacity > 0.0 and absf(iron_shipped - capacity) < EPSILON and timber_shipped < EPSILON, "Capacity should go to the widest margin per unit (iron) before cheaper goods")
+
+	# Same shipment at two different bids: identical cash entering, different split.
+	var results: Array = []
+	for bid in [0.4, 0.7]:
+		var fresh := _new_sim("build_economy_with_charcoal_burner")
+		var seller: HEBusiness = fresh.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+		var fresh_trader: HEBusiness = fresh.businesses[trader_id]
+		var seller_before := seller.balance
+		var trader_before := fresh_trader.balance
+		var entered_before: float = fresh._export_revenue_total
+		fresh._execute_export(fresh_trader, seller, Commodity.Type.TIMBER, 10.0, 1.0, bid, fresh._new_daily_record())
+		results.append({"entered": fresh._export_revenue_total - entered_before, "seller": seller.balance - seller_before, "trader": fresh_trader.balance - trader_before})
+	print("  10 timber at bid 0.4 vs 0.7: cash entering %.1f / %.1f, seller %.1f / %.1f, Trader spread %.1f / %.1f" % [
+		results[0]["entered"], results[1]["entered"], results[0]["seller"], results[1]["seller"], results[0]["trader"], results[1]["trader"]])
+	_assert(absf(results[0]["entered"] - 10.0) < EPSILON and absf(results[1]["entered"] - 10.0) < EPSILON, "Cash entering should be units x reference price regardless of the bid")
+	for r in results:
+		_assert(absf(r["seller"] + r["trader"] - r["entered"]) < EPSILON, "The seller's receipt plus the Trader's spread should equal the cash that entered")
+	_assert(results[1]["seller"] > results[0]["seller"] and results[1]["trader"] < results[0]["trader"], "A higher bid should shift value from the Trader to the seller")
+
+## Cattle and sheep use the same export path as every other good: enabled by
+## default, reference price from HERD_EXPORT_PRICE, and a horizon that is the
+## real countdown to the next review.
+func _check_herd_export_path() -> void:
+	print("\n=== Herds: livestock export through the common path ===")
+	var sim := _new_sim("build_economy_with_charcoal_burner")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var enabled := {}
+	for option in sim.get_trader_export_settings(HEScenarioSeeds.TRADER_BUSINESS_ID):
+		enabled[option["commodity_id"]] = option["enabled"]
+		if option["commodity_id"] == Commodity.Type.CATTLE:
+			_assert(absf(option["reference_price"] - HESimulation.HERD_EXPORT_PRICE[HEBusiness.Species.CATTLE]) < EPSILON, "A live animal's reference price is HERD_EXPORT_PRICE")
+	_assert(enabled.get(Commodity.Type.CATTLE, false) and enabled.get(Commodity.Type.SHEEP, false), "Cattle and sheep should be export checkbox goods, enabled by default")
+	var ranch: HEBusiness = sim._trade_seller(settlement_id, Commodity.Type.CATTLE)
+	_assert(ranch != null and ranch.kind == HEBusiness.Kind.HERD and ranch.species == HEBusiness.Species.CATTLE, "The cattle seller should be the Cattle Ranch")
+
+	var horizons: Array[int] = []
+	for day in 100:
+		horizons.append(sim._days_until_next_supply(ranch))
+		sim.advance_ticks(1)
+	var counted_down := true
+	var reset_seen := false
+	for i in range(1, horizons.size()):
+		if horizons[i] == horizons[i - 1] - 1 or horizons[i] == 1:
+			continue
+		if horizons[i] > horizons[i - 1]:
+			reset_seen = true
+			continue
+		counted_down = false
+	print("  herd horizon over 100 days: starts %d, a review resets it: %s, never the full %d-day growth cycle: %s" % [
+		horizons[0], reset_seen, ranch.growth_days, horizons.max() < ranch.growth_days or ranch.growth_days <= HESimulation.HERD_EVAL_INTERVAL_DAYS])
+	_assert(counted_down and reset_seen, "A herd's horizon should count down day by day to its next review, then reset")
+	_assert(horizons.max() <= HESimulation.HERD_EVAL_INTERVAL_DAYS, "A herd's horizon never exceeds its review interval")
+
+## The Trader holds no reserve of its own any more: nothing in the simulation
+## carries the old constant or the old Trader-owned surplus functions.
+func _check_no_export_reserve_left() -> void:
+	print("\n=== No Trader-owned reserve left in the simulation ===")
+	var source := FileAccess.get_file_as_string("res://scripts/sim/household_economy/he_simulation.gd")
+	for name in ["TRADER_RESERVE_BUFFER_DAYS", "_seller_surplus_above_reserve", "_exportable_surplus"]:
+		_assert(not source.contains(name), "%s should be gone: the seller decides what is spare" % name)
+	print("  reserve constant and Trader-owned surplus functions are gone")
 
 ## Exercises the opt-in Bloomery scenario: wood bought from the Woodlot plus
 ## iron ore imported by the Trader smelt into iron, which that same Trader
@@ -680,6 +1349,57 @@ func _check_local_iron_mine_supplies_bloomery_first() -> void:
 		_assert(not (transaction["direction"] == "import" and transaction["commodity"] == "Iron Ore"), "Local-mine Trader history should not contain an Iron Ore import")
 	_assert(maximum_buffered_timber > 0.0 and maximum_buffered_ore > 0.0, "Bloomery should retain both recipe inputs between production days")
 	_assert(worst_input_stock_gap < EPSILON, "Buffered Timber/Iron Ore stock did not reconcile, worst gap %.4f" % worst_input_stock_gap)
+
+## The export list is derived from the commodity catalogue, not hand-listed, so
+## a new good can't be silently left off the settings page: it must appear in the
+## fixed order, start disabled, and only be shown while something sells it.
+func _check_export_settings_derived_from_commodities() -> void:
+	print("
+=== Trader export settings: derived list, fixed order, rows hidden without a seller ===")
+	var priority := HESimulation.EXPORT_PRIORITY
+	_assert(priority.has(Commodity.Type.WOOL), "Wool should be an exportable good")
+	_assert(not priority.has(Commodity.Type.TOOLS), "Tools have no market price and should not be exportable")
+	var seen := {}
+	for commodity in priority:
+		_assert(not seen.has(commodity), "%s listed twice in EXPORT_PRIORITY" % Commodity.name_of(commodity))
+		seen[commodity] = true
+	for commodity in HESimulation.EXPORT_PINNED_FIRST + HESimulation.EXPORT_PINNED_LAST:
+		_assert(priority.has(commodity), "Pinned good %s is not exportable" % Commodity.name_of(commodity))
+	_assert(priority[0] == Commodity.Type.IRON, "Iron must keep first call on Trader capacity")
+	_assert(priority[priority.size() - 1] == Commodity.Type.SHEEP and priority[priority.size() - 2] == Commodity.Type.CATTLE, "Livestock must stay last")
+	for commodity in HESimulation.EXPORT_COMMODITIES:
+		_assert(priority.has(commodity), "Default-enabled %s is not exportable" % Commodity.name_of(commodity))
+
+	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
+	# Farm + Woodlot + Trader only: no Sheep Farm, ranch, Butcher or mine.
+	var bare := HESimulation.new(SEED, func(rng: RandomNumberGenerator) -> Dictionary:
+		return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, trader_id]))
+	var bare_rows := bare.get_trader_export_settings(trader_id)
+	var bare_goods: Array = []
+	for option in bare_rows:
+		bare_goods.append(option["commodity_id"])
+	for hidden in [Commodity.Type.WOOL, Commodity.Type.IRON_ORE, Commodity.Type.IRON, Commodity.Type.CATTLE, Commodity.Type.SHEEP, Commodity.Type.MEAT]:
+		_assert(not bare_goods.has(hidden), "%s has no local seller in this settlement, so its row should be hidden" % Commodity.name_of(hidden))
+	_assert(bare_goods.has(Commodity.Type.GRAIN) and bare_goods.has(Commodity.Type.TIMBER), "Grain and Timber have sellers and should be shown")
+	# Toggling a hidden good is remembered but never makes its row appear.
+	bare.set_trader_export_enabled(trader_id, Commodity.Type.WOOL, true)
+	_assert(bare.get_trader_export_settings(trader_id).size() == bare_rows.size(), "Toggling a hidden good must not make its row appear")
+
+	# Full economy: a Sheep Farm exists, so Wool appears -- off by default.
+	var full := _new_sim("build_three_business_economy")
+	var shown := {}
+	var shown_order: Array = []
+	for option in full.get_trader_export_settings(trader_id):
+		shown[option["commodity_id"]] = option["enabled"]
+		shown_order.append(option["commodity_id"])
+	_assert(shown.has(Commodity.Type.WOOL), "Wool should be a Trader export setting once a Sheep Farm exists")
+	_assert(shown.get(Commodity.Type.WOOL, true) == false, "Wool should start disabled")
+	# Hiding must never reorder what remains.
+	var last_index := -1
+	for commodity in shown_order:
+		var index := priority.find(commodity)
+		_assert(index > last_index, "%s shown out of EXPORT_PRIORITY order" % Commodity.name_of(commodity))
+		last_index = index
 
 func _check_trader_export_settings() -> void:
 	print("\n=== Trader export settings: ore opt-in and local input reserve ===")
@@ -833,7 +1553,10 @@ func _check_field_model_dynamics() -> void:
 			previous_stock[business_id] = report["stock"]
 
 			var employed: int = report["employed_workers"]
-			if employed > report["max_capacity"]:
+			# The land cap: only land-based businesses have one. (A ranch's
+			# max_capacity is a staffing ceiling that a multi-worker household can
+			# step over when it is hired whole.)
+			if report["land_area_acres"] > 0.0 and employed > report["max_capacity"]:
 				over_cap_by = max(over_cap_by, employed - report["max_capacity"])
 			var reference: float = report["reference_wage_per_worker"]
 			var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * reference * employed
@@ -1164,8 +1887,14 @@ func _check_herds_grow_and_cull() -> void:
 	_assert(sheep["herd_size"] > HEScenarioSeeds.SHEEP_STARTING_HERD, "Sheep herd should have grown from its seeded starting size")
 	_assert(cattle["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE] + EPSILON, "Cattle herd should never exceed its cull target, got %.2f" % cattle["herd_size"])
 	_assert(sheep["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP] + EPSILON, "Sheep herd should never exceed its cull target, got %.2f" % sheep["herd_size"])
-	_assert(cattle["stock"] > 0.0, "Cattle Ranch should have culled at least once by now, stock is still 0")
-	_assert(sheep["stock"] > 0.0, "Sheep Farm should have culled at least once by now, stock is still 0")
+	# Where a cull ends up (an outlet's inventory, or home-butchered into
+	# meat) depends on which businesses survived, so count the culls themselves.
+	var culled := {"Cattle": 0.0, "Sheep": 0.0}
+	for record in sim.get_daily_history(730):
+		for animal in culled.keys():
+			culled[animal] += (record["produced"] as Dictionary).get(animal, 0.0)
+	_assert(culled["Cattle"] > 0.0, "Cattle Ranch should have culled at least once in the last two years")
+	_assert(culled["Sheep"] > 0.0, "Sheep Farm should have culled at least once in the last two years")
 	_assert(sheep["wool_stock"] > 0.0, "Sheep Farm should have accumulated some wool by now")
 
 	var land_used: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD + sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
@@ -1276,13 +2005,290 @@ func _check_herd_monetization() -> void:
 
 	_check_demographic_invariants(sim)
 
+## A ranch that cannot make payroll slaughters some of its own cattle at home:
+## no cash is created, the meat lands in the ranch's inventory (booked as
+## production) and is bought by the town's households over the following days,
+## and the ranch is not failed for the wage the slaughter was meant to cover.
+func _check_hardship_butchery_makes_local_meat() -> void:
+	print("\n=== Hardship butchering: a cash-starved ranch slaughters at home and sells meat locally ===")
+	var sim := _new_sim("build_three_business_economy")
+	var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+	var worker: HEHousehold = null
+	for household_id in sim.households.keys():
+		var h: HEHousehold = sim.households[household_id]
+		if h.worker_capacity() > 0:
+			worker = h
+			break
+	_assert(worker != null, "Expected a household able to staff the ranch")
+	if worker == null:
+		return
+	worker.employer_business_id = ranch.id
+	var wage_bill: float = sim._reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
+	# Just past what the ranch can borrow against its herd (not 60 days of wages).
+	# Each head slaughtered also lowers that limit by its collateral, so a small
+	# margin is what one slaughter's meat can recover.
+	ranch.balance = -sim._wage_overdraft_limit(ranch, wage_bill) - 1.0
+	var herd_before := ranch.herd_size
+	sim.advance_ticks(1)
+
+	_assert(sim.businesses.has(ranch.id), "A ranch with meat on its shelf to cover payroll should not fail the day it slaughters")
+	_assert(ranch.last_hardship_butchered >= 1.0, "A ranch past its wage floor should slaughter at least one head")
+	_assert(ranch.herd_size < herd_before, "Hardship butchering should shrink the live herd")
+	var day_one: Dictionary = sim.get_daily_history(1)[0]
+	_assert((day_one["exported"] as Dictionary).get("Cattle", 0.0) < 0.0001, "Hardship butchering must not be booked as a Trader export")
+	var made: float = (day_one["produced"] as Dictionary).get("Meat", 0.0)
+	_assert(made >= HESimulation.HOME_BUTCHER_MEAT_PER_HEAD[HEBusiness.Species.CATTLE], "The slaughter should produce meat, made %.1f" % made)
+	_assert(ranch.stock(Commodity.Type.CATTLE) < 0.0001, "Home slaughter should not touch the culled-livestock inventory")
+	print("  slaughtered %.0f head -> %.1f meat on the shelf (herd %.1f -> %.1f)" % [ranch.last_hardship_butchered, made, herd_before, ranch.herd_size])
+
+	var sold := 0.0
+	var balance_after_slaughter := ranch.balance
+	# Households only start buying meat once their grain buffers run down, a
+	# week or so in, so give them three weeks.
+	sim.advance_ticks(20)
+	for record in sim.get_daily_history(20):
+		sold += (record["traded_quantity"] as Dictionary).get("Meat", 0.0)
+	print("  households bought %.1f meat over the next 20 days; ranch balance %.1f -> %.1f" % [sold, balance_after_slaughter, ranch.balance])
+	_assert(sold > 0.0001, "Households should buy the ranch's home-butchered meat locally")
+	_assert(sim.businesses.has(ranch.id), "The ranch should survive on the meat it sells")
+	_assert(ranch.balance > balance_after_slaughter, "Meat sales should repay the ranch's debt")
+	_check_demographic_invariants(sim)
+
+## A staffed ranch's husbandry is financed by its herd, not paid for in
+## breeding stock: with no income until the cull, it runs an overdraft against
+## the herd's value, so it slaughters nothing for payroll, keeps its care up, and
+## its herd outgrows an unstaffed ranch's. (Hardship slaughter remains the
+## backstop once the borrowing limit is reached -- the test above.)
+func _check_herd_collateral_finances_wages() -> void:
+	print("\n=== Herd collateral: payroll is financed against the herd, not paid in head ===")
+	var results := {}
+	for staffed in [false, true]:
+		var sim := _new_sim("build_three_business_economy")
+		var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+		if staffed:
+			ranch.capacity = ranch.max_capacity
+			ranch.min_capacity = ranch.max_capacity
+		else:
+			ranch.max_capacity = 0
+			ranch.capacity = 0
+		var slaughtered := 0.0
+		var lowest_balance := 0.0
+		var collateral_at_start: float = sim._herd_collateral(ranch)
+		for day in 360:
+			sim.advance_ticks(1)
+			slaughtered += ranch.last_hardship_butchered
+			lowest_balance = minf(lowest_balance, ranch.balance)
+		results[staffed] = {"herd": ranch.herd_size, "care": ranch.last_care_fraction, "slaughtered": slaughtered,
+			"lowest": lowest_balance, "workers": sim._business_employed_worker_count(ranch.id), "collateral": collateral_at_start}
+	var s: Dictionary = results[true]
+	var u: Dictionary = results[false]
+	print("  unstaffed herd %.1f | staffed herd %.1f (care %.2f, %d workers, %.0f head slaughtered, lowest balance %.0f of %.0f borrowable)" % [
+		u["herd"], s["herd"], s["care"], s["workers"], s["slaughtered"], s["lowest"], s["collateral"]])
+	_assert(s["workers"] > 0, "Test setup: the staffed ranch should have a crew")
+	_assert(s["slaughtered"] < 0.0001, "A ranch borrowing against its herd should slaughter nothing to make payroll, slaughtered %.0f" % s["slaughtered"])
+	_assert(s["lowest"] < 0.0 and s["lowest"] >= -s["collateral"] - EPSILON, "It should run an overdraft, within what the herd covers (%.0f of %.0f)" % [-s["lowest"], s["collateral"]])
+	_assert(s["care"] > 0.9, "Care should stay near full when payroll is not paid in carcasses, got %.2f" % s["care"])
+	_assert(s["herd"] > u["herd"] + 5.0, "A staffed ranch's herd should clearly outgrow an unstaffed one (%.1f vs %.1f)" % [s["herd"], u["herd"]])
+
+## With no staffed Trader or Butcher, a ranch butchers its own cull the day it
+## happens: no standing livestock stock, and the meat is sold locally. With an
+## outlet staffed, the cull stays in inventory for it to buy.
+func _check_cull_without_outlet_is_butchered_at_home() -> void:
+	print("\n=== Culls with no Trader or Butcher are butchered at home ===")
+	var sim := _new_sim("build_three_business_economy")
+	for outlet_id in [HEScenarioSeeds.TRADER_BUSINESS_ID, HEScenarioSeeds.BUTCHER_BUSINESS_ID]:
+		var outlet: HEBusiness = sim.businesses[outlet_id]
+		outlet.capacity = 0
+		outlet.max_capacity = 0
+	var ranches := {}
+	for business_id in [HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID, HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID]:
+		ranches[business_id] = sim.businesses[business_id]
+	sim.advance_ticks(24 * HESimulation.HERD_EVAL_INTERVAL_DAYS)
+	var produced_meat := 0.0
+	for record in sim.get_daily_history(24 * HESimulation.HERD_EVAL_INTERVAL_DAYS):
+		produced_meat += (record["produced"] as Dictionary).get("Meat", 0.0)
+	_assert(produced_meat > 0.0, "Home-butchered culls should produce meat")
+	for business_id in ranches.keys():
+		var ranch: HEBusiness = sim.businesses.get(business_id)
+		if ranch == null:
+			continue
+		var animals := ranch.stock(ranch.herd_commodity())
+		print("  %s: %d head of livestock held, %.1f meat made over the run" % [ranch.name, int(animals), produced_meat])
+		_assert(animals < 0.0001, "%s should hold no culled livestock without an outlet, holds %.1f" % [ranch.name, animals])
+	var sees_meat: bool = sim.get_market_summary().has("Meat")
+	_assert(sees_meat, "Meat should be listed in the local market once ranches home-butcher")
+
+## Culled cattle are a saleable good: a herd review moves head into the ranch's
+## inventory (herd_size stays the living herd), the Butcher buys some, the Trader
+## exports only what the Butcher does not take, each transfer is recorded once at
+## its source, and the Goods page reports it by channel with no household buyer.
+func _check_livestock_goods() -> void:
+	print("\n=== Livestock goods: one cull, one Butcher purchase, one Trader export, and the Goods report ===")
+	var sim := _new_sim("build_three_business_economy")
+	sim.sales_tax_rate = 0.0
+	var sid: int = sim.get_settlement_ids()[0]
+	var cattle := Commodity.Type.CATTLE
+	var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	var trader: HEBusiness = sim.businesses[HEScenarioSeeds.TRADER_BUSINESS_ID]
+	# Cattle and sheep are ordinary entries in the Trader's export settings, on by default.
+	var export_defaults := {}
+	for setting in sim.get_trader_export_settings(trader.id):
+		export_defaults[setting["name"]] = setting["enabled"]
+	_assert(export_defaults.get("Cattle", false) and export_defaults.get("Sheep", false), "Cattle and sheep should be Trader export settings, enabled by default, got %s" % [export_defaults])
+	# Free the Trader's capacity for livestock: every other export off.
+	for exported_good in HESimulation.EXPORT_PRIORITY:
+		if exported_good != cattle:
+			sim.set_trader_export_enabled(trader.id, exported_good, false)
+
+	# One cull: the review lands on the last tick of the first interval.
+	sim.advance_ticks(HESimulation.HERD_EVAL_INTERVAL_DAYS - 1)
+	var target := sim.herd_cull_target(ranch)
+	ranch.herd_size = target - 1.0
+	sim.advance_ticks(1)
+	var culled := ranch.stock(cattle)
+	var review: Dictionary = sim.get_daily_history(1)[0]
+	_assert(culled > 0.0, "A herd review above the cull target should leave culled head in the ranch's inventory")
+	_assert(is_equal_approx(ranch.herd_size, target), "The living herd stays distinct from inventory: back at its cull target %.1f, is %.2f" % [target, ranch.herd_size])
+	_assert(is_equal_approx((review["produced"] as Dictionary).get("Cattle", 0.0), culled), "The cull should be booked as production of exactly the head now in inventory")
+	_assert(is_equal_approx(float((review["closing_stock"] as Dictionary)["Cattle"]), culled), "Culled head should be counted in the day's closing stock")
+
+	# One Butcher purchase and one export, in the same tick: staff the Butcher,
+	# give the ranch plenty to sell, and the Trader takes only what is left.
+	var worker: HEHousehold = null
+	for household_id in sim.households.keys():
+		var h: HEHousehold = sim.households[household_id]
+		if h.worker_capacity() > 0:
+			worker = h
+			break
+	worker.employer_business_id = butcher.id
+	var buffer_head := float(sim._business_employed_worker_count(butcher.id)) * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
+	ranch.add_stock(cattle, buffer_head + 20.0)
+	var stock_before := ranch.stock(cattle)
+	var expected_bought: float = sim._butchery_wanted_head(butcher, HEBusiness.Species.CATTLE)
+	_assert(is_equal_approx(expected_bought, buffer_head), "A freshly staffed Butcher with no livestock should want a full buffer of %.1f head, wants %.1f" % [buffer_head, expected_bought])
+	sim.advance_ticks(1)
+	var bought: float = (butcher.todays_flows[HEBusiness.FLOW_BOUGHT] as Dictionary).get(cattle, 0.0)
+	var sold: float = (ranch.todays_flows[HEBusiness.FLOW_SOLD] as Dictionary).get(cattle, 0.0)
+	var exported := sold - bought
+	var bid := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_BID)
+	var reference := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.POSTED)
+	_assert(is_equal_approx(bid, reference * HESimulation.TRADER_BUY_PRICE_FRACTION), "The Trader's bid should be its usual fraction of the posted price, as for every export")
+	var purchase_price := HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	print("  culled %.1f head; then the Butcher bought %.1f and the Trader exported %.1f of %.1f" % [culled, bought, exported, stock_before])
+	_assert(is_equal_approx(bought, expected_bought), "The Butcher should buy exactly the head it wanted: %.2f vs %.2f" % [bought, expected_bought])
+	_assert(exported > 0.0, "Head the Butcher did not take should be exported")
+	_assert(is_equal_approx(ranch.stock(cattle), stock_before - sold), "Ranch inventory should fall by exactly the head sold")
+	_assert(is_equal_approx(ranch.last_revenue, bought * purchase_price + exported * bid), "The ranch is paid the Butcher's quote for local head and the Trader bid for exported head")
+	var day_record: Dictionary = sim.get_daily_history(1)[0]
+	_assert(is_equal_approx((day_record["traded_quantity"] as Dictionary).get("Cattle", 0.0), bought), "Only locally bought head count as traded")
+	_assert(is_equal_approx((day_record["exported"] as Dictionary).get("Cattle", 0.0), exported), "Only the Trader's head count as exported; none is both")
+
+	var transactions := sim.get_livestock_transactions(sid, cattle, 1)
+	var purchase_rows := transactions.filter(func(t): return t["channel"] == "butcher_purchase")
+	var export_rows := transactions.filter(func(t): return t["channel"] == "trader_export")
+	_assert(purchase_rows.size() == 1 and export_rows.size() == 1, "The tick should record one local purchase and one export, got %d and %d" % [purchase_rows.size(), export_rows.size()])
+	if purchase_rows.size() == 1 and export_rows.size() == 1:
+		_assert(is_equal_approx(purchase_rows[0]["quantity"], bought) and is_equal_approx(purchase_rows[0]["unit_price"], purchase_price) \
+			and purchase_rows[0]["seller_id"] == ranch.id and purchase_rows[0]["buyer_id"] == butcher.id, "The purchase record should name the ranch, the Butcher, the head and the Butcher's quote")
+		_assert(is_equal_approx(export_rows[0]["quantity"], exported) and is_equal_approx(export_rows[0]["unit_price"], reference) \
+			and is_equal_approx(export_rows[0]["paid_price"], bid) and export_rows[0]["buyer_id"] == trader.id, "The export record should carry the reference and the bid")
+
+	# The Goods page reads the good like any other: one trading price and the same
+	# row shape, the Butcher's held input at what it paid, the Trader as an export
+	# buyer, and no household.
+	var summary := sim.get_market_summary()
+	_assert(summary.has("Cattle") and summary.has("Sheep"), "Cattle and sheep should be listed while ranches and a Butcher exist")
+	var row: Dictionary = summary["Cattle"]
+	var row_keys := row.keys()
+	var grain_keys: Array = (summary["Grain"] as Dictionary).keys()
+	row_keys.sort()
+	grain_keys.sort()
+	_assert(row_keys == grain_keys, "A livestock row should have exactly the shape of any other good's row, got %s vs %s" % [row_keys, grain_keys])
+	_assert(is_equal_approx(row["price"], reference), "The row's one price is the posted price, like another good's market price; the Trader and Butcher pay fractions of it")
+	_assert(is_equal_approx(row["last_clearing"]["quantity_traded"], bought) and is_equal_approx(row["last_clearing"]["exported"], exported), "The row's last day should split local sales from exports")
+	var detail := sim.get_market_detail(sid, cattle)
+	var holding: Dictionary = {}
+	for h in detail["holdings"]:
+		if h["business_id"] == butcher.id:
+			holding = h
+	_assert(not holding.is_empty() and is_equal_approx(holding["value"], butcher.stock(cattle) * purchase_price), "The Butcher's held head should be valued at what it paid")
+	var export_buyers: Array = detail["buyers"].filter(func(b): return b.get("kind", "") == "export")
+	_assert(export_buyers.size() == 1 and export_buyers[0].has("capacity") and export_buyers[0].has("available"), "The Trader should appear once, as an export buyer with its capacity, like for any good")
+	_assert(detail["buyers"].all(func(b): return b.get("kind", "") != "household"), "No household buys live cattle")
+	_assert(detail["need"].is_empty() and detail["price_signal"].is_empty(), "Livestock has no household need and no local price drift")
+
+	# No spurious rows: nothing to sell, buy or export means no livestock listing,
+	# and a Trader alone (spare export capacity) does not create one.
+	for included in [[HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID], [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.TRADER_BUSINESS_ID]]:
+		var bare := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, included), true)
+		bare.advance_ticks(30)
+		var bare_summary := bare.get_market_summary()
+		_assert(not bare_summary.has("Cattle") and not bare_summary.has("Sheep"), "A settlement with no ranch or Butcher should list no livestock, roster %s" % [included])
+
+## Livestock export is an ordinary Trader setting: with a staffed Trader and the
+## cattle checkbox on, a cull waits in the ranch's inventory for it; with the box
+## off and no Butcher, the Trader is not an outlet and the ranch butchers its own
+## cull the same day instead of stockpiling it.
+func _check_livestock_export_toggle() -> void:
+	print("\n=== Livestock export is a Trader setting: switched off, the ranch butchers its own cull ===")
+	var cattle := Commodity.Type.CATTLE
+	var by_setting := {}
+	for enabled in [true, false]:
+		var roster := [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, HEScenarioSeeds.TRADER_BUSINESS_ID, HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+		var sim := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, roster), true)
+		sim.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, cattle, enabled)
+		var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
+		sim.advance_ticks(HESimulation.HERD_EVAL_INTERVAL_DAYS - 1)
+		ranch.herd_size = sim.herd_cull_target(ranch) - 1.0
+		sim.advance_ticks(1)
+		var review: Dictionary = sim.get_daily_history(1)[0]
+		by_setting[enabled] = {"culled": (review["produced"] as Dictionary).get("Cattle", 0.0), "held": ranch.stock(cattle), "meat": (review["produced"] as Dictionary).get("Meat", 0.0)}
+	print("  export on: held %.1f of %.1f culled, %.1f meat | export off: held %.1f, %.1f meat" % [
+		by_setting[true]["held"], by_setting[true]["culled"], by_setting[true]["meat"], by_setting[false]["held"], by_setting[false]["meat"]])
+	_assert(by_setting[true]["culled"] > 0.0 and by_setting[false]["culled"] > 0.0, "Both runs should cull at the first review")
+	_assert(is_equal_approx(by_setting[true]["held"], by_setting[true]["culled"]) and by_setting[true]["meat"] < 0.0001, "With export on, the cull waits in inventory for the Trader and nothing is home-butchered")
+	_assert(by_setting[false]["held"] < 0.0001 and by_setting[false]["meat"] > 0.0, "With export off and no Butcher, the ranch should butcher the cull at home")
+
 ## The Butcher turns a ranch's cull into meat and leather instead of the Trader
 ## exporting it raw, and households eat the meat (twice grain's food value) and
 ## may wear the leather. Run for four years so both ranches have culled
 ## several times, reconciling goods and money every single day.
+## Starts each ranch within one review's growth of its cull target, so its first
+## cull lands in the first year instead of 1.5-3 years in. The Butcher is hired on
+## day one and pays wages from a small startup reserve; with the seeded herds
+## (100 head against targets of 150 and 200) it fails before it ever sees an
+## animal, which makes any check of what it does vacuous. See the TODO on hiring
+## in he_simulation.gd's _reconcile_employment.
+func _seed_ranches_near_cull_target(sim: HESimulation, share_of_target: float = 0.97) -> void:
+	for business_id in sim.businesses.keys():
+		var b: HEBusiness = sim.businesses[business_id]
+		if b.kind == HEBusiness.Kind.HERD:
+			b.herd_size = floorf(sim.herd_cull_target(b) * share_of_target)
+			b.collateral_herd = b.herd_size
+
+## The Butcher's first cull is bought on credit; the animals it holds must secure
+## its wage overdraft (as a ranch's herd does) and it starts with working capital
+## for a first buffer of cattle, so it does not fail the day after buying.
+func _check_butcher_credit(sim: HESimulation) -> void:
+	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
+	var wage_bill := 2.0 * 0.8
+	var empty_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var start_cash := butcher.balance
+	butcher.add_stock(Commodity.Type.CATTLE, 20.0)
+	var held_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var collateral := 20.0 * HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_BID) * HESimulation.HERD_COLLATERAL_FRACTION
+	butcher.consume(Commodity.Type.CATTLE, 20.0)
+	print("  Butcher: start cash %.0f | overdraft limit %.1f empty, %.1f holding 20 cattle (collateral %.1f)" % [start_cash, empty_limit, held_limit, collateral])
+	_assert(held_limit > empty_limit and absf(held_limit - maxf(empty_limit, collateral)) < EPSILON, "Held livestock should secure the Butcher's wage overdraft")
+	var buffer_cost := 2.0 * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE] 		* HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
+	_assert(start_cash >= buffer_cost - EPSILON, "The Butcher should start with cash for its first buffer of cattle (%.0f vs %.0f)" % [start_cash, buffer_cost])
+
 func _check_butcher_processes_livestock() -> void:
 	print("\n=== Butcher: ranch culls become meat and leather, which households eat ===")
 	var sim := _new_sim("build_three_business_economy")
+	_seed_ranches_near_cull_target(sim)
+	_check_butcher_credit(sim)
 	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
 	_assert(butcher.processes_livestock and butcher.sells(Commodity.Type.MEAT) and butcher.sells(Commodity.Type.LEATHER),
 		"The seeded Butcher should process livestock into meat and leather")
@@ -1290,7 +2296,7 @@ func _check_butcher_processes_livestock() -> void:
 		"The Butcher should be the local seller of its secondary output too")
 
 	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
-	reconciled_commodities.append_array(HESimulation.HERD_COMMODITIES)
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
 	var produced := {}
 	var consumed := {}
 	var exported := {}
@@ -1532,7 +2538,13 @@ func _check_mill_and_bakery_chain() -> void:
 	var sim := _new_sim("build_economy_with_mill_and_bakery")
 	var bakery: HEBusiness = sim.businesses[HEScenarioSeeds.BAKERY_BUSINESS_ID]
 	_assert(bakery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bakery's timber input should be a heat slot")
-	sim.advance_ticks(360)
+	# Its oven buys heat the way households do: whichever satisfier is cheapest
+	# per heat unit (charcoal packs 4, timber 1), not timber specifically.
+	_assert(HENeeds.get_need(HENeed.Id.HEAT).is_satisfied_by(Commodity.Type.CHARCOAL), "Charcoal should satisfy heat, so the Bakery can bid for it")
+	sim.advance_ticks(10)
+	_assert(bakery.stock(Commodity.Type.CHARCOAL) + bakery.stock(Commodity.Type.TIMBER) > 0.0,
+		"The Bakery should have bought heat fuel (charcoal or timber) through its heat slot")
+	sim.advance_ticks(350)
 	var flour_made := 0.0
 	var bread_made := 0.0
 	for record in sim.get_daily_history(360):
@@ -1552,6 +2564,90 @@ func _check_mill_and_bakery_chain() -> void:
 		bread_traded += (record["traded_quantity"] as Dictionary).get("Bread", 0.0)
 	_assert(bread_traded > 0.0, "Households should have bought bread (it is cheaper per hunger point than grain)")
 	_check_demographic_invariants(sim)
+
+## Government Warehouse: costs 200 from the treasury, employs 2 admin workers
+## paid by the treasury, and money stays conserved.
+func _check_government_warehouse() -> void:
+	print("
+=== Government Warehouse: built from the treasury, 2 admin workers ===")
+	var sim := _new_sim("build_three_business_economy")
+	var cost := HEScenarioSeeds.WAREHOUSE_BUILD_COST
+	_assert(not sim.build_government_building(1, "warehouse"), "Starting treasury is too small to afford a warehouse")
+	sim.advance_ticks(1)
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	gov.balance = cost + 50.0
+	var money_before := sim._total_money()
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse should build once the treasury covers it")
+	_assert(absf(gov.balance - 50.0) < EPSILON, "Treasury should pay exactly the build cost")
+	_assert(absf(money_before - sim._total_money() - cost) < EPSILON, "Building should take exactly the cost out of circulation")
+	_assert(absf(sim.get_city_summary()["construction_spend_total"] - cost) < EPSILON, "Construction spend should be booked")
+	_assert(not sim.build_government_building(1, "warehouse"), "Only one warehouse per town")
+	sim.advance_ticks(14)
+	var warehouse_id := -1
+	for report in sim.get_business_reports(1):
+		if report["kind"] == "warehouse":
+			warehouse_id = report["business_id"]
+			_assert(report["employed_workers"] >= 1 and report["capacity"] == 2 and report["max_capacity"] == 2, "Warehouse should staff its 2 admin slots (employed %d)" % report["employed_workers"])
+			_assert(absf(report["balance"] - gov.balance) < EPSILON, "Warehouse cash should be the treasury's")
+	_assert(warehouse_id != -1, "Warehouse should appear in business reports")
+	var warehouse: HEBusiness = sim.businesses[warehouse_id]
+	_assert(absf(warehouse.balance) < EPSILON, "Warehouse must hold no cash of its own")
+
+	# Buy orders: the treasury pays for goods that land in the warehouse's
+	# inventory, within the daily cap, and money is only moved, never made.
+	var timber := Commodity.Type.TIMBER
+	gov.balance = 500.0
+	_assert(sim.set_warehouse_order(warehouse_id, timber, 25.0, false, 0.0), "Warehouse should accept a buy order")
+	_assert(not sim.set_warehouse_order(gov.id, timber, 25.0, false, 0.0), "Only a warehouse takes orders")
+	sim.advance_ticks(1)
+	_assert(warehouse.stock(timber) <= HESimulation.WAREHOUSE_DAILY_TRADE_CAP + EPSILON, "A day's buying is capped (bought %.2f)" % warehouse.stock(timber))
+	sim.advance_ticks(20)
+	_assert(warehouse.stock(timber) > 0.0, "Buy order should stock the warehouse with timber")
+	_assert(warehouse.stock(timber) <= 25.0 + EPSILON, "Buy order should stop at its target (held %.2f)" % warehouse.stock(timber))
+	_assert(absf(warehouse.balance) < EPSILON, "Warehouse still has no cash after buying")
+
+	# Sell order: held goods above `keep` are exported through the Trader and
+	# the treasury is paid.
+	var held := warehouse.stock(timber)
+	if held > 0.0:
+		_assert(sim.set_warehouse_order(warehouse_id, timber, 0.0, true, 0.0), "Warehouse should accept a sell order")
+		sim.advance_ticks(10)
+		_assert(warehouse.stock(timber) < held, "Sell order should export held timber (still %.2f of %.2f)" % [warehouse.stock(timber), held])
+
+## Government build costs: farm and woodlot are the free starter tier (built
+## through the same path as the warehouse), and a goods cost is drawn from the
+## Government Warehouse's stock and blocked while the warehouse can't cover it.
+func _check_government_build_costs() -> void:
+	print("
+=== Government build costs: free farm/woodlot, goods cost from the warehouse ===")
+	var sim := _new_sim("build_three_business_economy")
+	var settlement: HESettlement = sim.settlements[1]
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	for type_key in ["farm", "woodlot"]:
+		_assert(sim.has_business_of_type(1, type_key), "Seeded town starts with a %s" % type_key)
+		_assert(sim.build_government_building(1, type_key) == false, "A second %s is refused (unique per town)" % type_key)
+		for business_id in sim.businesses.keys():
+			if (sim.businesses[business_id] as HEBusiness).type_key == type_key:
+				sim.businesses.erase(business_id)
+				settlement.business_ids.erase(business_id)
+				break
+		var treasury_before := gov.balance
+		_assert(sim.build_government_building(1, type_key), "%s should build through the Government for free" % type_key)
+		_assert(absf(gov.balance - treasury_before) < EPSILON, "A free %s must not touch the treasury" % type_key)
+		_assert(sim.has_business_of_type(1, type_key), "The new %s should exist" % type_key)
+
+	# Goods cost: no warehouse -> blocked; warehouse without stock -> blocked;
+	# stocked warehouse -> builds and the goods are consumed.
+	var timber := Commodity.Type.TIMBER
+	var option := {"type_key": "test_hall", "cost": HEScenarioSeeds.build_cost(0.0, {timber: 5.0})}
+	_assert(sim.government_build_blocker(1, option).contains("warehouse"), "Goods cost needs a warehouse")
+	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 50.0
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse builds")
+	var warehouse := sim._government_warehouse(1)
+	_assert(sim.government_build_blocker(1, option).contains("has 0"), "Empty warehouse can't cover the goods cost")
+	warehouse.add_stock(timber, 8.0)
+	_assert(sim.government_build_blocker(1, option) == "", "Stocked warehouse covers the goods cost")
+	_assert(HEScenarioSeeds.cost_text(option["cost"]) == "5 Timber" or HEScenarioSeeds.cost_text(option["cost"]).contains("5"), "cost_text lists goods")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.

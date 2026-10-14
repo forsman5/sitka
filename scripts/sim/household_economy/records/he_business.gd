@@ -67,6 +67,21 @@ extends RefCounted
 ## treasury means a rationed wage, not an overdraft. `builder_slots` is the
 ## (not yet modeled) number of builder jobs it will fund; see its comment.
 
+## Kind.WAREHOUSE (the "Government Warehouse") is a fifth odd one out, built by
+## the town government rather than a player-funded business: no recipe, no
+## sales, no self-tuning, and no cash of its own: its `balance` stays 0 and its
+## wages AND purchases come out of the settlement's treasury (the same goes
+## for any future government building). It holds an `inventory` that the
+## player manages through `warehouse_orders` (standing buy-up-to / sell-down-to
+## orders against the local market and Trader, see he_simulation.gd's
+## _run_warehouse_orders), to be spent on construction projects later.
+## TODO(warehouse-capacity): the inventory has no storage limit (only the
+## per-order target and the daily trade cap bound it) and goods never spoil.
+## Give each good a size/weight per unit and the building a capacity, so a
+## warehouse fills up and buying has to be selective; an upgrade could raise
+## it. Likely to matter once there can be more than one (see the unique-
+## building TODO on HESimulation.build_government_building).
+
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
@@ -99,7 +114,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
 enum Species { CATTLE, SHEEP }
 
 var id: int
@@ -135,12 +150,6 @@ var need_inputs: Dictionary[Commodity.Type, int] = {}
 ## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
 var processes_livestock: bool = false
 
-## Wages come only out of cash on hand -- no negative-balance allowance (see
-## he_simulation.gd's _wage_overdraft_floor). Set on processors that buy their
-## inputs from a thin local market (Mill, Bakery), where wage debt would
-## otherwise crowd out the credit they need to keep buying inputs.
-var wages_from_cash_only: bool = false
-
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0
@@ -149,14 +158,20 @@ var herd_size: float = 0.0
 ## commodity so a future consumer doesn't have to assume which one it was.
 ## Empty on any interval with nothing to cull.
 var last_culled: Dictionary[Commodity.Type, float] = {}
+
+## Kind.HERD only: the herd as of its last review, which is what a ranch's wage
+## overdraft is secured against (he_simulation.gd's _herd_collateral). 0 until the
+## first review, when it is the starting herd.
+var collateral_herd: float = 0.0
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
 ## last time _run_herds ran. Always 0 for cattle.
 var last_wool_produced: float = 0.0
-## Kind.HERD only, reporting: head sold off today via he_simulation.gd's
-## _hardship_butcher_if_needed to cover a wage shortfall the ranch's own
-## cash couldn't. 0.0 on any ordinary day.
+## Kind.HERD only, reporting: head slaughtered at home today via
+## he_simulation.gd's _hardship_butcher_if_needed (their meat then sells
+## locally) to cover a wage shortfall the ranch's own cash couldn't. 0.0 on
+## any ordinary day.
 var last_hardship_butchered: float = 0.0
-## Kind.HERD only: this ranch's own recent births / culls / hardship sales,
+## Kind.HERD only: this ranch's own recent births / culls / hardship butchering,
 ## oldest first, bounded by he_simulation.gd's HERD_EVENT_HISTORY_MAX. Kept
 ## per business (not just in the shared blotter) because the blotter's
 ## 200-entry ring fills with household chatter long before a ranch's rare
@@ -268,6 +283,13 @@ var tax_collected_total: float = 0.0
 ## plain variable now so the UI and player actions have a stable name to bind.
 var builder_slots: int = 0
 
+## Kind.WAREHOUSE only: the player's standing orders, {Commodity.Type:
+## {"buy_up_to": float, "sell": bool, "keep": float}}. `buy_up_to` > 0 buys the
+## good (local sellers, else the Trader's imports) until the warehouse holds
+## that many; `sell` exports whatever is held above `keep` through the Trader.
+## Both are paced by he_simulation.gd's WAREHOUSE_DAILY_TRADE_CAP.
+var warehouse_orders: Dictionary = {}
+
 var last_planned_units: float = 0.0
 var last_actual_units: float = 0.0
 var last_output_produced: Dictionary[Commodity.Type, float] = {}
@@ -277,6 +299,11 @@ var last_wage_per_worker: float = 0.0
 ## -- see he_simulation.gd._run_trade. Always empty for a PRODUCTION
 ## business.
 var last_exported: Dictionary[Commodity.Type, float] = {}
+
+## Kind.TRADER only: the share of each good's reference price this Trader bids
+## for export, moved a step a day by he_simulation.gd's _adjust_trader_bids. A
+## good not listed bids TRADER_STARTING_BID_FRACTION.
+var bid_fraction: Dictionary[Commodity.Type, float] = {}
 
 ## Kind.TRADER only: units of each commodity imported (from outside the
 ## settlement, on behalf of a local buyer) today, for reporting -- see
@@ -305,6 +332,7 @@ func _init(p_id: int, p_name: String, p_recipe: Recipe, p_max_capacity: int, p_i
 	kind = p_kind
 	species = p_species
 	herd_size = p_herd_size
+	collateral_herd = p_herd_size
 
 ## The primary recipe output (Farm -> grain, Woodlot -> timber, Butcher ->
 ## meat). Most PRODUCTION businesses have exactly one; for a multi-output
@@ -397,6 +425,129 @@ func flow_history(flow: String) -> Dictionary:
 	for commodity in history.keys():
 		out[commodity] = (history[commodity] as Array).duplicate()
 	return out
+
+## Operating ledger: every cash movement of the day under its own heading, kept
+## apart from what the balance happens to do. Sales are gross (tax is its own
+## line); a Trader's trade_margin is what it keeps between buying and selling.
+## cash_profit = inflows - outflows and reconciles to the day's balance change
+## (less one-off startup cash); stock_change_value is the value of goods
+## accumulated or run down, at the day's closing prices, and is NOT in cash_profit.
+const LEDGER_INFLOWS := ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin", "tax_income"]
+const LEDGER_OUTFLOWS := ["input_local", "input_import", "wages", "taxes"]
+const LEDGER_HISTORY_DAYS := 730
+
+var ledger_today: Dictionary = {}
+## Today's per-good physical movements, {group: {Commodity.Type: units}} with
+## group "produced", "local" (sold to households or businesses in town) or
+## "export" (sold to the Trader). Kept per good because a ranch or Butcher sells
+## more than one, and a seller's forecast of local use is per good.
+var ledger_goods_today: Dictionary = {}
+## Stock held when the day opened, so close_ledger_day can value the change.
+var ledger_open_stock: Dictionary = {}
+var _ledger_history: Array[Dictionary] = []
+
+func ledger_add(key: String, amount: float) -> void:
+	ledger_today[key] = ledger_today.get(key, 0.0) + amount
+
+func ledger_row_count() -> int:
+	return _ledger_history.size()
+
+func ledger_add_good(group: String, commodity: Commodity.Type, units: float) -> void:
+	var by_good: Dictionary = ledger_goods_today.get_or_add(group, {})
+	by_good[commodity] = by_good.get(commodity, 0.0) + units
+
+func open_ledger_day() -> void:
+	ledger_today = {}
+	ledger_goods_today = {}
+	ledger_open_stock = inventory.duplicate()
+
+## Finalises today's row. `prices` values stock at the day's closing prices;
+## `output_commodities` splits output stock from input stock. `units_*` are
+## physical, for capacity decisions.
+func close_ledger_day(prices: Dictionary, output_commodities: Array, units_sold: float, units_produced: float) -> void:
+	var row: Dictionary = {}
+	# What the day's production actually used up, at closing prices. Purchases
+	# land in lumps while buffers fill; consumption is the running input cost.
+	var consumed_value := 0.0
+	for c in (todays_flows.get(FLOW_CONSUMED, {}) as Dictionary).keys():
+		consumed_value += float(todays_flows[FLOW_CONSUMED][c]) * float(prices.get(c, 0.0))
+	row["input_consumed_value"] = consumed_value
+	var inflow := 0.0
+	var outflow := 0.0
+	for key in LEDGER_INFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		inflow += row[key]
+	for key in LEDGER_OUTFLOWS:
+		row[key] = ledger_today.get(key, 0.0)
+		outflow += row[key]
+	row["injection"] = ledger_today.get("injection", 0.0)
+	# Units buyers could pay for but the offer could not fill (from the day's
+	# price signal): demand the sales figure cannot see when supply is binding.
+	row["unmet_demand"] = ledger_today.get("unmet_demand", 0.0)
+	# Units households wanted but could not pay for: need without purchasing
+	# power, which a sales figure cannot see either.
+	row["unfunded_demand"] = ledger_today.get("unfunded_demand", 0.0)
+	row["cash_profit"] = inflow - outflow
+	var output_value := 0.0
+	var input_value := 0.0
+	var change_value := 0.0
+	var commodities := {}
+	for c in inventory.keys():
+		commodities[c] = true
+	for c in ledger_open_stock.keys():
+		commodities[c] = true
+	for c in commodities.keys():
+		var price: float = prices.get(c, 0.0)
+		var held: float = stock(c)
+		if output_commodities.has(c):
+			output_value += held * price
+		else:
+			input_value += held * price
+		change_value += (held - float(ledger_open_stock.get(c, 0.0))) * price
+	row["output_stock_value"] = output_value
+	row["input_stock_value"] = input_value
+	row["stock_change_value"] = change_value
+	row["units_sold"] = units_sold
+	row["units_produced"] = units_produced
+	row["employed"] = ledger_today.get("employed", 0.0)
+	row["reference_wage"] = ledger_today.get("reference_wage", 0.0)
+	row["balance"] = balance
+	row["goods"] = ledger_goods_today.duplicate(true)
+	_ledger_history.append(row)
+	if _ledger_history.size() > LEDGER_HISTORY_DAYS:
+		_ledger_history.pop_front()
+
+## Newest last. Rows are copied so callers cannot change history.
+func ledger_history(days: int = LEDGER_HISTORY_DAYS) -> Array:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var out: Array = []
+	for i in range(start, _ledger_history.size()):
+		out.append((_ledger_history[i] as Dictionary).duplicate())
+	return out
+
+## Average per day of one good's units in a group ("produced", "local",
+## "export") over the last `days` rows (0.0 with no rows).
+func ledger_good_average(group: String, commodity: Commodity.Type, days: int) -> float:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var n := _ledger_history.size() - start
+	if n <= 0:
+		return 0.0
+	var total := 0.0
+	for i in range(start, _ledger_history.size()):
+		var goods: Dictionary = (_ledger_history[i] as Dictionary).get("goods", {})
+		total += float((goods.get(group, {}) as Dictionary).get(commodity, 0.0))
+	return total / n
+
+## Average of one ledger column over the last `days` rows (0.0 with no rows).
+func ledger_average(key: String, days: int) -> float:
+	var start: int = maxi(0, _ledger_history.size() - days)
+	var n := _ledger_history.size() - start
+	if n <= 0:
+		return 0.0
+	var total := 0.0
+	for i in range(start, _ledger_history.size()):
+		total += float((_ledger_history[i] as Dictionary).get(key, 0.0))
+	return total / n
 
 func record_wage_day(wage_per_worker: float) -> void:
 	_wage_history.append(wage_per_worker)

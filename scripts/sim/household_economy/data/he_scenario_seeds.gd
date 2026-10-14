@@ -39,6 +39,10 @@ const GOVERNMENT_BUSINESS_ID := 9
 ## Opt-in like the Bloomery and Iron Mine; numbered after the Butcher (8) and
 ## the Government (9), which are present in every town.
 const CHARCOAL_BURNER_BUSINESS_ID := 10
+## Government Warehouse: built from the treasury, staffed by a fixed admin crew
+## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
+const WAREHOUSE_BUILD_COST := 200.0
+const WAREHOUSE_WORKERS := 2
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
 
@@ -48,6 +52,8 @@ const STARTING_TREASURY_DAYS := 10.0
 ## business tuned to zero between them would miss the next one -- and may grow
 ## to a second when there is enough to process. Like the ranches it has no
 ## day-one employees: it is hired from the unemployed pool.
+## TODO(butcher hiring): this floor is staffed from day one even though no ranch
+## culls for 1.5-3 years -- see the note in he_simulation.gd's _reconcile_employment.
 const BUTCHER_MIN_CAPACITY := 2
 ## Crew a ranch is authorized to hire from day one. It starts with no employees
 ## and fills this from the unemployed pool at the weekly reconcile; there is no
@@ -102,6 +108,11 @@ const BLOOMERY_MAX_CAPACITY := 20
 ## like the Bloomery: legacy (non-field) business, so this is its hard ceiling.
 const CHARCOAL_BURNER_MAX_CAPACITY := 10
 const CHARCOAL_BURNER_GRACE_DAYS := 21
+## Households' whole heat need is about 3 charcoal a day (0.1 heat per person,
+## 4 heat per charcoal) and a worker makes 1.5, so two workers meet it. A
+## bigger starting crew only makes charcoal nobody buys, which the operating
+## ledger showed collapsing its price within weeks.
+const CHARCOAL_BURNER_STARTING_CREW := 2
 
 ## Starting herd sizes -- deliberately well under either species' cull
 ## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
@@ -245,16 +256,65 @@ static func make_charcoal_burner(business_id: int, settlement_id: int, initial_c
 static func make_mill(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var mill := HEBusiness.new(business_id, "Mill", _mill_recipe(), MILL_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	mill.type_key = "mill"
-	mill.wages_from_cash_only = true
 	return mill
 
 static func make_bakery(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var bakery := HEBusiness.new(business_id, "Bakery", _bakery_recipe(), BAKERY_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	bakery.type_key = "bakery"
-	bakery.wages_from_cash_only = true
 	# Its timber input is the oven's heat, which any heat fuel can supply.
 	bakery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 	return bakery
+
+static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
+	var warehouse := HEBusiness.new(business_id, "Government Warehouse", null, WAREHOUSE_WORKERS, WAREHOUSE_WORKERS, HEBusiness.Kind.WAREHOUSE, settlement_id)
+	warehouse.type_key = "warehouse"
+	return warehouse
+
+## A construction cost: `gold` comes out of the treasury, `goods`
+## ({Commodity.Type: units}) out of the town's Government Warehouse stock.
+static func build_cost(gold: float = 0.0, goods: Dictionary = {}) -> Dictionary:
+	return {"gold": gold, "goods": goods}
+
+## "free", "200 g", or "20 g + 10 Timber" -- for build-menu item text.
+static func cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	var gold: float = cost.get("gold", 0.0)
+	if gold > 0.0:
+		parts.append("%.0f g" % gold)
+	var goods: Dictionary = cost.get("goods", {})
+	for commodity in goods:
+		parts.append("%.0f %s" % [goods[commodity], Commodity.name_of(commodity)])
+	return "free" if parts.is_empty() else " + ".join(parts)
+
+## What the government charges to build each player business kind, by
+## business_types() `type_key`. Kinds not listed here cannot be built through the
+## Government menu. A zero cost is the free starter tier (no warehouse needed);
+## later kinds pay gold and/or warehouse goods via build_cost().
+static func government_business_costs() -> Dictionary:
+	return {
+		"farm": build_cost(),
+		"woodlot": build_cost(),
+	}
+
+## Buildings the town government builds: the Warehouse (never seeded, not in
+## business_types()) plus the player business kinds priced in
+## government_business_costs(). Each carries a `cost` from build_cost().
+## `startup` marks a business that gets the new-business crew and seed cash
+## (HESimulation.add_new_business); the Warehouse runs on the treasury instead.
+static func government_buildings() -> Array[Dictionary]:
+	var options: Array[Dictionary] = [
+		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
+			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
+	]
+	var costs := government_business_costs()
+	for business_type in business_types():
+		if costs.has(business_type["type_key"]):
+			options.append({"type_key": business_type["type_key"], "label": business_type["label"],
+				"cost": costs[business_type["type_key"]], "hint": business_type["hint"],
+				"startup": true, "make": business_type["make"]})
+	return options
 
 ## THE registry of business kinds a player can pick: the dashboard's "Create
 ## business" menu and the setup page's checkboxes are both built from it, so a
@@ -323,16 +383,22 @@ static func _butcher_recipe() -> Recipe:
 static func _bloomery_recipe() -> Recipe:
 	return Recipe.new("bloomery", {Commodity.Type.TIMBER: 2.0, Commodity.Type.IRON_ORE: 1.0}, {Commodity.Type.IRON: 0.5})
 
-## Charcoal burner: 3 timber -> 1 charcoal per unit of output (inputs are a
+## Charcoal burner: 2.5 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
-## 4 heat against 3 heat of timber burned to make it, so the burner nets heat.
-## Per worker per day at full input supply: buys 4.5 timber (4.5) and sells 1.5
-## charcoal at BASE_PRICE 3.8 (5.7) = ~1.2 net, just above the ~1.1 reference
+## 4 heat against 2.5 heat of timber burned to make it, so the burner nets heat.
+## Per worker per day at full input supply: buys 3.75 timber (3.75) and sells
+## 1.5 charcoal at BASE_PRICE 3.8 (5.7) = ~1.95 net against a ~1.1 reference
 ## wage. Priced per heat unit that is 3.8 / 4 = 0.95 against timber's 1.0, so
 ## households switch to it -- a slim edge on purpose; the posted prices move
 ## with supply and demand.
+##
+## Why 2.5 and not 3: charcoal cannot sell for more than the 4 timber it
+## replaces (above that households heat with timber), so at 3 timber in the
+## most a worker could clear was ~0.1/day over the wage -- the operating
+## ledger showed any timber price above 1.0 ate it. 2.5 leaves room for timber
+## to run to roughly 1.5 before the workshop loses money.
 static func _charcoal_burner_recipe() -> Recipe:
-	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 3.0}, {Commodity.Type.CHARCOAL: 1.5})
+	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 2.5}, {Commodity.Type.CHARCOAL: 1.5})
 
 static func _iron_mine_recipe() -> Recipe:
 	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
@@ -393,6 +459,15 @@ static func startup_input_cash(b: HEBusiness, crew: int) -> float:
 	for commodity in b.recipe.inputs.keys():
 		cost += units_per_day * b.recipe.inputs[commodity] * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS * HESimulation.BASE_PRICE[commodity]
 	return cost
+
+## Working capital for a Butcher's first buffer of animals: what it costs, at
+## the Butcher's purchase quote, to fill HESimulation.BUTCHERY_INPUT_BUFFER_DAYS of
+## `crew` worker-days with cattle (the species it buys first). Without it its
+## first cull is bought on credit far below its wage floor and it fails.
+static func startup_livestock_cash(crew: int) -> float:
+	var species := HEBusiness.Species.CATTLE
+	var head: float = float(crew) * HESimulation.BUTCHERY_INPUT_BUFFER_DAYS / HESimulation.BUTCHERY_WORKER_DAYS_PER_HEAD[species]
+	return head * HESimulation.livestock_quote(species, HESimulation.LivestockQuote.BUTCHER_PURCHASE)
 
 static func _estimated_starting_reference_wage() -> float:
 	var dependency_ratio: float = float(HOUSEHOLD_SIZE) / float(WORKER_CAPACITY)
@@ -457,7 +532,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	farm.balance = startup_cash(farm, farm_capacity)
 	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
-	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY
+	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY + startup_livestock_cash(BUTCHER_MIN_CAPACITY)
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 
@@ -669,15 +744,18 @@ static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerato
 	return _build_world(half, remainder - half, trader, bloomery, iron_mine)
 
 ## Food-chain variant: Farm grain is milled into flour, which the Bakery
-## (with timber for heat) turns into bread. Households switch to whichever
-## of grain/flour/bread is cheapest per hunger point (see HENeeds).
+## (with heat from charcoal or timber) turns into bread. Households switch to
+## whichever of grain/flour/bread is cheapest per hunger point (see HENeeds).
 static func build_economy_with_mill_and_bakery(_rng: RandomNumberGenerator) -> Dictionary:
 	var trader := 8
 	var mill := 4
 	var bakery := 4
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - mill - bakery
+	# A Charcoal Burner so the Bakery's oven (a heat need slot, like households')
+	# has a denser fuel to bid for than timber alone.
+	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW
+	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - mill - bakery - charcoal_burner
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, 0, 0, 0, mill, bakery)
+	return _build_world(half, remainder - half, trader, 0, 0, charcoal_burner, mill, bakery)
 
 ## Eight businesses: the Iron Mine scenario plus a Charcoal Burner that turns
 ## the Woodlot's timber into charcoal. Households switch to charcoal when it
@@ -688,7 +766,7 @@ static func build_economy_with_charcoal_burner(_rng: RandomNumberGenerator) -> D
 	var trader := 8
 	var bloomery := 8
 	var iron_mine := 8
-	var charcoal_burner := 4
+	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner
 	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
 	return _build_world(half, remainder - half, trader, bloomery, iron_mine, charcoal_burner)
@@ -715,7 +793,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
-	var charcoal_burner: int = 4 if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
+	var charcoal_burner: int = CHARCOAL_BURNER_STARTING_CREW if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
 	var mill: int = 4 if included.has(MILL_BUSINESS_ID) else 0
 	var bakery: int = 4 if included.has(BAKERY_BUSINESS_ID) else 0
 	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - mill - bakery
