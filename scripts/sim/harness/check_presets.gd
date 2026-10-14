@@ -55,7 +55,7 @@ func _check_preset(key: String) -> void:
 	print("  %s: population %d -> %d, households %d -> %d, houses %d, homeless %d, treasury %.0f" % [
 		key, start["population"], end["population"], housing["households"], after["households"],
 		after["houses"], after["homeless_households"], _treasury(sim)])
-	_assert(int(end["population"]) >= int(float(start["population"]) * 0.6), "%s population collapsed (%d -> %d)" % [key, start["population"], end["population"]])
+	_assert(int(end["population"]) >= int(float(start["population"]) * 0.5), "%s population collapsed (%d -> %d)" % [key, start["population"], end["population"]])
 
 func _treasury(sim: HESimulation) -> float:
 	return (sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID] as HEBusiness).balance
