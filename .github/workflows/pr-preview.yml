@@ -45,8 +45,41 @@ jobs:
             core.info(`${files.length} changed files; game files changed: ${game}`);
             core.setOutput('game', String(game));
 
-  preview:
+  # Flags the existing preview comment as stale the moment a new push arrives, before the
+  # (slow) build finishes. The preview job's sticky comment rewrite below removes the flag.
+  # Plain GitHub-hosted runner: only touches the PR comment, no cluster access.
+  mark-outdated:
     needs: changes
+    if: >-
+      needs.changes.outputs.game == 'true' &&
+      github.event.action != 'closed' && github.event.action != 'edited' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const c = comments.find(x => x.body.includes('Sticky Pull Request Commentgamedev-preview'));
+            if (!c || !c.body.includes('**Preview ready:**') || c.body.startsWith('**[OUTDATED]**')) {
+              core.info('No live preview comment to mark.');
+              return;
+            }
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: c.id,
+              body: '**[OUTDATED]** A newer build is in progress; this link shows an older commit.\n\n' + c.body,
+            });
+
+  preview:
+    # Waits for mark-outdated so its edit can never land after the fresh comment below.
+    needs: [changes, mark-outdated]
     if: >-
       needs.changes.outputs.game == 'true' &&
       github.event.action != 'closed' && github.event.action != 'edited' &&
