@@ -40,6 +40,7 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const Household = preload("res://scripts/sim/records/household.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
@@ -104,6 +105,11 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	## can still win on price rather than tie and go unbought.
 	Commodity.Type.MEAT: 1.6,
 	Commodity.Type.LEATHER: 1.6,
+	## Above the pooled model's 6.0 because iron costs 30 here (see its comment):
+	## 9.0 keeps iron to about a quarter of the tool's price at 0.07 per tool.
+	## A small, durable purchase: at 0.005 per person per day a household
+	## spends 0.045 per person, well under a fifth of what it spends on food.
+	Commodity.Type.TOOLS: 9.0,
 }
 ## Largest one-day price move, as a fraction of the opening price.
 const PRICE_ADJUST_STEP := 0.05
@@ -604,6 +610,19 @@ const SALES_TAX_RATE := 0.05
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
+## Houses, keyed by their own id space (not shared with `businesses`). Housing
+## is a settlement-wide pool -- see get_housing_report().
+var dwellings: Dictionary[int, HEHouse] = {}
+
+## Housing rules, applied only to settlements with HESettlement.housing_modeled.
+## When every house is taken (households >= capacity) a household's monthly
+## birth chance is scaled by this: births fall by 80% rather than stopping.
+const HOUSING_SATURATED_BIRTH_SCALE := 0.2
+## Households beyond capacity are homeless (the newest households, by id --
+## no one is assigned to a specific house). Each homeless household has this
+## chance per EMIGRATION_EVAL_INTERVAL_DAYS of losing a member to emigration,
+## on top of any starvation emigration.
+const HOMELESS_EMIGRATION_CHANCE := 0.3
 var markets: Dictionary[int, HEMarket] = {}
 var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_id -> commodity -> bool
 
@@ -715,6 +734,8 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 		settlements[legacy_settlement.id] = legacy_settlement
 	households = world["households"]
 	businesses = world["businesses"]
+	if world.has("dwellings"):
+		dwellings = world["dwellings"]
 	for business_id in businesses.keys():
 		if (businesses[business_id] as HEBusiness).kind != HEBusiness.Kind.TRADER:
 			continue
@@ -738,6 +759,10 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 				var employer: HEBusiness = businesses[h.employer_business_id]
 				if employer.settlement_id != settlement_id:
 					h.employer_business_id = -1
+	for settlement_id in settlements.keys():
+		var housing_settlement: HESettlement = settlements[settlement_id]
+		for dwelling_id in housing_settlement.dwelling_ids:
+			(dwellings[dwelling_id] as HEHouse).settlement_id = settlement_id
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
@@ -770,6 +795,89 @@ func add_new_business(b: HEBusiness) -> void:
 	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
 	add_business(b)
 
+## Registers a house built after the sim started. The caller builds the record
+## with a free id from next_dwelling_id(); nothing is charged here.
+func add_dwelling(house: HEHouse) -> void:
+	assert(not dwellings.has(house.id), "Dwelling id %d already exists" % house.id)
+	assert(settlements.has(house.settlement_id), "Unknown settlement %d" % house.settlement_id)
+	dwellings[house.id] = house
+	var s: HESettlement = settlements[house.settlement_id]
+	s.dwelling_ids.append(house.id)
+	s.housing_modeled = true
+
+func next_dwelling_id() -> int:
+	var next_id := 1
+	for dwelling_id in dwellings.keys():
+		next_id = maxi(next_id, dwelling_id + 1)
+	return next_id
+
+## One entry per house, ascending id: {dwelling_id, settlement_id, name,
+## type_key}. Houses live in `dwellings`, a separate id space from businesses,
+## so they never appear in get_business_reports(); a town layout reads this.
+func get_dwelling_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	var ids := dwellings.keys()
+	ids.sort()
+	for dwelling_id in ids:
+		var house: HEHouse = dwellings[dwelling_id]
+		if settlement_id != -1 and house.settlement_id != settlement_id:
+			continue
+		out.append({
+			"dwelling_id": house.id,
+			"settlement_id": house.settlement_id,
+			"name": house.name,
+			"type_key": house.type_key,
+		})
+	return out
+
+## Housing state of one settlement. `modeled` is false for a world that never
+## set housing up (then nothing below limits it). `capacity` counts
+## households, `homeless_households` the ones past it, and `saturated` is true
+## when no house is free -- the condition that cuts births.
+func get_housing_report(settlement_id: int) -> Dictionary:
+	var s: HESettlement = settlements[settlement_id]
+	var capacity := 0
+	for dwelling_id in s.dwelling_ids:
+		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
+	var household_count := s.household_ids.size()
+	return {
+		"modeled": s.housing_modeled,
+		"houses": s.dwelling_ids.size(),
+		"capacity": capacity,
+		"households": household_count,
+		"homeless_households": maxi(0, household_count - capacity) if s.housing_modeled else 0,
+		"saturated": s.housing_modeled and household_count >= capacity,
+	}
+
+## Ids of households with no house: the settlement's households sorted by id,
+## the first `capacity` of them housed, the rest homeless.
+func _homeless_household_ids(settlement_id: int) -> Array[int]:
+	var homeless: Array[int] = []
+	var housing := get_housing_report(settlement_id)
+	if not housing["modeled"]:
+		return homeless
+	var ids: Array[int] = []
+	ids.assign((settlements[settlement_id] as HESettlement).household_ids)
+	ids.sort()
+	for i in range(int(housing["capacity"]), ids.size()):
+		homeless.append(ids[i])
+	return homeless
+
+## "housed", "homeless", or "unlimited" (housing not modeled). Same ordering
+## rule as _homeless_household_ids: the lowest-id households fill the houses.
+func _housing_status_of(h: HEHousehold) -> String:
+	var s: HESettlement = settlements[h.settlement_id]
+	if not s.housing_modeled:
+		return "unlimited"
+	var capacity := 0
+	for dwelling_id in s.dwelling_ids:
+		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
+	var lower := 0
+	for household_id in s.household_ids:
+		if household_id < h.id:
+			lower += 1
+	return "homeless" if lower >= capacity else "housed"
+
 ## The settlement's Government Warehouse, or null if it has not built one.
 func _government_warehouse(settlement_id: int) -> HEBusiness:
 	for business_id in businesses.keys():
@@ -786,7 +894,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null:
 		return "no government"
-	if has_business_of_type(settlement_id, option["type_key"]):
+	var repeatable: bool = option.get("repeatable", false)
+	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
 	var cost: Dictionary = option["cost"]
 	if gov.balance < float(cost.get("gold", 0.0)):
@@ -794,6 +903,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var goods: Dictionary = cost.get("goods", {})
 	if not goods.is_empty():
 		var warehouse := _government_warehouse(settlement_id)
+		if warehouse == null:
+			return "needs a government warehouse"
 		for commodity in goods:
 			var held := warehouse.stock(commodity) if warehouse != null else 0.0
 			if held < float(goods[commodity]):
@@ -815,7 +926,7 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 ## the build cost should probably scale with how many already exist.
 func build_government_building(settlement_id: int, type_key: String) -> bool:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
-	if gov == null or has_business_of_type(settlement_id, type_key):
+	if gov == null:
 		return false
 	for option in HEScenarioSeeds.government_buildings():
 		if option["type_key"] != type_key:
@@ -829,16 +940,87 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 			var warehouse := _government_warehouse(settlement_id)
 			for commodity in goods:
 				warehouse.consume(commodity, goods[commodity])
-		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
 		gov.balance -= gold
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
+		if option.get("category", "") == "housing":
+			add_dwelling(option["make"].call(next_dwelling_id(), settlement_id))
+			return true
+		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
 		if option.get("startup", false):
 			add_new_business(building)
 		else:
 			add_business(building)
 		return true
 	return false
+
+## What the warehouse still lacks for `option`'s goods cost: commodity ->
+## missing units, empty when the cost has no goods or the warehouse covers it
+## (or there is no warehouse -- then nothing can be ordered either).
+func _goods_shortfall(settlement_id: int, option: Dictionary) -> Dictionary:
+	var shortfall: Dictionary = {}
+	var warehouse := _government_warehouse(settlement_id)
+	if warehouse == null:
+		return shortfall
+	var goods: Dictionary = option["cost"].get("goods", {})
+	for commodity in goods:
+		var missing: float = float(goods[commodity]) - warehouse.stock(commodity)
+		if missing > 0.0:
+			shortfall[commodity] = missing
+	return shortfall
+
+## Where a goods-priced government build stands on its warehouse stock:
+##   "none"      -- nothing to order (no goods cost, already covered, no
+##                  warehouse, no government, already built, treasury short)
+##   "can_order" -- everything else is in place and goods are missing, and
+##                  no standing order covers them yet
+##   "ordered"   -- a standing buy order already targets the full cost; the
+##                  warehouse is just waiting for the goods to arrive
+func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
+	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
+	if gov == null:
+		return "none"
+	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+		return "none"
+	if gov.balance < float(option["cost"].get("gold", 0.0)):
+		return "none"
+	var shortfall := _goods_shortfall(settlement_id, option)
+	if shortfall.is_empty():
+		return "none"
+	var warehouse := _government_warehouse(settlement_id)
+	for commodity in shortfall:
+		var order: Dictionary = warehouse.warehouse_orders.get(commodity, {})
+		if float(order.get("buy_up_to", 0.0)) < float(option["cost"]["goods"][commodity]):
+			return "can_order"
+	return "ordered"
+
+## The Government build button's action. Builds `type_key` if it can be built
+## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## sets the warehouse's standing buy order for each missing good up to the
+## build's cost ("ordered") -- the player presses again once the goods arrive.
+## The order is left standing, so the warehouse keeps restocking for the next
+## one. Returns "" when nothing was done.
+## TODO(construction): the build itself is still instant; see
+## HEScenarioSeeds.government_buildings().
+func request_government_build(settlement_id: int, type_key: String) -> String:
+	if build_government_building(settlement_id, type_key):
+		return "built"
+	for option in HEScenarioSeeds.government_buildings():
+		if option["type_key"] != type_key:
+			continue
+		if build_goods_order_state(settlement_id, option) != "can_order":
+			return ""
+		var warehouse := _government_warehouse(settlement_id)
+		var goods: Dictionary = option["cost"]["goods"]
+		for commodity in _goods_shortfall(settlement_id, option):
+			var existing: Dictionary = warehouse.warehouse_orders.get(commodity, {})
+			var target := maxf(float(existing.get("buy_up_to", 0.0)), float(goods[commodity]))
+			var sells: bool = existing.get("sell", false)
+			# A standing sell order must not export the goods being saved up.
+			var keep := maxf(float(existing.get("keep", 0.0)), float(goods[commodity])) if sells else float(existing.get("keep", 0.0))
+			set_warehouse_order(warehouse.id, commodity, target, sells, keep)
+		return "ordered"
+	return ""
 
 ## Sets a Government Warehouse's standing order for one good: buy until it
 ## holds `buy_up_to` units (0 = don't buy), and -- if `sell` -- export whatever
@@ -939,6 +1121,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"headcount": h.headcount(),
 		"employer_business_id": h.employer_business_id,
 		"is_employed": h.is_employed(),
+		"housing_status": _housing_status_of(h),
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
@@ -946,6 +1129,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"morale": h.morale(1.0, true, tax_morale_effect()),
 		"health_losses": h.health_losses(),
 		"morale_penalties": h.morale_penalties(1.0, true, tax_morale_effect()),
+		"morale_bonuses": h.morale_bonuses(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -972,6 +1156,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var health_factors := {}
 	var morale_factors := {}
 	var tax_effect := tax_morale_effect()
+	var morale_bonus_factors := {}
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
 		if not h.is_employed():
@@ -990,6 +1175,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 				_add_factor(health_factors, loss["label"], loss["loss"])
 			for penalty in h.morale_penalties(v, member["works"], tax_effect):
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
+			for bonus in h.morale_bonuses():
+				_add_factor(morale_bonus_factors, bonus["label"], bonus["bonus"])
 	return {
 		"population": population,
 		"unemployed": unemployed,
@@ -997,6 +1184,8 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 		"avg_morale": (morale_total / population) if population > 0 else 1.0,
 		"health_factors": _factor_list(health_factors, population),
 		"morale_factors": _factor_list(morale_factors, population),
+		# Same shape, but avg_loss is points GAINED (needs met that lift morale).
+		"morale_bonus_factors": _factor_list(morale_bonus_factors, population),
 	}
 
 func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
@@ -1070,6 +1259,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"health": h.health(vulnerability),
 		"morale": h.morale(vulnerability, is_worker, tax_morale_effect()),
 		"morale_penalties": h.morale_penalties(vulnerability, is_worker, tax_morale_effect()),
+		"morale_bonuses": h.morale_bonuses(),
 		"needs": needs,
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
@@ -1710,6 +1900,7 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"export_revenue_total": _export_revenue_total,
 		"import_cost_total": _import_cost_total,
 		"construction_spend_total": _construction_spend_total,
+		"housing": get_housing_report(settlement_id),
 		"market": get_market_summary(settlement_id),
 	}
 
@@ -2351,6 +2542,13 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
 
+## Whether `need` is part of this settlement's economy at all: always, unless
+## the need can only be met by a dedicated business (HENeed.needs_seller) and
+## the settlement has none. Judged by the business existing, not by today's
+## stock, so a Toolsmith's momentary sell-out doesn't flip the cost of living.
+func _need_served(settlement_id: int, need: HENeed) -> bool:
+	return not need.needs_seller or _business_selling(settlement_id, need.baseline) != null
+
 ## Days until `b`'s next supply arrives (a harvest, or a herd review): the
 ## stretch its current stock has to cover. A herd has no fields to count down, so
 ## this is the real countdown to the shared review tick -- not the whole cycle
@@ -2483,7 +2681,7 @@ func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity
 ## instead of the household going without when the cheaper good runs short.
 func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	if need == null:
+	if need == null or not _need_served(h.settlement_id, need):
 		return 0.0
 	if need.unit_values.size() > 1:
 		# Households clear a need's satisfiers in cascade order (cheapest posted
@@ -2593,7 +2791,7 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	h.last_need_provided[need.id] = provided
 
 	var shortfall_units := (needed - provided) / need.value_of(need.baseline)
-	if shortfall_units > 0.0001:
+	if shortfall_units > 0.0001 and _need_served(h.settlement_id, need):
 		_accumulate(h.last_unmet_scarcity, need.baseline, shortfall_units)
 
 	var need_record: Dictionary = record["needs"].get_or_add(need.id, {
@@ -2663,6 +2861,23 @@ func _evaluate_emigration(record: Dictionary) -> void:
 		})
 		if household_ended:
 			to_remove.append(household_id)
+
+	# Homelessness: a household with no house is pushed out a member at a time.
+	for settlement_id in settlements.keys():
+		for household_id in _homeless_household_ids(settlement_id):
+			if to_remove.has(household_id) or rng.randf() >= HOMELESS_EMIGRATION_CHANCE:
+				continue
+			var homeless_household: HEHousehold = households[household_id]
+			var homeless_member_type := "dependent" if homeless_household.demographics.dependents > 0 else "worker"
+			homeless_household.remove_member_for_emigration()
+			emigrations += 1
+			var homeless_household_ended := homeless_household.demographics.is_empty()
+			_log_event("emigrate", {
+				"household_id": household_id, "member_type": homeless_member_type,
+				"cause": "homeless", "household_ended": homeless_household_ended,
+			})
+			if homeless_household_ended:
+				to_remove.append(household_id)
 
 	var written_off := _write_off_and_remove_households(to_remove)
 	_emigrations_total += emigrations
@@ -2816,6 +3031,9 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	var births := 0
 	var promotions := 0
 	var new_households: Array[HEHousehold] = []
+	var saturated: Dictionary = {}
+	for settlement_id in settlements.keys():
+		saturated[settlement_id] = get_housing_report(settlement_id)["saturated"]
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
@@ -2824,7 +3042,8 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
 		promotions += promoted
-		if h.evaluate_birth(rng):
+		var birth_scale := HOUSING_SATURATED_BIRTH_SCALE if saturated.get(h.settlement_id, false) else 1.0
+		if h.evaluate_birth(rng, birth_scale):
 			births += 1
 			_log_event("birth", {"household_id": household_id})
 
@@ -4889,6 +5108,8 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 	var dependency_ratio := float(total_population) / float(total_workers)
 	var per_person_cost := 0.0
 	for need in HENeeds.all():
+		if not _need_served(settlement_id, need):
+			continue
 		var cheapest_unit_cost := INF
 		for c in _household_cascade(settlement_id, need):
 			cheapest_unit_cost = minf(cheapest_unit_cost, _average_price_history(settlement_id, c) / need.value_of(c))

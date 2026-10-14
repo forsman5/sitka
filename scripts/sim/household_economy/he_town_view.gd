@@ -30,7 +30,10 @@ const ART := {
 	"trader": {"model": "building_tavern_blue.gltf", "width": 7.0},
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
+	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
 }
+## Houses alternate between this and ART["house"] by site id, for variety.
+const HOUSE_ALT_ART := {"model": "building_home_B_blue.gltf", "width": 4.5}
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
 const BARN_COLOR := Color(0.55, 0.27, 0.07)
@@ -74,6 +77,8 @@ var _info_title: Label
 var _info_body: Label
 var _details_button: Button
 var _unplaced_label: Label
+var _housing_label: Label
+var _housing: Dictionary = {}
 
 func _ready() -> void:
 	clip_contents = true
@@ -86,10 +91,12 @@ func _ready() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
-## Brings the drawn town in line with `layout` and the current business
-## reports. Cheap when nothing changed.
-func sync(layout: HETownLayout, reports: Array) -> void:
+## Brings the drawn town in line with `layout`, the current business reports
+## and the settlement's housing report (get_housing_report; may be empty).
+## Cheap when nothing changed.
+func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> void:
 	_layout = layout
+	_housing = housing
 	_reports.clear()
 	for report in reports:
 		_reports[int(report["business_id"])] = report
@@ -99,10 +106,25 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 		if not site["built"]:
 			continue
 		_sync_site(site)
-	var unplaced := layout.unplaced_business_ids()
-	_unplaced_label.visible = not unplaced.is_empty()
-	_unplaced_label.text = "%d business(es) have no room in the town" % unplaced.size()
+	var unplaced := layout.unplaced_business_ids().size() + layout.unplaced_dwelling_ids().size()
+	_unplaced_label.visible = unplaced > 0
+	_unplaced_label.text = "%d building(s) have no room in the town" % unplaced
+	_housing_label.visible = bool(housing.get("modeled", false))
+	_housing_label.text = housing_text(housing)
+	var strained := int(housing.get("homeless_households", 0)) > 0 or bool(housing.get("saturated", false))
+	_housing_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3) if strained else Color(1, 1, 1, 0.95))
 	_refresh_info()
+
+## "Housing: 41 houses for 30 households" with homeless / full flags.
+static func housing_text(housing: Dictionary) -> String:
+	if not bool(housing.get("modeled", false)):
+		return ""
+	var text := "Housing: %d houses for %d households" % [housing["houses"], housing["households"]]
+	if int(housing["homeless_households"]) > 0:
+		text += " (%d homeless)" % housing["homeless_households"]
+	elif bool(housing["saturated"]):
+		text += " (full: births slowed)"
+	return text
 
 ## Sets the town's time of day (0 = midnight, 0.5 = noon): lighting through
 ## the shared RTS day/night keyframes, plus the HH:MM readout.
@@ -234,6 +256,20 @@ func _build_overlay() -> void:
 	add_child(_clock_label)
 	set_time_of_day(_time_of_day)
 
+	_housing_label = Label.new()
+	_housing_label.add_theme_font_size_override("font_size", 15)
+	_housing_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_housing_label.add_theme_constant_override("outline_size", 4)
+	_housing_label.anchor_left = 1.0
+	_housing_label.anchor_right = 1.0
+	_housing_label.offset_left = -420.0
+	_housing_label.offset_right = -12.0
+	_housing_label.offset_top = 34.0
+	_housing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_housing_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_housing_label.visible = false
+	add_child(_housing_label)
+
 	_unplaced_label = Label.new()
 	_unplaced_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
 	_unplaced_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
@@ -276,7 +312,7 @@ static func _flat_material(color: Color) -> StandardMaterial3D:
 
 func _sync_site(site: Dictionary) -> void:
 	var site_id: int = site["site_id"]
-	var occupied: bool = site["business_id"] != HETownLayout.NO_BUSINESS
+	var occupied: bool = site["business_id"] != HETownLayout.NO_BUSINESS or site["dwelling_id"] != HETownLayout.NO_BUSINESS
 	var signature := "%s|%s" % [site["type_key"], occupied]
 	var entry: Dictionary = _site_nodes.get(site_id, {})
 	if entry.is_empty() or entry["signature"] != signature:
@@ -318,6 +354,8 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		_:
 			_add_plaza(body, footprint)
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
+	if type_key == HETownLayout.HOUSE_TYPE_KEY and int(site["site_id"]) % 2 == 1:
+		art = HOUSE_ALT_ART
 	var building := _make_building(art, occupied)
 	building.position = building_offset
 	body.add_child(building)
@@ -331,6 +369,9 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	label.font_size = 40
 	label.outline_size = 10
 	label.modulate = Color.WHITE if occupied else Color(0.8, 0.8, 0.8)
+	# A dense residential zone would drown the map in text; houses are
+	# identified by selecting them.
+	label.visible = type_key != HETownLayout.HOUSE_TYPE_KEY
 	label.position = Vector3(0.0, 9.0, 0.0) + Vector3(building_offset.x, 0.0, 0.0).rotated(Vector3.UP, body.rotation.y)
 	root.add_child(label)
 	return {"root": root, "label": label}
@@ -448,6 +489,13 @@ func _refresh_info() -> void:
 	var rect := _layout.site_rect(site)
 	(_selection_marker.mesh as BoxMesh).size = Vector3(rect.size.x + 1.0, 0.15, rect.size.y + 1.0)
 	_selection_marker.position = Vector3(rect.get_center().x, 0.2, rect.get_center().y)
+	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
+		_details_button.visible = false
+		_info_title.text = str(site["label"])
+		var shelter := "Shelters one household."
+		var housing_line := housing_text(_housing)
+		_info_body.text = shelter if housing_line == "" else "%s\n%s" % [shelter, housing_line]
+		return
 	var business_id: int = site["business_id"]
 	_details_button.visible = business_id != HETownLayout.NO_BUSINESS
 	if business_id == HETownLayout.NO_BUSINESS:
