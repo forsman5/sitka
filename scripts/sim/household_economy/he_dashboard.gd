@@ -11,6 +11,8 @@ const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
@@ -113,6 +115,19 @@ const BLOTTER_FILTERS := [
 static var pending_builder: Callable = Callable()
 
 var _simulation: HESimulation
+## Where each business stands in the town view. Owned here, not by the view, so
+## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
+var _town_layout: HETownLayout
+var _town_view: HETownView
+var _town_mode_button: Button
+var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
+var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
+## Town view clock, 0..1 (0.25 = 06:00). The sim ticks one day each time it
+## passes TOWN_TICK_PHASE, so villagers will later walk out to work the day
+## that was just computed. GameState.town_day_seconds is the real-time length
+## of that day; the dashboard's own 1x/10x/100x scale does not apply here.
+const TOWN_TICK_PHASE := 5.5 / 24.0 # same as Person.WAKE_TIME in the RTS
+var _town_phase: float = TOWN_TICK_PHASE
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
 
@@ -266,6 +281,9 @@ func _configure_tooltip_theme() -> void:
 func _process(delta: float) -> void:
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
+	if _town_view != null and _town_view.visible:
+		_advance_town_time(delta)
+		return
 	_day_accumulator += minf(delta, 0.25) * _speed_multiplier / SECONDS_PER_DAY_AT_1X
 	_day_accumulator = minf(_day_accumulator, 8.0) # bound interactive work, same as dashboard.gd
 	var days_to_advance := mini(int(_day_accumulator), 4)
@@ -276,11 +294,28 @@ func _process(delta: float) -> void:
 		_day_accumulator -= 1.0
 	_refresh()
 
+## Advances the Town view clock by `delta` real seconds and steps the sim one
+## day when it passes dawn. Stepped (not scaled) so there is never more than
+## one tick per visual day.
+func _advance_town_time(delta: float) -> void:
+	var before := _town_phase
+	var after := before + minf(delta, 0.25) / GameState.town_day_seconds
+	var ticked := before < TOWN_TICK_PHASE and after >= TOWN_TICK_PHASE
+	_town_phase = fposmod(after, 1.0)
+	_town_view.set_time_of_day(_town_phase)
+	if ticked:
+		_simulation.advance_ticks(1)
+		_refresh()
+
 func _load_scenario() -> void:
 	var builder := pending_builder
 	if not builder.is_valid():
 		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
 	_simulation = HESimulation.new(SEED, builder)
+	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports())
+	if _town_view != null:
+		_town_view.sync(_town_layout, _simulation.get_business_reports())
+		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
@@ -369,6 +404,11 @@ func _build_ui() -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
 
+	_town_mode_button = Button.new()
+	_town_mode_button.text = "Town view"
+	_town_mode_button.tooltip_text = "Switch between the dashboard and a map of the town's buildings."
+	_town_mode_button.pressed.connect(func() -> void: _set_town_mode(not _town_view.visible))
+	top_bar.add_child(_town_mode_button)
 	top_bar.add_child(_make_settings_button())
 	top_bar.add_child(_make_speed_button("Pause", 0.0))
 	top_bar.add_child(_make_speed_button("1x", 1.0))
@@ -381,6 +421,7 @@ func _build_ui() -> void:
 	var top_tabs := TabContainer.new()
 	top_tabs.custom_minimum_size = Vector2(0, 250)
 	vbox.add_child(top_tabs)
+	_dashboard_body.append(top_tabs)
 
 	_build_town_tab(top_tabs)
 
@@ -412,6 +453,16 @@ func _build_ui() -> void:
 	lower_row.add_theme_constant_override("separation", 16)
 	lower_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(lower_row)
+	_dashboard_body.append(lower_row)
+
+	# The town view takes over the space below the top bar, so the 250 px Town
+	# statistics tab above stays a statistics tab.
+	_town_view = HETownView.new()
+	_town_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_town_view.visible = false
+	_town_view.details_requested.connect(_on_town_details_requested)
+	vbox.add_child(_town_view)
 
 	var household_column := VBoxContainer.new()
 	household_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1080,6 +1131,15 @@ func _open_settings_dialog() -> void:
 		GameState.set_history_settings(int(sparkline_box.value), int(blotter_box.value))
 	sparkline_box.value_changed.connect(apply)
 	blotter_box.value_changed.connect(apply)
+	var day_label := Label.new()
+	day_label.text = "Town view day length"
+	grid.add_child(day_label)
+	var day_picker := OptionButton.new()
+	for seconds in GameState.TOWN_DAY_SECONDS_OPTIONS:
+		day_picker.add_item("%d s per day%s" % [int(seconds), " (RTS pace)" if seconds == 120.0 else ""])
+	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
+	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
+	grid.add_child(day_picker)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)
@@ -1127,6 +1187,7 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
 	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
+	_speed_buttons.append(btn)
 	return btn
 
 func _on_blotter_toggle_pressed() -> void:
@@ -2528,6 +2589,26 @@ func _refresh_government_build_menu() -> void:
 		_gov_build_popup.set_item_text(i, item_text)
 		_gov_build_popup.set_item_disabled(i, blocker != "")
 
+## Dashboard <-> town map. The simulation keeps running either way; only which
+## half of the window is shown changes.
+func _set_town_mode(enabled: bool) -> void:
+	_town_view.visible = enabled
+	for body in _dashboard_body:
+		body.visible = not enabled
+	_town_mode_button.text = "Dashboard" if enabled else "Town view"
+	# Town time has one pace (the day-length setting): Pause and Play only.
+	_speed_buttons[1].text = "Play" if enabled else "1x"
+	_speed_buttons[2].visible = not enabled
+	_speed_buttons[3].visible = not enabled
+	if enabled:
+		_town_view.set_time_of_day(_town_phase)
+
+## "Open business details" in the town view: back to the dashboard with that
+## business's detail panel open.
+func _on_town_details_requested(business_id: int) -> void:
+	_set_town_mode(false)
+	_on_business_row_selected(business_id)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -2600,11 +2681,11 @@ func _rebuild_job_rows() -> void:
 	_unemployed_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_jobs_list.add_child(_unemployed_label)
 
-func _refresh_job_rows() -> void:
+func _refresh_job_rows(reports: Array) -> void:
 	var total_employed := 0
 	var total_capacity := 0
 	var total_max := 0
-	for report in _simulation.get_business_reports():
+	for report in reports:
 		total_employed += report["employed_workers"]
 		total_capacity += report["capacity"]
 		total_max += report["max_capacity"]
@@ -2789,6 +2870,8 @@ func _refresh() -> void:
 	# Create business menu's "already built" state; rebuild rather than leave a
 	# frozen row for a business that no longer exists.
 	var reports := _simulation.get_business_reports()
+	_town_layout.reconcile(reports)
+	_town_view.sync(_town_layout, reports)
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):
@@ -2860,7 +2943,7 @@ func _refresh() -> void:
 		cash_change_label.text = "%+.1f" % cash_change
 		cash_change_label.add_theme_color_override("font_color", Color(0.6, 0.85, 0.6) if cash_change >= 0.0 else Color(0.9, 0.5, 0.5))
 
-	_refresh_job_rows()
+	_refresh_job_rows(reports)
 
 	if _selected_business_id != -1 and not mouse_down:
 		_refresh_business_detail()
