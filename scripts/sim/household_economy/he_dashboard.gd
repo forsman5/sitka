@@ -240,6 +240,14 @@ var _business_detail_warehouse_grid: GridContainer
 var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
 var _warehouse_orders_loaded_for: int = -1
 var _gov_build_popup: PopupMenu
+var _town_gov_build_popup: PopupMenu # the same menu, bottom-right of the town view
+# Top-bar warehouse stock: one icon+number item per held good, most units
+# first, cut off with "..." when the bar runs out of room.
+var _warehouse_strip: Control
+var _warehouse_strip_row: HBoxContainer
+var _warehouse_strip_items: Array[HBoxContainer] = []
+var _warehouse_strip_more: Label
+var _warehouse_strip_data: Array = []
 var _create_business_button: MenuButton
 var _business_detail_herd_events_section: VBoxContainer
 var _business_detail_herd_events_display: RichTextLabel
@@ -442,11 +450,10 @@ func _build_ui() -> void:
 	_treasury_box.mouse_entered.connect(_on_treasury_hover.bind(true))
 	_treasury_box.mouse_exited.connect(_on_treasury_hover.bind(false))
 
+	# The warehouse strip takes all the slack, which pushes the population
+	# summary right up against the Town view / Dashboard button.
+	top_bar.add_child(_build_warehouse_strip())
 	top_bar.add_child(_build_population_summary())
-
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top_bar.add_child(spacer)
 
 	_town_mode_button = Button.new()
 	_town_mode_button.text = "Town view"
@@ -513,6 +520,7 @@ func _build_ui() -> void:
 	_town_view.details_requested.connect(_on_town_details_requested)
 	_town_view.visibility_changed.connect(_on_view_changed)
 	vbox.add_child(_town_view)
+	_town_view.add_child(_build_town_gov_build_button())
 
 	var household_column := VBoxContainer.new()
 	household_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1102,6 +1110,88 @@ func _build_population_summary() -> Control:
 	_housing_label = Label.new()
 	housing_row.add_child(_housing_label)
 	return margin
+
+## Top-bar read-out of the Government Warehouse: "<timber icon> 40  <iron icon> 12 ...".
+## A plain Control (minimum width 0) so it soaks up the bar's free width
+## without ever forcing the bar wider; _layout_warehouse_strip() shows as
+## many items as fit.
+func _build_warehouse_strip() -> Control:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_warehouse_strip = Control.new()
+	_warehouse_strip.clip_contents = true
+	_warehouse_strip.mouse_filter = Control.MOUSE_FILTER_PASS
+	_warehouse_strip.resized.connect(_layout_warehouse_strip)
+	margin.add_child(_warehouse_strip)
+	_warehouse_strip_row = HBoxContainer.new()
+	_warehouse_strip_row.add_theme_constant_override("separation", 14)
+	_warehouse_strip.add_child(_warehouse_strip_row)
+	_warehouse_strip_more = Label.new()
+	_warehouse_strip_more.text = "..."
+	_warehouse_strip_more.add_theme_font_size_override("font_size", 22)
+	_warehouse_strip_more.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_warehouse_strip_more.mouse_filter = Control.MOUSE_FILTER_STOP
+	_warehouse_strip_row.add_child(_warehouse_strip_more)
+	return margin
+
+func _refresh_warehouse_strip() -> void:
+	_warehouse_strip_data = _simulation.get_warehouse_inventory(_town_settlement_id())
+	while _warehouse_strip_items.size() < _warehouse_strip_data.size():
+		var item := HBoxContainer.new()
+		item.add_theme_constant_override("separation", 4)
+		item.mouse_filter = Control.MOUSE_FILTER_STOP
+		var icon := TextureRect.new()
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2(24, 24)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item.add_child(icon)
+		var label := Label.new()
+		label.add_theme_font_size_override("font_size", 22)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item.add_child(label)
+		_warehouse_strip_row.add_child(item)
+		_warehouse_strip_row.move_child(_warehouse_strip_more, -1)
+		_warehouse_strip_items.append(item)
+	for i in _warehouse_strip_data.size():
+		var row: Dictionary = _warehouse_strip_data[i]
+		var item := _warehouse_strip_items[i]
+		var icon := item.get_child(0) as TextureRect
+		var label := item.get_child(1) as Label
+		icon.texture = Commodity.icon_of(row["commodity"])
+		icon.visible = icon.texture != null
+		# No icon (assets not imported yet): fall back to the good's name.
+		label.text = "%.0f" % row["units"] if icon.visible else "%s %.0f" % [row["name"], row["units"]]
+		item.tooltip_text = "%s: %.1f in the Government Warehouse" % [row["name"], row["units"]]
+	_layout_warehouse_strip()
+
+## Shows the leading items that fit in the strip's width; if any are left
+## over, ends with "..." whose tooltip lists the rest.
+func _layout_warehouse_strip() -> void:
+	if _warehouse_strip == null:
+		return
+	var count := _warehouse_strip_data.size()
+	var separation := float(_warehouse_strip_row.get_theme_constant("separation"))
+	var more_width := _warehouse_strip_more.get_combined_minimum_size().x + separation
+	var used := 0.0
+	var shown := 0
+	for i in count:
+		var width := _warehouse_strip_items[i].get_combined_minimum_size().x + (separation if i > 0 else 0.0)
+		var reserve := more_width if i < count - 1 else 0.0
+		if used + width + reserve > _warehouse_strip.size.x:
+			break
+		used += width
+		shown += 1
+	for i in _warehouse_strip_items.size():
+		_warehouse_strip_items[i].visible = i < shown
+	_warehouse_strip_more.visible = shown < count
+	var hidden: PackedStringArray = []
+	for i in range(shown, count):
+		hidden.append("%s: %.1f" % [_warehouse_strip_data[i]["name"], _warehouse_strip_data[i]["units"]])
+	_warehouse_strip_more.tooltip_text = "Also in the Government Warehouse:\n" + "\n".join(hidden)
+	_warehouse_strip_row.reset_size()
 
 ## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
 ## needs no asset file.
@@ -2975,8 +3065,11 @@ func _rebuild_business_rows() -> void:
 ## refresh, not only when the rows are rebuilt: affordability follows the
 ## treasury, which grows (and is spent) as the sim runs.
 func _refresh_government_build_menu() -> void:
-	if _gov_build_popup == null or not is_instance_valid(_gov_build_popup):
-		return
+	for popup in [_gov_build_popup, _town_gov_build_popup]:
+		if popup != null and is_instance_valid(popup):
+			_refresh_government_build_popup(popup)
+
+func _refresh_government_build_popup(popup: PopupMenu) -> void:
 	var gov_options := HEScenarioSeeds.government_buildings()
 	for i in gov_options.size():
 		var gov_option: Dictionary = gov_options[i]
@@ -2991,8 +3084,32 @@ func _refresh_government_build_menu() -> void:
 			item_text += " - goods on order"
 		elif blocker != "":
 			item_text += " - %s" % blocker
-		_gov_build_popup.set_item_text(i, item_text)
-		_gov_build_popup.set_item_disabled(i, blocker != "" and order_state != "can_order")
+		popup.set_item_text(i, item_text)
+		popup.set_item_disabled(i, blocker != "" and order_state != "can_order")
+
+## "Government build" anchored to the town view's bottom-right corner, so
+## buildings can be bought while watching them go up. Same items and handler
+## as the Businesses tab's menu.
+func _build_town_gov_build_button() -> MenuButton:
+	var button := MenuButton.new()
+	button.text = "Government build ▾"
+	button.flat = false
+	button.tooltip_text = "Build a municipal building. The cost is paid from the town treasury."
+	button.anchor_left = 1.0
+	button.anchor_right = 1.0
+	button.anchor_top = 1.0
+	button.anchor_bottom = 1.0
+	button.offset_right = -10.0
+	button.offset_bottom = -10.0
+	button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	button.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_town_gov_build_popup = button.get_popup()
+	for i in HEScenarioSeeds.government_buildings().size():
+		_town_gov_build_popup.add_item("", i)
+	_town_gov_build_popup.id_pressed.connect(_on_build_government_pressed)
+	# Refresh on open too: the town view only refreshes once per sim day.
+	button.about_to_popup.connect(_refresh_government_build_menu)
+	return button
 
 ## Dashboard <-> town map. The simulation keeps running either way; only which
 ## half of the window is shown changes.
@@ -3348,6 +3465,7 @@ func _refresh_header() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = _format_day(clock["day"])
 	_refresh_treasury()
+	_refresh_warehouse_strip()
 	_refresh_population_summary()
 	_check_extinction()
 
