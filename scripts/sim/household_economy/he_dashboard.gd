@@ -307,6 +307,8 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
+	if _town_view != null:
+		_town_view.set_villagers_paused(_simulation == null or _ended or _speed_multiplier <= 0.0)
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	if _town_view != null and _town_view.visible:
@@ -346,7 +348,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports())
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -496,6 +498,7 @@ func _build_ui() -> void:
 	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_town_view.visible = false
 	_town_view.details_requested.connect(_on_town_details_requested)
+	_town_view.person_details_requested.connect(_on_town_person_details_requested)
 	vbox.add_child(_town_view)
 
 	var household_column := VBoxContainer.new()
@@ -2945,6 +2948,10 @@ func _on_town_details_requested(business_id: int) -> void:
 	_set_town_mode(false)
 	_on_business_row_selected(business_id)
 
+func _on_town_person_details_requested(household_id: int, member_number: int) -> void:
+	_set_town_mode(false)
+	_on_person_selected(household_id, member_number)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -3196,7 +3203,7 @@ func _refresh_businesses(mouse_down: bool) -> void:
 	var reports := _simulation.get_business_reports(-1, false)
 	var dwellings := _simulation.get_dwelling_reports()
 	_town_layout.reconcile(reports, dwellings)
-	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings)
+	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):

@@ -155,6 +155,34 @@ Each slice is its own PR against `master`:
 
 Slices 1–3 are independent and can be built in parallel. Slice 4 needs all three.
 
+### First deliverable (PR #87)
+
+PR #87 ships slices 1 and 2 plus a static part of slice 4. Villagers are on screen and clickable, but there is no schedule, routing or commuting yet.
+
+- **House assignment (slice 1):** done as specified in section 1. `check_housing_assignment.gd` covers it. `run_household_economy.gd` output is byte-identical to master.
+- **Road paths (slice 2):** `he_town_paths.gd`, from PR #88. Nothing uses it yet.
+- **Villagers (`he_villagers.gd`):**
+  - One visual-only model per household member, keyed `(household_id, member_number)`, with the dashboard's numbering.
+  - Members mill about in their house's front yard (the strip between the front wall and the road). Homeless villagers mill at the plaza edge.
+  - Each new spot is the best of 4 random candidates, farthest from housemates, so a family spreads out.
+  - Body model seeded per villager (female only when `Casual_Female.fbx` is present). Skin tone seeded per household. Children at 0.6 scale.
+  - Milling and animations stop while the dashboard is paused or the Town view is hidden.
+- **Town view:**
+  - Clicking a villager (screen-space pick, ahead of sites) opens a person window: household and member, role and age, employer, household size, and home.
+  - **Show home** selects the house and centres the camera on it. **Person details** opens the dashboard's person page.
+  - The house panel lists its households.
+- **Checks:** `check_town_view.gd` covers:
+  - one villager per person;
+  - villagers in their own yard;
+  - milling, and freezing while paused;
+  - a real click pick;
+  - the person window;
+  - Show home;
+  - Person details.
+
+  `capture_town_view.gd` gains `--villager`, `--zoom` and `--tilt`.
+- **Not yet:** the day/night schedule (villagers stay out all night), commuting along the paths, and work.
+
 ## Questions to settle
 
 1. **Models (settled).** Male and female models (`Casual_Male.fbx`, `Casual_Female.fbx`), split by a per-villager seed, plus per-household tints. Children use the adult models at about 0.6 scale until a child model is sourced.

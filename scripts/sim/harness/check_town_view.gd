@@ -85,6 +85,8 @@ func _run() -> void:
 	_click(view, _screen_of(view, farm_site["position"]))
 	check(view.selected_business_id() == HEScenarioSeeds.FARM_BUSINESS_ID, "Selection should still work after rotating the camera")
 
+	await _check_villagers(dashboard, view, layout)
+
 	# Wheel zoom goes through the shared RTS rig.
 	var size_before: float = view.camera().size
 	var wheel := InputEventMouseButton.new()
@@ -171,6 +173,77 @@ func _run() -> void:
 	check(view.site_node_count() == after_count, "The vacant building stays drawn")
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
+
+## Villagers: one model per household member, milling in front of their own
+## house (homeless at the plaza); clicking one opens the person window, whose
+## buttons jump to the home and to the dashboard's person detail.
+func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
+	var sim = dashboard._simulation
+	var reports: Array = sim.get_villager_reports(dashboard._town_settlement_id())
+	var population := 0
+	for report in reports:
+		population += (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
+	check(population > 0 and view.villager_count() == population, "One villager per person (%d drawn, %d people)" % [view.villager_count(), population])
+
+	# Each housed villager stands in its own yard.
+	var housed_key := Vector2i(-1, -1)
+	var far := 0
+	for report in reports:
+		if int(report["dwelling_id"]) == -1:
+			continue
+		var site := layout.site_of_dwelling(int(report["dwelling_id"]))
+		var position: Vector3 = view.villagers().villager_position(Vector2i(int(report["household_id"]), 1))
+		if site.is_empty() or not position.is_finite():
+			continue
+		if Vector2(position.x, position.z).distance_to(site["position"]) > 9.0:
+			far += 1
+		if housed_key.x == -1:
+			housed_key = Vector2i(int(report["household_id"]), 1)
+	check(housed_key.x != -1, "Some villager has a house")
+	check(far == 0, "Villagers mill in front of their own house (%d too far)" % far)
+
+	# Milling: they move while the town runs and freeze while paused.
+	var start: Vector3 = view.villagers().villager_position(housed_key)
+	view.set_villagers_paused(false)
+	for i in 120:
+		view.villagers()._process(0.1)
+	var moved := false
+	for key in view.villagers().villager_keys():
+		moved = moved or view.villagers().villager_position(key) != start
+	check(moved, "Villagers mill about while the town runs")
+	view.set_villagers_paused(true)
+	var frozen: Vector3 = view.villagers().villager_position(housed_key)
+	view.villagers()._process(1.0)
+	check(view.villagers().villager_position(housed_key) == frozen, "Paused villagers stand still")
+
+	# Click a villager: the person window names them and their household.
+	view.clear_selection()
+	var position: Vector3 = view.villagers().villager_position(housed_key)
+	var chest := position + Vector3.UP * 1.0
+	_click(view, view.camera().unproject_position(chest))
+	var picked: Vector2i = view.selected_villager()
+	check(picked.x != -1, "Clicking a villager selects them")
+	if picked.x == -1:
+		view.select_villager(housed_key.x, housed_key.y)
+		picked = housed_key
+	check(view._info_panel.visible and view._info_title.text == "Household %d - Member %d" % [picked.x, picked.y], "Person window title (got '%s')" % view._info_title.text)
+	check(view._info_body.text.contains("Household:") and view._home_button.visible and view._person_button.visible, "Person window shows the household and both buttons")
+
+	# Show home: selects the household's house and centres the camera on it.
+	var home_dwelling := int(view.villagers().household_report(picked.x)["dwelling_id"])
+	view._on_home_pressed()
+	var home_site := layout.site_of_dwelling(home_dwelling)
+	check(view._selected_site_id == int(home_site["site_id"]) and view.selected_villager().x == -1, "Show home selects the villager's house")
+	var rig: Node3D = view._rig
+	check(Vector2(rig.position.x, rig.position.z).distance_to(home_site["position"]) < 0.5, "Show home centres the camera on the house")
+	check(view._info_body.text.begins_with("Home of household") and view._info_body.text.contains(str(picked.x)), "The house panel lists the villager's household (got '%s')" % view._info_body.text)
+
+	# Person details: back to the dashboard with that person open.
+	view.select_villager(picked.x, picked.y)
+	view._on_person_pressed()
+	check(not view.visible and dashboard._selected_person_household_id == picked.x and dashboard._selected_person_number == picked.y, "Person details opens the dashboard person page")
+	dashboard._set_town_mode(true)
+	await process_frame
 
 ## Screen position (view-local) of a town-coordinate point, via the camera.
 func _screen_of(view, town_point: Vector2) -> Vector2:
