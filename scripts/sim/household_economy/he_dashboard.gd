@@ -1296,7 +1296,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 48)
 	box.add_child(grid)
-	for stat in [["houses", "Houses"], ["households", "Households"], ["free", "Free houses"], ["homeless", "Homeless households"]]:
+	for stat in [["houses", "Homes"], ["households", "Households"], ["free", "Free homes"], ["homeless", "Homeless households"]]:
 		var cell := VBoxContainer.new()
 		grid.add_child(cell)
 		var caption := Label.new()
@@ -1311,7 +1311,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	var rules := Label.new()
 	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rules.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
+	rules.text = "One home shelters one household (a house is one home, a tenement several); capacity is pooled across the town. When no home is free, births fall by 80%. Households with no home lose members to emigration."
 	box.add_child(rules)
 
 	# Both housing builds are always offered; the hint says which one the
@@ -1346,7 +1346,7 @@ func _refresh_housing() -> void:
 	var housing := _simulation.get_housing_report(_town_settlement_id())
 	if housing["modeled"]:
 		var free := maxi(0, int(housing["capacity"]) - int(housing["households"]))
-		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		_housing_label.text = "%d homes / %d households" % [housing["capacity"], housing["households"]]
 		var color := Color(0.4, 0.75, 0.45)
 		if housing["homeless_households"] > 0:
 			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
@@ -1355,7 +1355,7 @@ func _refresh_housing() -> void:
 			_housing_label.text += " (full)"
 			color = Color(0.9, 0.7, 0.3)
 		_housing_label.add_theme_color_override("font_color", color)
-		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["houses"]
+		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["capacity"]
 		(_housing_detail_labels["households"] as Label).text = "%d" % housing["households"]
 		(_housing_detail_labels["free"] as Label).text = "%d" % free
 		(_housing_detail_labels["homeless"] as Label).text = "%d" % housing["homeless_households"]
@@ -3289,9 +3289,9 @@ func _group_visible(group: int) -> bool:
 		HEPresenter.Group.TOWN_STATS:
 			return _page_shown(_town_page)
 		HEPresenter.Group.HOUSING:
-			# One refresh feeds the summary line on the Town tab and the
-			# Housing tab's detail labels and build buttons.
-			return _page_shown(_town_page) or _page_shown(_housing_page)
+			# One refresh feeds the top-bar summary line (on screen whatever
+			# tab is open) and the Housing tab's detail labels and buttons.
+			return _housing_label.is_visible_in_tree() or _page_shown(_town_page) or _page_shown(_housing_page)
 		HEPresenter.Group.MARKET:
 			return _page_shown(_goods_page)
 		HEPresenter.Group.MARKET_DETAIL:
