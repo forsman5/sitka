@@ -3289,9 +3289,9 @@ func _group_visible(group: int) -> bool:
 		HEPresenter.Group.TOWN_STATS:
 			return _page_shown(_town_page)
 		HEPresenter.Group.HOUSING:
-			# One refresh feeds the summary line on the Town tab and the
-			# Housing tab's detail labels and build buttons.
-			return _page_shown(_town_page) or _page_shown(_housing_page)
+			# One refresh feeds the top-bar summary line (on screen whatever
+			# tab is open) and the Housing tab's detail labels and buttons.
+			return _housing_label.is_visible_in_tree() or _page_shown(_town_page) or _page_shown(_housing_page)
 		HEPresenter.Group.MARKET:
 			return _page_shown(_goods_page)
 		HEPresenter.Group.MARKET_DETAIL:
