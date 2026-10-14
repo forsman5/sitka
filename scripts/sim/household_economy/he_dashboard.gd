@@ -11,6 +11,7 @@ const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
@@ -1463,6 +1464,8 @@ func _refresh_household_detail() -> void:
 		_add_household_detail_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
 	for bonus in h["morale_bonuses"]:
 		_add_household_detail_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
+	if h["morale"] > 1.0 and h["is_employed"]:
+		_add_household_detail_line("    Morale above 100%%: +%.0f%% output at their workplace" % ((h["morale"] - 1.0) * HEHousehold.MORALE_PRODUCTIVITY_PER_POINT * 100.0))
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []

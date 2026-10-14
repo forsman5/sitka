@@ -39,7 +39,7 @@ static func all() -> Array[HENeed]:
 			# tools costs no health -- a household that has them gets a morale
 			# lift instead (morale_bonus).
 			HENeed.new(HENeed.Id.TOOLS, "Tools", 0.005, {Commodity.Type.TOOLS: 1.0}, Commodity.Type.TOOLS, false, 0.0,
-				"Good tools lift morale; going without costs no health. Reporting only: no effect on output yet.", true, 0.1),
+				"Good tools lift morale; going without costs no health. Morale above 100% raises output at the workplace.", true, 0.1),
 		]
 	return _all
 
