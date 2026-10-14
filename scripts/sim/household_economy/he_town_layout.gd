@@ -30,7 +30,9 @@ extends RefCounted
 ##   site), and no road is moved or removed. Businesses keep to their zone
 ##   candidates but must clear the roads; houses take lots along the road
 ##   frontage, nearest the civic anchor first, facing the road. Roads store no
-##   occupancy; a house site records its `road_id`.
+##   occupancy; a frontage site records its `road_id` and `access`, the point
+##   on that road's centreline its front door walks to (Vector2.INF when the
+##   site is not on a road).
 ## - Occupants come in two kinds with separate id spaces: a business
 ##   (`business_id`, from get_business_reports) or a house (`dwelling_id`, from
 ##   get_dwelling_reports). A site holds at most one; key an occupant by
@@ -171,6 +173,7 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 		"footprint": ZONE_SPECS[ZONE_CIVIC]["footprint"],
 		"zone": ZONE_CIVIC,
 		"road_id": -1,
+		"access": Vector2.INF,
 		"business_id": NO_BUSINESS,
 		"dwelling_id": NO_BUSINESS,
 		"type_key": "",
@@ -364,6 +367,7 @@ func _allocate_from(zones: Array) -> int:
 				"footprint": footprint,
 				"zone": candidate_zone,
 				"road_id": int(candidate.get("road_id", -1)),
+				"access": candidate.get("access", Vector2.INF),
 				"business_id": NO_BUSINESS,
 				"dwelling_id": NO_BUSINESS,
 				"type_key": "",
@@ -593,7 +597,7 @@ static func _make_frontage_candidates(zone: String, seed_text: String, roads: Ar
 				var distance := center.length()
 				if distance < min_radius or distance > max_radius:
 					continue
-				out.append({"position": center, "rotation": rotation, "road_id": road["road_id"], "order": distance, "frontage": true})
+				out.append({"position": center, "rotation": rotation, "road_id": road["road_id"], "order": distance, "frontage": true, "access": sample[0]})
 			s += HOUSE_LOT_PITCH
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["order"] != b["order"]:
