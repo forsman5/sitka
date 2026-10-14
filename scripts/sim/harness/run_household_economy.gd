@@ -2464,6 +2464,13 @@ func _check_industrial_tools_model() -> void:
 	var buy_sim := _new_sim("build_economy_with_toolsmith")
 	var buy_farm: HEBusiness = buy_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
 	buy_farm.inventory[Commodity.Type.TOOLS] = 0.0
+	# The market view lists the starved farm among the tools buyers.
+	var tool_detail := buy_sim.get_market_detail(HEScenarioSeeds.SETTLEMENT_ID, Commodity.Type.TOOLS)
+	var farm_listed := false
+	for buyer in tool_detail["buyers"]:
+		if buyer.get("business_id", -1) == buy_farm.id:
+			farm_listed = true
+	_assert(farm_listed, "A tool-short business should appear among the tools market's buyers")
 	buy_sim.advance_ticks(40)
 	var restocked := buy_farm.stock(Commodity.Type.TOOLS)
 	var restocked_productivity := buy_sim._tool_productivity(buy_farm)

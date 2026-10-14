@@ -1537,6 +1537,12 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			elif not SUBSISTENCE_COMMODITIES.has(commodity):
 				offered = _seller_trade_offer(b, commodity)["quantity"]
 			sellers.append({"owner": b.name, "business_id": b.id, "offered": offered, "stock": stock})
+		if commodity == Commodity.Type.TOOLS and b.uses_tools() and _tools_in_play(settlement_id):
+			var ask := _tool_request(b, _business_employed_worker_count(b.id))
+			if ask["requested"] > 0.0001:
+				buyers.append({"owner": b.name, "business_id": b.id, "requested": ask["requested"],
+					"funded": minf(ask["requested"], maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
+					"stock": stock})
 		if b.recipe.inputs.has(commodity):
 			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
 			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
@@ -2234,6 +2240,16 @@ func _tool_productivity(b: HEBusiness) -> float:
 func _tools_in_play(settlement_id: int) -> bool:
 	return _business_selling(settlement_id, Commodity.Type.TOOLS) != null
 
+## What a tool-using business is short of (target stock minus held) and how
+## much of that it asks the seller for today. Shared by purchasing and the
+## market view so the Buyers list shows the request purchasing actually makes.
+func _tool_request(buyer: HEBusiness, employed: int) -> Dictionary:
+	var target: float = float(employed) * (buyer.tools_per_worker + buyer.tool_wear_per_worker_day * PRODUCTION_INPUT_BUFFER_DAYS)
+	var shortfall: float = maxf(0.0, target - buyer.stock(Commodity.Type.TOOLS))
+	var daily_wear: float = float(employed) * buyer.tool_wear_per_worker_day
+	return {"shortfall": shortfall,
+		"requested": minf(shortfall, maxf(daily_wear * TARGET_BUFFER_DAYS, shortfall * TOOL_FILL_FRACTION_PER_DAY))}
+
 ## Tool-using businesses top their tools up to one per worker plus a buffer of
 ## wear (PRODUCTION_INPUT_BUFFER_DAYS), buying from the town's tool seller out
 ## of the same paced offer households draw on (_business_offer -- no reserve for
@@ -2252,12 +2268,12 @@ func _run_tool_purchasing(record: Dictionary) -> void:
 		var employed := _business_employed_worker_count(business_id)
 		if employed <= 0:
 			continue
-		var target: float = float(employed) * (buyer.tools_per_worker + buyer.tool_wear_per_worker_day * PRODUCTION_INPUT_BUFFER_DAYS)
-		var shortfall: float = maxf(0.0, target - buyer.stock(tools))
+		var ask := _tool_request(buyer, employed)
+		var shortfall: float = ask["shortfall"]
 		if shortfall <= 0.0001:
 			continue
+		var requested: float = ask["requested"]
 		var daily_wear: float = float(employed) * buyer.tool_wear_per_worker_day
-		var requested: float = minf(shortfall, maxf(daily_wear * TARGET_BUFFER_DAYS, shortfall * TOOL_FILL_FRACTION_PER_DAY))
 		var price: float = (markets[buyer.settlement_id] as HEMarket).price[tools]
 		var offer := _business_offer(buyer.settlement_id, tools, {}, false, requested)
 		var budget := _input_budget(buyer, employed, daily_wear * price)
