@@ -73,6 +73,7 @@ There are no persistent member ids yet. A villager's key is `(household_id, role
 
 - When a member leaves, the household's array shrinks from the back, so that villager disappears. Other villagers can shift slot but keep their household, house, job and appearance.
 - Appearance is seeded from `household_id` (shared tint per household) plus slot (small hue/scale jitter). A family therefore reads as a family, and a split-off household gets its own colour.
+- Body model (male or female) is seeded from the villager key, so it stays the same for a villager across days and ticks. There are no recorded sexes in the sim, so this is purely cosmetic, roughly half and half. If the sim ever tracks it, the report field replaces the seed.
 - Dependents render as children at about 0.6 scale, the same idea as `OnFootSheep.LAMB_SCALE`. Dependents past `AGING_THRESHOLD_DAYS` who have not left home render at adult size.
 
 Persistent member ids (the `last_promoted_member_numbers` placeholder in `he_household.gd`) are a separate, later change. Nothing here depends on them.
@@ -122,8 +123,10 @@ Check `check_villager_schedule.gd`:
 
 New `scripts/sim/household_economy/he_villagers.gd`, a `Node3D` under the town view's `_sites_root`. `HETownView` owns it and feeds it from `sync()` and `set_time_of_day()`.
 
-- **Model.** `assets/models/people/Casual_Male.fbx`, already used by `on_foot_player.gd`, with clips `CharacterArmature|Idle`, `|Walk` and `|Run`.
-  - It is instanced visual-only, scaled to about 1.7 world units (houses are 4.5 wide).
+- **Models.** Two body models, picked per villager (see section 2):
+  - `assets/models/people/Casual_Male.fbx`, already used by `on_foot_player.gd`, with clips `CharacterArmature|Idle`, `|Walk` and `|Run`.
+  - `assets/models/people/Casual_Female.fbx`, added to this branch in commit `14b7272`. It comes from the same Quaternius Ultimate Animated Character Pack as the male model and should share its skeleton and `CharacterArmature|*` clip names, so one animation code path drives both. Slice 4 confirms this headlessly before relying on it.
+  - Both are instanced visual-only, scaled to about 1.7 world units (houses are 4.5 wide).
   - A per-household tint is applied as `material_override` or a shared tinted material per household colour.
   - Walk while moving, idle while working or loitering. Playback speed follows walk speed.
 - **Pooling.** Villager nodes are pooled by key. A roster change adds and removes the difference and never rebuilds the crowd.
@@ -154,7 +157,7 @@ Slices 1–3 are independent and can be built in parallel. Slice 4 needs all thr
 
 ## Questions to settle
 
-1. **One model for everyone?** The repo has only `Casual_Male.fbx`. Proposed: use it for all villagers with per-household tints and child scale now, and add a female or child model later if one is sourced.
+1. **Models (settled).** Male and female models (`Casual_Male.fbx`, `Casual_Female.fbx`), split by a per-villager seed, plus per-household tints. Children use the adult models at about 0.6 scale until a child model is sourced.
 2. **Should children walk around?** Proposed: yes, they stay near home or the plaza. That roughly doubles the visible crowd.
 3. **Where do split-off households live?** Proposed: the innermost free house (simple, deterministic). Alternative: the free house nearest the parent's house, so families cluster. This could be the first step toward the household compounds noted as open in the town view plan.
 4. **Inside or outside at work?** Proposed: workers at town businesses (trader, bloomery and similar) go inside. Field, pasture and woodlot workers stay visible.
@@ -168,3 +171,4 @@ Slices 1–3 are independent and can be built in parallel. Slice 4 needs all thr
 - `scripts/sim/household_economy/he_town_view.gd`: `sync()`, `set_time_of_day()`, selection and info panel
 - `scripts/sim/household_economy/he_dashboard.gd`: `_advance_town_time`, `TOWN_TICK_PHASE`, the town view `sync` call sites
 - `scripts/on_foot/on_foot_player.gd`: the `Casual_Male.fbx` instancing and animation clip names to reuse
+- `assets/models/people/Casual_Male.fbx`, `Casual_Female.fbx`: villager body models
