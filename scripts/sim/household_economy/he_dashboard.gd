@@ -28,6 +28,7 @@ const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 ## HEBusiness.type_key) and costs nothing -- both may change later.
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
+const TOWN_CHART_REFRESH_SECONDS := 0.5
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
@@ -135,6 +136,7 @@ const TOWN_TICK_PHASE := 5.5 / 24.0 # same as Person.WAKE_TIME in the RTS
 var _town_phase: float = TOWN_TICK_PHASE
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
+var _last_town_chart_day := -1
 
 var _day_label: Label
 var _treasury_margin: Control
@@ -322,6 +324,7 @@ func _load_scenario() -> void:
 	if not builder.is_valid():
 		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
 	_simulation = HESimulation.new(SEED, builder)
+	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
 		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
@@ -1234,6 +1237,15 @@ func _refresh_town() -> void:
 	var city := _simulation.get_city_summary()
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
+	# The town stats stay current on every tick. At high speed, redraw the
+	# history charts about twice per requested real second instead of once per
+	# frame; the next redraw still includes every simulated day in the history.
+	var chart_interval := maxi(1, int(_speed_multiplier * TOWN_CHART_REFRESH_SECONDS))
+	if _town_view != null and _town_view.visible:
+		chart_interval = 1
+	if _last_town_chart_day >= 0 and _simulation.day - _last_town_chart_day < chart_interval:
+		return
+	_last_town_chart_day = _simulation.day
 	# Extra leading days so the trailing flow sums are full from the first point.
 	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
 	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
@@ -1320,6 +1332,7 @@ func _on_history_settings_changed() -> void:
 		_create_business_button.visible = GameState.dev_mode
 	_update_history_titles()
 	_set_blotter_minimized(_blotter_minimized)
+	_last_town_chart_day = -1
 	_refresh()
 	_refresh_blotter()
 
@@ -1332,7 +1345,10 @@ func _update_history_titles() -> void:
 func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
-	btn.pressed.connect(func() -> void: _speed_multiplier = speed)
+	btn.pressed.connect(func() -> void:
+		_speed_multiplier = speed
+		_last_town_chart_day = -1
+		_refresh_town())
 	_speed_buttons.append(btn)
 	return btn
 
@@ -3063,7 +3079,9 @@ func _refresh() -> void:
 	# A business that failed (or was created) changes the set of rows and the
 	# Create business menu's "already built" state; rebuild rather than leave a
 	# frozen row for a business that no longer exists.
-	var reports := _simulation.get_business_reports()
+	# The rows and town map use current values; detailed histories are built
+	# only when a business detail panel asks for them.
+	var reports := _simulation.get_business_reports(-1, false)
 	_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
 	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
 	var rows_stale := reports.size() != _business_rows.size()
