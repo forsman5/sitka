@@ -40,6 +40,21 @@ func _ready() -> void:
 	repro.value_changed.connect(func(v: float) -> void: OnFootPlayer.sheep_repro_percent = v)
 	repro_row.add_child(repro)
 
+	var start_row := HBoxContainer.new()
+	start_row.add_theme_constant_override("separation", 10)
+	box.add_child(start_row)
+	var start_label := Label.new()
+	start_label.text = "Starting sheep"
+	start_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	start_row.add_child(start_label)
+	var start_count := SpinBox.new()
+	start_count.min_value = 1.0
+	start_count.max_value = 200.0
+	start_count.step = 1.0
+	start_count.value = OnFootPlayer.start_sheep_count
+	start_count.value_changed.connect(func(v: float) -> void: OnFootPlayer.start_sheep_count = int(v))
+	start_row.add_child(start_count)
+
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 14)
 	box.add_child(row)

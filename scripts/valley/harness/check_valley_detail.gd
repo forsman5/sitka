@@ -28,8 +28,13 @@ func _run() -> void:
 		return
 	detail._set_town_mode(true)
 	await process_frame
-	if not detail._town_view.visible or detail._town_view.site_node_count() != detail.external_simulation.get_business_reports().size():
+	if not detail._town_view.visible or detail._town_view.site_node_count() < detail.external_simulation.get_business_reports().size():
 		push_error("Embedded town view does not show the town's businesses")
+		quit(1)
+		return
+	if detail._town_layout.unplaced_business_ids().size() > 0 or detail._town_layout.unplaced_dwelling_ids().size() > 0:
+		print("Aldford unplaced: businesses %d, houses %d" % [detail._town_layout.unplaced_business_ids().size(), detail._town_layout.unplaced_dwelling_ids().size()])
+		push_error("Embedded town view could not place the town's businesses or houses")
 		quit(1)
 		return
 	if not detail._speed_buttons[2].visible or not detail._speed_buttons[3].visible:
@@ -52,5 +57,22 @@ func _run() -> void:
 		push_error("Valley controls did not return")
 		quit(1)
 		return
+	for town_id in ValleySeed.HOUSEHOLDS_PER_SETTLEMENT.keys():
+		if town_id == ValleySeed.ALDFORD:
+			continue
+		valley.call("_select_settlement", town_id)
+		valley.call("_open_detail_view")
+		await process_frame
+		detail = valley.get("_detail_view")
+		if detail == null or detail.external_simulation != valley.get("_economy").towns[town_id]:
+			push_error("Town %d detail lost its persistent economy" % town_id)
+			quit(1)
+			return
+		if detail._town_layout.unplaced_business_ids().size() > 0 or detail._town_layout.unplaced_dwelling_ids().size() > 0:
+			push_error("Town %d layout left businesses or houses unplaced" % town_id)
+			quit(1)
+			return
+		valley.call("_close_detail_view")
+		await process_frame
 	print("Valley town detail OK")
 	quit()

@@ -98,6 +98,8 @@ func _init() -> void:
 	for town_id in TOWN_NAMES:
 		var economy := HESimulation.new(4242 + town_id * 101, Callable(self, "_build_town").bind(town_id))
 		economy.external_trade_enabled = false
+		if town_id == ValleySeed.STAITHE:
+			economy.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.TOOLS, true)
 		towns[town_id] = economy
 	edges = ValleySeed._build_transport_edges()
 

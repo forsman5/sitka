@@ -22,8 +22,8 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 
-## Row order of the Needs tab.
-const NEEDS_TAB_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
+## Row order of the Needs tab comes from HENeeds.display_order(): every need in
+## the catalog, so a new need can't be left off the tab.
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 ## Offered by the Businesses tab's "Create business" menu: every kind in
 ## HEScenarioSeeds.business_types(), so a new kind shows up here by being
@@ -31,6 +31,7 @@ const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
 ## HEBusiness.type_key) and costs nothing -- both may change later.
 const SEED := 4242
 const SECONDS_PER_DAY_AT_1X := 1.0
+const TOWN_CHART_REFRESH_SECONDS := 0.5
 const WAGE_TOOLTIP := "A business paying above the reference wage grows (green); one paying below shrinks (red)."
 ## Filters always rescan this complete simulated-time window. The view is
 ## scrollable, so no separate event-count cap can hide an enabled category.
@@ -124,6 +125,11 @@ var embedded_mode := false
 ## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
 var _town_layout: HETownLayout
 var _town_view: HETownView
+## Top-bar second line, and the Housing tab's readouts.
+var _housing_label: Label
+var _housing_detail_labels: Dictionary = {} # key -> Label
+var _housing_build_button: Button
+var _housing_blocker_label: Label
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
@@ -135,6 +141,7 @@ const TOWN_TICK_PHASE := 5.5 / 24.0 # same as Person.WAKE_TIME in the RTS
 var _town_phase: float = TOWN_TICK_PHASE
 var _speed_multiplier: float = 1.0
 var _day_accumulator: float = 0.0
+var _last_town_chart_day := -1
 
 var _day_label: Label
 var _treasury_margin: Control
@@ -201,6 +208,11 @@ var _business_detail_cull_target_hint: Label
 ## tick, and rewriting the box then would clobber whatever's being typed.
 var _cull_target_loaded_for: int = -1
 var _business_detail_warehouse_section: VBoxContainer
+var _business_detail_tax_section: VBoxContainer
+var _tax_slider: HSlider
+var _tax_label: Label
+var _tax_effect_label: Label
+var _tax_slider_loaded_for: int = -1
 var _business_detail_warehouse_grid: GridContainer
 var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
 var _warehouse_orders_loaded_for: int = -1
@@ -259,7 +271,7 @@ func _ready() -> void:
 	if external_simulation != null:
 		_simulation = external_simulation
 		_town_layout = HETownLayout.new("valley:%s" % _simulation.get_city_summary()["name"],
-			_town_settlement_id(), _simulation.get_business_reports())
+			_town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 		for report in _simulation.get_business_reports():
 			_business_names[report["business_id"]] = report["name"]
 	else:
@@ -335,9 +347,10 @@ func _load_scenario() -> void:
 	if not builder.is_valid():
 		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
 	_simulation = HESimulation.new(SEED, builder)
-	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports())
+	_last_town_chart_day = -1
+	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports())
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -480,6 +493,8 @@ func _build_ui() -> void:
 	goods_scroll.add_child(_market_grid)
 	_rebuild_market_grid()
 	_known_market_commodities = _simulation.get_market_summary().keys()
+
+	_build_housing_tab(top_tabs)
 
 	var lower_row := HBoxContainer.new()
 	lower_row.add_theme_constant_override("separation", 16)
@@ -669,6 +684,30 @@ func _build_ui() -> void:
 	_business_detail_herd_events_display.fit_content = true
 	_business_detail_herd_events_display.scroll_active = false
 	_business_detail_herd_events_section.add_child(_business_detail_herd_events_display)
+
+	# Government tax policy: one slider for the sales tax rate. Its value is
+	# loaded from the sim only when a government is first shown (see
+	# _refresh_tax_section) so the periodic refresh never fights a drag.
+	_business_detail_tax_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_tax_section)
+	var tax_title := Label.new()
+	tax_title.text = "Tax policy"
+	tax_title.add_theme_font_size_override("font_size", 14)
+	_business_detail_tax_section.add_child(tax_title)
+	_tax_label = Label.new()
+	_business_detail_tax_section.add_child(_tax_label)
+	_tax_slider = HSlider.new()
+	_tax_slider.min_value = 0.0
+	_tax_slider.max_value = HESimulation.MAX_SALES_TAX_RATE * 100.0
+	_tax_slider.step = 1.0
+	_tax_slider.custom_minimum_size = Vector2(240, 0)
+	_tax_slider.value_changed.connect(_on_tax_slider_changed)
+	_business_detail_tax_section.add_child(_tax_slider)
+	_tax_effect_label = Label.new()
+	_tax_effect_label.add_theme_font_size_override("font_size", 12)
+	_tax_effect_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_tax_effect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_business_detail_tax_section.add_child(_tax_effect_label)
 
 	# Warehouse standing orders: the section is built once, its rows (one per
 	# tradeable good) the first time a warehouse report arrives -- see
@@ -960,7 +999,10 @@ func _build_population_summary() -> Control:
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.mouse_entered.connect(_on_population_hover.bind(true))
 	box.mouse_exited.connect(_on_population_hover.bind(false))
-	margin.add_child(box)
+	var lines := VBoxContainer.new()
+	lines.add_theme_constant_override("separation", 0)
+	margin.add_child(lines)
+	lines.add_child(box)
 	_population_box = box
 
 	# Same live-refreshing popup approach as the treasury tip: a built-in
@@ -1010,6 +1052,17 @@ func _build_population_summary() -> Control:
 	_avg_morale_label = Label.new()
 	_avg_morale_label.add_theme_font_size_override("font_size", 22)
 	box.add_child(_avg_morale_label)
+
+	# Second line, under the health/morale row: how full the town's housing is.
+	var housing_row := HBoxContainer.new()
+	housing_row.add_theme_constant_override("separation", 8)
+	lines.add_child(housing_row)
+	var housing_caption := Label.new()
+	housing_caption.text = "Housing"
+	housing_caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	housing_row.add_child(housing_caption)
+	_housing_label = Label.new()
+	housing_row.add_child(_housing_label)
 	return margin
 
 ## A simple head-and-shoulders silhouette, rasterized from inline SVG so it
@@ -1039,6 +1092,8 @@ func _refresh_population_summary() -> void:
 	var tip := "%d people. Averages are per person." % w["population"]
 	tip += _factor_tip_section("Health", w["avg_health"], w["health_factors"], w["population"])
 	tip += _factor_tip_section("Morale", w["avg_morale"], w["morale_factors"], w["population"])
+	for bonus in w["morale_bonus_factors"]:
+		tip += "\n  %s: +%.1f pts (lifts %d of %d people)" % [bonus["label"], bonus["avg_loss"] * 100.0, bonus["people"], w["population"]]
 	_population_tip_label.text = tip
 	_population_tip.reset_size()
 
@@ -1049,7 +1104,7 @@ func _factor_tip_section(caption: String, average: float, factors: Array, popula
 	if factors.is_empty():
 		return text + "\n  Nothing is lowering it."
 	for factor in factors:
-		text += "\n  %s: -%.1f pts (affects %d of %d people)" % [factor["label"], factor["avg_loss"] * 100.0, factor["people"], population]
+		text += "\n  %s: %+.1f pts (affects %d of %d people)" % [factor["label"], -factor["avg_loss"] * 100.0, factor["people"], population]
 	return text
 
 func _on_population_hover(hovering: bool) -> void:
@@ -1094,6 +1149,100 @@ func _build_town_tab(top_tabs: TabContainer) -> void:
 	_town_population_title = _town_population_chart.get_meta("title_label")
 	_town_flow_chart = _add_town_chart(charts, "Births, emigrations and deaths (trailing %d-day total)" % TOWN_FLOW_WINDOW_DAYS, TOWN_FLOW_SERIES)
 
+## Housing tab (after Goods): a large readout of the town's housing pool and
+## the government "build house" action. Houses are a settlement-wide pool --
+## see HESimulation.get_housing_report.
+func _build_housing_tab(top_tabs: TabContainer) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.name = "Housing"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	top_tabs.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 10)
+	scroll.add_child(box)
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 48)
+	box.add_child(grid)
+	for stat in [["houses", "Houses"], ["households", "Households"], ["free", "Free houses"], ["homeless", "Homeless households"]]:
+		var cell := VBoxContainer.new()
+		grid.add_child(cell)
+		var caption := Label.new()
+		caption.text = stat[1]
+		caption.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+		cell.add_child(caption)
+		var value := Label.new()
+		value.add_theme_font_size_override("font_size", 32)
+		cell.add_child(value)
+		_housing_detail_labels[stat[0]] = value
+
+	var rules := Label.new()
+	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rules.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
+	box.add_child(rules)
+
+	_housing_build_button = Button.new()
+	_housing_build_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_housing_build_button.pressed.connect(_on_build_house_pressed)
+	box.add_child(_housing_build_button)
+	_housing_blocker_label = Label.new()
+	_housing_blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+	box.add_child(_housing_blocker_label)
+
+func _house_option_index() -> int:
+	var options := HEScenarioSeeds.government_buildings()
+	for i in options.size():
+		if options[i]["type_key"] == "house":
+			return i
+	return -1
+
+func _on_build_house_pressed() -> void:
+	var index := _house_option_index()
+	if index >= 0:
+		_on_build_government_pressed(index)
+
+func _refresh_housing() -> void:
+	var housing := _simulation.get_housing_report(_town_settlement_id())
+	if housing["modeled"]:
+		var free := maxi(0, int(housing["capacity"]) - int(housing["households"]))
+		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		var color := Color(0.4, 0.75, 0.45)
+		if housing["homeless_households"] > 0:
+			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
+			color = Color(0.85, 0.35, 0.3)
+		elif housing["saturated"]:
+			_housing_label.text += " (full)"
+			color = Color(0.9, 0.7, 0.3)
+		_housing_label.add_theme_color_override("font_color", color)
+		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["houses"]
+		(_housing_detail_labels["households"] as Label).text = "%d" % housing["households"]
+		(_housing_detail_labels["free"] as Label).text = "%d" % free
+		(_housing_detail_labels["homeless"] as Label).text = "%d" % housing["homeless_households"]
+	else:
+		_housing_label.text = "unlimited"
+		_housing_label.remove_theme_color_override("font_color")
+		for key in _housing_detail_labels:
+			(_housing_detail_labels[key] as Label).text = "-"
+	var index := _house_option_index()
+	if index < 0:
+		return
+	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
+	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
+	var order_state := _simulation.build_goods_order_state(_town_settlement_id(), option)
+	_housing_build_button.text = "Build house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	if order_state == "can_order":
+		_housing_build_button.text = "Order timber for a house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	_housing_build_button.disabled = blocker != "" and order_state != "can_order"
+	if order_state == "can_order":
+		_housing_blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
+	elif order_state == "ordered":
+		_housing_blocker_label.text = "Goods on order: %s" % blocker
+	else:
+		_housing_blocker_label.text = blocker
+
 ## A title row with a color-keyed legend above a hoverable chart.
 func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
 	var header := HBoxContainer.new()
@@ -1120,6 +1269,15 @@ func _refresh_town() -> void:
 	var city := _simulation.get_city_summary()
 	for stat in TOWN_STATS:
 		(_town_stat_labels[stat[1]] as Label).text = stat[2] % city[stat[1]]
+	# The town stats stay current on every tick. At high speed, redraw the
+	# history charts about twice per requested real second instead of once per
+	# frame; the next redraw still includes every simulated day in the history.
+	var chart_interval := maxi(1, int(_speed_multiplier * TOWN_CHART_REFRESH_SECONDS))
+	if _town_view != null and _town_view.visible:
+		chart_interval = 1
+	if _last_town_chart_day >= 0 and _simulation.day - _last_town_chart_day < chart_interval:
+		return
+	_last_town_chart_day = _simulation.day
 	# Extra leading days so the trailing flow sums are full from the first point.
 	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
 	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
@@ -1206,6 +1364,7 @@ func _on_history_settings_changed() -> void:
 		_create_business_button.visible = GameState.dev_mode
 	_update_history_titles()
 	_set_blotter_minimized(_blotter_minimized)
+	_last_town_chart_day = -1
 	_refresh()
 	_refresh_blotter()
 
@@ -1219,10 +1378,11 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	var btn := Button.new()
 	btn.text = label
 	btn.pressed.connect(func() -> void:
+		_speed_multiplier = speed
 		if embedded_mode:
 			speed_requested.emit(speed)
-		else:
-			_speed_multiplier = speed)
+		_last_town_chart_day = -1
+		_refresh_town())
 	_speed_buttons.append(btn)
 	return btn
 
@@ -1312,6 +1472,10 @@ func _refresh_household_detail() -> void:
 		unemployed.text = "Unemployed"
 		employer_row.add_child(unemployed)
 	_household_detail_content.add_child(employer_row)
+	if h["housing_status"] != "unlimited":
+		var housing_line := Label.new()
+		housing_line.text = "Housing: %s" % ("Homeless" if h["housing_status"] == "homeless" else "Housed")
+		_household_detail_content.add_child(housing_line)
 
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
@@ -1330,7 +1494,9 @@ func _refresh_household_detail() -> void:
 			_add_household_detail_line("    %s shortfall: -%.0f%% health" % [loss["label"], loss["loss"] * 100.0])
 	_add_meter_row(_household_detail_content, "Morale", h["morale"])
 	for penalty in h["morale_penalties"]:
-		_add_household_detail_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+		_add_household_detail_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
+	for bonus in h["morale_bonuses"]:
+		_add_household_detail_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
 	_add_household_detail_heading("Events (last %d days)" % HOUSEHOLD_EVENT_HISTORY_DAYS)
 	var event_lines: Array[String] = []
@@ -1480,7 +1646,9 @@ func _refresh_person_detail() -> void:
 	_add_meter_row(_person_detail_content, "Health", p["health"])
 	_add_meter_row(_person_detail_content, "Morale", p["morale"])
 	for penalty in p["morale_penalties"]:
-		_add_person_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+		_add_person_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
+	for bonus in p["morale_bonuses"]:
+		_add_person_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
 	_add_person_heading("Needs (today, equal share of the household's)")
 	for need in p["needs"]:
@@ -1635,7 +1803,7 @@ func _build_needs_tab(top_tabs: TabContainer) -> void:
 		header.text = col_label
 		header.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 		grid.add_child(header)
-	for need_id in NEEDS_TAB_ORDER:
+	for need_id in HENeeds.display_order():
 		var need := HENeeds.get_need(need_id)
 		var name_button := Button.new()
 		name_button.text = need.label
@@ -2084,11 +2252,37 @@ func _refresh_business_detail() -> void:
 	if _business_detail_warehouse_section.visible:
 		_refresh_warehouse_orders(report)
 
+	_business_detail_tax_section.visible = report["kind"] == "government"
+	if _business_detail_tax_section.visible:
+		_refresh_tax_section(report)
+
 	_business_detail_transaction_section.visible = report["kind"] == "trader"
 	if _business_detail_transaction_section.visible:
 		_refresh_trader_transactions()
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
+
+## Syncs the tax slider's caption and morale-effect text to the sim's rate;
+## the slider's own value is loaded only when this government is first shown.
+func _refresh_tax_section(report: Dictionary) -> void:
+	if _tax_slider_loaded_for != _selected_business_id:
+		_tax_slider_loaded_for = _selected_business_id
+		_tax_slider.set_value_no_signal(roundf(report["sales_tax_rate"] * 100.0))
+	_update_tax_labels()
+
+func _update_tax_labels() -> void:
+	var effect := _simulation.tax_morale_effect()
+	_tax_label.text = "Sales tax: %.0f%% (default %.0f%%)" % [_simulation.sales_tax_rate * 100.0, HESimulation.SALES_TAX_RATE * 100.0]
+	if effect > 0.001:
+		_tax_effect_label.text = "Low taxes: +%.0f%% morale for everyone, but less treasury income." % (effect * 100.0)
+	elif effect < -0.001:
+		_tax_effect_label.text = "High taxes: -%.0f%% morale for everyone, but more treasury income." % (-effect * 100.0)
+	else:
+		_tax_effect_label.text = "Default rate: no morale effect. Lower rates raise morale (+10%% at 2%%); higher rates lower it (max %.0f%%)." % (HESimulation.MAX_SALES_TAX_RATE * 100.0)
+
+func _on_tax_slider_changed(value: float) -> void:
+	_simulation.set_sales_tax_rate(value / 100.0)
+	_update_tax_labels()
 
 ## The warehouse's order table. Rows are created once (a per-refresh rebuild
 ## would split a click across two widget instances, like the HUD's buttons);
@@ -2618,13 +2812,18 @@ func _refresh_government_build_menu() -> void:
 	for i in gov_options.size():
 		var gov_option: Dictionary = gov_options[i]
 		var blocker := _simulation.government_build_blocker(_town_settlement_id(), gov_option)
+		var order_state := _simulation.build_goods_order_state(_town_settlement_id(), gov_option)
 		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(gov_option["cost"])]
 		if blocker == "already built":
 			item_text = "%s (already built)" % gov_option["label"]
+		elif order_state == "can_order":
+			item_text += " - click to order the goods"
+		elif order_state == "ordered":
+			item_text += " - goods on order"
 		elif blocker != "":
 			item_text += " - %s" % blocker
 		_gov_build_popup.set_item_text(i, item_text)
-		_gov_build_popup.set_item_disabled(i, blocker != "")
+		_gov_build_popup.set_item_disabled(i, blocker != "" and order_state != "can_order")
 
 ## Dashboard <-> town map. The simulation keeps running either way; only which
 ## half of the window is shown changes.
@@ -2663,7 +2862,11 @@ func _on_create_business_pressed(index: int) -> void:
 
 func _on_build_government_pressed(index: int) -> void:
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
-	if not _simulation.build_government_building(_town_settlement_id(), option["type_key"]):
+	var outcome := _simulation.request_government_build(_town_settlement_id(), option["type_key"])
+	if outcome == "ordered":
+		_refresh()
+		return
+	if outcome != "built":
 		return
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]
@@ -2770,7 +2973,7 @@ func _rebuild_household_rows() -> void:
 	var goods_columns: Array[String] = []
 	for c in HESimulation.SUBSISTENCE_COMMODITIES:
 		goods_columns.append(Commodity.name_of(c))
-	var col_labels: Array[String] = ["ID", "Employer", "Workers", "Dependents"]
+	var col_labels: Array[String] = ["ID", "Employer", "Housing", "Workers", "Dependents"]
 	col_labels.append_array(goods_columns)
 	col_labels.append_array(["Balance", "Stress", "Unmet (scarce)", "Unmet (unfunded)"])
 	grid.columns = col_labels.size()
@@ -2796,6 +2999,10 @@ func _rebuild_household_rows() -> void:
 		employer_label.custom_minimum_size = Vector2(80, 0)
 		employer_label.pressed.connect(_on_household_employer_pressed.bind(household_id))
 		grid.add_child(employer_label)
+
+		var housing_status_label := Label.new()
+		housing_status_label.custom_minimum_size = Vector2(70, 0)
+		grid.add_child(housing_status_label)
 
 		var workers_label := Label.new()
 		workers_label.custom_minimum_size = Vector2(50, 0)
@@ -2834,7 +3041,7 @@ func _rebuild_household_rows() -> void:
 		grid.add_child(unaffordable_label)
 
 		_household_rows[household_id] = {
-			"id": id_label, "employer": employer_label, "workers": workers_label, "dependents": dependents_label,
+			"id": id_label, "employer": employer_label, "housing": housing_status_label, "workers": workers_label, "dependents": dependents_label,
 			"goods": goods_labels, "balance": balance_label,
 			"stress": stress_label, "scarcity": scarcity_label, "unaffordable": unaffordable_label,
 		}
@@ -2877,6 +3084,7 @@ func _refresh() -> void:
 	_check_extinction()
 
 	_refresh_town()
+	_refresh_housing()
 	_refresh_government_build_menu()
 
 	var market := _simulation.get_market_summary()
@@ -2907,9 +3115,11 @@ func _refresh() -> void:
 	# A business that failed (or was created) changes the set of rows and the
 	# Create business menu's "already built" state; rebuild rather than leave a
 	# frozen row for a business that no longer exists.
-	var reports := _simulation.get_business_reports()
-	_town_layout.reconcile(reports)
-	_town_view.sync(_town_layout, reports)
+	# The rows and town map use current values; detailed histories are built
+	# only when a business detail panel asks for them.
+	var reports := _simulation.get_business_reports(-1, false)
+	_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
+	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):
@@ -3005,6 +3215,16 @@ func _refresh() -> void:
 		employer_button.text = _business_names.get(h["employer_business_id"], "Unemployed")
 		employer_button.disabled = not _business_names.has(h["employer_business_id"])
 		employer_button.tooltip_text = "Open employer detail" if not employer_button.disabled else ""
+		var housing_status_label := row["housing"] as Label
+		match h["housing_status"]:
+			"homeless":
+				housing_status_label.text = "Homeless"
+				housing_status_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+			"housed":
+				housing_status_label.text = "Housed"
+				housing_status_label.remove_theme_color_override("font_color")
+			_:
+				housing_status_label.text = ""
 		var worker_ages: Array = h["worker_ages"]
 		var workers_label := row["workers"] as Label
 		if worker_ages.is_empty():

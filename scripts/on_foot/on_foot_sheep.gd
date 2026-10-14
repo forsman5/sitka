@@ -12,6 +12,12 @@ const ADULT_AGE := 2
 const LAMB_SCALE := 0.6
 
 @export var flee_speed: float = 5.5
+## Flee speed scales with distance from the player: full speed inside
+## (scare radius - flee_full_speed_inset), easing linearly down to
+## flee_edge_speed_mult of flee_speed at the scare radius, so sheep at the edge
+## of the ring meander away at a trot instead of snapping on and off.
+@export var flee_full_speed_inset: float = 7.0
+@export_range(0.0, 1.0) var flee_edge_speed_mult: float = 0.33
 @export var turn_rate: float = 6.0
 @export var accel: float = 14.0
 @export var arena_half_size: float = 90.0
@@ -27,6 +33,28 @@ const LAMB_SCALE := 0.6
 @export var react_delay_max: float = 0.18
 ## Chance that a sheep already running still gets spooked into a hop by a bark.
 @export_range(0.0, 1.0) var running_react_chance: float = 0.1
+
+## Flocking weights (Jadhav et al. 2024, docs/sheep-flocking-plan.md). Every term
+## is a unit vector times a constant; none depend on distance.
+@export_group("Flocking")
+## Nearest mates a sheep perceives; it attracts to n_att random ones of those and
+## aligns to n_ali random ones of the attracting set.
+@export var flock_k: int = 10
+@export var flock_n_att: int = 5
+@export var flock_n_ali: int = 1
+@export var w_dog: float = 1.0
+@export var w_rep: float = 2.0
+@export var w_att: float = 1.5
+@export var w_ali: float = 1.3
+## Previous heading carried into the next one (smooths turns, lets turns ripple
+## through the flock instead of snapping).
+@export var w_inertia: float = 1.0
+@export var noise_strength: float = 0.5
+## Mates closer than this repel; the neighbour subset and noise are re-rolled
+## about once a second (per sheep, staggered) so 60 Hz noise doesn't become jitter.
+@export var rep_distance: float = 1.5
+@export var resample_interval: float = 1.0
+@export_group("")
 
 var age_days: int = ADULT_AGE
 
@@ -51,6 +79,16 @@ var _react_left: float = 0.0
 var _react_delay_left: float = 0.0
 var _listening_to: Node = null
 var _bob_t: float = randf() * TAU
+var _heading := Vector3.ZERO
+var _noise := Vector3.ZERO
+var _resample_left: float = randf() * 1.0
+var _att_mates: Array = []
+var _ali_mates: Array = []
+
+# One snapshot of every free sheep per physics frame, shared by all of them, so
+# neighbour queries don't each re-walk the group (and re-read positions).
+static var _snap_frame: int = -1
+static var _snap: Array = []
 
 func _ready() -> void:
 	add_to_group("on_foot_sheep")
@@ -133,11 +171,13 @@ func _physics_process(delta: float) -> void:
 	var speed := wander_speed
 	_fleeing = false
 
+	_refresh_snapshot()
+	_tick_resample(delta)
 	var flee_dir := _flee_direction()
 	if flee_dir != Vector3.ZERO:
 		_fleeing = true
 		desired = flee_dir
-		speed = flee_speed
+		speed = flee_speed * _flee_speed_factor()
 	else:
 		_state_left -= delta
 		if _state_left <= 0.0:
@@ -153,6 +193,10 @@ func _physics_process(delta: float) -> void:
 		desired = _avoid_water(desired)
 		if desired == Vector3.ZERO:
 			speed = 0.0
+	if desired != Vector3.ZERO:
+		_heading = desired
+	elif speed == 0.0:
+		_heading = Vector3.ZERO
 
 	var target := desired * speed
 	var horiz := Vector3(velocity.x, 0.0, velocity.z).move_toward(target, accel * delta)
@@ -220,23 +264,39 @@ func _flee_direction() -> Vector3:
 	if dist > trigger and _startled_left <= 0.0:
 		return Vector3.ZERO
 	away = away.normalized() if dist > 0.01 else Vector3.FORWARD
-	return (away + _edge_push() + _separation()).normalized()
+	# Flee while still flocking: attraction and alignment keep the mob together
+	# and polarized instead of fanning out radially from the dog.
+	var steer := away * w_dog + _edge_push() + _separation() * w_rep
+	steer += _attraction() * w_att + _alignment() * w_ali
+	steer += _heading * w_inertia + _noise * noise_strength
+	steer.y = 0.0
+	return steer.normalized() if steer.length() > 0.001 else away
 
-## Gentle wander that keeps drifting back toward the rest of the flock.
+## Flee speed multiplier: 1.0 within the inner zone, easing linearly to
+## flee_edge_speed_mult at the scare radius. A bark-startled sheep bolts at full
+## speed regardless of distance.
+func _flee_speed_factor() -> float:
+	if _startled_left > 0.0 or _player == null:
+		return 1.0
+	var scare := 8.0
+	if _player.has_method("scare_radius"):
+		scare = _player.call("scare_radius")
+	var off := global_position - _player.global_position
+	off.y = 0.0
+	var inner := maxf(scare - flee_full_speed_inset, 0.0)
+	var span := maxf(scare - inner, 0.001)
+	var t := clampf((off.length() - inner) / span, 0.0, 1.0)
+	return lerpf(1.0, flee_edge_speed_mult, t)
+
+## Gentle wander that keeps drifting back toward nearby mates (not the global
+## centroid, which sits in empty space when the flock is split into clumps).
 func _pick_wander_dir() -> Vector3:
 	var dir := Vector3.FORWARD.rotated(Vector3.UP, randf() * TAU)
-	var mates := get_tree().get_nodes_in_group("on_foot_sheep")
-	var center := Vector3.ZERO
-	var n := 0
-	for m in mates:
-		if m != self:
-			center += (m as Node3D).global_position
-			n += 1
-	if n > 0:
-		var to_flock := center / n - global_position
-		to_flock.y = 0.0
-		if to_flock.length() > 5.0:
-			dir = (dir + to_flock.normalized() * 1.5).normalized()
+	var to_mates := _attraction()
+	if to_mates != Vector3.ZERO:
+		var centre_off := _mean_offset(_att_mates)
+		if centre_off.length() > 5.0:
+			dir = (dir + to_mates * 1.5).normalized()
 	return (dir + _edge_push() * 2.0).normalized()
 
 func _edge_push() -> Vector3:
@@ -249,17 +309,80 @@ func _edge_push() -> Vector3:
 		push.z = -signf(p.z)
 	return push
 
+## Hard-ish spacing: push away from every mate inside rep_distance.
 func _separation() -> Vector3:
 	var push := Vector3.ZERO
-	for m in get_tree().get_nodes_in_group("on_foot_sheep"):
+	var pos := global_position
+	for m in _snap:
 		if m == self:
 			continue
-		var off: Vector3 = global_position - (m as Node3D).global_position
+		var off: Vector3 = pos - (m as Node3D).global_position
 		off.y = 0.0
 		var d := off.length()
-		if d > 0.01 and d < 1.5:
-			push += off / d * (1.5 - d)
+		if d > 0.01 and d < rep_distance:
+			push += off / d * (rep_distance - d) / rep_distance
 	return push
+
+func _refresh_snapshot() -> void:
+	var frame := Engine.get_physics_frames()
+	if frame == _snap_frame:
+		return
+	_snap_frame = frame
+	_snap.clear()
+	for m in get_tree().get_nodes_in_group("on_foot_sheep"):
+		_snap.append(m)
+
+## Re-roll which of the k nearest mates this sheep attends to, plus the noise
+## vector, about once per resample_interval.
+func _tick_resample(delta: float) -> void:
+	_resample_left -= delta
+	if _resample_left > 0.0:
+		return
+	_resample_left = resample_interval * randf_range(0.75, 1.25)
+	_noise = Vector3.FORWARD.rotated(Vector3.UP, randf() * TAU) * randf()
+	var near: Array = []
+	var pos := global_position
+	for m in _snap:
+		if m == self or (m as OnFootSheep).penned:
+			continue
+		var off: Vector3 = (m as Node3D).global_position - pos
+		off.y = 0.0
+		near.append([off.length_squared(), m])
+	near.sort_custom(func(a, b): return a[0] < b[0])
+	var pool: Array = []
+	for i in mini(flock_k, near.size()):
+		pool.append(near[i][1])
+	pool.shuffle()
+	_att_mates = pool.slice(0, flock_n_att)
+	_ali_mates = _att_mates.slice(0, flock_n_ali)
+
+func _mean_offset(mates: Array) -> Vector3:
+	var sum := Vector3.ZERO
+	var n := 0
+	for m in mates:
+		if is_instance_valid(m):
+			sum += (m as Node3D).global_position - global_position
+			n += 1
+	if n == 0:
+		return Vector3.ZERO
+	sum.y = 0.0
+	return sum / n
+
+## Unit direction toward the mean of the attended neighbours.
+func _attraction() -> Vector3:
+	var off := _mean_offset(_att_mates)
+	return off.normalized() if off.length() > 0.01 else Vector3.ZERO
+
+## Unit mean heading of the aligned neighbours (their current velocity).
+func _alignment() -> Vector3:
+	var sum := Vector3.ZERO
+	for m in _ali_mates:
+		if is_instance_valid(m):
+			var v: Vector3 = (m as CharacterBody3D).velocity
+			v.y = 0.0
+			if v.length() > 0.2:
+				sum += v.normalized()
+	return sum.normalized() if sum.length() > 0.01 else Vector3.ZERO
 
 func _face_and_animate(delta: float, horiz: Vector3) -> void:
 	var speed := horiz.length()

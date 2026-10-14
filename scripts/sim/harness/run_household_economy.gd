@@ -65,12 +65,14 @@ func _init() -> void:
 	_check_livestock_goods()
 	_check_livestock_export_toggle()
 	_check_butcher_processes_livestock()
+	_check_toolsmith_supplies_tools()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
 	_check_government_taxes()
 	_check_government_warehouse()
 	_check_government_build_costs()
+	_check_housing()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -1357,7 +1359,8 @@ func _check_export_settings_derived_from_commodities() -> void:
 === Trader export settings: derived list, fixed order, rows hidden without a seller ===")
 	var priority := HESimulation.EXPORT_PRIORITY
 	_assert(priority.has(Commodity.Type.WOOL), "Wool should be an exportable good")
-	_assert(not priority.has(Commodity.Type.TOOLS), "Tools have no market price and should not be exportable")
+	_assert(priority.has(Commodity.Type.TOOLS), "Tools have a market price (the Toolsmith's) and should be exportable")
+	_assert(not HESimulation.EXPORT_COMMODITIES.has(Commodity.Type.TOOLS), "Tools should start disabled: the Toolsmith serves local households")
 	var seen := {}
 	for commodity in priority:
 		_assert(not seen.has(commodity), "%s listed twice in EXPORT_PRIORITY" % Commodity.name_of(commodity))
@@ -2342,6 +2345,57 @@ func _check_butcher_processes_livestock() -> void:
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Butcher present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
 
+## The Toolsmith buys the Bloomery's iron locally (instead of the Trader
+## exporting all of it at half price) and sells tools to households, which use
+## them at the pooled model's 0.005 per person per day. Two years, reconciling
+## goods and money every day.
+func _check_toolsmith_supplies_tools() -> void:
+	print("\n=== Toolsmith: iron becomes tools, which households use ===")
+	var sim := _new_sim("build_economy_with_toolsmith")
+	var settlement_id: int = sim.get_settlement_ids()[0]
+	var toolsmith: HEBusiness = sim.businesses[HEScenarioSeeds.TOOLSMITH_BUSINESS_ID]
+	_assert(toolsmith.sells(Commodity.Type.TOOLS) and toolsmith.recipe.inputs.has(Commodity.Type.IRON),
+		"The seeded Toolsmith should turn iron into tools")
+	_assert(sim._business_selling(settlement_id, Commodity.Type.TOOLS) == toolsmith, "The Toolsmith should be the local seller of tools")
+	_assert(not _new_sim("build_economy_with_bloomery_and_iron_mine").businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID),
+		"Only the Toolsmith scenario should seed a Toolsmith")
+
+	var reconciled_commodities := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled_commodities.append_array(HESimulation.LIVESTOCK_GOODS)
+	reconciled_commodities.append(Commodity.Type.IRON)
+	var produced := {}
+	var consumed := {}
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	for window in 2:
+		sim.advance_ticks(360)
+		for record in sim.get_daily_history(360):
+			for c in reconciled_commodities:
+				var name := Commodity.name_of(c)
+				var day_produced: float = record["produced"].get(name, 0.0)
+				var day_consumed: float = record["consumed"].get(name, 0.0)
+				var day_exported: float = (record["exported"] as Dictionary).get(name, 0.0)
+				var day_imported: float = (record["imported"] as Dictionary).get(name, 0.0)
+				var written_off: float = (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				var expected: float = record["opening_stock"][name] + day_produced + day_imported - day_consumed - day_exported - written_off
+				worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+				produced[name] = produced.get(name, 0.0) + day_produced
+				consumed[name] = consumed.get(name, 0.0) + day_consumed
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+
+	# Survival is deliberately not asserted: a business that exhausts its credit
+	# is deleted, and the Toolsmith's imported iron depends on the Trader, which
+	# the seeded economy can lose.
+	print("  over 2 years: toolsmith made %.0f tools from %.0f iron; households used %.0f | still open: %s" % [
+		produced.get("Tools", 0.0), consumed.get("Iron", 0.0), consumed.get("Tools", 0.0), sim.businesses.has(toolsmith.id)])
+	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
+	_assert(produced.get("Tools", 0.0) > 0.0 and consumed.get("Iron", 0.0) > 0.0, "The Toolsmith should have turned some iron into tools")
+	_assert(consumed.get("Tools", 0.0) > 0.0, "Households should have used some tools")
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Toolsmith present, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
+	_check_demographic_invariants(sim)
+
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
 ## the lifecycle engine.
@@ -2350,8 +2404,8 @@ func _check_needs_catalog() -> void:
 	var ids: Array = []
 	for need in HENeeds.all():
 		ids.append(need.id)
-	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING], "Needs should be food, heat, clothing in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL],
+	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING, HENeed.Id.TOOLS], "Needs should be food, heat, clothing, tools in that order")
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL, Commodity.Type.TOOLS],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
@@ -2370,6 +2424,27 @@ func _check_needs_catalog() -> void:
 		"Baselines should stay wool and grain")
 	_assert(is_equal_approx(HENeeds.units_per_person_daily(Commodity.Type.GRAIN), 0.4), "Grain per person per day should stay 0.4")
 	_assert(HENeeds.units_per_person_daily(Commodity.Type.IRON) == 0.0, "A good that satisfies no need has no daily use")
+
+	# The Needs tab lists the catalog, so a new need can't be forgotten there.
+	var tab_order: Array = HENeeds.display_order()
+	for need in HENeeds.all():
+		_assert(tab_order.has(need.id), "%s is missing from the Needs tab" % need.label)
+	_assert(tab_order.size() == HENeeds.all().size(), "The Needs tab should list each need exactly once")
+
+	# Tools: morale only. Going without costs no health, having them lifts
+	# morale, and the lift offsets other penalties (an unemployed household here).
+	var tools_need := HENeeds.get_need(HENeed.Id.TOOLS)
+	_assert(tools_need.health_weight == 0.0 and tools_need.morale_bonus > 0.0, "Tools should be a morale-only need")
+	var bonus_household := HEHousehold.new(1, 2, 2)
+	var base_morale := bonus_household.morale()
+	_assert(not bonus_household.is_employed() and base_morale < 1.0, "Fixture household should start with an unemployment penalty")
+	bonus_household.last_need_required[HENeed.Id.TOOLS] = 0.1
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.05
+	_assert(bonus_household.morale_bonuses().is_empty() and is_equal_approx(bonus_household.morale(), base_morale), "A half-met tools need should give no morale bonus")
+	bonus_household.last_need_provided[HENeed.Id.TOOLS] = 0.1
+	_assert(bonus_household.morale_bonuses().size() == 1 and is_equal_approx(bonus_household.morale(), minf(1.0, base_morale + tools_need.morale_bonus)),
+		"A met tools need should lift morale by its bonus")
+	_assert(is_equal_approx(bonus_household.health(), 1.0), "Tools must not change health")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
 	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")
@@ -2604,6 +2679,76 @@ func _check_government_build_costs() -> void:
 	warehouse.add_stock(timber, 8.0)
 	_assert(sim.government_build_blocker(1, option) == "", "Stocked warehouse covers the goods cost")
 	_assert(HEScenarioSeeds.cost_text(option["cost"]) == "5 Timber" or HEScenarioSeeds.cost_text(option["cost"]).contains("5"), "cost_text lists goods")
+
+## Housing: houses are buildings, not businesses. A house is built by the
+## government for gold from the treasury plus timber from the warehouse (so it
+## needs a warehouse), is repeatable, shelters one household, and a full town
+## cuts births while homeless households shed members.
+func _check_housing() -> void:
+	print("\n=== Housing: government-built houses, saturation, homelessness ===")
+	var sim := _new_sim("build_three_business_economy")
+	var seeded: Dictionary = sim.get_housing_report(1)
+	_assert(seeded["modeled"], "The seeded town models housing")
+	_assert(seeded["capacity"] >= seeded["households"], "Seeded housing covers the starting households (%d for %d)" % [seeded["capacity"], seeded["households"]])
+	_assert(not seeded["saturated"] and seeded["homeless_households"] == 0, "A freshly seeded town has a free house")
+	for builder in ["build_three_business_economy_with_bloomery", "build_economy_with_bloomery_and_iron_mine", "build_economy_with_charcoal_burner", "build_lopsided_start"]:
+		var other := _new_sim(builder)
+		_assert(other.get_housing_report(1)["capacity"] >= other.get_housing_report(1)["households"], "%s seeds enough housing" % builder)
+	var custom := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID]), true)
+	_assert(custom.get_housing_report(1)["capacity"] >= custom.get_housing_report(1)["households"], "Custom roster seeds enough housing")
+
+	var house_option: Dictionary = {}
+	for option in HEScenarioSeeds.government_buildings():
+		if option["type_key"] == "house":
+			house_option = option
+	_assert(not house_option.is_empty(), "The government can build houses")
+	_assert(is_equal_approx(house_option["cost"]["gold"], 15.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 15 gold + 50 timber")
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 500.0
+	_assert(sim.government_build_blocker(1, house_option) == "needs a government warehouse", "No warehouse: house is blocked on the warehouse (got '%s')" % sim.government_build_blocker(1, house_option))
+	_assert(not sim.build_government_building(1, "house"), "A house cannot be built without a warehouse")
+
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse builds")
+	var warehouse := sim._government_warehouse(1)
+	_assert(sim.government_build_blocker(1, house_option).contains("has 0"), "Empty warehouse can't supply the timber")
+	_assert(sim.build_goods_order_state(1, house_option) == "can_order", "Short of timber with a warehouse: the build can order it")
+	_assert(sim.request_government_build(1, "house") == "ordered", "Pressing build orders the missing timber")
+	var timber_order: Dictionary = warehouse.warehouse_orders.get(Commodity.Type.TIMBER, {})
+	_assert(is_equal_approx(float(timber_order.get("buy_up_to", 0.0)), 50.0), "The standing order targets the house's timber cost")
+	_assert(sim.build_goods_order_state(1, house_option) == "ordered", "With the order standing, the state is ordered")
+	_assert(sim.request_government_build(1, "house") == "", "Pressing again before the goods arrive does nothing")
+	sim.advance_ticks(10)
+	_assert(warehouse.stock(Commodity.Type.TIMBER) >= 50.0 - EPSILON, "The order stocks the warehouse with timber (has %.1f)" % warehouse.stock(Commodity.Type.TIMBER))
+	var timber_before := warehouse.stock(Commodity.Type.TIMBER)
+	var houses_before: int = sim.get_housing_report(1)["houses"]
+	var treasury_before := gov.balance
+	_assert(sim.build_government_building(1, "house"), "House builds from treasury gold + warehouse timber")
+	_assert(sim.get_housing_report(1)["houses"] == houses_before + 1, "A house was added")
+	_assert(absf(treasury_before - gov.balance - 15.0) < EPSILON, "The house cost 15 gold")
+	_assert(absf(timber_before - warehouse.stock(Commodity.Type.TIMBER) - 50.0) < EPSILON, "The house consumed 50 timber from the warehouse")
+	warehouse.add_stock(Commodity.Type.TIMBER, 60.0)
+	_assert(sim.build_government_building(1, "house"), "Houses are repeatable")
+	_assert(sim.businesses.size() == sim.businesses.keys().size() and not sim.has_business_of_type(1, "house"), "Houses are not businesses")
+
+	# Saturation: drop all houses -> every household homeless, births scaled
+	# down and members shed. Compare against an identical town with housing.
+	var housed := _new_sim("build_three_business_economy")
+	var evicted := _new_sim("build_three_business_economy")
+	var evicted_settlement: HESettlement = evicted.settlements[1]
+	evicted.dwellings.clear()
+	evicted_settlement.dwelling_ids.clear()
+	var report: Dictionary = evicted.get_housing_report(1)
+	_assert(report["saturated"] and report["homeless_households"] == report["households"], "Without houses the whole town is homeless")
+	_assert(evicted.get_household_summary(evicted.get_household_ids()[0])["housing_status"] == "homeless", "An evicted household reports homeless")
+	_assert(housed.get_household_summary(housed.get_household_ids()[0])["housing_status"] == "housed", "A housed household reports housed")
+	var pop_start: int = housed.get_city_summary()["population"]
+	housed.advance_ticks(720)
+	evicted.advance_ticks(720)
+	var housed_summary: Dictionary = housed.get_city_summary()
+	var evicted_summary: Dictionary = evicted.get_city_summary()
+	print("  population %d -> housed %d, homeless %d; emigrations %d vs %d; births %d vs %d" % [pop_start, housed_summary["population"], evicted_summary["population"], housed_summary["emigrations_total"], evicted_summary["emigrations_total"], housed_summary["births_total"], evicted_summary["births_total"]])
+	_assert(evicted_summary["emigrations_total"] > housed_summary["emigrations_total"], "Homeless households emigrate far more")
+	_assert(evicted_summary["population"] < housed_summary["population"], "A homeless town ends smaller than a housed one")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.

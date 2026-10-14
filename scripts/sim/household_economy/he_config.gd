@@ -16,6 +16,7 @@ const PRESETS := [
 	{"label": "Six businesses, lopsided start", "builder": "build_lopsided_start", "include": [1, 2, 3, 6, 7, 8]},
 	{"label": "Seven businesses, with Bloomery", "builder": "build_three_business_economy_with_bloomery", "include": [1, 2, 3, 4, 6, 7, 8]},
 	{"label": "Eight businesses, with Bloomery and Iron Mine", "builder": "build_economy_with_bloomery_and_iron_mine", "include": [1, 2, 3, 4, 5, 6, 7, 8]},
+	{"label": "Seven businesses, with Toolsmith (imports iron)", "builder": "build_economy_with_toolsmith", "include": [1, 2, 3, 6, 7, 8, 11]},
 	{"label": "Nine businesses, with Charcoal Burner", "builder": "build_economy_with_charcoal_burner", "include": [1, 2, 3, 4, 5, 6, 7, 8, 10]},
 ]
 

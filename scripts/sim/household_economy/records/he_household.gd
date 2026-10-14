@@ -85,6 +85,12 @@ const BIRTH_STRESS_THRESHOLD := 0.1
 ## into a worker) at once -- a soft brake on growth rate, not a cap on the
 ## household's eventual total size.
 const MAX_PENDING_DEPENDENTS := 6
+## Crowding. A household with more than this many adults (its workers plus
+## dependents past AGING_THRESHOLD_DAYS who haven't left yet) pushes the extras
+## out faster: each adult beyond the cap has its monthly leave-home chance
+## multiplied by CROWDED_LEAVE_MULTIPLIER.
+const CROWDED_ADULT_COUNT := 4
+const CROWDED_LEAVE_MULTIPLIER := 3.0
 
 ## Reused pooled record: worker_capacity, dependents, food_stress,
 ## apply_daily_fulfillment(), update_migration_pressure(),
@@ -311,9 +317,17 @@ func evaluate_aging(rng: RandomNumberGenerator) -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
 	last_promoted_member_numbers.clear()
+	var adult_slots := CROWDED_ADULT_COUNT - _worker_ages.size()
+	var adults_seen := 0
 	for i in _dependent_ages.size():
 		var age: int = _dependent_ages[i]
-		if age >= AGING_THRESHOLD_DAYS and rng.randf() < leave_home_chance(age):
+		var chance := 0.0
+		if age >= AGING_THRESHOLD_DAYS:
+			chance = leave_home_chance(age)
+			if adults_seen >= adult_slots:
+				chance = minf(1.0, chance * CROWDED_LEAVE_MULTIPLIER)
+			adults_seen += 1
+		if age >= AGING_THRESHOLD_DAYS and rng.randf() < chance:
 			promoted += 1
 			# 1-based position in the member list (workers first, then
 			# dependents) as of just before promotion.
@@ -368,14 +382,16 @@ func evaluate_old_age_death() -> int:
 ## and has fewer than MAX_PENDING_DEPENDENTS dependents already in the
 ## pipeline gains one new dependent at age 0. Returns true if a birth
 ## happened, for HESimulation's reporting.
-func evaluate_birth(rng: RandomNumberGenerator) -> bool:
+## `chance_scale` multiplies BIRTH_MONTHLY_CHANCE (1.0 normally; a town with
+## no free housing passes less -- see HESimulation.HOUSING_SATURATED_BIRTH_SCALE).
+func evaluate_birth(rng: RandomNumberGenerator, chance_scale: float = 1.0) -> bool:
 	if _consecutive_prosperous_days < BIRTH_ELIGIBLE_DAYS:
 		return false
 	if _days_since_last_birth < _birth_cooldown_days:
 		return false
 	if _dependent_ages.size() >= MAX_PENDING_DEPENDENTS:
 		return false
-	if rng.randf() >= BIRTH_MONTHLY_CHANCE:
+	if rng.randf() >= BIRTH_MONTHLY_CHANCE * chance_scale:
 		return false
 	_dependent_ages.append(0)
 	demographics.dependents += 1
@@ -431,8 +447,14 @@ func health_losses(vulnerability: float = 1.0) -> Array[Dictionary]:
 
 ## Morale penalties currently applying, as [{label, penalty}] (penalty > 0).
 ## `works` is false for dependents, who aren't affected by unemployment.
-func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[Dictionary]:
+## `tax_morale` is the town's tax policy effect (+ bonus for low tax, - for
+## high; see HESimulation.tax_morale_effect), listed as a signed penalty.
+func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
+	if tax_morale > 0.001:
+		out.append({"label": "Low taxes", "penalty": -tax_morale})
+	elif tax_morale < -0.001:
+		out.append({"label": "High taxes", "penalty": -tax_morale})
 	var need_penalty := MORALE_NEED_PENALTY * minf(weighted_need_stress() * vulnerability, 1.0)
 	if need_penalty > 0.001:
 		out.append({"label": "Unmet needs", "penalty": need_penalty})
@@ -444,11 +466,25 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[D
 			break
 	return out
 
-func morale(vulnerability: float = 1.0, works: bool = true) -> float:
+## Morale gained from needs fully met today (HENeed.morale_bonus), as
+## [{label, bonus}]. Everyone in the household shares it.
+func morale_bonuses() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for need in HENeeds.all():
+		if need.morale_bonus <= 0.0:
+			continue
+		var required: float = last_need_required.get(need.id, 0.0)
+		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
+			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
+	return out
+
+func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> float:
 	var total := 0.0
-	for entry in morale_penalties(vulnerability, works):
-		total += entry["penalty"]
-	return clampf(1.0 - total, 0.0, 1.0)
+	for entry in morale_penalties(vulnerability, works, tax_morale):
+		total -= entry["penalty"]
+	for entry in morale_bonuses():
+		total += entry["bonus"]
+	return clampf(1.0 + total, 0.0, 1.0)
 
 ## 1.0 for most people; VULNERABILITY_MULTIPLIER for children and the frail.
 static func vulnerability_of(is_worker: bool, age_days: int) -> float:
