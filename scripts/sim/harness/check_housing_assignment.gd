@@ -125,6 +125,7 @@ func _check_new_house_and_upgrade_fill_at_once() -> void:
 	_assert(occupants.size() == 1, "The new house reports one occupant")
 
 	# Tenement upgrade in place through the government build path.
+	sim.construction_days = 0 # instant builds; construction timing is covered elsewhere
 	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
 	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 1000.0
 	_assert(sim.build_government_building(SID, "warehouse"), "Warehouse builds")
