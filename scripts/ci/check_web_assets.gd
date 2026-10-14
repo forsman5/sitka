@@ -3,9 +3,11 @@ extends SceneTree
 ## Fail the Web build if Godot silently skips model imports on a fresh runner.
 const REQUIRED_MODELS: PackedStringArray = [
 	"res://assets/models/animals/Cow.fbx",
+	"res://assets/models/buildings/building_barracks_blue.gltf",
 	"res://assets/models/buildings/building_castle_blue.gltf",
 	"res://assets/models/buildings/building_home_A_blue.gltf",
 	"res://assets/models/buildings/building_home_B_blue.gltf",
+	"res://assets/models/buildings/building_house_builder_blue.glb",
 	"res://assets/models/buildings/building_tavern_blue.gltf",
 	"res://assets/models/buildings/tent.gltf",
 	"res://assets/models/nature/tree_single_A.gltf",
