@@ -2153,6 +2153,15 @@ func _refresh_business_detail() -> void:
 		for commodity_name in (report["input_inventory"] as Dictionary).keys():
 			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
 		rows.append(["Input inventory", input_parts])
+	if report.has("tools"):
+		var tools: Dictionary = report["tools"]
+		var tools_name := Commodity.name_of(Commodity.Type.TOOLS)
+		rows.append(["Tools inventory", [[tools_name, "%s %.1f (%.1f needed for full coverage, %.0f%% covered)" % [tools_name, tools["stock"], tools["needed"], tools["coverage"] * 100.0]]]])
+		if not tools["active"]:
+			rows.append(["Tool use", "no tool seller in town, so tools have no effect"])
+		else:
+			var boost: float = tools["productivity"] / tools["floor"] - 1.0
+			rows.append(["Tool use", "using %.2f tools/day to boost productivity by %.0f%% (running at %.0f%% of full output)" % [tools["wear_per_day"], boost * 100.0, tools["productivity"] * 100.0]])
 	rows.append_array([
 		["Treasury" if report["kind"] == "warehouse" else "Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
