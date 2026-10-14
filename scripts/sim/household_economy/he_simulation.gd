@@ -609,6 +609,18 @@ const SALES_TAX_RATE := 0.05
 
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
+
+## Derived employment index: business ID -> ordered employee household IDs
+## (households' iteration order, so wage accumulation order matches the old
+## full scans). Membership only; worker totals are summed from current
+## demographics at query time so aging/death/emigration can never leave them
+## stale. Rebuilt lazily in one household pass after anything marks it dirty:
+## an employer change (HEHousehold.employment_changed), or a household being
+## added or removed. Rebuilds replace the dictionary rather than mutating it,
+## so a reference taken earlier stays a valid snapshot.
+var _employment_members: Dictionary = {}
+var _employment_dirty := true
+var _employment_rebuild_count := 0
 var businesses: Dictionary[int, HEBusiness] = {}
 ## Houses, keyed by their own id space (not shared with `businesses`). Housing
 ## is a settlement-wide pool -- see get_housing_report().
@@ -745,6 +757,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 		var legacy_settlement: HESettlement = world["settlement"]
 		settlements[legacy_settlement.id] = legacy_settlement
 	households = world["households"]
+	_invalidate_employment()
 	businesses = world["businesses"]
 	if world.has("dwellings"):
 		dwellings = world["dwellings"]
@@ -2297,10 +2310,8 @@ func _pay_wages(record: Dictionary) -> void:
 		b.record_wage_day(wage_per_worker)
 		b.last_wage_shortfall = shortfall
 		var total_paid := 0.0
-		for household_id in households.keys():
+		for household_id in _employment_index().get(business_id, []):
 			var h: HEHousehold = households[household_id]
-			if h.employer_business_id != business_id:
-				continue
 			var pay: float = wage_per_worker * h.worker_capacity()
 			h.balance += pay
 			total_paid += pay
@@ -2362,11 +2373,9 @@ func _herd_collateral(b: HEBusiness) -> float:
 func _fail_business(business_id: int, record: Dictionary) -> void:
 	var b: HEBusiness = businesses[business_id]
 	var laid_off := 0
-	for household_id in households.keys():
-		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			h.employer_business_id = -1
-			laid_off += 1
+	for household_id in (_employment_index().get(business_id, []) as Array).duplicate():
+		(households[household_id] as HEHousehold).employer_business_id = -1
+		laid_off += 1
 	var goods_written_off: Dictionary[Commodity.Type, float] = {}
 	for c in inventory_goods():
 		var amount := b.stock(c)
@@ -3199,6 +3208,7 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 	})
 	(settlements[orphan.settlement_id] as HESettlement).household_ids.erase(household_id)
 	households.erase(household_id)
+	_invalidate_employment()
 	return true
 
 ## Shared by _evaluate_emigration and _evaluate_old_age: each `household_ids`
@@ -3221,6 +3231,7 @@ func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
 				goods_written_off[c] = goods_written_off.get(c, 0.0) + amount
 		(settlements[h.settlement_id] as HESettlement).household_ids.erase(household_id)
 		households.erase(household_id)
+	_invalidate_employment()
 
 	_money_written_off_total += money_written_off
 	for c in goods_written_off.keys():
@@ -3269,6 +3280,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 
 	for new_household in new_households:
 		households[new_household.id] = new_household
+		_invalidate_employment()
 		(settlements[new_household.settlement_id] as HESettlement).household_ids.append(new_household.id)
 
 	_births_total += births
@@ -3625,16 +3637,17 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 	var business_ids := businesses.keys()
 	business_ids.sort()
 
+	# One index snapshot serves the whole layoff pass: a layoff only changes
+	# its own business's membership, and each business is visited once.
+	var layoff_snapshot := _employment_index()
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
 		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
-		for household_id in households.keys():
-			if (households[household_id] as HEHousehold).employer_business_id == business_id:
-				employed_ids.append(household_id)
+		employed_ids.assign(layoff_snapshot.get(business_id, []))
 		employed_ids.sort()
-		var employed_workers := _business_employed_worker_count(business_id)
+		var employed_workers := _workers_in(employed_ids)
 		var i := employed_ids.size() - 1
 		# i >= 1: never lay off the last household, whatever its size.
 		while employed_workers > b.capacity and i >= 1:
@@ -3669,11 +3682,15 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		var pool_index := 0
 		var local_business_ids := (settlements[settlement_id] as HESettlement).business_ids.duplicate()
 		local_business_ids.sort()
+		# Hires only move unemployed households into the business being
+		# filled, so one snapshot gives every business its starting count
+		# without a rebuild after each hire.
+		var hiring_snapshot := _employment_index()
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
 				continue # TODO(builders): hire builder_slots households here once modeled
-			var employed_workers := _business_employed_worker_count(business_id)
+			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
 			# TODO(butcher hiring): this hires to `capacity` whatever the business has to
 			# work with. A Butcher is hired the day workers are free, but a ranch's
 			# first cull is 1.5-3 years out (herds start well below their cull target),
@@ -5186,9 +5203,7 @@ func get_government_summary(settlement_id: int) -> Dictionary:
 	if gov == null:
 		return {}
 	var admin_ids: Array[int] = []
-	for household_id in households.keys():
-		if (households[household_id] as HEHousehold).employer_business_id == gov.id:
-			admin_ids.append(household_id)
+	admin_ids.assign(_employment_index().get(gov.id, []))
 	admin_ids.sort()
 	return {
 		"business_id": gov.id,
@@ -5253,23 +5268,45 @@ func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> 
 		total += _daily_need(h, commodity)
 	return total
 
-func _business_employed_worker_count(business_id: int) -> int:
+func _invalidate_employment() -> void:
+	_employment_dirty = true
+
+## Fresh business ID -> Array[int] of employee household IDs. Callers must not
+## mutate the arrays.
+func _employment_index() -> Dictionary:
+	if _employment_dirty:
+		var members: Dictionary = {}
+		var listener := _invalidate_employment
+		for household_id in households.keys():
+			var h: HEHousehold = households[household_id]
+			h.employment_changed = listener
+			if h.employer_business_id == -1:
+				continue
+			if not members.has(h.employer_business_id):
+				members[h.employer_business_id] = [] as Array[int]
+			(members[h.employer_business_id] as Array[int]).append(household_id)
+		_employment_members = members
+		_employment_dirty = false
+		_employment_rebuild_count += 1
+	return _employment_members
+
+func _workers_in(member_ids: Array) -> int:
 	var total := 0
-	for household_id in households.keys():
-		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			total += h.worker_capacity()
+	for household_id in member_ids:
+		total += (households[household_id] as HEHousehold).worker_capacity()
 	return total
+
+func _business_employed_worker_count(business_id: int) -> int:
+	return _workers_in(_employment_index().get(business_id, []))
 
 ## Worker count weighted by each employing household's morale bonus (see
 ## HEHousehold.productivity_multiplier): what production actually gets out of
 ## the crew. Equals the plain headcount when nobody's morale is above 100%.
 func _business_effective_worker_count(business_id: int) -> float:
 	var total := 0.0
-	for household_id in households.keys():
+	for household_id in _employment_index().get(business_id, []):
 		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			total += float(h.worker_capacity()) * h.productivity_multiplier()
+		total += float(h.worker_capacity()) * h.productivity_multiplier()
 	return total
 
 ## The crew's average morale (per worker, so a big household counts for more)
@@ -5278,10 +5315,8 @@ func _business_effective_worker_count(business_id: int) -> float:
 func _business_crew_morale(business_id: int) -> Dictionary:
 	var workers := 0
 	var morale_total := 0.0
-	for household_id in households.keys():
+	for household_id in _employment_index().get(business_id, []):
 		var h: HEHousehold = households[household_id]
-		if h.employer_business_id != business_id:
-			continue
 		workers += h.worker_capacity()
 		morale_total += float(h.worker_capacity()) * h.morale()
 	if workers == 0:
@@ -5293,11 +5328,26 @@ func _business_crew_morale(business_id: int) -> Dictionary:
 	}
 
 func _business_employed_household_count(business_id: int) -> int:
-	var total := 0
+	return (_employment_index().get(business_id, []) as Array).size()
+
+## Debug oracle: true when the index equals an independent full scan. Used by
+## the acceptance harness after mutation boundaries.
+func employment_index_matches_scan() -> bool:
+	var scanned: Dictionary = {}
 	for household_id in households.keys():
-		if (households[household_id] as HEHousehold).employer_business_id == business_id:
-			total += 1
-	return total
+		var employer: int = (households[household_id] as HEHousehold).employer_business_id
+		if employer == -1:
+			continue
+		if not scanned.has(employer):
+			scanned[employer] = []
+		scanned[employer].append(household_id)
+	var indexed := _employment_index()
+	if indexed.size() != scanned.size():
+		return false
+	for business_id in scanned.keys():
+		if not indexed.has(business_id) or (indexed[business_id] as Array) != (scanned[business_id] as Array):
+			return false
+	return true
 
 ## Appends today's opening price (this tick's actual clearing price, before
 ## _adjust_price mutates it for tomorrow) to each commodity's trailing
