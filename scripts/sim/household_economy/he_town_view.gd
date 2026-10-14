@@ -39,13 +39,11 @@ const ART := {
 }
 ## Houses cycle through this pool by site id, for variety. Index 0 matches
 ## ART["house"] so a plain lookup and a pool lookup agree for site 0.
+## Blue-only by design: every building in town shares one team color, so
+## variety here comes from model shape, not tint.
 const HOUSE_ART_POOL: Array[Dictionary] = [
 	{"model": "building_home_A_blue.gltf", "width": 4.5},
 	{"model": "building_home_B_blue.gltf", "width": 4.5},
-	{"model": "building_home_A_green.gltf", "width": 4.5},
-	{"model": "building_home_B_green.gltf", "width": 4.5},
-	{"model": "building_home_A_yellow.gltf", "width": 4.5},
-	{"model": "building_home_B_yellow.gltf", "width": 4.5},
 	{"model": "tent.gltf", "width": 4.0},
 ]
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
