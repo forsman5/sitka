@@ -189,6 +189,7 @@ var _trader_settings_scroll: ScrollContainer
 var _trader_settings_list: VBoxContainer
 var _trader_settings_button: Button
 var _trader_settings_open: bool = false
+var _trader_settings_boxes: Dictionary = {} # commodity id -> CheckBox
 var _business_detail_sparkline: HESparkline
 var _business_detail_flow_chart: Dictionary = {} # {"section", "legend", "chart"}, see _build_flow_chart
 var _business_flow_view := 0 # index into FLOW_VIEWS; kept across business selections
@@ -1735,12 +1736,11 @@ func _rebuild_trader_settings() -> void:
 	note.text = "Changes take effect on the next day and reset when you load a scenario. Local households and businesses buy first; each seller then decides how much it can spare and the least it will take, and the Trader takes what it can use at its bid, widest spread first, until its capacity is used. The bid moves a little each day."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trader_settings_list.add_child(note)
+	_trader_settings_boxes.clear()
 	for option in _simulation.get_trader_export_settings(_selected_business_id):
 		var checkbox := CheckBox.new()
-		checkbox.text = option["name"]
-		if option["reference_price"] > 0.0:
-			checkbox.text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
-		checkbox.text += "   stored %.1f" % option["stored"]
+		checkbox.text = _trader_export_option_text(option)
+		_trader_settings_boxes[option["commodity_id"]] = checkbox
 		var option_icon := Commodity.icon_of(option["commodity_id"])
 		if option_icon != null:
 			checkbox.icon = option_icon
@@ -1749,6 +1749,20 @@ func _rebuild_trader_settings() -> void:
 		checkbox.button_pressed = option["enabled"]
 		checkbox.toggled.connect(_on_trader_export_toggled.bind(_selected_business_id, option["commodity_id"]))
 		_trader_settings_list.add_child(checkbox)
+
+func _trader_export_option_text(option: Dictionary) -> String:
+	var text: String = option["name"]
+	if option["reference_price"] > 0.0:
+		text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
+	return text + "   stored %.1f" % option["stored"]
+
+## Updates the label text in place; the checkboxes themselves are not rebuilt so
+## a click is never split across two button instances.
+func _refresh_trader_settings_text() -> void:
+	for option in _simulation.get_trader_export_settings(_selected_business_id):
+		var box = _trader_settings_boxes.get(option["commodity_id"])
+		if is_instance_valid(box):
+			(box as CheckBox).text = _trader_export_option_text(option)
 
 func _on_trader_export_toggled(enabled: bool, business_id: int, commodity: int) -> void:
 	_simulation.set_trader_export_enabled(business_id, commodity, enabled)
@@ -2109,6 +2123,8 @@ func _refresh_business_detail() -> void:
 	if not _trader_settings_button.visible:
 		_trader_settings_open = false
 	_update_trader_detail_page()
+	if _trader_settings_open:
+		_refresh_trader_settings_text()
 	_business_detail_sparkline.set_data(_tail(report["balance_history"]))
 	_refresh_business_flow_chart(report)
 
