@@ -51,6 +51,13 @@ const WAREHOUSE_BUILD_COST := 100.0
 ## one household (HEHouse.capacity_households).
 const HOUSE_BUILD_GOLD := 15.0
 const HOUSE_BUILD_TIMBER := 50.0
+## Tenement prices follow the house rate per household gained: a new tenement
+## adds HEHouse.DENSE_CAPACITY households, an upgrade adds one fewer (the house
+## it replaces already counted), so both cost more than a house.
+const TENEMENT_BUILD_GOLD := 60.0
+const TENEMENT_BUILD_TIMBER := 200.0
+const TENEMENT_UPGRADE_GOLD := 45.0
+const TENEMENT_UPGRADE_TIMBER := 150.0
 ## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -117,12 +124,12 @@ const TRADER_MAX_CAPACITY := 20
 ## so this IS the hard ceiling, not a land-derived one.
 const BLOOMERY_MAX_CAPACITY := 20
 
-## The Toolsmith serves only the settlement's own households (its Trader export
-## starts disabled), whose demand is about 0.6 tools a day -- roughly twelve
-## workers at _toolsmith_recipe's rate. It keeps a core crew year-round: demand
-## is smooth, and a business tuned to zero would only trial-hire a crew the
-## town can't feed. Starting at the full demand-sized crew avoids a first-month
-## shortage that would pin the price at its ceiling.
+## The Toolsmith serves only the settlement's own households and tool-using
+## businesses (its Trader export starts disabled): about 0.8-1.0 tools a day, or
+## nine to eleven workers at _toolsmith_recipe's rate. It keeps a core crew
+## year-round: demand is smooth, and a business tuned to zero would only
+## trial-hire a crew the town can't feed. Starting at a full demand-sized crew
+## avoids a first-month shortage that would pin the price at its ceiling.
 const TOOLSMITH_MIN_CAPACITY := 6
 const TOOLSMITH_STARTING_CAPACITY := 12
 const TOOLSMITH_MAX_CAPACITY := 16
@@ -198,9 +205,29 @@ static func _farm_recipe() -> Recipe:
 ## and no day-one staff. With the trial hire gone, a farm at capacity 0 stays
 ## at zero until the caller passes initial_capacity (TODO: the create-business
 ## flow should seed one).
+##
+## Industrial tool use (see HEBusiness.tools_per_worker and
+## docs/tools-industrial-demand-plan.md): one tool per worker, worn out after
+## this many worker-days. Heavier-handled trades wear faster. The Toolsmith is
+## left out for now -- its tools in stock are also its product, so "tools in use"
+## and "tools for sale" would need separating -- and so are the herds.
+const TOOL_LIFE_WORKER_DAYS := {
+	"farm": 300.0,
+	"woodlot": 200.0,
+	"iron_mine": 150.0,
+	"bloomery": 400.0,
+	"charcoal_burner": 300.0,
+	"butcher": 250.0,
+}
+
+static func _equip(b: HEBusiness) -> void:
+	b.tools_per_worker = 1.0
+	b.tool_wear_per_worker_day = 1.0 / TOOL_LIFE_WORKER_DAYS[b.type_key]
+
 static func make_farm(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var farm := HEBusiness.new(business_id, "Farm", _farm_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	farm.type_key = "farm"
+	_equip(farm)
 	farm.configure_land(FARM_LAND_AREA_ACRES, _make_fields(FARM_FIELD_COUNT, FARM_LAND_AREA_ACRES, field_start_days, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 	return farm
 
@@ -211,6 +238,7 @@ static func make_farm(business_id: int, settlement_id: int, initial_capacity: in
 static func make_woodlot(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var woodlot := HEBusiness.new(business_id, "Woodlot", _woodlot_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	woodlot.type_key = "woodlot"
+	_equip(woodlot)
 	woodlot.configure_land(WOODLOT_LAND_AREA_ACRES, _make_fields(WOODLOT_FIELD_COUNT, WOODLOT_LAND_AREA_ACRES, field_start_days, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
 	return woodlot
 
@@ -237,6 +265,7 @@ static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.
 static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
 	var butcher := HEBusiness.new(business_id, "Butcher", _butcher_recipe(), BUTCHER_MAX_CAPACITY, BUTCHER_MIN_CAPACITY, HEBusiness.Kind.PRODUCTION, settlement_id)
 	butcher.type_key = "butcher"
+	_equip(butcher)
 	butcher.processes_livestock = true
 	butcher.min_capacity = BUTCHER_MIN_CAPACITY
 	# Meat and leather sell down over the following cull cycle, so smooth its
@@ -247,6 +276,7 @@ static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
 static func make_bloomery(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var bloomery := HEBusiness.new(business_id, "Bloomery", _bloomery_recipe(), BLOOMERY_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	bloomery.type_key = "bloomery"
+	_equip(bloomery)
 	# Its timber input is the furnace's heat, which any heat fuel can supply.
 	bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 	return bloomery
@@ -254,6 +284,7 @@ static func make_bloomery(business_id: int, settlement_id: int, initial_capacity
 static func make_iron_mine(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var iron_mine := HEBusiness.new(business_id, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	iron_mine.type_key = "iron_mine"
+	_equip(iron_mine)
 	return iron_mine
 
 static func make_toolsmith(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
@@ -267,6 +298,7 @@ static func make_toolsmith(business_id: int, settlement_id: int, initial_capacit
 static func make_charcoal_burner(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var burner := HEBusiness.new(business_id, "Charcoal Burner", _charcoal_burner_recipe(), CHARCOAL_BURNER_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	burner.type_key = "charcoal_burner"
+	_equip(burner)
 	# It converts the Woodlot's timber, whose supply and price only settle once a
 	# harvest has landed, so its startup cash must outlast that whole cycle.
 	burner.startup_cycle_days = WOODLOT_GROWTH_DAYS
@@ -318,6 +350,17 @@ static func government_buildings() -> Array[Dictionary]:
 			"hint": "Shelters one household. Needs a Government Warehouse; the build button orders the timber.",
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
+		{"type_key": "tenement", "label": "Tenement", "category": "housing", "repeatable": true,
+			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER}),
+			# Charged instead of `cost` while a plain house is left to upgrade
+			# (see HESimulation.build_cost_for).
+			"upgrade_cost": build_cost(TENEMENT_UPGRADE_GOLD, {Commodity.Type.TIMBER: TENEMENT_UPGRADE_TIMBER}),
+			"hint": "Upgrades the innermost house in place to shelter %d households (a new tenement if none is left to upgrade)." % HEHouse.DENSE_CAPACITY,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_dense()
+				return house},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"startup": false,
@@ -399,18 +442,19 @@ static func _bloomery_recipe() -> Recipe:
 ## Iron in, tools out. Iron's price here is inflated (see BASE_PRICE's Iron
 ## comment: 30), so 0.07 iron per tool (2.1) is about a quarter of the 9.0
 ## tool price; the pooled smithy's 1.5 iron per tool would cost more than the
-## tool sells for. A worker makes 0.065 tools a day (0.59 of sales), and a
-## twelve-worker crew 0.78 a day against about 0.6-0.9 that 30 households use
-## at 0.005 per person.
-## The output rate is deliberately narrow: swept over four seeds for two
-## years, 0.06 and 0.065 keep the business open in all of them (average price
-## about 17 and 14.5), while 0.07 and 0.09 oversupply, drive the price to its
-## floor and the business bankrupt (by day 270-570). The crew averages only
-## 7-8 workers (the unemployed pool is empty), so supply sits just under demand
-## and the price runs above its base. Re-sweep if the wage basket or iron's
-## price moves.
+## tool sells for.
+## Output rate: the demand it serves is households (0.005 a person a day, about
+## 0.6-0.9 for 30 households) PLUS the tool-using businesses' wear, so it was
+## re-swept with industrial demand in. Over four seeds for two years: 0.065
+## leaves tools short (price at its ceiling, average 31), the Trader dies by day
+## ~330 on the wage inflation and the Toolsmith follows; 0.08-0.10 keep both
+## alive in every seed with productivity ~0.99 and the average price at 9-13
+## (base 9); 0.11 and up oversupply, drive the price to its floor and bankrupt
+## the business. 0.09 is the middle of the safe band. The crew averages 8 of the
+## 12-16 slots because the unemployed pool is empty. Re-sweep if the wage
+## basket, iron's price or any tool wear rate moves.
 static func _toolsmith_recipe() -> Recipe:
-	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.07}, {Commodity.Type.TOOLS: 0.065})
+	return Recipe.new("toolsmith", {Commodity.Type.IRON: 0.07}, {Commodity.Type.TOOLS: 0.09})
 
 ## Charcoal burner: 2.5 timber -> 1 charcoal per unit of output (inputs are a
 ## ratio, like the bloomery's), 1.5 charcoal per worker per day. One charcoal is
@@ -652,10 +696,19 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 		households[household_id] = household
 		settlement.household_ids.append(household_id)
 
+	# With a Toolsmith in town, every tool-using business starts equipped for its
+	# day-one crew (plus the wear buffer it would hold), the way a field business
+	# starts with its crop already in store -- otherwise the first month would sit
+	# on the productivity floor while the Toolsmith tools up a whole town.
+	if toolsmith != null:
+		for tool_user in businesses.values():
+			if tool_user.uses_tools():
+				tool_user.add_stock(Commodity.Type.TOOLS, float(tool_user.capacity) * (tool_user.tools_per_worker + tool_user.tool_wear_per_worker_day * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS))
+
 	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
 	var gov: HEBusiness = businesses[GOVERNMENT_BUSINESS_ID]
 	gov.balance += float(options.get("treasury_bonus", 0.0))
-	var dwellings := seed_housing(settlement, household_count, int(options.get("houses", -1)))
+	var dwellings := seed_housing(settlement, household_count, int(options.get("houses", -1)), int(options.get("tenements", 0)))
 	var warehouse_stock: Dictionary = options.get("warehouse_stock", {})
 	if options.get("warehouse", false):
 		# Staffed at the first weekly reconcile (HESimulation._ensure_warehouse_staff).
@@ -671,12 +724,15 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 ## plus HOUSING_STARTING_HEADROOM, marks housing as modeled there, and returns
 ## the dwellings dict for the builder's world. Public so a multi-town builder
 ## can house each settlement.
-static func seed_housing(settlement: HESettlement, household_count: int, house_count: int = -1) -> Dictionary[int, HEHouse]:
+static func seed_housing(settlement: HESettlement, household_count: int, house_count: int = -1, tenement_count: int = 0) -> Dictionary[int, HEHouse]:
 	var dwellings: Dictionary[int, HEHouse] = {}
 	if house_count < 0:
 		house_count = ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM))
 	for i in house_count:
 		var house := HEHouse.new(i + 1, settlement.id, "House %d" % (i + 1))
+		# The innermost (lowest-id) houses are the ones already densified.
+		if i < tenement_count:
+			house.upgrade_to_dense()
 		dwellings[house.id] = house
 		settlement.dwelling_ids.append(house.id)
 	settlement.housing_modeled = true
@@ -746,6 +802,7 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"households": households,
 		"settlement_name": str(spec.get("settlement_name", spec.get("label", "Village"))),
 		"houses": int(spec.get("housing", {}).get("houses", -1)),
+		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
 	}
 	var warehouse: Dictionary = spec.get("warehouse", {})

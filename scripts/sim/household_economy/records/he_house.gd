@@ -9,6 +9,12 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 
 const TYPE_KEY := "house"
 
+## A dense house: same lot, more households. Plain houses are upgraded to it in
+## place (HESimulation.build_government_building), so growth can densify the
+## town instead of pushing it outward.
+const DENSE_TYPE_KEY := "tenement"
+const DENSE_CAPACITY := 4
+
 ## How many households one house shelters.
 var capacity_households: int = 1
 
@@ -17,3 +23,12 @@ func _init(p_id: int, p_settlement_id: int, p_name: String = "House") -> void:
 	settlement_id = p_settlement_id
 	name = p_name
 	type_key = TYPE_KEY
+
+func is_dense() -> bool:
+	return type_key == DENSE_TYPE_KEY
+
+## Turns this house into a tenement without moving it.
+func upgrade_to_dense() -> void:
+	type_key = DENSE_TYPE_KEY
+	capacity_households = DENSE_CAPACITY
+	name = "Tenement %d" % id
