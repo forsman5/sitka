@@ -196,6 +196,17 @@ func _check_person_health_and_morale() -> void:
 	_assert(sim.get_person_summary(any_id, 9999).is_empty(), "Out-of-range member should not exist")
 	print("  stressed household seen: %s, child seen: %s" % [stressed_seen, child_seen])
 
+	# The business page reports the crew's morale and the output it earns.
+	var crew_seen := false
+	for report in sim.get_business_reports():
+		if report["kind"] != "production" or not report.has("crew_morale"):
+			continue
+		var crew: Dictionary = report["crew_morale"]
+		_assert(crew["multiplier"] >= 1.0 and crew["avg_morale"] >= 0.0 and crew["avg_morale"] <= HEHousehold.MORALE_MAX,
+			"Business %s crew morale out of range" % report["name"])
+		crew_seen = crew_seen or crew["workers"] > 0
+	_assert(crew_seen, "A staffed production business should report its crew's morale")
+
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
 	var a := _new_sim("build_three_business_economy")

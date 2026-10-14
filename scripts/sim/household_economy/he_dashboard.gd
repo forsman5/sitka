@@ -2156,6 +2156,15 @@ func _refresh_business_detail() -> void:
 		else:
 			var boost: float = tools["productivity"] / tools["floor"] - 1.0
 			rows.append(["Tool use", "using %.2f tools/day to boost productivity by %.0f%% (running at %.0f%% of full output)" % [tools["wear_per_day"], boost * 100.0, tools["productivity"] * 100.0]])
+	if report.has("crew_morale") and report["crew_morale"]["workers"] > 0:
+		var crew: Dictionary = report["crew_morale"]
+		var morale_boost: float = crew["multiplier"] - 1.0
+		var morale_text := "crew morale %.0f%% (avg of %d workers)" % [crew["avg_morale"] * 100.0, crew["workers"]]
+		if morale_boost > 0.0005:
+			morale_text += ", boosting output by %.0f%%" % (morale_boost * 100.0)
+		else:
+			morale_text += ", no output bonus (needs morale above 100%)"
+		rows.append(["Productivity from morale", morale_text])
 	rows.append_array([
 		["Treasury" if report["kind"] == "warehouse" else "Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],

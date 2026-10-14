@@ -1412,6 +1412,8 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true) 
 				"productivity": _tool_productivity(b),
 				"floor": HEBusiness.TOOL_PRODUCTIVITY_FLOOR,
 			}
+		if include_detail and (b.kind == HEBusiness.Kind.PRODUCTION or b.kind == HEBusiness.Kind.HERD):
+			report["crew_morale"] = _business_crew_morale(b.id)
 		out.append(report)
 	return out
 
@@ -4952,7 +4954,7 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 ## net revenue the work really earns.
 func _run_butchery(b: HEBusiness, record: Dictionary) -> void:
 	var workers := _business_employed_worker_count(b.id)
-	var worker_days_left := float(workers) * _tool_productivity(b)
+	var worker_days_left := _business_effective_worker_count(b.id) * _tool_productivity(b)
 	var cattle_meat_per_worker_day: float = BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE] / BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
 	var produced: Dictionary[Commodity.Type, float] = {Commodity.Type.MEAT: 0.0, Commodity.Type.LEATHER: 0.0}
 	for species in BUTCHERY_SPECIES_ORDER:
@@ -5170,6 +5172,26 @@ func _business_effective_worker_count(business_id: int) -> float:
 		if h.employer_business_id == business_id:
 			total += float(h.worker_capacity()) * h.productivity_multiplier()
 	return total
+
+## The crew's average morale (per worker, so a big household counts for more)
+## and the output multiplier it earns, for the business detail page. `workers`
+## is 0 for an unstaffed business, in which case morale and multiplier are 1.0.
+func _business_crew_morale(business_id: int) -> Dictionary:
+	var workers := 0
+	var morale_total := 0.0
+	for household_id in households.keys():
+		var h: HEHousehold = households[household_id]
+		if h.employer_business_id != business_id:
+			continue
+		workers += h.worker_capacity()
+		morale_total += float(h.worker_capacity()) * h.morale()
+	if workers == 0:
+		return {"workers": 0, "avg_morale": 1.0, "multiplier": 1.0}
+	return {
+		"workers": workers,
+		"avg_morale": morale_total / workers,
+		"multiplier": _business_effective_worker_count(business_id) / workers,
+	}
 
 func _business_employed_household_count(business_id: int) -> int:
 	var total := 0
