@@ -147,7 +147,13 @@ func _run() -> void:
 	dashboard._refresh()
 	check(view.site_node_count() == drawn_before + 1, "A new house should add exactly one drawn site")
 	check(view._housing_label.text.begins_with("Housing: %d houses" % (house_count + 1)), "Town view should show the housing report (got '%s')" % view._housing_label.text)
+	# The Town tab's housing line only refreshes while the dashboard is shown.
+	var was_town_mode: bool = view.visible
+	dashboard._set_town_mode(false)
+	await process_frame
+	await process_frame
 	check(dashboard._housing_label.text.begins_with("%d houses" % (house_count + 1)), "Dashboard Town tab should show housing (got '%s')" % dashboard._housing_label.text)
+	dashboard._set_town_mode(was_town_mode)
 
 	# A failed business leaves its building, vacant, for the next business.
 	var after_count: int = view.site_node_count()
