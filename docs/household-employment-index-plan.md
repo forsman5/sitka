@@ -84,3 +84,14 @@ If #19 is integrated first, also run its valley economy and embedded-detail chec
 Indexes remain owned by HESimulation and contain stable IDs rather than scene nodes. A future Rust core can preserve the same employment API with typed vectors/maps. Independent towns provide a potential parallel execution boundary, but this change introduces no threading.
 
 Reference-wage caching is a separate follow-up: wages depend on demographics, served needs, seller availability, and price history, so an employment cache alone cannot establish freshness. Likewise dashboard scheduling, history storage, supplier indexes, and Rust extraction are outside this plan.
+
+## Implementation status
+
+Stages 2-4 are implemented in this PR as a membership-only index (business ID -> ordered employee household IDs), lazily rebuilt in one household pass:
+- Invalidation: `HEHousehold.employer_business_id` has a setter that notifies the owning `HESimulation`, so direct harness/fixture writes are observed; household add/remove and world load also invalidate.
+- Worker totals are summed from member households' current `worker_capacity()` at query time rather than cached, so aging, death, and emigration cannot leave them stale.
+- Migrated: worker/household counts, `_pay_wages` distribution, `_fail_business`, `_reconcile_employment` (layoff pass and per-settlement hiring each take one index snapshot instead of rebuilding per hire), and `get_government_summary`.
+- Oracle: `HESimulation.employment_index_matches_scan()` is checked daily for 400 days in two scenarios, plus after a direct employer write, in `run_household_economy.gd`.
+- Compatibility: city/business/household/event-log fingerprints over 800 days match master for the three-business, toolsmith, and lopsided scenarios.
+
+Not done: benchmark harness and phase timings (stage 1), incremental maintenance (stage 6).

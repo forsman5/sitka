@@ -21,6 +21,7 @@ var _ok := true
 
 func _init() -> void:
 	_check_determinism()
+	_check_employment_index_matches_scan()
 	_check_multi_settlement_locality()
 	_check_conservation()
 	_check_bloomery_smelting()
@@ -208,6 +209,32 @@ func _check_determinism() -> void:
 	_assert(not mismatch, "Household summaries diverged between two same-seed runs")
 	if not mismatch:
 		print("  two same-seed 120-day runs produced identical household, business, and city summaries")
+
+## The lazily rebuilt employment index must equal an independent full scan
+## after every mutation boundary: ordinary days, lifecycle churn (deaths,
+## emigration, orphan adoption), a direct fixture write, and a failure.
+func _check_employment_index_matches_scan() -> void:
+	print("
+=== Employment index ===")
+	for builder in ["build_three_business_economy", "build_lopsided_start"]:
+		var sim := _new_sim(builder)
+		var mismatches := 0
+		for day in range(400):
+			sim.advance_ticks(1)
+			if not sim.employment_index_matches_scan():
+				mismatches += 1
+		_assert(mismatches == 0, "%s: employment index diverged from scan on %d days" % [builder, mismatches])
+		# Direct fixture write must be observed through the setter hook.
+		var employed_id := -1
+		for household_id in sim.get_household_ids():
+			if sim.households[household_id].employer_business_id != -1:
+				employed_id = household_id
+				break
+		if employed_id != -1:
+			sim.employment_index_matches_scan()
+			sim.households[employed_id].employer_business_id = -1
+			_assert(sim.employment_index_matches_scan(), "%s: index stale after direct employer write" % builder)
+		print("  %s: index matched scan every day for 400 days (%d rebuilds)" % [builder, sim._employment_rebuild_count])
 
 func _check_multi_settlement_locality() -> void:
 	print("\n=== Multi-settlement identity and locality ===")
