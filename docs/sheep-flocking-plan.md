@@ -33,8 +33,10 @@ comes from one per-physics-frame snapshot shared by all sheep. Calm wander
 cohesion uses nearby mates rather than the global centroid.
 
 Unchanged by design: bark startle hop, water avoidance, penning, animation.
-Flee speed (5.5) sits between player walk (3.5/5.0) and sprint (8.0/8.5): walking
-keeps pressure, sprinting catches up. That's a tuning knob, not the paper's 1.15x.
+Flee speed (5.5 at full, eased down toward the scare edge by
+`_flee_speed_factor`) sits between player walk (3.5/5.0) and sprint (8.0/8.5):
+walking keeps pressure, sprinting catches up. That's a tuning knob, not the
+paper's 1.15x. Figures below are with that distance scaling merged.
 
 ## Acceptance check
 
@@ -47,10 +49,10 @@ godot --headless --path . --script res://scripts/sim/harness/check_flock_steerin
 
 | | Paper | Before | After | Pass bound |
 |---|---|---|---|---|
-| Cohesion C (mean radius) | 1.21 m | 6.00 m | 1.54 m | <= 4.0 |
-| Polarization P | 0.85 | 0.35 | 0.90 | >= 0.7 |
-| Median elongation E | ~0.8 | 1.16 | 0.81 | < 1.0 |
-| Distance driven in 60 s | n/a | 19 m | 116 m | > 50 |
+| Cohesion C (mean radius) | 1.21 m | 6.00 m | 1.34 m | <= 4.0 |
+| Polarization P | 0.85 | 0.35 | 0.93 | >= 0.7 |
+| Median elongation E | ~0.8 | 1.16 | 0.62 | < 1.0 |
+| Distance driven in 60 s | n/a | 19 m | 80 m | > 50 |
 
 Limits: runs without terrain (doesn't exercise `_avoid_water`); neighbour scan is
 O(N) per sheep once per second, fine for tens of sheep.
