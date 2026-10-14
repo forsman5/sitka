@@ -54,7 +54,7 @@ Rule kept from the town view plan: the simulation owns economic truth, the layou
 
 **Performance.**
 - Animations advance by hand: at most 64 a frame, only on screen, and none zoomed out past ortho size 50.
-- Villagers cast no shadows.
+- Villager shadows are off by default (the "Villager shadows" checkbox in Settings, `GameState.villager_shadows`).
 - Skin materials are shared per tone.
 - Results at 120 households (480 villagers, whole town in view):
 
@@ -107,7 +107,7 @@ Rule kept from the town view plan: the simulation owns economic truth, the layou
 Settled in #87:
 - **Models:** male and female bodies picked by seed, skin tone per household, adult models scaled down for children.
 - **Children:** yes, they are drawn and mill about with their household.
-- **Performance budget:** 64 animation updates a frame, no animation past zoom 50, no villager shadows.
+- **Performance budget:** 64 animation updates a frame, no animation past zoom 50, villager shadows off by default (a setting).
 
 Still open:
 1. **Where do split-off households live?** Today it's the innermost free house. The alternative is the free house nearest the parents, so families cluster: a first step toward household compounds.

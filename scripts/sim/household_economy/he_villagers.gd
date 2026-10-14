@@ -28,8 +28,9 @@ extends Node3D
 ## meshes, then their shadows. So: animations are advanced by hand, at most
 ## ANIM_UPDATES_PER_FRAME a frame, only for villagers on screen, and not at all
 ## once the camera is zoomed out past ANIM_MAX_ZOOM (they are a few pixels
-## tall); villagers cast no shadows; and every villager of one skin tone shares
-## one skin material.
+## tall); villagers cast shadows only when GameState.villager_shadows is on
+## (off by default); and every villager of one skin tone shares one skin
+## material.
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
@@ -76,6 +77,22 @@ var _villagers: Dictionary = {} # Vector2i(household_id, member_number) -> entry
 var _anim_order: Array = [] # villager keys, the round-robin order
 var _anim_cursor := 0
 var _roster: Dictionary = {} # household_id -> villager report
+
+var _shadows_on := false
+
+func _ready() -> void:
+	_shadows_on = GameState.villager_shadows
+	GameState.settings_changed.connect(_on_settings_changed)
+
+func _on_settings_changed() -> void:
+	if GameState.villager_shadows == _shadows_on:
+		return
+	_shadows_on = GameState.villager_shadows
+	for mesh_node in find_children("*", "MeshInstance3D", true, false):
+		(mesh_node as MeshInstance3D).cast_shadow = _shadow_mode()
+
+func _shadow_mode() -> GeometryInstance3D.ShadowCastingSetting:
+	return GeometryInstance3D.SHADOW_CASTING_SETTING_ON if _shadows_on else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## Rebuilds the roster from `reports` (get_villager_reports) and `layout`.
 ## Existing villagers keep their node and position; only new ones are added
@@ -327,7 +344,7 @@ func _make_model(key: Vector2i, female: bool, child: bool) -> Node3D:
 	var tone := _pick_tone(tone_rng)
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_node := node as MeshInstance3D
-		mesh_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mesh_node.cast_shadow = _shadow_mode()
 		_apply_skin(mesh_node, tone)
 	var anim := model.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if anim != null:

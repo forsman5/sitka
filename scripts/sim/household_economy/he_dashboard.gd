@@ -1491,6 +1491,14 @@ func _open_settings_dialog() -> void:
 	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
 	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
 	grid.add_child(day_picker)
+	var shadows_label := Label.new()
+	shadows_label.text = "Villager shadows"
+	grid.add_child(shadows_label)
+	var shadows_check := CheckBox.new()
+	shadows_check.text = "Villagers cast shadows (slower in large towns)"
+	shadows_check.button_pressed = GameState.villager_shadows
+	shadows_check.toggled.connect(GameState.set_villager_shadows)
+	grid.add_child(shadows_check)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)

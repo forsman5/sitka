@@ -221,6 +221,20 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 			females += 1
 	check(females > population / 5 and females < population * 4 / 5, "Both body models are in use (%d of %d female)" % [females, population])
 
+	# Shadows follow the GameState setting (off by default). Set directly and
+	# signalled by hand, so the check does not rewrite the user's settings file.
+	var game_state: Node = root.get_node("GameState")
+	var saved_shadows: bool = game_state.villager_shadows
+	var shadow_mesh := view.villagers().find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
+	game_state.villager_shadows = false
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "Villager shadows off when the setting is off")
+	game_state.villager_shadows = true
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "Villager shadows follow the setting when turned on")
+	game_state.villager_shadows = saved_shadows
+	game_state.settings_changed.emit()
+
 	# Each housed villager stands in its own yard.
 	var housed_key := Vector2i(-1, -1)
 	var far := 0
