@@ -3,6 +3,13 @@ name: PR preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, closed]
+    # Skipped only when EVERY file in the PR matches (GitHub evaluates the whole PR diff, so
+    # one game file in the PR keeps building on every push). Scenes, assets, shaders and
+    # project settings deliberately still build. A docs-only PR gets no preview, comment, or
+    # teardown run; any stale dir is covered by preview-gc.yml.
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
 
 permissions:
   contents: read
