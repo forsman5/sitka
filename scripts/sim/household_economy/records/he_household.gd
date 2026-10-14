@@ -108,6 +108,12 @@ var settlement_id: int
 ## labor reconciliation.
 var employer_business_id: int = -1
 
+## The house (HESimulation.dwellings id) this household lives in, or -1 when
+## it is homeless or its settlement does not model housing. Only
+## HESimulation._reconcile_housing writes it: a household keeps its house
+## until it ceases to exist.
+var dwelling_id: int = -1
+
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
 var inventory: Dictionary[Commodity.Type, float] = {}

@@ -90,6 +90,7 @@ var _details_button: Button
 var _unplaced_label: Label
 var _housing_label: Label
 var _housing: Dictionary = {}
+var _dwellings: Dictionary = {} # dwelling_id -> get_dwelling_reports() entry
 
 func _ready() -> void:
 	clip_contents = true
@@ -102,12 +103,16 @@ func _ready() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
-## Brings the drawn town in line with `layout`, the current business reports
-## and the settlement's housing report (get_housing_report; may be empty).
+## Brings the drawn town in line with `layout`, the current business reports,
+## the settlement's housing report (get_housing_report; may be empty) and its
+## houses (get_dwelling_reports, for who lives where; may be empty).
 ## Cheap when nothing changed.
-func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> void:
+func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwellings: Array = []) -> void:
 	_layout = layout
 	_housing = housing
+	_dwellings.clear()
+	for dwelling in dwellings:
+		_dwellings[int(dwelling["dwelling_id"])] = dwelling
 	_reports.clear()
 	for report in reports:
 		_reports[int(report["business_id"])] = report
@@ -137,6 +142,21 @@ static func housing_text(housing: Dictionary) -> String:
 	elif bool(housing["saturated"]):
 		text += " (full: births slowed)"
 	return text
+
+## "Home of households 3, 7 (2 of 4)" / "Empty (room for 1 household)" from a
+## get_dwelling_reports() entry; "" when the entry is missing.
+static func occupants_text(dwelling: Dictionary) -> String:
+	if dwelling.is_empty():
+		return ""
+	var occupants: Array = dwelling.get("occupant_household_ids", [])
+	var capacity := int(dwelling.get("capacity", 1))
+	if occupants.is_empty():
+		return "Empty (room for %d household%s)" % [capacity, "" if capacity == 1 else "s"]
+	var ids := ", ".join(occupants.map(str))
+	var noun := "household" if occupants.size() == 1 else "households"
+	if capacity == 1:
+		return "Home of %s %s" % [noun, ids]
+	return "Home of %s %s (%d of %d)" % [noun, ids, occupants.size(), capacity]
 
 ## Sets the town's time of day (0 = midnight, 0.5 = noon): lighting through
 ## the shared RTS day/night keyframes, plus the HH:MM readout.
@@ -577,9 +597,11 @@ func _refresh_info() -> void:
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
-		var shelter := "Shelters one household."
-		if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
-			shelter = "Shelters several households."
+		var shelter := occupants_text(_dwellings.get(int(site["dwelling_id"]), {}))
+		if shelter == "":
+			shelter = "Shelters one household."
+			if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
+				shelter = "Shelters several households."
 		var housing_line := housing_text(_housing)
 		_info_body.text = shelter if housing_line == "" else "%s\n%s" % [shelter, housing_line]
 		return

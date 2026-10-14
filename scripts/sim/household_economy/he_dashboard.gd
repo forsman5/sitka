@@ -346,7 +346,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports())
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -3194,8 +3194,9 @@ func _refresh_businesses(mouse_down: bool) -> void:
 	# The rows and town map use current values; detailed histories are built
 	# only when a business detail panel asks for them.
 	var reports := _simulation.get_business_reports(-1, false)
-	_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
-	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
+	var dwellings := _simulation.get_dwelling_reports()
+	_town_layout.reconcile(reports, dwellings)
+	_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings)
 	var rows_stale := reports.size() != _business_rows.size()
 	for report in reports:
 		if not _business_rows.has(report["business_id"]):

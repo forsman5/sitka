@@ -610,18 +610,18 @@ const SALES_TAX_RATE := 0.05
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
 var businesses: Dictionary[int, HEBusiness] = {}
-## Houses, keyed by their own id space (not shared with `businesses`). Housing
-## is a settlement-wide pool -- see get_housing_report().
+## Houses, keyed by their own id space (not shared with `businesses`). Each
+## household lives in one (HEHousehold.dwelling_id) -- see _reconcile_housing.
 var dwellings: Dictionary[int, HEHouse] = {}
 
 ## Housing rules, applied only to settlements with HESettlement.housing_modeled.
 ## When every house is taken (households >= capacity) a household's monthly
 ## birth chance is scaled by this: births fall by 80% rather than stopping.
 const HOUSING_SATURATED_BIRTH_SCALE := 0.2
-## Households beyond capacity are homeless (the newest households, by id --
-## no one is assigned to a specific house). Each homeless household has this
-## chance per EMIGRATION_EVAL_INTERVAL_DAYS of losing a member to emigration,
-## on top of any starvation emigration.
+## Households without an assigned house are homeless. Assignment is sticky and
+## fills by ascending household id, so these are the newest households. Each
+## homeless household has this chance per EMIGRATION_EVAL_INTERVAL_DAYS of
+## losing a member to emigration, on top of any starvation emigration.
 const HOMELESS_EMIGRATION_CHANCE := 0.3
 var markets: Dictionary[int, HEMarket] = {}
 var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_id -> commodity -> bool
@@ -778,6 +778,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
+	_reconcile_all_housing()
 
 ## Registers a business built after the sim started. Takes a free id from
 ## next_business_id(); the caller builds the record. Nothing is charged -- the
@@ -820,6 +821,7 @@ func add_dwelling(house: HEHouse) -> void:
 	var s: HESettlement = settlements[house.settlement_id]
 	s.dwelling_ids.append(house.id)
 	s.housing_modeled = true
+	_reconcile_housing(house.settlement_id)
 
 func next_dwelling_id() -> int:
 	var next_id := 1
@@ -828,9 +830,11 @@ func next_dwelling_id() -> int:
 	return next_id
 
 ## One entry per house, ascending id: {dwelling_id, settlement_id, name,
-## type_key}. Houses live in `dwellings`, a separate id space from businesses,
-## so they never appear in get_business_reports(); a town layout reads this.
+## type_key, capacity, occupant_household_ids (ascending)}. Houses live in
+## `dwellings`, a separate id space from businesses, so they never appear in
+## get_business_reports(); a town layout reads this.
 func get_dwelling_reports(settlement_id: int = -1) -> Array:
+	var occupants := _occupants_by_dwelling()
 	var out: Array = []
 	var ids := dwellings.keys()
 	ids.sort()
@@ -843,8 +847,93 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 			"settlement_id": house.settlement_id,
 			"name": house.name,
 			"type_key": house.type_key,
+			"capacity": house.capacity_households,
+			"occupant_household_ids": occupants.get(house.id, [] as Array[int]),
 		})
 	return out
+
+## One entry per household of the settlement, ascending id -- the cheap roster
+## a town renderer reads every tick (get_household_summary is far heavier):
+## {household_id, dwelling_id, employer_business_id, housing_status,
+## worker_ages, dependent_ages}. Ages are in days, one entry per member.
+func get_villager_reports(settlement_id: int) -> Array:
+	var out: Array = []
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		out.append({
+			"household_id": h.id,
+			"dwelling_id": h.dwelling_id,
+			"employer_business_id": h.employer_business_id,
+			"housing_status": _housing_status_of(h),
+			"worker_ages": PackedInt32Array(h.worker_ages()),
+			"dependent_ages": PackedInt32Array(h.dependent_ages()),
+		})
+	return out
+
+## dwelling_id -> ascending ids of the households living there.
+func _occupants_by_dwelling() -> Dictionary:
+	var occupants: Dictionary = {}
+	var ids := households.keys()
+	ids.sort()
+	for household_id in ids:
+		var dwelling_id: int = (households[household_id] as HEHousehold).dwelling_id
+		if dwelling_id == -1:
+			continue
+		if not occupants.has(dwelling_id):
+			occupants[dwelling_id] = [] as Array[int]
+		(occupants[dwelling_id] as Array[int]).append(household_id)
+	return occupants
+
+func _reconcile_all_housing() -> void:
+	for settlement_id in settlements.keys():
+		_reconcile_housing(settlement_id)
+
+## Brings house assignments in `settlement_id` in line with its households and
+## houses. The only writer of HEHousehold.dwelling_id. Rules:
+## - Sticky: a housed household keeps its house until it ceases to exist.
+## - A house holds capacity_households households (1, or 4 for a tenement); an
+##   upgrade in place adds free slots to the same house.
+## - Unhoused households, ascending id, each take a slot in the lowest-id house
+##   with room (ids follow placement order, so the innermost first).
+## - A household whose house is gone, belongs to another settlement, or is over
+##   capacity (highest ids leave first) is unhoused before refilling.
+## - A settlement that does not model housing houses nobody.
+## New households always get higher ids than existing ones, so the homeless
+## are always the newest households -- the rule housing used before houses were
+## assigned -- and homeless counts are unchanged by assignment.
+func _reconcile_housing(settlement_id: int) -> void:
+	var s: HESettlement = settlements[settlement_id]
+	var ids: Array[int] = []
+	ids.assign(s.household_ids)
+	ids.sort()
+	if not s.housing_modeled:
+		for household_id in ids:
+			(households[household_id] as HEHousehold).dwelling_id = -1
+		return
+	var free: Dictionary = {} # dwelling_id -> slots left
+	for dwelling_id in s.dwelling_ids:
+		free[dwelling_id] = (dwellings[dwelling_id] as HEHouse).capacity_households
+	var unhoused: Array[int] = []
+	for household_id in ids:
+		var h: HEHousehold = households[household_id]
+		if h.dwelling_id != -1 and int(free.get(h.dwelling_id, 0)) > 0:
+			free[h.dwelling_id] = int(free[h.dwelling_id]) - 1
+		else:
+			h.dwelling_id = -1
+			unhoused.append(household_id)
+	if unhoused.is_empty():
+		return
+	var houses: Array[int] = []
+	houses.assign(s.dwelling_ids)
+	houses.sort()
+	var cursor := 0
+	for household_id in unhoused:
+		while cursor < houses.size() and int(free[houses[cursor]]) <= 0:
+			cursor += 1
+		if cursor == houses.size():
+			break
+		(households[household_id] as HEHousehold).dwelling_id = houses[cursor]
+		free[houses[cursor]] = int(free[houses[cursor]]) - 1
 
 ## Housing state of one settlement. `modeled` is false for a world that never
 ## set housing up (then nothing below limits it). `capacity` counts
@@ -883,34 +972,28 @@ func _count_plain_houses(s: HESettlement) -> int:
 			count += 1
 	return count
 
-## Ids of households with no house: the settlement's households sorted by id,
-## the first `capacity` of them housed, the rest homeless.
+## Ids (ascending) of the settlement's households with no house, after
+## bringing assignments up to date.
 func _homeless_household_ids(settlement_id: int) -> Array[int]:
 	var homeless: Array[int] = []
-	var housing := get_housing_report(settlement_id)
-	if not housing["modeled"]:
+	_reconcile_housing(settlement_id)
+	if not (settlements[settlement_id] as HESettlement).housing_modeled:
 		return homeless
-	var ids: Array[int] = []
-	ids.assign((settlements[settlement_id] as HESettlement).household_ids)
-	ids.sort()
-	for i in range(int(housing["capacity"]), ids.size()):
-		homeless.append(ids[i])
+	for household_id in get_household_ids(settlement_id):
+		if (households[household_id] as HEHousehold).dwelling_id == -1:
+			homeless.append(household_id)
 	return homeless
 
-## "housed", "homeless", or "unlimited" (housing not modeled). Same ordering
-## rule as _homeless_household_ids: the lowest-id households fill the houses.
+## "housed", "homeless", or "unlimited" (housing not modeled). Reads the
+## assignment, checking the house still stands in this settlement in case a
+## caller changed `dwellings` since the last reconcile.
 func _housing_status_of(h: HEHousehold) -> String:
 	var s: HESettlement = settlements[h.settlement_id]
 	if not s.housing_modeled:
 		return "unlimited"
-	var capacity := 0
-	for dwelling_id in s.dwelling_ids:
-		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
-	var lower := 0
-	for household_id in s.household_ids:
-		if household_id < h.id:
-			lower += 1
-	return "homeless" if lower >= capacity else "housed"
+	if h.dwelling_id != -1 and s.dwelling_ids.has(h.dwelling_id) and dwellings.has(h.dwelling_id):
+		return "housed"
+	return "homeless"
 
 ## The settlement's Government Warehouse, or null if it has not built one.
 func _government_warehouse(settlement_id: int) -> HEBusiness:
@@ -991,6 +1074,7 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
 			if upgradable != null:
 				upgradable.upgrade_to_dense()
+				_reconcile_housing(settlement_id)
 			else:
 				add_dwelling(house)
 			return true
@@ -1170,6 +1254,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"employer_business_id": h.employer_business_id,
 		"is_employed": h.is_employed(),
 		"housing_status": _housing_status_of(h),
+		"dwelling_id": h.dwelling_id,
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
@@ -2104,6 +2189,10 @@ func _daily_tick() -> void:
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
 		_reconcile_employment(record)
+	# Emigration, old age, adoption and coming-of-age splits add and remove
+	# households; whoever is new or freed a house is (re)housed before the day
+	# closes, so every report between ticks reads current assignments.
+	_reconcile_all_housing()
 	_finalize_daily_record(record)
 
 func _reset_household_daily_records() -> void:

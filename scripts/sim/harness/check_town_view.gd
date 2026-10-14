@@ -46,6 +46,18 @@ func _run() -> void:
 			found = found or site["type_key"] == key
 		check(found, "Default scenario should place a %s" % key)
 
+	# House panel names who lives there (HESimulation house assignment).
+	var first_household: int = dashboard._simulation.get_household_ids()[0]
+	var home_id: int = dashboard._simulation.get_household_summary(first_household)["dwelling_id"]
+	var home_site := layout.site_of_dwelling(home_id)
+	check(not home_site.is_empty(), "The first household's house has a site")
+	if not home_site.is_empty():
+		view._select_site(home_site["site_id"])
+		check(view._info_body.text.contains("Home of household") and view._info_body.text.contains(str(first_household)), "House panel names its household (got '%s')" % view._info_body.text)
+		view.clear_selection()
+	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
+	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
+
 	var before := _positions(layout)
 	dashboard._set_town_mode(true)
 	await process_frame
