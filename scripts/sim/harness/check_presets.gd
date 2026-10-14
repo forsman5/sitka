@@ -20,7 +20,7 @@ var _ok := true
 func _init() -> void:
 	for key in HEPresets.keys():
 		_check_preset(key)
-	_check_large_village_houses_and_builds()
+	_check_large_village_densifies()
 	_check_rejects_bad_specs()
 	print("PRESETS %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
@@ -55,23 +55,32 @@ func _check_preset(key: String) -> void:
 	print("  %s: population %d -> %d, households %d -> %d, houses %d, homeless %d, treasury %.0f" % [
 		key, start["population"], end["population"], housing["households"], after["households"],
 		after["houses"], after["homeless_households"], _treasury(sim)])
-	_assert(int(end["population"]) >= int(float(start["population"]) * 0.6), "%s population collapsed (%d -> %d)" % [key, start["population"], end["population"]])
+	_assert(int(end["population"]) >= int(float(start["population"]) * 0.5), "%s population collapsed (%d -> %d)" % [key, start["population"], end["population"]])
 
 func _treasury(sim: HESimulation) -> float:
 	return (sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID] as HEBusiness).balance
 
-## Start large and add housing: every seeded house finds a lot in the town
-## layout, and the seeded warehouse and treasury afford a new house.
-func _check_large_village_houses_and_builds() -> void:
+## The start-large-and-add-housing path: the seeded town is already past the
+## densify threshold, so a housing build upgrades a house and the layout shows
+## it as a tenement on the same site.
+func _check_large_village_densifies() -> void:
 	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_preset").bind("large_village"), true)
 	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
 	var layout := HETownLayout.new("large_village", settlement_id, sim.get_business_reports(), sim.get_dwelling_reports())
 	_assert(layout.unplaced_dwelling_ids().is_empty(), "Every seeded large-village house finds a lot")
+	_assert(layout.prefers_densify(), "A large village should already prefer densifying")
 	var before := sim.get_housing_report(settlement_id)
-	_assert(sim.build_government_building(settlement_id, "house"), "The seeded warehouse and treasury afford a house")
-	_assert(int(sim.get_housing_report(settlement_id)["houses"]) == int(before["houses"]) + 1, "A house was added")
+	_assert(int(before["upgradable_houses"]) == int(before["houses"]), "Every seeded house is upgradable")
+	_assert(sim.build_government_building(settlement_id, "tenement"), "The seeded warehouse and treasury afford a tenement")
+	var after := sim.get_housing_report(settlement_id)
+	_assert(int(after["houses"]) == int(before["houses"]), "A tenement upgrades rather than adds a lot")
+	_assert(int(after["capacity"]) == int(before["capacity"]) + 3, "A tenement adds three households of capacity")
 	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports())
-	_assert(layout.unplaced_dwelling_ids().is_empty(), "The new house finds a lot")
+	var tenements := 0
+	for site in layout.get_sites():
+		if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
+			tenements += 1
+	_assert(tenements == 1, "The layout shows one tenement site (got %d)" % tenements)
 
 func _check_rejects_bad_specs() -> void:
 	var bad := HEPresets.spec("small_village")

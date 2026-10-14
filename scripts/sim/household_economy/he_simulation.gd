@@ -859,11 +859,29 @@ func get_housing_report(settlement_id: int) -> Dictionary:
 	return {
 		"modeled": s.housing_modeled,
 		"houses": s.dwelling_ids.size(),
+		"upgradable_houses": _count_plain_houses(s),
 		"capacity": capacity,
 		"households": household_count,
 		"homeless_households": maxi(0, household_count - capacity) if s.housing_modeled else 0,
 		"saturated": s.housing_modeled and household_count >= capacity,
 	}
+
+## The lowest-id plain house of the settlement, or null. Ids are handed out in
+## placement order (nearest the civic anchor first), so this is the innermost.
+func _innermost_plain_house(settlement_id: int) -> HEHouse:
+	var best: HEHouse = null
+	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
+		var house: HEHouse = dwellings[dwelling_id]
+		if not house.is_dense() and (best == null or house.id < best.id):
+			best = house
+	return best
+
+func _count_plain_houses(s: HESettlement) -> int:
+	var count := 0
+	for dwelling_id in s.dwelling_ids:
+		if not (dwellings[dwelling_id] as HEHouse).is_dense():
+			count += 1
+	return count
 
 ## Ids of households with no house: the settlement's households sorted by id,
 ## the first `capacity` of them housed, the rest homeless.
@@ -902,6 +920,15 @@ func _government_warehouse(settlement_id: int) -> HEBusiness:
 			return b
 	return null
 
+## What `option` costs in `settlement_id` right now: its `upgrade_cost` while
+## it would upgrade an existing house in place (a tenement with a plain house
+## left), otherwise its `cost`. Every build-cost reader goes through this.
+func build_cost_for(settlement_id: int, option: Dictionary) -> Dictionary:
+	if option.has("upgrade_cost") and settlements.has(settlement_id) \
+			and _innermost_plain_house(settlement_id) != null:
+		return option["upgrade_cost"]
+	return option["cost"]
+
 ## Why `option` (an entry of HEScenarioSeeds.government_buildings()) cannot be
 ## built in `settlement_id` right now -- "" when it can. Checks, in order: a
 ## government exists, the type is not already built, the treasury covers the
@@ -913,7 +940,7 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var repeatable: bool = option.get("repeatable", false)
 	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
-	var cost: Dictionary = option["cost"]
+	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
 	var goods: Dictionary = cost.get("goods", {})
@@ -949,7 +976,7 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 			continue
 		if government_build_blocker(settlement_id, option) != "":
 			return false
-		var cost: Dictionary = option["cost"]
+		var cost: Dictionary = build_cost_for(settlement_id, option)
 		var gold: float = cost.get("gold", 0.0)
 		var goods: Dictionary = cost.get("goods", {})
 		if not goods.is_empty():
@@ -960,7 +987,12 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
 		if option.get("category", "") == "housing":
-			add_dwelling(option["make"].call(next_dwelling_id(), settlement_id))
+			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
+			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
+			if upgradable != null:
+				upgradable.upgrade_to_dense()
+			else:
+				add_dwelling(house)
 			return true
 		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
 		if option.get("startup", false):
@@ -978,7 +1010,7 @@ func _goods_shortfall(settlement_id: int, option: Dictionary) -> Dictionary:
 	var warehouse := _government_warehouse(settlement_id)
 	if warehouse == null:
 		return shortfall
-	var goods: Dictionary = option["cost"].get("goods", {})
+	var goods: Dictionary = build_cost_for(settlement_id, option).get("goods", {})
 	for commodity in goods:
 		var missing: float = float(goods[commodity]) - warehouse.stock(commodity)
 		if missing > 0.0:
@@ -998,7 +1030,7 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 		return "none"
 	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
 		return "none"
-	if gov.balance < float(option["cost"].get("gold", 0.0)):
+	if gov.balance < float(build_cost_for(settlement_id, option).get("gold", 0.0)):
 		return "none"
 	var shortfall := _goods_shortfall(settlement_id, option)
 	if shortfall.is_empty():
@@ -1006,7 +1038,7 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 	var warehouse := _government_warehouse(settlement_id)
 	for commodity in shortfall:
 		var order: Dictionary = warehouse.warehouse_orders.get(commodity, {})
-		if float(order.get("buy_up_to", 0.0)) < float(option["cost"]["goods"][commodity]):
+		if float(order.get("buy_up_to", 0.0)) < float(build_cost_for(settlement_id, option)["goods"][commodity]):
 			return "can_order"
 	return "ordered"
 
@@ -1027,7 +1059,7 @@ func request_government_build(settlement_id: int, type_key: String) -> String:
 		if build_goods_order_state(settlement_id, option) != "can_order":
 			return ""
 		var warehouse := _government_warehouse(settlement_id)
-		var goods: Dictionary = option["cost"]["goods"]
+		var goods: Dictionary = build_cost_for(settlement_id, option)["goods"]
 		for commodity in _goods_shortfall(settlement_id, option):
 			var existing: Dictionary = warehouse.warehouse_orders.get(commodity, {})
 			var target := maxf(float(existing.get("buy_up_to", 0.0)), float(goods[commodity]))

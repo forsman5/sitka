@@ -16,11 +16,12 @@ extends RefCounted
 ##                 the rest, split by farm_share. Ranches and the Butcher always
 ##                 exist and staff themselves.
 ##   farm_share    float   share of the remaining workers on the Farm (0..1)
-##   housing       {houses}  seeded dwellings (one household each)
+##   housing       {houses, tenements}  seeded dwellings; `tenements` of the
+##                 houses start already densified (HEHouse.DENSE_CAPACITY)
 ##   treasury_bonus float  gold added to the government's starting float
 ##   warehouse     {stock: {grain|timber|wool: units}}  present = a Government
 ##                 Warehouse already stands, holding this stock (what a
-##                 house build draws on); empty/absent = none
+##                 house/tenement build draws on); empty/absent = none
 ##
 ## Adding a field: read it in HEScenarioSeeds.build_from_spec with a default so
 ## older specs keep loading, and document it here.
@@ -37,7 +38,7 @@ const PRESETS := {
 		"households": 20,
 		"crews": {"trader": 6},
 		"farm_share": 0.55,
-		"housing": {"houses": 24},
+		"housing": {"houses": 24, "tenements": 0},
 		"treasury_bonus": 250.0,
 		"warehouse": {"stock": {"timber": 150}},
 	},
@@ -50,7 +51,7 @@ const PRESETS := {
 		"households": 30,
 		"crews": {"trader": 8, "bloomery": 8, "iron_mine": 10, "charcoal_burner": 2},
 		"farm_share": 0.5,
-		"housing": {"houses": 36},
+		"housing": {"houses": 36, "tenements": 0},
 		"treasury_bonus": 150.0,
 		"warehouse": {"stock": {"timber": 300}},
 	},
@@ -63,7 +64,7 @@ const PRESETS := {
 		"households": 48,
 		"crews": {"trader": 10, "bloomery": 6, "iron_mine": 6, "charcoal_burner": 2, "toolsmith": 8},
 		"farm_share": 0.6,
-		"housing": {"houses": 56},
+		"housing": {"houses": 56, "tenements": 0},
 		"treasury_bonus": 400.0,
 		"warehouse": {"stock": {"timber": 600}},
 	},
@@ -97,6 +98,9 @@ static func validate(candidate: Dictionary) -> Array[String]:
 		crewed += int(crew)
 	if crewed > households * 2:
 		problems.append("crews (%d workers) exceed the %d workers available" % [crewed, households * 2])
+	var housing: Dictionary = candidate.get("housing", {})
+	if housing.has("houses") and int(housing.get("tenements", 0)) > int(housing["houses"]):
+		problems.append("more tenements than houses")
 	var share := float(candidate.get("farm_share", 0.5))
 	if share < 0.0 or share > 1.0:
 		problems.append("farm_share must be 0..1")
