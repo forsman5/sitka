@@ -185,7 +185,7 @@ const STARTING_CASH_RESERVE_DAYS := 30.0
 ## startup float for the small permanent Trader crew; shipment purchases are
 ## separately capped to leave a wage reserve.
 const VALLEY_TRADER_EXTRA_RUNWAY_DAYS := 120.0
-## Larger valley towns use housing blocks so their dwellings fit the town map.
+## Valley towns start with dense tenements so their dwellings fit the town map.
 const VALLEY_HOUSEHOLDS_PER_DWELLING := 4
 ## Startup cash for a field business covers its whole production cycle of
 ## wages, times this safety factor. The credit line only covers 60 days of the
@@ -578,6 +578,7 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## such business id in `businesses`.
 static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, charcoal_burner_capacity: int = 0, toolsmith_capacity: int = 0, options: Dictionary = {}) -> Dictionary:
 	var household_count: int = int(options.get("households", HOUSEHOLD_COUNT))
+	var is_valley: bool = bool(options.get("valley", false))
 	var settlement := HESettlement.new(SETTLEMENT_ID, str(options.get("settlement_name", "Testholm")))
 	var town_scale := float(household_count) / float(HOUSEHOLD_COUNT)
 	var farm_land := FARM_LAND_AREA_ACRES * town_scale
@@ -586,7 +587,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var farm := make_farm(FARM_BUSINESS_ID, SETTLEMENT_ID, farm_capacity, FARM_FIELD_START_DAYS)
 	var woodlot := make_woodlot(WOODLOT_BUSINESS_ID, SETTLEMENT_ID, woodlot_capacity, WOODLOT_FIELD_START_DAYS)
 	var trader := make_trader(TRADER_BUSINESS_ID, SETTLEMENT_ID, trader_capacity)
-	if household_count != HOUSEHOLD_COUNT:
+	if is_valley:
 		farm.configure_land(farm_land, _make_fields(FARM_FIELD_COUNT, farm_land, FARM_FIELD_START_DAYS, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 		woodlot.configure_land(woodlot_land, _make_fields(WOODLOT_FIELD_COUNT, woodlot_land, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
 		trader.max_capacity = maxi(TRADER_MAX_CAPACITY, ceili(TRADER_MAX_CAPACITY * town_scale))
@@ -602,7 +603,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	farm.balance = startup_cash(farm, farm_capacity)
 	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
-	if household_count != HOUSEHOLD_COUNT:
+	if is_valley:
 		trader.balance += VALLEY_TRADER_EXTRA_RUNWAY_DAYS * estimated_wage * trader_capacity
 	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY + startup_livestock_cash(BUTCHER_MIN_CAPACITY)
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
@@ -631,7 +632,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
 		bloomery = make_bloomery(BLOOMERY_BUSINESS_ID, SETTLEMENT_ID, bloomery_capacity)
-		bloomery.max_capacity = maxi(BLOOMERY_MAX_CAPACITY, ceili(BLOOMERY_MAX_CAPACITY * town_scale))
+		if is_valley:
+			bloomery.max_capacity = maxi(BLOOMERY_MAX_CAPACITY, ceili(BLOOMERY_MAX_CAPACITY * town_scale))
 		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
@@ -639,7 +641,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var charcoal_burner: HEBusiness = null
 	if charcoal_burner_capacity > 0:
 		charcoal_burner = make_charcoal_burner(CHARCOAL_BURNER_BUSINESS_ID, SETTLEMENT_ID, charcoal_burner_capacity)
-		if household_count != HOUSEHOLD_COUNT:
+		if is_valley:
 			charcoal_burner.max_capacity = maxi(CHARCOAL_BURNER_MAX_CAPACITY, ceili(CHARCOAL_BURNER_MAX_CAPACITY * town_scale))
 		# Wages across the whole Woodlot cycle plus its first timber input buffer
 		# (see startup_cash and make_charcoal_burner's startup_cycle_days).
@@ -654,7 +656,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var iron_mine: HEBusiness = null
 	if iron_mine_capacity > 0:
 		iron_mine = make_iron_mine(IRON_MINE_BUSINESS_ID, SETTLEMENT_ID, iron_mine_capacity)
-		iron_mine.max_capacity = maxi(IRON_MINE_MAX_CAPACITY, ceili(IRON_MINE_MAX_CAPACITY * town_scale))
+		if is_valley:
+			iron_mine.max_capacity = maxi(IRON_MINE_MAX_CAPACITY, ceili(IRON_MINE_MAX_CAPACITY * town_scale))
 		iron_mine.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * iron_mine_capacity
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
@@ -853,6 +856,7 @@ static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dict
 	var farm := int(round(float(remainder) * farm_share / 2.0)) * 2
 	var tenement_count := ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM) / VALLEY_HOUSEHOLDS_PER_DWELLING)
 	var options := {
+		"valley": true,
 		"households": household_count,
 		"houses": tenement_count,
 		"tenements": tenement_count,
