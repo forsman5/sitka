@@ -16,8 +16,12 @@ extends Control
 
 signal business_selected(business_id: int)
 signal details_requested(business_id: int)
+## The person window's "Person details" button: open the dashboard's person
+## detail for this member (HESimulation.get_person_summary numbering).
+signal person_details_requested(household_id: int, member_number: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+const HEVillagers = preload("res://scripts/sim/household_economy/he_villagers.gd")
 const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
 const MODEL_DIR := "res://assets/models/buildings/"
@@ -111,9 +115,17 @@ var _info_panel: PanelContainer
 var _info_title: Label
 var _info_body: Label
 var _details_button: Button
+var _home_button: Button
+var _person_button: Button
+var _villager_layer: HEVillagers
+## Selected villager as (household_id, member_number), or (-1, -1). A site and
+## a villager are never selected at once.
+var _selected_villager := Vector2i(-1, -1)
+var _villager_marker: MeshInstance3D
 var _unplaced_label: Label
 var _housing_label: Label
 var _housing: Dictionary = {}
+var _dwellings: Dictionary = {} # dwelling_id -> get_dwelling_reports() entry
 
 func _ready() -> void:
 	clip_contents = true
@@ -126,12 +138,16 @@ func _ready() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
-## Brings the drawn town in line with `layout`, the current business reports
-## and the settlement's housing report (get_housing_report; may be empty).
-## Cheap when nothing changed.
-func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> void:
+## Brings the drawn town in line with `layout`, the current business reports,
+## the settlement's housing report (get_housing_report; may be empty) and its
+## houses (get_dwelling_reports, for who lives where; may be empty) and its
+## people (get_villager_reports; may be empty). Cheap when nothing changed.
+func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwellings: Array = [], villagers: Array = []) -> void:
 	_layout = layout
 	_housing = housing
+	_dwellings.clear()
+	for dwelling in dwellings:
+		_dwellings[int(dwelling["dwelling_id"])] = dwelling
 	_reports.clear()
 	for report in reports:
 		_reports[int(report["business_id"])] = report
@@ -142,6 +158,9 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> voi
 		if not site["built"]:
 			continue
 		_sync_site(site)
+	_villager_layer.sync(layout, villagers)
+	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
+		_selected_villager = Vector2i(-1, -1)
 	var unplaced := layout.unplaced_business_ids().size() + layout.unplaced_dwelling_ids().size()
 	_unplaced_label.visible = unplaced > 0
 	_unplaced_label.text = "%d building(s) have no room in the town" % unplaced
@@ -161,6 +180,21 @@ static func housing_text(housing: Dictionary) -> String:
 	elif bool(housing["saturated"]):
 		text += " (full: births slowed)"
 	return text
+
+## "Home of households 3, 7 (2 of 4)" / "Empty (room for 1 household)" from a
+## get_dwelling_reports() entry; "" when the entry is missing.
+static func occupants_text(dwelling: Dictionary) -> String:
+	if dwelling.is_empty():
+		return ""
+	var occupants: Array = dwelling.get("occupant_household_ids", [])
+	var capacity := int(dwelling.get("capacity", 1))
+	if occupants.is_empty():
+		return "Empty (room for %d household%s)" % [capacity, "" if capacity == 1 else "s"]
+	var ids := ", ".join(occupants.map(str))
+	var noun := "household" if occupants.size() == 1 else "households"
+	if capacity == 1:
+		return "Home of %s %s" % [noun, ids]
+	return "Home of %s %s (%d of %d)" % [noun, ids, occupants.size(), capacity]
 
 ## Sets the town's time of day (0 = midnight, 0.5 = noon): lighting through
 ## the shared RTS day/night keyframes, plus the HH:MM readout.
@@ -185,7 +219,44 @@ func select_business(business_id: int) -> void:
 
 func clear_selection() -> void:
 	_selected_site_id = -1
+	_selected_villager = Vector2i(-1, -1)
 	_refresh_info()
+
+## Selects one villager and shows the person window (no-op if not drawn).
+func select_villager(household_id: int, member_number: int) -> void:
+	var key := Vector2i(household_id, member_number)
+	if not _villager_layer.villager_position(key).is_finite():
+		return
+	_selected_site_id = -1
+	_selected_villager = key
+	_refresh_info()
+
+## (household_id, member_number) of the selected villager, or (-1, -1).
+func selected_villager() -> Vector2i:
+	return _selected_villager
+
+func villager_count() -> int:
+	return _villager_layer.villager_count() if _villager_layer != null else 0
+
+func villagers() -> HEVillagers:
+	return _villager_layer
+
+## Freezes or resumes the villagers (the dashboard's pause), animations too.
+func set_villagers_paused(value: bool) -> void:
+	if _villager_layer != null and _villager_layer.paused != value:
+		_villager_layer.paused = value
+		_update_villager_processing()
+
+## The villager layer (and the AnimationPlayers under it) only runs while this
+## view is shown and the town is not paused: its Node3D visibility does not
+## follow this Control's, so it would otherwise animate behind the dashboard.
+func _update_villager_processing() -> void:
+	var active := is_visible_in_tree() and not _villager_layer.paused
+	_villager_layer.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+
+## Pans the camera so `point` (town coordinates) is centred.
+func focus_on(point: Vector2) -> void:
+	_rig.call("center_on", Vector3(point.x, 0.0, point.y))
 
 func selected_business_id() -> int:
 	if _layout == null or _selected_site_id == -1:
@@ -270,6 +341,21 @@ func _build_world() -> void:
 	_selection_marker.name = "Selection"
 	_viewport.add_child(_selection_marker)
 
+	_villager_layer = HEVillagers.new()
+	_villager_layer.name = "Villagers"
+	_viewport.add_child(_villager_layer)
+	visibility_changed.connect(_update_villager_processing)
+	_update_villager_processing()
+	_villager_marker = MeshInstance3D.new()
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.55
+	ring.outer_radius = 0.8
+	_villager_marker.mesh = ring
+	_villager_marker.material_override = marker_material
+	_villager_marker.visible = false
+	_villager_marker.name = "VillagerSelection"
+	_viewport.add_child(_villager_marker)
+
 func _build_overlay() -> void:
 	var hint := Label.new()
 	hint.text = "Wheel: zoom   Middle-drag / WASD: pan   Q/E: rotate   Alt+mouse: tilt   Click: select"
@@ -337,6 +423,14 @@ func _build_overlay() -> void:
 	_details_button.text = "Open business details"
 	_details_button.pressed.connect(_on_details_pressed)
 	box.add_child(_details_button)
+	_home_button = Button.new()
+	_home_button.text = "Show home"
+	_home_button.pressed.connect(_on_home_pressed)
+	box.add_child(_home_button)
+	_person_button = Button.new()
+	_person_button.text = "Person details"
+	_person_button.pressed.connect(_on_person_pressed)
+	box.add_child(_person_button)
 	add_child(_info_panel)
 
 static func _flat_material(color: Color) -> StandardMaterial3D:
@@ -611,6 +705,7 @@ func _add_plaza(body: Node3D, footprint: Vector2) -> void:
 
 func _select_site(site_id: int) -> void:
 	_selected_site_id = site_id
+	_selected_villager = Vector2i(-1, -1)
 	_refresh_info()
 	business_selected.emit(selected_business_id())
 
@@ -624,6 +719,14 @@ func _site_at(point: Vector2) -> int:
 
 func _refresh_info() -> void:
 	if _info_panel == null:
+		return
+	_home_button.visible = false
+	_person_button.visible = false
+	_villager_marker.visible = _selected_villager.x != -1
+	if _selected_villager.x != -1:
+		_selection_marker.visible = false
+		_info_panel.visible = true
+		_refresh_villager_info()
 		return
 	var site: Dictionary = {}
 	if _layout != null and _selected_site_id != -1:
@@ -645,9 +748,11 @@ func _refresh_info() -> void:
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
-		var shelter := "Shelters one household."
-		if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
-			shelter = "Shelters several households."
+		var shelter := occupants_text(_dwellings.get(int(site["dwelling_id"]), {}))
+		if shelter == "":
+			shelter = "Shelters one household."
+			if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
+				shelter = "Shelters several households."
 		var housing_line := housing_text(_housing)
 		_info_body.text = shelter if housing_line == "" else "%s\n%s" % [shelter, housing_line]
 		return
@@ -660,6 +765,78 @@ func _refresh_info() -> void:
 	var report: Dictionary = _reports.get(business_id, {})
 	_info_title.text = str(site["label"])
 	_info_body.text = _state_text(report)
+
+## The person window: who the selected villager is, their household, job and
+## home, from the villager report (no simulation access here).
+func _refresh_villager_info() -> void:
+	var household_id := _selected_villager.x
+	var member_number := _selected_villager.y
+	var report := _villager_layer.household_report(household_id)
+	_details_button.visible = false
+	_person_button.visible = true
+	_info_title.text = "Household %d - Member %d" % [household_id, member_number]
+	if report.is_empty():
+		_info_body.text = ""
+		return
+	_info_body.text = person_text(report, member_number, _business_name(int(report["employer_business_id"])))
+	var dwelling_id := int(report["dwelling_id"])
+	_home_button.visible = true
+	_home_button.disabled = _layout == null or dwelling_id == -1 or _layout.site_of_dwelling(dwelling_id).is_empty()
+	_home_button.text = "Show home" if not _home_button.disabled else "No home"
+
+## Lines of the person window for member `member_number` of a villager report
+## (get_villager_reports entry); `employer_name` is "" when unknown.
+static func person_text(report: Dictionary, member_number: int, employer_name: String) -> String:
+	var workers: PackedInt32Array = report["worker_ages"]
+	var dependents: PackedInt32Array = report["dependent_ages"]
+	var index := member_number - 1
+	if index < 0 or index >= workers.size() + dependents.size():
+		return ""
+	var is_worker := index < workers.size()
+	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var lines: Array[String] = []
+	var role := "Worker"
+	if not is_worker:
+		role = "Child" if age < HEHousehold.AGING_THRESHOLD_DAYS else "Adult living at home"
+	lines.append("%s, age %d years %d days" % [role, age / 365, age % 365])
+	if is_worker:
+		var employer_id := int(report["employer_business_id"])
+		if employer_id == -1:
+			lines.append("Unemployed")
+		else:
+			lines.append("Works at %s" % (employer_name if employer_name != "" else "business %d" % employer_id))
+	lines.append("Household: %d worker%s, %d dependent%s" % [workers.size(), "" if workers.size() == 1 else "s", dependents.size(), "" if dependents.size() == 1 else "s"])
+	match str(report["housing_status"]):
+		"housed":
+			lines.append("Lives in house %d" % int(report["dwelling_id"]))
+		"homeless":
+			lines.append("Homeless: sleeps by the town square")
+	return "\n".join(lines)
+
+func _business_name(business_id: int) -> String:
+	var report: Dictionary = _reports.get(business_id, {})
+	return str(report.get("name", ""))
+
+func _on_home_pressed() -> void:
+	var report := _villager_layer.household_report(_selected_villager.x)
+	if report.is_empty() or _layout == null:
+		return
+	var site := _layout.site_of_dwelling(int(report["dwelling_id"]))
+	if site.is_empty():
+		return
+	focus_on(site["position"])
+	_select_site(site["site_id"])
+
+func _on_person_pressed() -> void:
+	if _selected_villager.x != -1:
+		person_details_requested.emit(_selected_villager.x, _selected_villager.y)
+
+func _process(_delta: float) -> void:
+	if _selected_villager.x == -1 or _villager_marker == null:
+		return
+	var position := _villager_layer.villager_position(_selected_villager)
+	if position.is_finite():
+		_villager_marker.position = position + Vector3.UP * 0.08
 
 static func _state_text(report: Dictionary) -> String:
 	if report.is_empty():
@@ -709,6 +886,12 @@ func _gui_input(event: InputEvent) -> void:
 	_viewport.push_input(event)
 
 func _click(position: Vector2) -> void:
+	# People stand on top of sites, so they take the click first.
+	var villager := _villager_layer.pick(_camera, position) if _camera != null and _camera.is_inside_tree() else Vector2i(-1, -1)
+	if villager.x != -1:
+		select_villager(villager.x, villager.y)
+		business_selected.emit(-1)
+		return
 	var point: Variant = ground_point(position)
 	if point == null:
 		return

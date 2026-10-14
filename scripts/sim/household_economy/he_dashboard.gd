@@ -327,6 +327,8 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
+	if _town_view != null:
+		_town_view.set_villagers_paused(_simulation == null or _ended or _speed_multiplier <= 0.0)
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	if _town_view != null and _town_view.visible:
@@ -366,7 +368,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -518,6 +520,7 @@ func _build_ui() -> void:
 	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_town_view.visible = false
 	_town_view.details_requested.connect(_on_town_details_requested)
+	_town_view.person_details_requested.connect(_on_town_person_details_requested)
 	_town_view.visibility_changed.connect(_on_view_changed)
 	vbox.add_child(_town_view)
 	_town_view.add_child(_build_town_gov_build_button())
@@ -1488,6 +1491,14 @@ func _open_settings_dialog() -> void:
 	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
 	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
 	grid.add_child(day_picker)
+	var shadows_label := Label.new()
+	shadows_label.text = "Villager shadows"
+	grid.add_child(shadows_label)
+	var shadows_check := CheckBox.new()
+	shadows_check.text = "Villagers cast shadows (slower in large towns)"
+	shadows_check.button_pressed = GameState.villager_shadows
+	shadows_check.toggled.connect(GameState.set_villager_shadows)
+	grid.add_child(shadows_check)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)
@@ -3131,6 +3142,10 @@ func _on_town_details_requested(business_id: int) -> void:
 	_set_town_mode(false)
 	_on_business_row_selected(business_id)
 
+func _on_town_person_details_requested(household_id: int, member_number: int) -> void:
+	_set_town_mode(false)
+	_on_person_selected(household_id, member_number)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -3386,8 +3401,9 @@ func _refresh_visible_groups(ignore_mouse_guard: bool) -> void:
 			HEPresenter.Group.TOWN_VIEW:
 				if reports.is_empty():
 					reports = _simulation.get_business_reports(-1, false)
-				_town_layout.reconcile(reports, _simulation.get_dwelling_reports(), _simulation.get_construction_reports())
-				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
+				var dwellings := _simulation.get_dwelling_reports()
+				_town_layout.reconcile(reports, dwellings, _simulation.get_construction_reports())
+				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 				_town_view_synced = true
 			HEPresenter.Group.BUSINESS_ROWS:
 				if reports.is_empty():
