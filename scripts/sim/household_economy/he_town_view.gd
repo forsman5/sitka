@@ -144,11 +144,11 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}) -> voi
 	_housing_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3) if strained else Color(1, 1, 1, 0.95))
 	_refresh_info()
 
-## "Housing: 41 houses for 30 households" with homeless / full flags.
+## "Housing: 41 homes for 30 households" with homeless / full flags.
 static func housing_text(housing: Dictionary) -> String:
 	if not bool(housing.get("modeled", false)):
 		return ""
-	var text := "Housing: %d houses for %d households" % [housing["houses"], housing["households"]]
+	var text := "Housing: %d homes for %d households" % [housing["capacity"], housing["households"]]
 	if int(housing["homeless_households"]) > 0:
 		text += " (%d homeless)" % housing["homeless_households"]
 	elif bool(housing["saturated"]):
