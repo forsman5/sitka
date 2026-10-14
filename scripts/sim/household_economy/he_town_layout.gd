@@ -9,8 +9,9 @@ extends RefCounted
 ## on the civic anchor (0, 0), bounded by +/-HALF_EXTENT. A consumer maps
 ## (x, y) to its own ground (x, height(x, y), y) with whatever transform and
 ## terrain sampling it needs; `footprint` is the unrotated size in the same
-## units and `rotation` a yaw in radians (always a multiple of PI/2, so a
-## footprint is an axis-aligned rect, see site_rect()).
+## units and `rotation` a yaw in radians. Businesses sit at multiples of
+## PI/2; houses face the lane they front and take any yaw. site_rect() is the
+## axis-aligned bounds of the rotated footprint, site_contains() the exact test.
 ##
 ## Rules:
 ## - The starting layout is a pure function of the scenario key, settlement id
@@ -23,11 +24,19 @@ extends RefCounted
 ##   first candidate that clears every existing footprint by SITE_SPACING, so
 ##   later additions never rearrange earlier ones.
 ## - Site 0 is the civic anchor, reserved for the government.
+## - Roads are data too: a seeded graph (spokes from the civic anchor, lanes
+##   branching off them) built at construction. It only ever grows: when no
+##   house lot is left, new lanes are added (seeded, never through an existing
+##   site), and no road is moved or removed. Businesses keep to their zone
+##   candidates but must clear the roads; houses take lots along the road
+##   frontage, nearest the civic anchor first, facing the road. Roads store no
+##   occupancy; a house site records its `road_id`.
 ## - Occupants come in two kinds with separate id spaces: a business
 ##   (`business_id`, from get_business_reports) or a house (`dwelling_id`, from
 ##   get_dwelling_reports). A site holds at most one; key an occupant by
 ##   (type_key, id). Houses never fail, so a house site is never vacated or
-##   reused, and houses are allocated only in the residential zone.
+##   reused, and houses are allocated only in the residential zone (road
+##   frontage).
 
 const CIVIC_SITE_ID := 0
 const NO_BUSINESS := -1
@@ -54,10 +63,50 @@ const ZONE_SPECS := {
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
 	ZONE_FIELD: {"footprint": Vector2(22.0, 16.0), "radius": Vector2(28.0, 48.0)},
 	ZONE_PASTURE: {"footprint": Vector2(26.0, 20.0), "radius": Vector2(46.0, 66.0)},
-	# A lattice (`pitch` apart, so houses sit SITE_SPACING from each other) over
-	# the annulus `radius`, filled outward from a seeded `heart_radius` point.
-	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0), "radius": Vector2(30.0, 74.0), "pitch": 9.0, "heart_radius": 46.0},
+	# Lots along the road frontage (see _make_housing_candidates); no radius band.
+	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0)},
 }
+
+## Road network. Spokes leave the civic anchor at seeded angles; lanes branch
+## off each spoke at the arc distances in LANE_JUNCTIONS (`sides`: which sides
+## of the spoke get a lane; `alternate`: one side, flipping per spoke).
+const ROAD_SPOKE_COUNT := 5
+const ROAD_SPOKE_START := 6.0
+const ROAD_STEP := 7.0
+const ROAD_MAX_POINTS := 14
+const MAIN_ROAD_WIDTH := 5.0
+const LANE_WIDTH := 3.5
+const LANE_STEP := 6.0
+const LANE_JUNCTIONS := [
+	{"at": 26.0, "sides": [1, -1], "length": 30.0},
+	{"at": 46.0, "sides": [1, -1], "length": 30.0},
+	{"at": 66.0, "sides": [1, -1], "length": 30.0},
+]
+## A lane is cut to half the chord between neighbouring spokes at its junction,
+## less this, so lanes from adjacent spokes never run into each other.
+const LANE_SPOKE_GAP := 9.0
+## Shorter lanes are skipped: a stub too short to front a house just reads as a nub.
+const LANE_MIN_LENGTH := 12.0
+## Roads stay this far inside the town square.
+const ROAD_EDGE_MARGIN := 4.0
+## Clear gap a business keeps from a road ribbon; houses front it directly.
+const BUSINESS_ROAD_CLEARANCE := 1.5
+const HOUSE_SETBACK := 1.0
+## Spacing of candidate lots along a road. Finer than a house plus SITE_SPACING
+## on purpose: first-fit then slides past a blocked lot and packs the frontage.
+const HOUSE_LOT_PITCH := 5.0
+## Houses stay out of the civic plaza and its immediate surroundings.
+const HOUSE_MIN_RADIUS := 20.0
+## Growth: lanes added per step when house lots run out, tries per step, and
+## steps tried for one house before it is reported unplaced.
+const GROWTH_LANES_PER_STEP := 3
+const GROWTH_ATTEMPTS := 40
+const GROWTH_STEPS_PER_HOUSE := 4
+const GROWTH_LANE_LENGTH := Vector2(16.0, 26.0)
+## A new lane keeps this far from any existing site.
+const GROWTH_SITE_CLEARANCE := 1.0
+## Chance a growth lane continues its parent past the end instead of branching.
+const GROWTH_EXTEND_CHANCE := 0.3
 ## Where a zone's allocation spills when its own candidates run out.
 const FALLBACK_ORDER := {
 	ZONE_TOWN: [ZONE_TOWN, ZONE_FIELD, ZONE_PASTURE],
@@ -81,6 +130,10 @@ var scenario_key: String = ""
 var settlement_id: int = -1
 
 var _sites: Array[Dictionary] = []
+var _roads: Array[Dictionary] = [] # {"road_id", "class", "width", "points": PackedVector2Array, "parent"}
+var _road_segments: Array[Dictionary] = [] # {"center", "half", "rotation", "road_id"}: oriented ribbon rects
+var _seed_text: String = ""
+var _growth_steps: int = 0
 var _candidates: Dictionary = {} # zone -> Array of {"position": Vector2, "rotation": float}
 var _unplaced: Array[int] = []
 var _unplaced_dwellings: Array[int] = []
@@ -98,7 +151,10 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 	var seed_text := "%s|%d|%s" % [scenario_key, settlement_id, ",".join(starting_ids.map(str))]
 	for zone in [ZONE_TOWN, ZONE_FIELD, ZONE_PASTURE]:
 		_candidates[zone] = _make_candidates(zone, seed_text)
-	_candidates[ZONE_HOUSING] = _make_housing_candidates(seed_text)
+	_seed_text = seed_text
+	_roads = _make_roads(seed_text)
+	_road_segments = _segments_of(_roads)
+	_candidates[ZONE_HOUSING] = _make_housing_candidates(seed_text, _roads)
 	_sites.append({
 		"site_id": CIVIC_SITE_ID,
 		"settlement_id": settlement_id,
@@ -106,6 +162,7 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 		"rotation": 0.0,
 		"footprint": ZONE_SPECS[ZONE_CIVIC]["footprint"],
 		"zone": ZONE_CIVIC,
+		"road_id": -1,
 		"business_id": NO_BUSINESS,
 		"dwelling_id": NO_BUSINESS,
 		"type_key": "",
@@ -188,6 +245,10 @@ func reconcile(reports: Array, dwellings: Array = []) -> bool:
 	_unplaced_dwellings.clear()
 	for dwelling_id in new_houses:
 		var site_index := _allocate_from([ZONE_HOUSING])
+		var growth := 0
+		while site_index == -1 and growth < GROWTH_STEPS_PER_HOUSE and _grow_roads():
+			growth += 1
+			site_index = _allocate_from([ZONE_HOUSING])
 		if site_index == -1:
 			_unplaced_dwellings.append(dwelling_id)
 			continue
@@ -235,9 +296,25 @@ func site_of_dwelling(dwelling_id: int) -> Dictionary:
 			return site.duplicate()
 	return {}
 
-## Footprint rect in town coordinates, with the 90 degree rotation applied.
+## Axis-aligned bounds of the site's rotated footprint, in town coordinates.
 func site_rect(site: Dictionary) -> Rect2:
 	return _rect_for(site["position"], site["footprint"], site["rotation"])
+
+## Whether `point` lies inside the site's rotated footprint.
+func site_contains(site: Dictionary, point: Vector2) -> bool:
+	var local: Vector2 = (point - site["position"]).rotated(-float(site["rotation"]))
+	var half: Vector2 = (site["footprint"] as Vector2) * 0.5
+	return absf(local.x) <= half.x and absf(local.y) <= half.y
+
+func road_count() -> int:
+	return _roads.size()
+
+## The road network: {road_id, class ("main"/"lane"), width, points, parent}.
+func get_roads() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for road in _roads:
+		out.append(road.duplicate())
+	return out
 
 # ---------------------------------------------------------------------------
 
@@ -260,9 +337,9 @@ func _allocate_site(type_key: String) -> int:
 func _allocate_from(zones: Array) -> int:
 	for candidate_zone in zones:
 		var footprint: Vector2 = ZONE_SPECS[candidate_zone]["footprint"]
+		var clearance := 0.0 if candidate_zone == ZONE_HOUSING else BUSINESS_ROAD_CLEARANCE
 		for candidate in _candidates[candidate_zone]:
-			var rect := _rect_for(candidate["position"], footprint, candidate["rotation"])
-			if not _fits(rect):
+			if not _fits(candidate["position"], footprint, candidate["rotation"], clearance):
 				continue
 			_sites.append({
 				"site_id": _sites.size(),
@@ -271,6 +348,7 @@ func _allocate_from(zones: Array) -> int:
 				"rotation": candidate["rotation"],
 				"footprint": footprint,
 				"zone": candidate_zone,
+				"road_id": int(candidate.get("road_id", -1)),
 				"business_id": NO_BUSINESS,
 				"dwelling_id": NO_BUSINESS,
 				"type_key": "",
@@ -280,41 +358,223 @@ func _allocate_from(zones: Array) -> int:
 			return _sites.size() - 1
 	return -1
 
-func _fits(rect: Rect2) -> bool:
+## Whether a footprint at `center` yawed by `rotation` is inside the town,
+## SITE_SPACING clear of every site and `road_clearance` clear of every road.
+func _fits(center: Vector2, footprint: Vector2, rotation: float, road_clearance: float) -> bool:
 	var limit := Rect2(Vector2.ONE * -HALF_EXTENT, Vector2.ONE * HALF_EXTENT * 2.0)
-	if not limit.encloses(rect):
+	if not limit.encloses(_rect_for(center, footprint, rotation)):
 		return false
-	var padded := rect.grow(SITE_SPACING)
+	var half := footprint * 0.5
+	var spaced := half + Vector2.ONE * SITE_SPACING
 	for site in _sites:
-		if padded.intersects(site_rect(site)):
+		if _obb_overlap(center, spaced, rotation, site["position"], (site["footprint"] as Vector2) * 0.5, site["rotation"]):
+			return false
+	var cleared := half + Vector2.ONE * road_clearance
+	for segment in _road_segments:
+		if _obb_overlap(center, cleared, rotation, segment["center"], segment["half"], segment["rotation"]):
 			return false
 	return true
 
+## Axis-aligned bounds of a footprint rotated by `rotation`.
 static func _rect_for(center: Vector2, footprint: Vector2, rotation: float) -> Rect2:
-	var quarter_turns := int(round(rotation / (PI * 0.5)))
-	var size := footprint
-	if quarter_turns % 2 != 0:
-		size = Vector2(footprint.y, footprint.x)
-	return Rect2(center - size * 0.5, size)
+	var half := footprint * 0.5
+	var c := absf(cos(rotation))
+	var s := absf(sin(rotation))
+	var extent := Vector2(c * half.x + s * half.y, s * half.x + c * half.y)
+	return Rect2(center - extent, extent * 2.0)
 
-## Residential lattice candidates, nearest the seeded heart first.
-static func _make_housing_candidates(seed_text: String) -> Array:
-	var spec: Dictionary = ZONE_SPECS[ZONE_HOUSING]
-	var band: Vector2 = spec["radius"]
-	var pitch: float = spec["pitch"]
+## Separating-axis test for two oriented rects given as centre, half extents
+## and yaw. Touching edges do not overlap.
+static func _obb_overlap(c1: Vector2, h1: Vector2, r1: float, c2: Vector2, h2: Vector2, r2: float) -> bool:
+	var u1 := Vector2.from_angle(r1)
+	var v1 := Vector2(-u1.y, u1.x)
+	var u2 := Vector2.from_angle(r2)
+	var v2 := Vector2(-u2.y, u2.x)
+	var delta := c2 - c1
+	for axis in [u1, v1, u2, v2]:
+		var reach: float = h1.x * absf(u1.dot(axis)) + h1.y * absf(v1.dot(axis)) \
+			+ h2.x * absf(u2.dot(axis)) + h2.y * absf(v2.dot(axis))
+		if absf(delta.dot(axis)) >= reach:
+			return false
+	return true
+
+# --- Roads ------------------------------------------------------------------
+
+## Spokes from the civic anchor with lanes branching off. A pure function of
+## the seed text; roads are never edited after this.
+static func _make_roads(seed_text: String) -> Array[Dictionary]:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%s|roads" % seed_text)
+	var roads: Array[Dictionary] = []
+	var base_angle := rng.randf() * TAU
+	for k in ROAD_SPOKE_COUNT:
+		var angle := base_angle + float(k) * TAU / float(ROAD_SPOKE_COUNT) + rng.randf_range(-0.35, 0.35)
+		roads.append({
+			"road_id": roads.size(),
+			"class": "main",
+			"width": MAIN_ROAD_WIDTH,
+			"points": _wander(Vector2.from_angle(angle) * ROAD_SPOKE_START, angle, ROAD_STEP, INF, 0.14, rng),
+			"parent": -1,
+		})
+	for k in ROAD_SPOKE_COUNT:
+		var spoke: Dictionary = roads[k]
+		for junction in LANE_JUNCTIONS:
+			var sides: Array = junction.get("sides", [])
+			if junction.get("alternate", false):
+				sides = [1 if k % 2 == 0 else -1]
+			for side in sides:
+				var sample := _polyline_sample(spoke["points"], float(junction["at"]) + rng.randf_range(-2.0, 2.0))
+				var heading := (sample[1] as Vector2).angle() + float(side) * PI * 0.5 + rng.randf_range(-0.25, 0.25)
+				var chord := 2.0 * float(junction["at"]) * sin(PI / float(ROAD_SPOKE_COUNT))
+				var length := minf(float(junction["length"]), chord * 0.5 - LANE_SPOKE_GAP)
+				if length < LANE_MIN_LENGTH:
+					continue
+				var points := _wander(sample[0], heading, LANE_STEP, length, 0.15, rng)
+				if points.size() < 2:
+					continue
+				roads.append({
+					"road_id": roads.size(),
+					"class": "lane",
+					"width": LANE_WIDTH,
+					"points": points,
+					"parent": spoke["road_id"],
+				})
+	return roads
+
+## A gently wandering polyline from `start`, pulled back toward `heading`, up
+## to `length` along it (INF: until it nears the town edge or the point cap).
+static func _wander(start: Vector2, heading: float, step: float, length: float, wobble: float, rng: RandomNumberGenerator) -> PackedVector2Array:
+	var points := PackedVector2Array([start])
+	var current := heading
+	var position := start
+	var travelled := 0.0
+	var limit := HALF_EXTENT - ROAD_EDGE_MARGIN
+	while points.size() < ROAD_MAX_POINTS and travelled < length:
+		current = lerp_angle(current, heading, 0.3) + rng.randf_range(-wobble, wobble)
+		var advance := step if is_inf(length) else minf(step, length - travelled)
+		position += Vector2.from_angle(current) * advance
+		if absf(position.x) > limit or absf(position.y) > limit:
+			break
+		points.append(position)
+		travelled += advance
+	return points
+
+## [position, unit tangent] at arc distance `s` along `points` (clamped).
+static func _polyline_sample(points: PackedVector2Array, s: float) -> Array:
+	var remaining := maxf(s, 0.0)
+	for i in range(points.size() - 1):
+		var segment := points[i + 1] - points[i]
+		var length := segment.length()
+		if remaining <= length or i == points.size() - 2:
+			var t := clampf(remaining / maxf(length, 0.0001), 0.0, 1.0)
+			return [points[i] + segment * t, segment.normalized()]
+		remaining -= length
+	return [points[0], Vector2.RIGHT]
+
+static func _segments_of(roads: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for road in roads:
+		var points: PackedVector2Array = road["points"]
+		for i in range(points.size() - 1):
+			var delta := points[i + 1] - points[i]
+			out.append({
+				"center": (points[i] + points[i + 1]) * 0.5,
+				"half": Vector2(delta.length() * 0.5, float(road["width"]) * 0.5),
+				"rotation": delta.angle(),
+				"road_id": road["road_id"],
+			})
+	return out
+
+## Adds up to GROWTH_LANES_PER_STEP lanes branching off random existing roads,
+## seeded by the growth step so a given history always grows the same town.
+## A lane may not cross another road or come near an existing site. Returns
+## whether any lane was added; its house lots join the candidate list.
+func _grow_roads() -> bool:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%s|grow|%d" % [_seed_text, _growth_steps])
+	_growth_steps += 1
+	var added: Array[Dictionary] = []
+	var attempts := 0
+	while added.size() < GROWTH_LANES_PER_STEP and attempts < GROWTH_ATTEMPTS:
+		attempts += 1
+		var parent: Dictionary = _roads[rng.randi() % _roads.size()]
+		var parent_points: PackedVector2Array = parent["points"]
+		var total := 0.0
+		for i in range(parent_points.size() - 1):
+			total += parent_points[i].distance_to(parent_points[i + 1])
+		var extend := rng.randf() < GROWTH_EXTEND_CHANCE
+		var sample := _polyline_sample(parent_points, total if extend else rng.randf_range(total * 0.1, total))
+		var side := 1 if rng.randf() < 0.5 else -1
+		var turn := 0.0 if extend else float(side) * PI * 0.5
+		var heading := (sample[1] as Vector2).angle() + turn + rng.randf_range(-0.3, 0.3)
+		var length := rng.randf_range(GROWTH_LANE_LENGTH.x, GROWTH_LANE_LENGTH.y)
+		var points := _wander(sample[0], heading, LANE_STEP, length, 0.15, rng)
+		if points.size() < 3 or (sample[0] as Vector2).length() < HOUSE_MIN_RADIUS:
+			continue
+		var lane := {
+			"road_id": _roads.size() + added.size(),
+			"class": "lane",
+			"width": LANE_WIDTH,
+			"points": points,
+			"parent": parent["road_id"],
+		}
+		if _lane_is_clear(lane, added):
+			added.append(lane)
+	if added.is_empty():
+		return false
+	_roads.append_array(added)
+	_road_segments.append_array(_segments_of(added))
+	var lots := _make_housing_candidates("%s|grow%d" % [_seed_text, _growth_steps], added)
+	(_candidates[ZONE_HOUSING] as Array).append_array(lots)
+	return true
+
+## Whether `lane` stays clear of existing sites and of every road but its
+## parent (and the lanes already added this step).
+func _lane_is_clear(lane: Dictionary, added: Array[Dictionary]) -> bool:
+	var segments := _segments_of([lane] as Array[Dictionary])
+	for segment in segments:
+		var ribbon: Vector2 = segment["half"]
+		for site in _sites:
+			var reach: Vector2 = (site["footprint"] as Vector2) * 0.5 + Vector2.ONE * GROWTH_SITE_CLEARANCE
+			if _obb_overlap(segment["center"], ribbon, segment["rotation"], site["position"], reach, site["rotation"]):
+				return false
+		for other in _road_segments:
+			if other["road_id"] == lane["parent"]:
+				continue
+			if _obb_overlap(segment["center"], ribbon + Vector2.ONE * 2.0, segment["rotation"], other["center"], other["half"], other["rotation"]):
+				return false
+		for other_lane in added:
+			for other in _segments_of([other_lane] as Array[Dictionary]):
+				if _obb_overlap(segment["center"], ribbon + Vector2.ONE * 2.0, segment["rotation"], other["center"], other["half"], other["rotation"]):
+					return false
+	return true
+
+## House lots along both sides of every road, nearest the civic anchor first.
+## Each faces the road (local +Z toward it), with a little seeded setback,
+## slide and yaw jitter so the rows read as built, not stamped.
+static func _make_housing_candidates(seed_text: String, roads: Array[Dictionary]) -> Array:
+	var half: float = (ZONE_SPECS[ZONE_HOUSING]["footprint"] as Vector2).x * 0.5
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("%s|%s" % [seed_text, ZONE_HOUSING])
-	var heart := Vector2.from_angle(rng.randf() * TAU) * float(spec["heart_radius"])
-	var offset := Vector2(snappedf(rng.randf() * pitch, COORD_SNAP), snappedf(rng.randf() * pitch, COORD_SNAP))
-	var steps := int(ceil(HALF_EXTENT / pitch)) + 1
 	var out: Array = []
-	for i in range(-steps, steps + 1):
-		for j in range(-steps, steps + 1):
-			var point := Vector2(i, j) * pitch + offset
-			var radius := point.length()
-			if radius < band.x or radius > band.y:
-				continue
-			out.append({"position": point, "rotation": 0.0, "order": point.distance_to(heart)})
+	for road in roads:
+		var points: PackedVector2Array = road["points"]
+		var total := 0.0
+		for i in range(points.size() - 1):
+			total += points[i].distance_to(points[i + 1])
+		var s := HOUSE_LOT_PITCH * 0.5
+		while s < total - half:
+			var sample := _polyline_sample(points, s)
+			var tangent: Vector2 = sample[1]
+			var left := Vector2(-tangent.y, tangent.x)
+			for side in [1, -1]:
+				var setback: float = float(road["width"]) * 0.5 + HOUSE_SETBACK + half + rng.randf_range(0.0, 1.2)
+				var center: Vector2 = sample[0] + left * float(side) * setback + tangent * rng.randf_range(-0.7, 0.7)
+				var rotation := tangent.angle() + (PI if side > 0 else 0.0) + rng.randf_range(-0.05, 0.05)
+				if center.length() < HOUSE_MIN_RADIUS:
+					continue
+				out.append({"position": center, "rotation": rotation, "road_id": road["road_id"], "order": center.length()})
+			s += HOUSE_LOT_PITCH
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["order"] != b["order"]:
 			return a["order"] < b["order"]
