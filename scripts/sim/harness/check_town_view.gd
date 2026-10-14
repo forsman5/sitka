@@ -163,6 +163,31 @@ func _run() -> void:
 	var vacated := layout.get_site(ranch_site["site_id"])
 	check(vacated["business_id"] == HETownLayout.NO_BUSINESS and vacated["built"], "A failed ranch should leave a vacant building")
 	check(view.site_node_count() == after_count, "The vacant building stays drawn")
+
+	# A Government-built house stands as a foundation first, then the house.
+	var sim = dashboard._simulation
+	var settlement_id: int = dashboard._town_settlement_id()
+	var warehouse = HEScenarioSeeds.make_warehouse(sim.next_business_id(), settlement_id)
+	sim.add_business(warehouse)
+	warehouse.inventory[preload("res://scripts/sim/records/commodity.gd").Type.TIMBER] = 500.0
+	sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID].balance = 5000.0
+	var house_index := -1
+	for i in HEScenarioSeeds.government_buildings().size():
+		if HEScenarioSeeds.government_buildings()[i]["type_key"] == "house":
+			house_index = i
+	dashboard._on_build_government_pressed(house_index)
+	var construction: Array = sim.get_construction_reports(settlement_id)
+	check(construction.size() == 1, "Pressing build house starts one construction")
+	if construction.size() == 1:
+		var lot := layout.site_of_dwelling(int(construction[0]["dwelling_id"]))
+		check(not lot.is_empty() and lot["under_construction"], "The house's foundation has a lot")
+		var lot_label: Label3D = view._site_nodes[lot["site_id"]]["label"]
+		check(lot_label.text.ends_with("(under construction)"), "The foundation is labelled under construction (got '%s')" % lot_label.text)
+		sim.advance_ticks(sim.construction_days)
+		dashboard._refresh()
+		check(not layout.get_site(lot["site_id"])["under_construction"], "The house replaces its foundation")
+		lot_label = view._site_nodes[lot["site_id"]]["label"]
+		check(not lot_label.text.contains("under construction"), "The finished house drops the construction label")
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
 

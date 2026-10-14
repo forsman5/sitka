@@ -11,6 +11,7 @@ const Commodity =preload("res://scripts/sim/records/commodity.gd")
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
+const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 ## H1 labor-market acceptance check. Run with:
 ##   godot --headless --script res://scripts/sim/harness/run_household_economy.gd
@@ -75,6 +76,7 @@ func _init() -> void:
 	_check_government_warehouse()
 	_check_government_build_costs()
 	_check_housing()
+	_check_government_construction()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -2738,6 +2740,7 @@ func _check_government_warehouse() -> void:
 	print("
 === Government Warehouse: built from the treasury, 2 admin workers ===")
 	var sim := _new_sim("build_three_business_economy")
+	sim.construction_days = 0 # instant builds; _check_government_construction covers the wait
 	var cost := HEScenarioSeeds.WAREHOUSE_BUILD_COST
 	_assert(not sim.build_government_building(1, "warehouse"), "Starting treasury is too small to afford a warehouse")
 	sim.advance_ticks(1)
@@ -2788,6 +2791,7 @@ func _check_government_build_costs() -> void:
 	print("
 === Government build costs: free farm/woodlot, goods cost from the warehouse ===")
 	var sim := _new_sim("build_three_business_economy")
+	sim.construction_days = 0 # instant builds; _check_government_construction covers the wait
 	var settlement: HESettlement = sim.settlements[1]
 	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
 	for type_key in ["farm", "woodlot"]:
@@ -2823,6 +2827,7 @@ func _check_government_build_costs() -> void:
 func _check_housing() -> void:
 	print("\n=== Housing: government-built houses, saturation, homelessness ===")
 	var sim := _new_sim("build_three_business_economy")
+	sim.construction_days = 0 # instant builds; _check_government_construction covers the wait
 	var seeded: Dictionary = sim.get_housing_report(1)
 	_assert(seeded["modeled"], "The seeded town models housing")
 	_assert(seeded["capacity"] >= seeded["households"], "Seeded housing covers the starting households (%d for %d)" % [seeded["capacity"], seeded["households"]])
@@ -2913,6 +2918,64 @@ func _check_housing() -> void:
 	print("  population %d -> housed %d, homeless %d; emigrations %d vs %d; births %d vs %d" % [pop_start, housed_summary["population"], evicted_summary["population"], housed_summary["emigrations_total"], evicted_summary["emigrations_total"], housed_summary["births_total"], evicted_summary["births_total"]])
 	_assert(evicted_summary["emigrations_total"] > housed_summary["emigrations_total"], "Homeless households emigrate far more")
 	_assert(evicted_summary["population"] < housed_summary["population"], "A homeless town ends smaller than a housed one")
+
+## Construction: a government build is paid for when ordered, stands as a
+## foundation (a construction report the town layout seats on its final site)
+## for CONSTRUCTION_DAYS, then opens with the same id on the same site.
+func _check_government_construction() -> void:
+	print("\n=== Government construction: foundation first, building after %d days ===" % HESimulation.CONSTRUCTION_DAYS)
+	var sim := _new_sim("build_three_business_economy")
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 500.0
+	var layout := HETownLayout.new("construction", 1, sim.get_business_reports(), sim.get_dwelling_reports())
+	var treasury_before := gov.balance
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse construction starts")
+	_assert(absf(treasury_before - gov.balance - HEScenarioSeeds.WAREHOUSE_BUILD_COST) < EPSILON, "The cost is paid when construction starts")
+	_assert(sim._government_warehouse(1) == null, "The warehouse is not open while under construction")
+	_assert(not sim.build_government_building(1, "warehouse"), "A second warehouse is refused while one is under construction")
+	_assert(sim.government_build_blocker(1, {"type_key": "warehouse", "cost": HEScenarioSeeds.build_cost()}) == "under construction", "The blocker says under construction")
+	var constructions := sim.get_construction_reports(1)
+	_assert(constructions.size() == 1 and int(constructions[0]["days_left"]) == HESimulation.CONSTRUCTION_DAYS, "One construction report, %d days left" % HESimulation.CONSTRUCTION_DAYS)
+	var warehouse_id := int(constructions[0]["business_id"])
+	_assert(warehouse_id == sim.next_business_id() - 1, "The construction reserves its business id")
+	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports(), constructions)
+	var site := layout.site_of_business(warehouse_id)
+	_assert(not site.is_empty() and site["under_construction"], "The layout seats the foundation on a site")
+	for i in HESimulation.CONSTRUCTION_DAYS - 1:
+		sim.advance_ticks(1)
+		_assert(sim._government_warehouse(1) == null, "Still a foundation on day %d" % sim.day)
+	sim.advance_ticks(1)
+	_assert(sim._government_warehouse(1) != null and sim._government_warehouse(1).id == warehouse_id, "The warehouse opens after %d days with its reserved id" % HESimulation.CONSTRUCTION_DAYS)
+	_assert(sim.get_construction_reports(1).is_empty(), "No construction left")
+	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports(), sim.get_construction_reports())
+	var built_site := layout.site_of_business(warehouse_id)
+	_assert(built_site.get("site_id", -1) == site["site_id"] and not built_site["under_construction"], "The building opens on its foundation's site")
+
+	# A house: foundation on a housing lot, then the house; two queued tenement
+	# upgrades never target the same house.
+	var warehouse := sim._government_warehouse(1)
+	warehouse.add_stock(Commodity.Type.TIMBER, 1000.0)
+	gov.balance = 5000.0
+	var houses_before: int = sim.get_housing_report(1)["houses"]
+	_assert(sim.build_government_building(1, "house"), "House construction starts")
+	_assert(sim.get_housing_report(1)["houses"] == houses_before, "No house until construction finishes")
+	var house_construction: Dictionary = sim.get_construction_reports(1)[0]
+	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports(), sim.get_construction_reports())
+	var lot := layout.site_of_dwelling(int(house_construction["dwelling_id"]))
+	_assert(not lot.is_empty() and lot["under_construction"], "The house foundation takes a lot")
+	_assert(sim.build_government_building(1, "tenement") and sim.build_government_building(1, "tenement"), "Two tenement upgrades start")
+	var targets: Array = []
+	for report in sim.get_construction_reports(1):
+		if int(report["upgrade_dwelling_id"]) != -1:
+			targets.append(int(report["upgrade_dwelling_id"]))
+	_assert(targets.size() == 2 and targets[0] != targets[1], "Queued upgrades target different houses (%s)" % str(targets))
+	sim.advance_ticks(HESimulation.CONSTRUCTION_DAYS)
+	_assert(sim.get_housing_report(1)["houses"] == houses_before + 1, "The house opens after construction")
+	for dwelling_id in targets:
+		_assert(sim.dwellings[dwelling_id].is_dense(), "House %d was upgraded" % dwelling_id)
+	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports(), sim.get_construction_reports())
+	var house_site := layout.site_of_dwelling(int(house_construction["dwelling_id"]))
+	_assert(house_site.get("site_id", -1) == lot["site_id"] and not house_site["under_construction"], "The house stands on its foundation's lot")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.
