@@ -180,7 +180,7 @@ func _check_person_health_and_morale() -> void:
 	var child_seen := false
 	for household_id in sim.get_household_ids():
 		var h := sim.get_household_summary(household_id)
-		_assert(h["health"] >= 0.0 and h["health"] <= 1.0 and h["morale"] >= 0.0 and h["morale"] <= 1.0,
+		_assert(h["health"] >= 0.0 and h["health"] <= 1.0 and h["morale"] >= 0.0 and h["morale"] <= HEHousehold.MORALE_MAX,
 			"Household %d health/morale out of range" % household_id)
 		if h["food_stress"] > 0.001:
 			stressed_seen = true
@@ -196,6 +196,17 @@ func _check_person_health_and_morale() -> void:
 	_assert(sim.get_person_summary(any_id, 0).is_empty(), "Member 0 should not exist")
 	_assert(sim.get_person_summary(any_id, 9999).is_empty(), "Out-of-range member should not exist")
 	print("  stressed household seen: %s, child seen: %s" % [stressed_seen, child_seen])
+
+	# The business page reports the crew's morale and the output it earns.
+	var crew_seen := false
+	for report in sim.get_business_reports():
+		if report["kind"] != "production" or not report.has("crew_morale"):
+			continue
+		var crew: Dictionary = report["crew_morale"]
+		_assert(crew["multiplier"] >= 1.0 and crew["avg_morale"] >= 0.0 and crew["avg_morale"] <= HEHousehold.MORALE_MAX,
+			"Business %s crew morale out of range" % report["name"])
+		crew_seen = crew_seen or crew["workers"] > 0
+	_assert(crew_seen, "A staffed production business should report its crew's morale")
 
 func _check_determinism() -> void:
 	print("\n=== Determinism ===")
@@ -2583,6 +2594,20 @@ func _check_needs_catalog() -> void:
 	_assert(bonus_household.morale_bonuses().size() == 1 and is_equal_approx(bonus_household.morale(), minf(1.0, base_morale + tools_need.morale_bonus)),
 		"A met tools need should lift morale by its bonus")
 	_assert(is_equal_approx(bonus_household.health(), 1.0), "Tools must not change health")
+
+	# Morale can pass 100% when bonuses outweigh penalties, and only that excess
+	# is a production bonus.
+	var happy_household := HEHousehold.new(2, 2, 2)
+	happy_household.employer_business_id = 1
+	_assert(is_equal_approx(happy_household.morale(), 1.0) and is_equal_approx(happy_household.productivity_multiplier(), 1.0),
+		"A household with no penalties or bonuses should sit at exactly 100% morale and no output bonus")
+	happy_household.last_need_required[HENeed.Id.TOOLS] = 0.1
+	happy_household.last_need_provided[HENeed.Id.TOOLS] = 0.1
+	_assert(happy_household.morale() > 1.0 and happy_household.morale() <= HEHousehold.MORALE_MAX,
+		"Bonuses with no penalties should carry morale above 100%, under the ceiling")
+	_assert(is_equal_approx(happy_household.productivity_multiplier(), 1.0 + tools_need.morale_bonus * HEHousehold.MORALE_PRODUCTIVITY_PER_POINT),
+		"Morale above 100% should become the same fraction of extra output")
+	_assert(is_equal_approx(bonus_household.productivity_multiplier(), 1.0), "Morale below 100% must not cost output")
 	var sim := _new_sim("build_economy_with_bloomery_and_iron_mine")
 	var bloomery: HEBusiness = sim.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	_assert(bloomery.need_inputs == {Commodity.Type.TIMBER: HENeed.Id.HEAT}, "The Bloomery's timber input should be a heat slot")

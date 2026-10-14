@@ -194,6 +194,12 @@ const FRAIL_LIFESPAN_FRACTION := 0.8
 const MORALE_NEED_PENALTY := 0.6
 const MORALE_UNEMPLOYED_PENALTY := 0.15
 const MORALE_UNAFFORDABLE_PENALTY := 0.1
+## Bonuses can carry morale past 100% (up to this ceiling). Morale above 100%
+## is the only part that feeds production: a worker's output is multiplied by
+## 1 + (morale - 1) * MORALE_PRODUCTIVITY_PER_POINT, so +10% morale is +10%
+## output at the default 1.0. Below 100% there is no output penalty (yet).
+const MORALE_MAX := 1.25
+const MORALE_PRODUCTIVITY_PER_POINT := 1.0
 
 ## Smoothed shortfall per need (HENeed.Id -> 0..1), using the same gain and
 ## recovery as food stress: a bad day jumps it, recovery takes ~20 days. Food
@@ -495,7 +501,12 @@ func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 
 		total -= entry["penalty"]
 	for entry in morale_bonuses():
 		total += entry["bonus"]
-	return clampf(1.0 + total, 0.0, 1.0)
+	return clampf(1.0 + total, 0.0, MORALE_MAX)
+
+## Output multiplier for this household's workers (1.0 = no bonus), from
+## morale above 100%.
+func productivity_multiplier() -> float:
+	return 1.0 + maxf(morale() - 1.0, 0.0) * MORALE_PRODUCTIVITY_PER_POINT
 
 ## 1.0 for most people; VULNERABILITY_MULTIPLIER for children and the frail.
 static func vulnerability_of(is_worker: bool, age_days: int) -> float:

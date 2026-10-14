@@ -1457,6 +1457,8 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true) 
 				"productivity": _tool_productivity(b),
 				"floor": HEBusiness.TOOL_PRODUCTIVITY_FLOOR,
 			}
+		if include_detail and (b.kind == HEBusiness.Kind.PRODUCTION or b.kind == HEBusiness.Kind.HERD):
+			report["crew_morale"] = _business_crew_morale(b.id)
 		out.append(report)
 	return out
 
@@ -1744,7 +1746,8 @@ func get_trader_export_settings(business_id: int) -> Array:
 		var fraction := _trader_bid_fraction(trader, commodity)
 		out.append({"commodity_id": commodity, "name": Commodity.name_of(commodity),
 			"enabled": _trader_export_enabled[business_id].get(commodity, false),
-			"reference_price": reference, "bid_fraction": fraction, "bid_price": reference * fraction})
+			"reference_price": reference, "bid_fraction": fraction, "bid_price": reference * fraction,
+			"stored": _town_stored(trader.settlement_id, commodity)})
 	return out
 
 func set_trader_export_enabled(business_id: int, commodity: Commodity.Type, enabled: bool) -> void:
@@ -2444,7 +2447,7 @@ func _run_production(record: Dictionary) -> void:
 		if b.kind == HEBusiness.Kind.HERD:
 			# Husbandry accrues daily; _run_herds turns it into a care
 			# fraction at the next review (HERD_LABOR_PER_HEAD_PER_DAY).
-			b.care_worker_days += float(_business_employed_worker_count(business_id)) * _tool_productivity(b)
+			b.care_worker_days += _business_effective_worker_count(business_id) * _tool_productivity(b)
 			continue
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
@@ -2454,10 +2457,10 @@ func _run_production(record: Dictionary) -> void:
 		if b.processes_livestock:
 			_run_butchery(b, record)
 			continue
-		var employed := _business_employed_worker_count(business_id)
+		var employed := _business_effective_worker_count(business_id)
 		var output_commodity := b.output_commodity()
 		var rate: float = b.recipe.outputs[output_commodity]
-		var planned: float = float(employed) * rate * _tool_productivity(b)
+		var planned: float = employed * rate * _tool_productivity(b)
 		var units: float = planned * b.last_input_fulfillment_ratio
 		for input_commodity in b.recipe.inputs.keys():
 			if b.need_inputs.has(input_commodity):
@@ -2588,8 +2591,7 @@ func _burn_need_input(b: HEBusiness, input_commodity: Commodity.Type, quantity: 
 ## are 0.0 on every non-harvest day -- lumpy, not smoothed -- which is the
 ## whole point of a harvest cycle over a flat daily rate.
 func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
-	var employed := _business_employed_worker_count(b.id)
-	var effective_workers := float(employed) * _tool_productivity(b)
+	var effective_workers := _business_effective_worker_count(b.id) * _tool_productivity(b)
 	var output_commodity := b.output_commodity()
 	var harvested := 0.0
 	for f in b.fields:
@@ -2604,7 +2606,7 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 		f.days_growing = 0
 		f.labor_applied = 0.0
 	b.add_stock(output_commodity, harvested)
-	b.last_planned_units = float(employed)
+	b.last_planned_units = effective_workers
 	b.last_actual_units = harvested
 	b.last_output_produced = {output_commodity: harvested}
 	var name := Commodity.name_of(output_commodity)
@@ -5002,7 +5004,7 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 ## net revenue the work really earns.
 func _run_butchery(b: HEBusiness, record: Dictionary) -> void:
 	var workers := _business_employed_worker_count(b.id)
-	var worker_days_left := float(workers) * _tool_productivity(b)
+	var worker_days_left := _business_effective_worker_count(b.id) * _tool_productivity(b)
 	var cattle_meat_per_worker_day: float = BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE] / BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
 	var produced: Dictionary[Commodity.Type, float] = {Commodity.Type.MEAT: 0.0, Commodity.Type.LEATHER: 0.0}
 	for species in BUTCHERY_SPECIES_ORDER:
@@ -5230,6 +5232,34 @@ func _workers_in(member_ids: Array) -> int:
 
 func _business_employed_worker_count(business_id: int) -> int:
 	return _workers_in(_employment_index().get(business_id, []))
+
+## Worker count weighted by each employing household's morale bonus (see
+## HEHousehold.productivity_multiplier): what production actually gets out of
+## the crew. Equals the plain headcount when nobody's morale is above 100%.
+func _business_effective_worker_count(business_id: int) -> float:
+	var total := 0.0
+	for household_id in _employment_index().get(business_id, []):
+		var h: HEHousehold = households[household_id]
+		total += float(h.worker_capacity()) * h.productivity_multiplier()
+	return total
+
+## The crew's average morale (per worker, so a big household counts for more)
+## and the output multiplier it earns, for the business detail page. `workers`
+## is 0 for an unstaffed business, in which case morale and multiplier are 1.0.
+func _business_crew_morale(business_id: int) -> Dictionary:
+	var workers := 0
+	var morale_total := 0.0
+	for household_id in _employment_index().get(business_id, []):
+		var h: HEHousehold = households[household_id]
+		workers += h.worker_capacity()
+		morale_total += float(h.worker_capacity()) * h.morale()
+	if workers == 0:
+		return {"workers": 0, "avg_morale": 1.0, "multiplier": 1.0}
+	return {
+		"workers": workers,
+		"avg_morale": morale_total / workers,
+		"multiplier": _business_effective_worker_count(business_id) / workers,
+	}
 
 func _business_employed_household_count(business_id: int) -> int:
 	return (_employment_index().get(business_id, []) as Array).size()
