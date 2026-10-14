@@ -22,6 +22,14 @@ extends Node3D
 ## villager; skin tone seeded per household so a family resembles itself;
 ## dependents under HEHousehold.AGING_THRESHOLD_DAYS are children, drawn at
 ## CHILD_SCALE.
+##
+## Cost (measured with perf_town_villagers.gd, 480 villagers): the
+## AnimationPlayers were the biggest share of a frame, then drawing the skinned
+## meshes, then their shadows. So: animations are advanced by hand, at most
+## ANIM_UPDATES_PER_FRAME a frame, only for villagers on screen, and not at all
+## once the camera is zoomed out past ANIM_MAX_ZOOM (they are a few pixels
+## tall); villagers cast no shadows; and every villager of one skin tone shares
+## one skin material.
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
@@ -50,12 +58,23 @@ const PLAZA_RING := Vector2(8.5, 11.5)
 const SPOT_TRIES := 4
 ## Screen-space pick radius in pixels, around the villager's chest.
 const PICK_RADIUS_PX := 14.0
+## Animation budget: AnimationPlayers advanced per frame (round robin over the
+## villagers on screen; each catches up on the time it missed).
+const ANIM_UPDATES_PER_FRAME := 64
+## Orthographic camera size above which animations stop (pose held).
+const ANIM_MAX_ZOOM := 50.0
+## Most missed time one catch-up advances, so a villager coming back on screen
+## does not jump through a long stretch of its clip.
+const ANIM_MAX_CATCH_UP := 0.5
 
 static var _scene_cache: Dictionary = {}
+static var _skin_materials: Dictionary = {} # Color -> StandardMaterial3D
 
 var paused := false
 
 var _villagers: Dictionary = {} # Vector2i(household_id, member_number) -> entry
+var _anim_order: Array = [] # villager keys, the round-robin order
+var _anim_cursor := 0
 var _roster: Dictionary = {} # household_id -> villager report
 
 ## Rebuilds the roster from `reports` (get_villager_reports) and `layout`.
@@ -82,6 +101,8 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 		if not wanted.has(key):
 			(_villagers[key]["node"] as Node3D).queue_free()
 			_villagers.erase(key)
+	_anim_order = _villagers.keys()
+	_anim_cursor = 0
 
 func villager_count() -> int:
 	return _villagers.size()
@@ -162,11 +183,16 @@ func _place(key: Vector2i, yard: Dictionary, child: bool) -> void:
 			"yard": yard,
 			"target": Vector3.INF,
 			"wait": rng.randf_range(0.0, IDLE_TIME.y),
+			"anim_debt": 0.0, # seconds of animation not yet advanced
 		}
 		node.position = _free_spot(key, yard, rng)
 		_villagers[key] = entry
 		node.rotation.y = rng.randf() * TAU
 		_play(entry, IDLE_CLIP)
+		# Manual mode: pose it now (never left in the rest pose, even while
+		# zoomed out), at a random point of the clip so idles are not in step.
+		if entry["anim"] != null:
+			(entry["anim"] as AnimationPlayer).advance(rng.randf_range(0.0, 2.0))
 		return
 	if entry["yard"] != yard:
 		# Moved house (or became homeless): walk over from wherever they are.
@@ -178,8 +204,38 @@ func _place(key: Vector2i, yard: Dictionary, child: bool) -> void:
 func _process(delta: float) -> void:
 	if paused:
 		return
+	var step := minf(delta, 0.25)
 	for key in _villagers:
-		_step(_villagers[key], minf(delta, 0.25))
+		var entry: Dictionary = _villagers[key]
+		_step(entry, step)
+		entry["anim_debt"] = minf(float(entry["anim_debt"]) + step, ANIM_MAX_CATCH_UP)
+	_advance_animations()
+
+## Advances up to ANIM_UPDATES_PER_FRAME on-screen villagers' animations by the
+## time each has missed, continuing round robin from where the last frame
+## stopped. Nothing animates while zoomed out past ANIM_MAX_ZOOM.
+func _advance_animations() -> void:
+	var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+	if camera == null or _anim_order.is_empty():
+		return
+	if camera.projection == Camera3D.PROJECTION_ORTHOGONAL and camera.size > ANIM_MAX_ZOOM:
+		return
+	var updated := 0
+	var count := _anim_order.size()
+	var scanned := 0
+	while scanned < count and updated < ANIM_UPDATES_PER_FRAME:
+		var key = _anim_order[(_anim_cursor + scanned) % count]
+		scanned += 1
+		var entry: Dictionary = _villagers.get(key, {})
+		if entry.is_empty() or entry["anim"] == null:
+			continue
+		var node := entry["node"] as Node3D
+		if not camera.is_position_in_frustum(node.position + Vector3.UP):
+			continue
+		(entry["anim"] as AnimationPlayer).advance(float(entry["anim_debt"]))
+		entry["anim_debt"] = 0.0
+		updated += 1
+	_anim_cursor = (_anim_cursor + scanned) % count
 
 func _step(entry: Dictionary, delta: float) -> void:
 	var node := entry["node"] as Node3D
@@ -270,9 +326,13 @@ func _make_model(key: Vector2i, female: bool, child: bool) -> Node3D:
 	tone_rng.seed = hash("skin|%d" % key.x)
 	var tone := _pick_tone(tone_rng)
 	for node in model.find_children("*", "MeshInstance3D", true, false):
-		SkinTones.apply(node as MeshInstance3D, tone)
+		var mesh_node := node as MeshInstance3D
+		mesh_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_apply_skin(mesh_node, tone)
 	var anim := model.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if anim != null:
+		# Advanced by hand in _advance_animations, under a per-frame budget.
+		anim.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
 		for clip in [IDLE_CLIP, WALK_CLIP]:
 			if anim.has_animation(clip):
 				anim.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
@@ -280,6 +340,18 @@ func _make_model(key: Vector2i, female: bool, child: bool) -> Node3D:
 	var factor := ADULT_HEIGHT / maxf(height, 0.001) * (CHILD_SCALE if child else 1.0)
 	model.scale = Vector3.ONE * factor
 	return holder
+
+## Like SkinTones.apply, but every villager of one tone shares one material.
+static func _apply_skin(mesh_node: MeshInstance3D, tone: Color) -> void:
+	for i in mesh_node.mesh.get_surface_count():
+		if mesh_node.mesh.surface_get_name(i) != "Skin":
+			continue
+		if not _skin_materials.has(tone):
+			var material := StandardMaterial3D.new()
+			material.albedo_color = tone
+			_skin_materials[tone] = material
+		mesh_node.set_surface_override_material(i, _skin_materials[tone])
+		return
 
 ## SkinTones' weighted tones, picked with a seeded rng instead of the global one.
 static func _pick_tone(rng: RandomNumberGenerator) -> Color:
