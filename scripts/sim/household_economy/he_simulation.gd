@@ -618,6 +618,20 @@ var price_adjustment_enabled: bool = true
 ## future player policy can change it per sim. 0.0 turns the tax off.
 var sales_tax_rate: float = SALES_TAX_RATE
 
+## Player tax policy range and its morale effect: every point below the
+## default is worth +TAX_MORALE_PER_POINT morale (so 2% = +10%), every point
+## above is worth the same penalty (15% = -33%).
+const MAX_SALES_TAX_RATE := 0.15
+const TAX_MORALE_PER_POINT := 10.0 / 3.0 / 100.0
+
+func set_sales_tax_rate(rate: float) -> void:
+	sales_tax_rate = clampf(rate, 0.0, MAX_SALES_TAX_RATE)
+
+## Morale shift from the tax rate, applied to every person: positive below
+## the default rate, negative above it.
+func tax_morale_effect() -> float:
+	return (SALES_TAX_RATE - sales_tax_rate) * 100.0 * TAX_MORALE_PER_POINT
+
 ## Named "emigrate" rather than "die" -- placeholder terminology until H1
 ## actually connects to the wider valley (see docs/river-valley-vertical-
 ## slice.md) and a household on the brink of starvation has somewhere real
@@ -929,9 +943,9 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
 		"health": h.health(),
-		"morale": h.morale(),
+		"morale": h.morale(1.0, true, tax_morale_effect()),
 		"health_losses": h.health_losses(),
-		"morale_penalties": h.morale_penalties(),
+		"morale_penalties": h.morale_penalties(1.0, true, tax_morale_effect()),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
@@ -957,6 +971,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var morale_total := 0.0
 	var health_factors := {}
 	var morale_factors := {}
+	var tax_effect := tax_morale_effect()
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
 		if not h.is_employed():
@@ -969,11 +984,11 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 		for member in members:
 			var v: float = member["v"]
 			health_total += h.health(v)
-			morale_total += h.morale(v, member["works"])
+			morale_total += h.morale(v, member["works"], tax_effect)
 			population += 1
 			for loss in h.health_losses(v):
 				_add_factor(health_factors, loss["label"], loss["loss"])
-			for penalty in h.morale_penalties(v, member["works"]):
+			for penalty in h.morale_penalties(v, member["works"], tax_effect):
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
 	return {
 		"population": population,
@@ -985,7 +1000,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	}
 
 func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
-	if amount <= 0.001:
+	if absf(amount) <= 0.001:
 		return
 	var entry: Dictionary = factors.get_or_add(label, {"total": 0.0, "people": 0})
 	entry["total"] += amount
@@ -1053,8 +1068,8 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"note": note,
 		"vulnerability": vulnerability,
 		"health": h.health(vulnerability),
-		"morale": h.morale(vulnerability, is_worker),
-		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"morale": h.morale(vulnerability, is_worker, tax_morale_effect()),
+		"morale_penalties": h.morale_penalties(vulnerability, is_worker, tax_morale_effect()),
 		"needs": needs,
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}

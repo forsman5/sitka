@@ -431,8 +431,14 @@ func health_losses(vulnerability: float = 1.0) -> Array[Dictionary]:
 
 ## Morale penalties currently applying, as [{label, penalty}] (penalty > 0).
 ## `works` is false for dependents, who aren't affected by unemployment.
-func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[Dictionary]:
+## `tax_morale` is the town's tax policy effect (+ bonus for low tax, - for
+## high; see HESimulation.tax_morale_effect), listed as a signed penalty.
+func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
+	if tax_morale > 0.001:
+		out.append({"label": "Low taxes", "penalty": -tax_morale})
+	elif tax_morale < -0.001:
+		out.append({"label": "High taxes", "penalty": -tax_morale})
 	var need_penalty := MORALE_NEED_PENALTY * minf(weighted_need_stress() * vulnerability, 1.0)
 	if need_penalty > 0.001:
 		out.append({"label": "Unmet needs", "penalty": need_penalty})
@@ -444,9 +450,9 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[D
 			break
 	return out
 
-func morale(vulnerability: float = 1.0, works: bool = true) -> float:
+func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> float:
 	var total := 0.0
-	for entry in morale_penalties(vulnerability, works):
+	for entry in morale_penalties(vulnerability, works, tax_morale):
 		total += entry["penalty"]
 	return clampf(1.0 - total, 0.0, 1.0)
 
