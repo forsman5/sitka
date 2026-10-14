@@ -44,7 +44,7 @@ const WAREHOUSE_BUILD_COST := 200.0
 ## A house costs gold from the treasury plus timber from the Government
 ## Warehouse -- the first build priced in warehouse goods. One house shelters
 ## one household (HEHouse.capacity_households).
-const HOUSE_BUILD_GOLD := 50.0
+const HOUSE_BUILD_GOLD := 20.0
 const HOUSE_BUILD_TIMBER := 50.0
 ## Seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the

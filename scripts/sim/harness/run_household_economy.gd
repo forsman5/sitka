@@ -2628,7 +2628,7 @@ func _check_housing() -> void:
 		if option["type_key"] == "house":
 			house_option = option
 	_assert(not house_option.is_empty(), "The government can build houses")
-	_assert(is_equal_approx(house_option["cost"]["gold"], 50.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 50 gold + 50 timber")
+	_assert(is_equal_approx(house_option["cost"]["gold"], 20.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 20 gold + 50 timber")
 	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
 	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 500.0
 	_assert(sim.government_build_blocker(1, house_option) == "needs a government warehouse", "No warehouse: house is blocked on the warehouse (got '%s')" % sim.government_build_blocker(1, house_option))
@@ -2642,7 +2642,7 @@ func _check_housing() -> void:
 	var treasury_before := gov.balance
 	_assert(sim.build_government_building(1, "house"), "House builds from treasury gold + warehouse timber")
 	_assert(sim.get_housing_report(1)["houses"] == houses_before + 1, "A house was added")
-	_assert(absf(treasury_before - gov.balance - 50.0) < EPSILON, "The house cost 50 gold")
+	_assert(absf(treasury_before - gov.balance - 20.0) < EPSILON, "The house cost 20 gold")
 	_assert(absf(warehouse.stock(Commodity.Type.TIMBER) - 70.0) < EPSILON, "The house consumed 50 timber from the warehouse")
 	_assert(sim.build_government_building(1, "house"), "Houses are repeatable")
 	_assert(sim.businesses.size() == sim.businesses.keys().size() and not sim.has_business_of_type(1, "house"), "Houses are not businesses")

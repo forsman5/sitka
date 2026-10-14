@@ -4,7 +4,7 @@
 
 - A **house** (`HEHouse`, `type_key == "house"`) is a building, not a business: no workers, recipe, stock or balance. One house shelters one household (`capacity_households = 1`).
 - Housing is a **settlement-wide pool**. Households are not assigned to a specific house (`TODO(housing-assignment)`).
-- Only the **government** builds houses ("Government build" menu): 50 gold from the treasury + 50 timber from the Government Warehouse. It is blocked with `"needs a government warehouse"` until a warehouse exists, then by treasury / warehouse stock. Houses are repeatable; businesses and the warehouse stay unique.
+- Only the **government** builds houses ("Government build" menu): 20 gold from the treasury + 50 timber from the Government Warehouse. It is blocked with `"needs a government warehouse"` until a warehouse exists, then by treasury / warehouse stock. Houses are repeatable; businesses and the warehouse stay unique.
 - When no house is free (`households >= capacity`) every household's monthly **birth chance is scaled by 0.2** (`HESimulation.HOUSING_SATURATED_BIRTH_SCALE`). Coming-of-age splits are not blocked.
 - Households past capacity (newest ids first) are **homeless**: each loses a member with `HOMELESS_EMIGRATION_CHANCE` (0.3) per monthly emigration pass (event `emigrate`, `cause: "homeless"`).
 - A household with more than 4 adults (workers + dependents past the aging threshold) gives each extra adult 3x the monthly leave-home chance (`CROWDED_ADULT_COUNT`, `CROWDED_LEAVE_MULTIPLIER`).
