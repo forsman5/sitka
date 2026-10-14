@@ -53,7 +53,9 @@ const HOUSE_TYPE_KEY := "house"
 const HALF_EXTENT := 80.0
 ## Minimum clear gap between two site footprints.
 const SITE_SPACING := 3.0
-const CANDIDATES_PER_ZONE := 128
+## Roads and house rows reject a share of a zone's candidates, so there are
+## enough of them that a business still finds a clear spot in its own zone.
+const CANDIDATES_PER_ZONE := 384
 const COORD_SNAP := 0.5
 
 ## footprint: site size; radius: band of distances from the civic anchor in
@@ -63,7 +65,7 @@ const ZONE_SPECS := {
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
 	ZONE_FIELD: {"footprint": Vector2(22.0, 16.0), "radius": Vector2(28.0, 48.0)},
 	ZONE_PASTURE: {"footprint": Vector2(26.0, 20.0), "radius": Vector2(46.0, 66.0)},
-	# Lots along the road frontage (see _make_housing_candidates); no radius band.
+	# Lots along the road frontage (see _make_frontage_candidates); no radius band.
 	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0)},
 }
 
@@ -78,8 +80,6 @@ const MAIN_ROAD_WIDTH := 5.0
 const LANE_WIDTH := 3.5
 const LANE_STEP := 6.0
 const LANE_JUNCTIONS := [
-	{"at": 26.0, "sides": [1, -1], "length": 30.0},
-	{"at": 46.0, "sides": [1, -1], "length": 30.0},
 	{"at": 66.0, "sides": [1, -1], "length": 30.0},
 ]
 ## A lane is cut to half the chord between neighbouring spokes at its junction,
@@ -95,8 +95,10 @@ const HOUSE_SETBACK := 1.0
 ## Spacing of candidate lots along a road. Finer than a house plus SITE_SPACING
 ## on purpose: first-fit then slides past a blocked lot and packs the frontage.
 const HOUSE_LOT_PITCH := 5.0
-## Houses stay out of the civic plaza and its immediate surroundings.
-const HOUSE_MIN_RADIUS := 20.0
+## Town businesses front the spokes out to this radius (the "main street"),
+## and houses start beyond it so the two never compete for the same frontage.
+const MAIN_STREET_RADIUS := 42.0
+const HOUSE_MIN_RADIUS := 42.0
 ## Growth: lanes added per step when house lots run out, tries per step, and
 ## steps tried for one house before it is reported unplaced.
 const GROWTH_LANES_PER_STEP := 3
@@ -154,7 +156,13 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 	_seed_text = seed_text
 	_roads = _make_roads(seed_text)
 	_road_segments = _segments_of(_roads)
-	_candidates[ZONE_HOUSING] = _make_housing_candidates(seed_text, _roads)
+	# Town businesses front the spokes first (the spiral spots stay as overflow),
+	# so civic and trade buildings sit on the main streets instead of in the
+	# narrow wedges between them.
+	var town_lots := _make_frontage_candidates(ZONE_TOWN, seed_text, _roads, 0.0, MAIN_STREET_RADIUS)
+	town_lots.append_array(_candidates[ZONE_TOWN])
+	_candidates[ZONE_TOWN] = town_lots
+	_candidates[ZONE_HOUSING] = _make_frontage_candidates(ZONE_HOUSING, seed_text, _roads, HOUSE_MIN_RADIUS, INF)
 	_sites.append({
 		"site_id": CIVIC_SITE_ID,
 		"settlement_id": settlement_id,
@@ -300,6 +308,13 @@ func site_of_dwelling(dwelling_id: int) -> Dictionary:
 func site_rect(site: Dictionary) -> Rect2:
 	return _rect_for(site["position"], site["footprint"], site["rotation"])
 
+## Whether `later`'s footprint grown by `margin` (in its own frame, as
+## placement checks it) overlaps `earlier`'s. A later site has the higher id.
+static func sites_crowd(later: Dictionary, earlier: Dictionary, margin: float) -> bool:
+	return _obb_overlap(
+		later["position"], (later["footprint"] as Vector2) * 0.5 + Vector2.ONE * margin, later["rotation"],
+		earlier["position"], (earlier["footprint"] as Vector2) * 0.5, earlier["rotation"])
+
 ## Whether `point` lies inside the site's rotated footprint.
 func site_contains(site: Dictionary, point: Vector2) -> bool:
 	var local: Vector2 = (point - site["position"]).rotated(-float(site["rotation"]))
@@ -337,8 +352,8 @@ func _allocate_site(type_key: String) -> int:
 func _allocate_from(zones: Array) -> int:
 	for candidate_zone in zones:
 		var footprint: Vector2 = ZONE_SPECS[candidate_zone]["footprint"]
-		var clearance := 0.0 if candidate_zone == ZONE_HOUSING else BUSINESS_ROAD_CLEARANCE
 		for candidate in _candidates[candidate_zone]:
+			var clearance := 0.0 if candidate.get("frontage", false) else BUSINESS_ROAD_CLEARANCE
 			if not _fits(candidate["position"], footprint, candidate["rotation"], clearance):
 				continue
 			_sites.append({
@@ -524,7 +539,7 @@ func _grow_roads() -> bool:
 		return false
 	_roads.append_array(added)
 	_road_segments.append_array(_segments_of(added))
-	var lots := _make_housing_candidates("%s|grow%d" % [_seed_text, _growth_steps], added)
+	var lots := _make_frontage_candidates(ZONE_HOUSING, "%s|grow%d" % [_seed_text, _growth_steps], added, HOUSE_MIN_RADIUS, INF)
 	(_candidates[ZONE_HOUSING] as Array).append_array(lots)
 	return true
 
@@ -549,13 +564,17 @@ func _lane_is_clear(lane: Dictionary, added: Array[Dictionary]) -> bool:
 					return false
 	return true
 
-## House lots along both sides of every road, nearest the civic anchor first.
-## Each faces the road (local +Z toward it), with a little seeded setback,
-## slide and yaw jitter so the rows read as built, not stamped.
-static func _make_housing_candidates(seed_text: String, roads: Array[Dictionary]) -> Array:
-	var half: float = (ZONE_SPECS[ZONE_HOUSING]["footprint"] as Vector2).x * 0.5
+## Lots for `zone` along both sides of every road, between `min_radius` and
+## `max_radius` of the civic anchor, nearest it first. Each faces the road
+## (local +Z toward it), with a little seeded setback, slide and yaw jitter so
+## the rows read as built, not stamped. Candidates are flagged `frontage`, so
+## placement lets them sit directly against the road ribbon.
+static func _make_frontage_candidates(zone: String, seed_text: String, roads: Array[Dictionary], min_radius: float, max_radius: float) -> Array:
+	var footprint: Vector2 = ZONE_SPECS[zone]["footprint"]
+	var half := footprint.x * 0.5
+	var depth := footprint.y * 0.5
 	var rng := RandomNumberGenerator.new()
-	rng.seed = hash("%s|%s" % [seed_text, ZONE_HOUSING])
+	rng.seed = hash("%s|%s|frontage" % [seed_text, zone])
 	var out: Array = []
 	for road in roads:
 		var points: PackedVector2Array = road["points"]
@@ -568,12 +587,13 @@ static func _make_housing_candidates(seed_text: String, roads: Array[Dictionary]
 			var tangent: Vector2 = sample[1]
 			var left := Vector2(-tangent.y, tangent.x)
 			for side in [1, -1]:
-				var setback: float = float(road["width"]) * 0.5 + HOUSE_SETBACK + half + rng.randf_range(0.0, 1.2)
+				var setback: float = float(road["width"]) * 0.5 + HOUSE_SETBACK + depth + rng.randf_range(0.0, 1.2)
 				var center: Vector2 = sample[0] + left * float(side) * setback + tangent * rng.randf_range(-0.7, 0.7)
 				var rotation := tangent.angle() + (PI if side > 0 else 0.0) + rng.randf_range(-0.05, 0.05)
-				if center.length() < HOUSE_MIN_RADIUS:
+				var distance := center.length()
+				if distance < min_radius or distance > max_radius:
 					continue
-				out.append({"position": center, "rotation": rotation, "road_id": road["road_id"], "order": center.length()})
+				out.append({"position": center, "rotation": rotation, "road_id": road["road_id"], "order": distance, "frontage": true})
 			s += HOUSE_LOT_PITCH
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["order"] != b["order"]:
