@@ -11,17 +11,40 @@ extends RefCounted
 ##   wall time has passed since the last presentation. Skipped intermediate
 ##   revisions are never queued; one presentation shows the latest state.
 ## - Every revision (and every explicit request) marks all groups dirty.
-##   Presenting consumes the dirty set. A policy that hides inactive tabs can
-##   narrow which groups are *taken*; untaken groups stay dirty and refresh the
-##   next time they are asked for.
+##   Presenting takes only the groups the view says are visible
+##   (take_visible); a hidden group stays dirty, costs nothing, and refreshes
+##   once the first time it is visible again.
 ## - Pause, player commands, and selection changes call request_immediate(),
 ##   which makes the next due() true regardless of the interval.
 ##
 ## interval_seconds == 0.0 presents on every revision, matching the
 ## dashboard's behavior from before the presenter existed.
 
-## Refresh groups, in the dashboard's presentation order.
-enum Group { HEADER, TOWN, MARKET_NEEDS, BUSINESSES, HOUSEHOLDS, DETAILS, BLOTTER }
+## Refresh groups, in the dashboard's presentation order. Each is owned by one
+## view that can be hidden independently: a top-level tab page, a list tab
+## page, a detail panel, the town map, or the blotter. The BUSINESS_DETAIL_*
+## groups are the tabs of the business detail page.
+enum Group {
+	HEADER,
+	TOWN_STATS,
+	HOUSING,
+	MARKET,
+	MARKET_DETAIL,
+	NEEDS,
+	NEED_DETAIL,
+	TOWN_VIEW,
+	BUSINESS_ROWS,
+	JOBS,
+	BUSINESS_DETAIL_HEADER,
+	BUSINESS_DETAIL_CASH,
+	BUSINESS_DETAIL_STOCKS,
+	BUSINESS_DETAIL_PRODUCTIVITY,
+	BUSINESS_DETAIL_EVENTS,
+	HOUSEHOLDS,
+	HOUSEHOLD_DETAIL,
+	PERSON_DETAIL,
+	BLOTTER,
+}
 
 var interval_seconds := 0.0
 var revision := 0
@@ -60,14 +83,31 @@ func due(delta: float) -> bool:
 		return false
 	return _elapsed >= interval_seconds
 
-## Consumes and returns the dirty groups; records the presentation.
+## Consumes and returns every dirty group; records the presentation.
 func take_dirty() -> Array:
+	return take_visible(func(_group: int) -> bool: return true)
+
+## Consumes and returns only the dirty groups for which `is_visible(group)` is
+## true, in presentation order. Hidden groups stay dirty. Records the
+## presentation either way, so a hidden group never keeps the dashboard
+## "behind".
+func take_visible(is_visible: Callable) -> Array:
 	var groups := _dirty.keys()
 	groups.sort()
-	_dirty.clear()
+	var taken: Array = []
+	for group in groups:
+		if is_visible.call(group):
+			taken.append(group)
+			_dirty.erase(group)
 	presented_revision = revision
 	_force = false
 	_elapsed = 0.0
+	return taken
+
+## Groups still waiting for their view to become visible.
+func pending_groups() -> Array:
+	var groups := _dirty.keys()
+	groups.sort()
 	return groups
 
 func _mark_all_dirty() -> void:

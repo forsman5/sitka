@@ -1152,6 +1152,55 @@ func get_household_ids(settlement_id: int = -1) -> Array[int]:
 func get_clock_summary() -> Dictionary:
 	return {"day": day}
 
+## Lightweight rows for the household table: exactly the fields it shows, in
+## one pass, with no need arrays, explanations, or per-person detail. Use
+## get_household_summary() for the one household a detail panel shows. Rows are
+## in household-ID order. Presentation data: treat as immutable.
+##   id, employer_business_id, housing_status, workers, oldest_worker,
+##   dependents, oldest_dependent, stock {commodity -> float} for every
+##   SUBSISTENCE_COMMODITIES entry, balance, stress, scarcity (total unmet
+##   for scarcity today), unaffordable (total unmet for lack of funds today).
+func get_household_table_snapshot(settlement_id: int = -1) -> Array[Dictionary]:
+	var rows: Array[Dictionary] = []
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		var worker_ages := h.worker_ages()
+		var dependent_ages := h.dependent_ages()
+		var stock := {}
+		var scarcity := 0.0
+		var unaffordable := 0.0
+		for c in SUBSISTENCE_COMMODITIES:
+			stock[c] = h.stock(c)
+			scarcity += h.last_unmet_scarcity.get(c, 0.0)
+			unaffordable += h.last_unmet_unaffordable.get(c, 0.0)
+		rows.append({
+			"id": household_id,
+			"employer_business_id": h.employer_business_id,
+			"housing_status": _housing_status_of(h),
+			"workers": worker_ages.size(),
+			"oldest_worker": worker_ages.max() if not worker_ages.is_empty() else 0,
+			"dependents": dependent_ages.size(),
+			"oldest_dependent": dependent_ages.max() if not dependent_ages.is_empty() else 0,
+			"stock": stock,
+			"balance": h.balance,
+			"stress": h.demographics.food_stress,
+			"scarcity": scarcity,
+			"unaffordable": unaffordable,
+		})
+	return rows
+
+## Workers and households with no employer, for the Jobs tab.
+func get_unemployment_summary(settlement_id: int = -1) -> Dictionary:
+	var workers := 0
+	var household_count := 0
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		if h.is_employed():
+			continue
+		household_count += 1
+		workers += h.worker_capacity()
+	return {"workers": workers, "households": household_count}
+
 func get_household_summary(household_id: int) -> Dictionary:
 	var h: HEHousehold = households[household_id]
 	var inventory := {}
@@ -1330,11 +1379,13 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
 
-func get_business_reports(settlement_id: int = -1, include_detail: bool = true) -> Array:
+func get_business_reports(settlement_id: int = -1, include_detail: bool = true, only_business_id: int = -1) -> Array:
 	var out: Array = []
 	var ids := businesses.keys()
 	ids.sort()
 	for business_id in ids:
+		if only_business_id != -1 and business_id != only_business_id:
+			continue
 		var b: HEBusiness = businesses[business_id]
 		if settlement_id != -1 and b.settlement_id != settlement_id:
 			continue
