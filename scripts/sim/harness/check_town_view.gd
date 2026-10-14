@@ -184,6 +184,11 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 	for report in reports:
 		population += (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
 	check(population > 0 and view.villager_count() == population, "One villager per person (%d drawn, %d people)" % [view.villager_count(), population])
+	var females := 0
+	for key in view.villagers().villager_keys():
+		if view.villagers()._villagers[key]["female"]:
+			females += 1
+	check(females > population / 5 and females < population * 4 / 5, "Both body models are in use (%d of %d female)" % [females, population])
 
 	# Each housed villager stands in its own yard.
 	var housed_key := Vector2i(-1, -1)
