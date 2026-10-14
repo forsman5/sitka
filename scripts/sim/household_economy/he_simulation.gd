@@ -935,6 +935,74 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		return true
 	return false
 
+## What the warehouse still lacks for `option`'s goods cost: commodity ->
+## missing units, empty when the cost has no goods or the warehouse covers it
+## (or there is no warehouse -- then nothing can be ordered either).
+func _goods_shortfall(settlement_id: int, option: Dictionary) -> Dictionary:
+	var shortfall: Dictionary = {}
+	var warehouse := _government_warehouse(settlement_id)
+	if warehouse == null:
+		return shortfall
+	var goods: Dictionary = option["cost"].get("goods", {})
+	for commodity in goods:
+		var missing: float = float(goods[commodity]) - warehouse.stock(commodity)
+		if missing > 0.0:
+			shortfall[commodity] = missing
+	return shortfall
+
+## Where a goods-priced government build stands on its warehouse stock:
+##   "none"      -- nothing to order (no goods cost, already covered, no
+##                  warehouse, no government, already built, treasury short)
+##   "can_order" -- everything else is in place and goods are missing, and
+##                  no standing order covers them yet
+##   "ordered"   -- a standing buy order already targets the full cost; the
+##                  warehouse is just waiting for the goods to arrive
+func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
+	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
+	if gov == null:
+		return "none"
+	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+		return "none"
+	if gov.balance < float(option["cost"].get("gold", 0.0)):
+		return "none"
+	var shortfall := _goods_shortfall(settlement_id, option)
+	if shortfall.is_empty():
+		return "none"
+	var warehouse := _government_warehouse(settlement_id)
+	for commodity in shortfall:
+		var order: Dictionary = warehouse.warehouse_orders.get(commodity, {})
+		if float(order.get("buy_up_to", 0.0)) < float(option["cost"]["goods"][commodity]):
+			return "can_order"
+	return "ordered"
+
+## The Government build button's action. Builds `type_key` if it can be built
+## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## sets the warehouse's standing buy order for each missing good up to the
+## build's cost ("ordered") -- the player presses again once the goods arrive.
+## The order is left standing, so the warehouse keeps restocking for the next
+## one. Returns "" when nothing was done.
+## TODO(construction): the build itself is still instant; see
+## HEScenarioSeeds.government_buildings().
+func request_government_build(settlement_id: int, type_key: String) -> String:
+	if build_government_building(settlement_id, type_key):
+		return "built"
+	for option in HEScenarioSeeds.government_buildings():
+		if option["type_key"] != type_key:
+			continue
+		if build_goods_order_state(settlement_id, option) != "can_order":
+			return ""
+		var warehouse := _government_warehouse(settlement_id)
+		var goods: Dictionary = option["cost"]["goods"]
+		for commodity in _goods_shortfall(settlement_id, option):
+			var existing: Dictionary = warehouse.warehouse_orders.get(commodity, {})
+			var target := maxf(float(existing.get("buy_up_to", 0.0)), float(goods[commodity]))
+			var sells: bool = existing.get("sell", false)
+			# A standing sell order must not export the goods being saved up.
+			var keep := maxf(float(existing.get("keep", 0.0)), float(goods[commodity])) if sells else float(existing.get("keep", 0.0))
+			set_warehouse_order(warehouse.id, commodity, target, sells, keep)
+		return "ordered"
+	return ""
+
 ## Sets a Government Warehouse's standing order for one good: buy until it
 ## holds `buy_up_to` units (0 = don't buy), and -- if `sell` -- export whatever
 ## it holds above `keep` units through the Trader. Both run daily, paced by

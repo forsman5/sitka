@@ -1165,9 +1165,17 @@ func _refresh_housing() -> void:
 		return
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
 	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
+	var order_state := _simulation.build_goods_order_state(_town_settlement_id(), option)
 	_housing_build_button.text = "Build house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
-	_housing_build_button.disabled = blocker != ""
-	_housing_blocker_label.text = blocker
+	if order_state == "can_order":
+		_housing_build_button.text = "Order timber for a house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	_housing_build_button.disabled = blocker != "" and order_state != "can_order"
+	if order_state == "can_order":
+		_housing_blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
+	elif order_state == "ordered":
+		_housing_blocker_label.text = "Goods on order: %s" % blocker
+	else:
+		_housing_blocker_label.text = blocker
 
 ## A title row with a color-keyed legend above a hoverable chart.
 func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
@@ -2692,13 +2700,18 @@ func _refresh_government_build_menu() -> void:
 	for i in gov_options.size():
 		var gov_option: Dictionary = gov_options[i]
 		var blocker := _simulation.government_build_blocker(_town_settlement_id(), gov_option)
+		var order_state := _simulation.build_goods_order_state(_town_settlement_id(), gov_option)
 		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(gov_option["cost"])]
 		if blocker == "already built":
 			item_text = "%s (already built)" % gov_option["label"]
+		elif order_state == "can_order":
+			item_text += " - click to order the goods"
+		elif order_state == "ordered":
+			item_text += " - goods on order"
 		elif blocker != "":
 			item_text += " - %s" % blocker
 		_gov_build_popup.set_item_text(i, item_text)
-		_gov_build_popup.set_item_disabled(i, blocker != "")
+		_gov_build_popup.set_item_disabled(i, blocker != "" and order_state != "can_order")
 
 ## Dashboard <-> town map. The simulation keeps running either way; only which
 ## half of the window is shown changes.
@@ -2736,7 +2749,11 @@ func _on_create_business_pressed(index: int) -> void:
 
 func _on_build_government_pressed(index: int) -> void:
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
-	if not _simulation.build_government_building(_town_settlement_id(), option["type_key"]):
+	var outcome := _simulation.request_government_build(_town_settlement_id(), option["type_key"])
+	if outcome == "ordered":
+		_refresh()
+		return
+	if outcome != "built":
 		return
 	for report in _simulation.get_business_reports():
 		_business_names[report["business_id"]] = report["name"]

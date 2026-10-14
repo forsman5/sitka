@@ -40,11 +40,11 @@ const GOVERNMENT_BUSINESS_ID := 9
 const CHARCOAL_BURNER_BUSINESS_ID := 10
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
-const WAREHOUSE_BUILD_COST := 200.0
+const WAREHOUSE_BUILD_COST := 100.0
 ## A house costs gold from the treasury plus timber from the Government
 ## Warehouse -- the first build priced in warehouse goods. One house shelters
 ## one household (HEHouse.capacity_households).
-const HOUSE_BUILD_GOLD := 20.0
+const HOUSE_BUILD_GOLD := 15.0
 const HOUSE_BUILD_TIMBER := 50.0
 ## Seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
@@ -288,16 +288,13 @@ static func government_business_costs() -> Dictionary:
 ## `startup` marks a business that gets the new-business crew and seed cash
 ## (HESimulation.add_new_business); the Warehouse runs on the treasury instead.
 static func government_buildings() -> Array[Dictionary]:
-	# TODO(auto-order): choosing a goods-priced build should also create the
-	# warehouse's standing buy order for the missing goods, instead of leaving
-	# the player to set it by hand.
 	# TODO(construction): government builds are instant and need no labor. Add
 	# construction jobs at the government building, and longer term a
 	# construction business that does the work.
 	var options: Array[Dictionary] = [
 		{"type_key": "house", "label": "House", "category": "housing", "repeatable": true,
 			"cost": build_cost(HOUSE_BUILD_GOLD, {Commodity.Type.TIMBER: HOUSE_BUILD_TIMBER}),
-			"hint": "Shelters one household. Needs a Government Warehouse holding the timber.",
+			"hint": "Shelters one household. Needs a Government Warehouse; the build button orders the timber.",
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),

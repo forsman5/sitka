@@ -4,12 +4,12 @@
 
 - A **house** (`HEHouse`, `type_key == "house"`) is a building, not a business: no workers, recipe, stock or balance. One house shelters one household (`capacity_households = 1`).
 - Housing is a **settlement-wide pool**. Households are not assigned to a specific house (`TODO(housing-assignment)`).
-- Only the **government** builds houses ("Government build" menu): 20 gold from the treasury + 50 timber from the Government Warehouse. It is blocked with `"needs a government warehouse"` until a warehouse exists, then by treasury / warehouse stock. Houses are repeatable; businesses and the warehouse stay unique.
+- Only the **government** builds houses ("Government build" menu): 15 gold from the treasury + 50 timber from the Government Warehouse. It is blocked with `"needs a government warehouse"` until a warehouse exists, then by treasury / warehouse stock. Houses are repeatable; businesses and the warehouse stay unique.
 - When no house is free (`households >= capacity`) every household's monthly **birth chance is scaled by 0.2** (`HESimulation.HOUSING_SATURATED_BIRTH_SCALE`). Coming-of-age splits are not blocked.
 - Households past capacity (newest ids first) are **homeless**: each loses a member with `HOMELESS_EMIGRATION_CHANCE` (0.3) per monthly emigration pass (event `emigrate`, `cause: "homeless"`).
 - A household with more than 4 adults (workers + dependents past the aging threshold) gives each extra adult 3x the monthly leave-home chance (`CROWDED_ADULT_COUNT`, `CROWDED_LEAVE_MULTIPLIER`).
 - Seeded towns (all presets and custom rosters) get one house per starting household plus 35% (`HOUSING_STARTING_HEADROOM`): 41 houses for 30 households. A world dict without a `"dwellings"` key is unlimited (`HESettlement.housing_modeled == false`).
-- Warehouse timber still arrives only via manual standing buy orders. TODO in `government_buildings()`: building a goods-priced item should create that order; and construction jobs / a construction business.
+- Pressing Build on a goods-priced item that lacks warehouse goods (with a warehouse and enough treasury gold) sets a standing warehouse buy order for the missing goods up to the build's cost (`HESimulation.request_government_build`, state via `build_goods_order_state`: `none` / `can_order` / `ordered`). The order stays standing, so the warehouse keeps restocking for the next build. The player presses again once the goods arrive (the warehouse buys up to `WAREHOUSE_DAILY_TRADE_CAP` a day, within its wage reserve).
 
 ## API a UI needs
 
@@ -38,4 +38,5 @@
 
 ## Still open
 - Houses are not assigned to households (pooled capacity).
-- Building a goods-priced item should create the warehouse buy order; there are no construction jobs or construction business yet (TODOs in `HEScenarioSeeds.government_buildings()`).
+- No construction jobs or construction business yet; builds are instant (TODO in `HEScenarioSeeds.government_buildings()`).
+- Bootstrapping a new town's timber (seeded warehouse stock, a timber tax on woodlots) is undecided.

@@ -2628,7 +2628,7 @@ func _check_housing() -> void:
 		if option["type_key"] == "house":
 			house_option = option
 	_assert(not house_option.is_empty(), "The government can build houses")
-	_assert(is_equal_approx(house_option["cost"]["gold"], 20.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 20 gold + 50 timber")
+	_assert(is_equal_approx(house_option["cost"]["gold"], 15.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 15 gold + 50 timber")
 	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
 	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 500.0
 	_assert(sim.government_build_blocker(1, house_option) == "needs a government warehouse", "No warehouse: house is blocked on the warehouse (got '%s')" % sim.government_build_blocker(1, house_option))
@@ -2637,13 +2637,22 @@ func _check_housing() -> void:
 	_assert(sim.build_government_building(1, "warehouse"), "Warehouse builds")
 	var warehouse := sim._government_warehouse(1)
 	_assert(sim.government_build_blocker(1, house_option).contains("has 0"), "Empty warehouse can't supply the timber")
-	warehouse.add_stock(Commodity.Type.TIMBER, 120.0)
+	_assert(sim.build_goods_order_state(1, house_option) == "can_order", "Short of timber with a warehouse: the build can order it")
+	_assert(sim.request_government_build(1, "house") == "ordered", "Pressing build orders the missing timber")
+	var timber_order: Dictionary = warehouse.warehouse_orders.get(Commodity.Type.TIMBER, {})
+	_assert(is_equal_approx(float(timber_order.get("buy_up_to", 0.0)), 50.0), "The standing order targets the house's timber cost")
+	_assert(sim.build_goods_order_state(1, house_option) == "ordered", "With the order standing, the state is ordered")
+	_assert(sim.request_government_build(1, "house") == "", "Pressing again before the goods arrive does nothing")
+	sim.advance_ticks(10)
+	_assert(warehouse.stock(Commodity.Type.TIMBER) >= 50.0 - EPSILON, "The order stocks the warehouse with timber (has %.1f)" % warehouse.stock(Commodity.Type.TIMBER))
+	var timber_before := warehouse.stock(Commodity.Type.TIMBER)
 	var houses_before: int = sim.get_housing_report(1)["houses"]
 	var treasury_before := gov.balance
 	_assert(sim.build_government_building(1, "house"), "House builds from treasury gold + warehouse timber")
 	_assert(sim.get_housing_report(1)["houses"] == houses_before + 1, "A house was added")
-	_assert(absf(treasury_before - gov.balance - 20.0) < EPSILON, "The house cost 20 gold")
-	_assert(absf(warehouse.stock(Commodity.Type.TIMBER) - 70.0) < EPSILON, "The house consumed 50 timber from the warehouse")
+	_assert(absf(treasury_before - gov.balance - 15.0) < EPSILON, "The house cost 15 gold")
+	_assert(absf(timber_before - warehouse.stock(Commodity.Type.TIMBER) - 50.0) < EPSILON, "The house consumed 50 timber from the warehouse")
+	warehouse.add_stock(Commodity.Type.TIMBER, 60.0)
 	_assert(sim.build_government_building(1, "house"), "Houses are repeatable")
 	_assert(sim.businesses.size() == sim.businesses.keys().size() and not sim.has_business_of_type(1, "house"), "Houses are not businesses")
 
