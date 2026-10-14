@@ -327,6 +327,8 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
+	if _town_view != null:
+		_town_view.set_villagers_paused(_simulation == null or _ended or _speed_multiplier <= 0.0)
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	if _town_view != null and _town_view.visible:
@@ -366,7 +368,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -518,6 +520,7 @@ func _build_ui() -> void:
 	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_town_view.visible = false
 	_town_view.details_requested.connect(_on_town_details_requested)
+	_town_view.person_details_requested.connect(_on_town_person_details_requested)
 	_town_view.visibility_changed.connect(_on_view_changed)
 	vbox.add_child(_town_view)
 	_town_view.add_child(_build_town_gov_build_button())
@@ -1296,7 +1299,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 48)
 	box.add_child(grid)
-	for stat in [["houses", "Houses"], ["households", "Households"], ["free", "Free houses"], ["homeless", "Homeless households"]]:
+	for stat in [["houses", "Homes"], ["households", "Households"], ["free", "Free homes"], ["homeless", "Homeless households"]]:
 		var cell := VBoxContainer.new()
 		grid.add_child(cell)
 		var caption := Label.new()
@@ -1311,7 +1314,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	var rules := Label.new()
 	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rules.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
+	rules.text = "One home shelters one household (a house is one home, a tenement several); capacity is pooled across the town. When no home is free, births fall by 80%. Households with no home lose members to emigration."
 	box.add_child(rules)
 
 	# Both housing builds are always offered; the hint says which one the
@@ -1346,7 +1349,7 @@ func _refresh_housing() -> void:
 	var housing := _simulation.get_housing_report(_town_settlement_id())
 	if housing["modeled"]:
 		var free := maxi(0, int(housing["capacity"]) - int(housing["households"]))
-		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		_housing_label.text = "%d homes / %d households" % [housing["capacity"], housing["households"]]
 		var color := Color(0.4, 0.75, 0.45)
 		if housing["homeless_households"] > 0:
 			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
@@ -1355,7 +1358,7 @@ func _refresh_housing() -> void:
 			_housing_label.text += " (full)"
 			color = Color(0.9, 0.7, 0.3)
 		_housing_label.add_theme_color_override("font_color", color)
-		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["houses"]
+		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["capacity"]
 		(_housing_detail_labels["households"] as Label).text = "%d" % housing["households"]
 		(_housing_detail_labels["free"] as Label).text = "%d" % free
 		(_housing_detail_labels["homeless"] as Label).text = "%d" % housing["homeless_households"]
@@ -1488,6 +1491,14 @@ func _open_settings_dialog() -> void:
 	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
 	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
 	grid.add_child(day_picker)
+	var shadows_label := Label.new()
+	shadows_label.text = "Villager shadows"
+	grid.add_child(shadows_label)
+	var shadows_check := CheckBox.new()
+	shadows_check.text = "Villagers cast shadows (slower in large towns)"
+	shadows_check.button_pressed = GameState.villager_shadows
+	shadows_check.toggled.connect(GameState.set_villager_shadows)
+	grid.add_child(shadows_check)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)
@@ -3132,6 +3143,10 @@ func _on_town_details_requested(business_id: int) -> void:
 	_set_town_mode(false)
 	_on_business_row_selected(business_id)
 
+func _on_town_person_details_requested(household_id: int, member_number: int) -> void:
+	_set_town_mode(false)
+	_on_person_selected(household_id, member_number)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -3290,9 +3305,9 @@ func _group_visible(group: int) -> bool:
 		HEPresenter.Group.TOWN_STATS:
 			return _page_shown(_town_page)
 		HEPresenter.Group.HOUSING:
-			# One refresh feeds the summary line on the Town tab and the
-			# Housing tab's detail labels and build buttons.
-			return _page_shown(_town_page) or _page_shown(_housing_page)
+			# One refresh feeds the top-bar summary line (on screen whatever
+			# tab is open) and the Housing tab's detail labels and buttons.
+			return _housing_label.is_visible_in_tree() or _page_shown(_town_page) or _page_shown(_housing_page)
 		HEPresenter.Group.MARKET:
 			return _page_shown(_goods_page)
 		HEPresenter.Group.MARKET_DETAIL:
@@ -3387,8 +3402,9 @@ func _refresh_visible_groups(ignore_mouse_guard: bool) -> void:
 			HEPresenter.Group.TOWN_VIEW:
 				if reports.is_empty():
 					reports = _simulation.get_business_reports(-1, false)
-				_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
-				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
+				var dwellings := _simulation.get_dwelling_reports()
+				_town_layout.reconcile(reports, dwellings, _simulation.get_construction_reports())
+				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 				_town_view_synced = true
 			HEPresenter.Group.BUSINESS_ROWS:
 				if reports.is_empty():
@@ -3499,6 +3515,9 @@ func _ensure_business_rows(reports: Array) -> void:
 		if not _business_rows.has(report["business_id"]):
 			rows_stale = true
 	if rows_stale:
+		# A government build that just finished construction has no name yet.
+		for report in reports:
+			_business_names[report["business_id"]] = report["name"]
 		_rebuild_business_rows()
 
 func _refresh_business_row_values(reports: Array) -> void:

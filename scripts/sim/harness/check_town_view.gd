@@ -46,6 +46,18 @@ func _run() -> void:
 			found = found or site["type_key"] == key
 		check(found, "Default scenario should place a %s" % key)
 
+	# House panel names who lives there (HESimulation house assignment).
+	var first_household: int = dashboard._simulation.get_household_ids()[0]
+	var home_id: int = dashboard._simulation.get_household_summary(first_household)["dwelling_id"]
+	var home_site := layout.site_of_dwelling(home_id)
+	check(not home_site.is_empty(), "The first household's house has a site")
+	if not home_site.is_empty():
+		view._select_site(home_site["site_id"])
+		check(view._info_body.text.contains("Home of household") and view._info_body.text.contains(str(first_household)), "House panel names its household (got '%s')" % view._info_body.text)
+		view.clear_selection()
+	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
+	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
+
 	var before := _positions(layout)
 	dashboard._set_town_mode(true)
 	await process_frame
@@ -72,6 +84,8 @@ func _run() -> void:
 	view.clear_selection()
 	_click(view, _screen_of(view, farm_site["position"]))
 	check(view.selected_business_id() == HEScenarioSeeds.FARM_BUSINESS_ID, "Selection should still work after rotating the camera")
+
+	await _check_villagers(dashboard, view, layout)
 
 	# Wheel zoom goes through the shared RTS rig.
 	var size_before: float = view.camera().size
@@ -146,13 +160,13 @@ func _run() -> void:
 	dashboard._simulation.add_dwelling(house_script.new(dashboard._simulation.next_dwelling_id(), dashboard._town_settlement_id()))
 	dashboard._refresh()
 	check(view.site_node_count() == drawn_before + 1, "A new house should add exactly one drawn site")
-	check(view._housing_label.text.begins_with("Housing: %d houses" % (house_count + 1)), "Town view should show the housing report (got '%s')" % view._housing_label.text)
+	check(view._housing_label.text.begins_with("Housing: %d homes" % (house_count + 1)), "Town view should show the housing report (got '%s')" % view._housing_label.text)
 	# The Town tab's housing line only refreshes while the dashboard is shown.
 	var was_town_mode: bool = view.visible
 	dashboard._set_town_mode(false)
 	await process_frame
 	await process_frame
-	check(dashboard._housing_label.text.begins_with("%d houses" % (house_count + 1)), "Dashboard Town tab should show housing (got '%s')" % dashboard._housing_label.text)
+	check(dashboard._housing_label.text.begins_with("%d homes" % (house_count + 1)), "Dashboard Town tab should show housing (got '%s')" % dashboard._housing_label.text)
 	dashboard._set_town_mode(was_town_mode)
 
 	# A failed business leaves its building, vacant, for the next business.
@@ -163,8 +177,123 @@ func _run() -> void:
 	var vacated := layout.get_site(ranch_site["site_id"])
 	check(vacated["business_id"] == HETownLayout.NO_BUSINESS and vacated["built"], "A failed ranch should leave a vacant building")
 	check(view.site_node_count() == after_count, "The vacant building stays drawn")
+
+	# A Government-built house stands as a foundation first, then the house.
+	var sim = dashboard._simulation
+	var settlement_id: int = dashboard._town_settlement_id()
+	var warehouse = HEScenarioSeeds.make_warehouse(sim.next_business_id(), settlement_id)
+	sim.add_business(warehouse)
+	warehouse.inventory[preload("res://scripts/sim/records/commodity.gd").Type.TIMBER] = 500.0
+	sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID].balance = 5000.0
+	var house_index := -1
+	for i in HEScenarioSeeds.government_buildings().size():
+		if HEScenarioSeeds.government_buildings()[i]["type_key"] == "house":
+			house_index = i
+	dashboard._on_build_government_pressed(house_index)
+	var construction: Array = sim.get_construction_reports(settlement_id)
+	check(construction.size() == 1, "Pressing build house starts one construction")
+	if construction.size() == 1:
+		var lot := layout.site_of_dwelling(int(construction[0]["dwelling_id"]))
+		check(not lot.is_empty() and lot["under_construction"], "The house's foundation has a lot")
+		var lot_label: Label3D = view._site_nodes[lot["site_id"]]["label"]
+		check(lot_label.text.ends_with("(under construction)"), "The foundation is labelled under construction (got '%s')" % lot_label.text)
+		sim.advance_ticks(sim.construction_days)
+		dashboard._refresh()
+		check(not layout.get_site(lot["site_id"])["under_construction"], "The house replaces its foundation")
+		lot_label = view._site_nodes[lot["site_id"]]["label"]
+		check(not lot_label.text.contains("under construction"), "The finished house drops the construction label")
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
+
+## Villagers: one model per household member, milling in front of their own
+## house (homeless at the plaza); clicking one opens the person window, whose
+## buttons jump to the home and to the dashboard's person detail.
+func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
+	var sim = dashboard._simulation
+	var reports: Array = sim.get_villager_reports(dashboard._town_settlement_id())
+	var population := 0
+	for report in reports:
+		population += (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
+	check(population > 0 and view.villager_count() == population, "One villager per person (%d drawn, %d people)" % [view.villager_count(), population])
+	var females := 0
+	for key in view.villagers().villager_keys():
+		if view.villagers()._villagers[key]["female"]:
+			females += 1
+	check(females > population / 5 and females < population * 4 / 5, "Both body models are in use (%d of %d female)" % [females, population])
+
+	# Shadows follow the GameState setting (off by default). Set directly and
+	# signalled by hand, so the check does not rewrite the user's settings file.
+	var game_state: Node = root.get_node("GameState")
+	var saved_shadows: bool = game_state.villager_shadows
+	var shadow_mesh := view.villagers().find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
+	game_state.villager_shadows = false
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "Villager shadows off when the setting is off")
+	game_state.villager_shadows = true
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "Villager shadows follow the setting when turned on")
+	game_state.villager_shadows = saved_shadows
+	game_state.settings_changed.emit()
+
+	# Each housed villager stands in its own yard.
+	var housed_key := Vector2i(-1, -1)
+	var far := 0
+	for report in reports:
+		if int(report["dwelling_id"]) == -1:
+			continue
+		var site := layout.site_of_dwelling(int(report["dwelling_id"]))
+		var position: Vector3 = view.villagers().villager_position(Vector2i(int(report["household_id"]), 1))
+		if site.is_empty() or not position.is_finite():
+			continue
+		if Vector2(position.x, position.z).distance_to(site["position"]) > 9.0:
+			far += 1
+		if housed_key.x == -1:
+			housed_key = Vector2i(int(report["household_id"]), 1)
+	check(housed_key.x != -1, "Some villager has a house")
+	check(far == 0, "Villagers mill in front of their own house (%d too far)" % far)
+
+	# Milling: they move while the town runs and freeze while paused.
+	var start: Vector3 = view.villagers().villager_position(housed_key)
+	view.set_villagers_paused(false)
+	for i in 120:
+		view.villagers()._process(0.1)
+	var moved := false
+	for key in view.villagers().villager_keys():
+		moved = moved or view.villagers().villager_position(key) != start
+	check(moved, "Villagers mill about while the town runs")
+	view.set_villagers_paused(true)
+	var frozen: Vector3 = view.villagers().villager_position(housed_key)
+	view.villagers()._process(1.0)
+	check(view.villagers().villager_position(housed_key) == frozen, "Paused villagers stand still")
+
+	# Click a villager: the person window names them and their household.
+	view.clear_selection()
+	var position: Vector3 = view.villagers().villager_position(housed_key)
+	var chest := position + Vector3.UP * 1.0
+	_click(view, view.camera().unproject_position(chest))
+	var picked: Vector2i = view.selected_villager()
+	check(picked.x != -1, "Clicking a villager selects them")
+	if picked.x == -1:
+		view.select_villager(housed_key.x, housed_key.y)
+		picked = housed_key
+	check(view._info_panel.visible and view._info_title.text == "Household %d - Member %d" % [picked.x, picked.y], "Person window title (got '%s')" % view._info_title.text)
+	check(view._info_body.text.contains("Household:") and view._home_button.visible and view._person_button.visible, "Person window shows the household and both buttons")
+
+	# Show home: selects the household's house and centres the camera on it.
+	var home_dwelling := int(view.villagers().household_report(picked.x)["dwelling_id"])
+	view._on_home_pressed()
+	var home_site := layout.site_of_dwelling(home_dwelling)
+	check(view._selected_site_id == int(home_site["site_id"]) and view.selected_villager().x == -1, "Show home selects the villager's house")
+	var rig: Node3D = view._rig
+	check(Vector2(rig.position.x, rig.position.z).distance_to(home_site["position"]) < 0.5, "Show home centres the camera on the house")
+	check(view._info_body.text.begins_with("Home of household") and view._info_body.text.contains(str(picked.x)), "The house panel lists the villager's household (got '%s')" % view._info_body.text)
+
+	# Person details: back to the dashboard with that person open.
+	view.select_villager(picked.x, picked.y)
+	view._on_person_pressed()
+	check(not view.visible and dashboard._selected_person_household_id == picked.x and dashboard._selected_person_number == picked.y, "Person details opens the dashboard person page")
+	dashboard._set_town_mode(true)
+	await process_frame
 
 ## Screen position (view-local) of a town-coordinate point, via the camera.
 func _screen_of(view, town_point: Vector2) -> Vector2:

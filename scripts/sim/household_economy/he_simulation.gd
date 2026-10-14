@@ -720,18 +720,18 @@ var _employment_members: Dictionary = {}
 var _employment_dirty := true
 var _employment_rebuild_count := 0
 var businesses: Dictionary[int, HEBusiness] = {}
-## Houses, keyed by their own id space (not shared with `businesses`). Housing
-## is a settlement-wide pool -- see get_housing_report().
+## Houses, keyed by their own id space (not shared with `businesses`). Each
+## household lives in one (HEHousehold.dwelling_id) -- see _reconcile_housing.
 var dwellings: Dictionary[int, HEHouse] = {}
 
 ## Housing rules, applied only to settlements with HESettlement.housing_modeled.
 ## When every house is taken (households >= capacity) a household's monthly
 ## birth chance is scaled by this: births fall by 80% rather than stopping.
 const HOUSING_SATURATED_BIRTH_SCALE := 0.2
-## Households beyond capacity are homeless (the newest households, by id --
-## no one is assigned to a specific house). Each homeless household has this
-## chance per EMIGRATION_EVAL_INTERVAL_DAYS of losing a member to emigration,
-## on top of any starvation emigration.
+## Households without an assigned house are homeless. Assignment is sticky and
+## fills by ascending household id, so these are the newest households. Each
+## homeless household has this chance per EMIGRATION_EVAL_INTERVAL_DAYS of
+## losing a member to emigration, on top of any starvation emigration.
 const HOMELESS_EMIGRATION_CHANCE := 0.3
 var markets: Dictionary[int, HEMarket] = {}
 var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_id -> commodity -> bool
@@ -815,6 +815,17 @@ var _import_cost_total := 0.0
 ## here: that is an ordinary purchase from a local seller or the Trader.
 var _construction_spend_total := 0.0
 
+## Days a government build stands as a foundation before the building opens
+## (see build_government_building). The cost is paid when it is ordered.
+const CONSTRUCTION_DAYS := 2
+## 0 opens government builds instantly (the harness's cost checks use this).
+var construction_days: int = CONSTRUCTION_DAYS
+## Government builds paid for but not yet standing, oldest first:
+## {settlement_id, record (HEBusiness or HEHouse, its id reserved), startup,
+## upgrade_dwelling_id (-1 unless a tenement upgrades that house), complete_day}.
+## TODO(construction): no labor yet -- a build just waits out the days.
+var _constructions: Array[Dictionary] = []
+
 ## Most units of one good a warehouse order buys or sells in a day, so a single
 ## order cannot drain a town's stock (or flood the Trader) in one tick.
 const WAREHOUSE_DAILY_TRADE_CAP := 10.0
@@ -889,6 +900,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
+	_reconcile_all_housing()
 
 ## Registers a business built after the sim started. Takes a free id from
 ## next_business_id(); the caller builds the record. Nothing is charged -- the
@@ -931,17 +943,23 @@ func add_dwelling(house: HEHouse) -> void:
 	var s: HESettlement = settlements[house.settlement_id]
 	s.dwelling_ids.append(house.id)
 	s.housing_modeled = true
+	_reconcile_housing(house.settlement_id)
 
 func next_dwelling_id() -> int:
 	var next_id := 1
 	for dwelling_id in dwellings.keys():
 		next_id = maxi(next_id, dwelling_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEHouse:
+			next_id = maxi(next_id, (entry["record"] as HEHouse).id + 1)
 	return next_id
 
 ## One entry per house, ascending id: {dwelling_id, settlement_id, name,
-## type_key}. Houses live in `dwellings`, a separate id space from businesses,
-## so they never appear in get_business_reports(); a town layout reads this.
+## type_key, capacity, occupant_household_ids (ascending)}. Houses live in
+## `dwellings`, a separate id space from businesses, so they never appear in
+## get_business_reports(); a town layout reads this.
 func get_dwelling_reports(settlement_id: int = -1) -> Array:
+	var occupants := _occupants_by_dwelling()
 	var out: Array = []
 	var ids := dwellings.keys()
 	ids.sort()
@@ -954,8 +972,93 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 			"settlement_id": house.settlement_id,
 			"name": house.name,
 			"type_key": house.type_key,
+			"capacity": house.capacity_households,
+			"occupant_household_ids": occupants.get(house.id, [] as Array[int]),
 		})
 	return out
+
+## One entry per household of the settlement, ascending id -- the cheap roster
+## a town renderer reads every tick (get_household_summary is far heavier):
+## {household_id, dwelling_id, employer_business_id, housing_status,
+## worker_ages, dependent_ages}. Ages are in days, one entry per member.
+func get_villager_reports(settlement_id: int) -> Array:
+	var out: Array = []
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		out.append({
+			"household_id": h.id,
+			"dwelling_id": h.dwelling_id,
+			"employer_business_id": h.employer_business_id,
+			"housing_status": _housing_status_of(h),
+			"worker_ages": PackedInt32Array(h.worker_ages()),
+			"dependent_ages": PackedInt32Array(h.dependent_ages()),
+		})
+	return out
+
+## dwelling_id -> ascending ids of the households living there.
+func _occupants_by_dwelling() -> Dictionary:
+	var occupants: Dictionary = {}
+	var ids := households.keys()
+	ids.sort()
+	for household_id in ids:
+		var dwelling_id: int = (households[household_id] as HEHousehold).dwelling_id
+		if dwelling_id == -1:
+			continue
+		if not occupants.has(dwelling_id):
+			occupants[dwelling_id] = [] as Array[int]
+		(occupants[dwelling_id] as Array[int]).append(household_id)
+	return occupants
+
+func _reconcile_all_housing() -> void:
+	for settlement_id in settlements.keys():
+		_reconcile_housing(settlement_id)
+
+## Brings house assignments in `settlement_id` in line with its households and
+## houses. The only writer of HEHousehold.dwelling_id. Rules:
+## - Sticky: a housed household keeps its house until it ceases to exist.
+## - A house holds capacity_households households (1, or 4 for a tenement); an
+##   upgrade in place adds free slots to the same house.
+## - Unhoused households, ascending id, each take a slot in the lowest-id house
+##   with room (ids follow placement order, so the innermost first).
+## - A household whose house is gone, belongs to another settlement, or is over
+##   capacity (highest ids leave first) is unhoused before refilling.
+## - A settlement that does not model housing houses nobody.
+## New households always get higher ids than existing ones, so the homeless
+## are always the newest households -- the rule housing used before houses were
+## assigned -- and homeless counts are unchanged by assignment.
+func _reconcile_housing(settlement_id: int) -> void:
+	var s: HESettlement = settlements[settlement_id]
+	var ids: Array[int] = []
+	ids.assign(s.household_ids)
+	ids.sort()
+	if not s.housing_modeled:
+		for household_id in ids:
+			(households[household_id] as HEHousehold).dwelling_id = -1
+		return
+	var free: Dictionary = {} # dwelling_id -> slots left
+	for dwelling_id in s.dwelling_ids:
+		free[dwelling_id] = (dwellings[dwelling_id] as HEHouse).capacity_households
+	var unhoused: Array[int] = []
+	for household_id in ids:
+		var h: HEHousehold = households[household_id]
+		if h.dwelling_id != -1 and int(free.get(h.dwelling_id, 0)) > 0:
+			free[h.dwelling_id] = int(free[h.dwelling_id]) - 1
+		else:
+			h.dwelling_id = -1
+			unhoused.append(household_id)
+	if unhoused.is_empty():
+		return
+	var houses: Array[int] = []
+	houses.assign(s.dwelling_ids)
+	houses.sort()
+	var cursor := 0
+	for household_id in unhoused:
+		while cursor < houses.size() and int(free[houses[cursor]]) <= 0:
+			cursor += 1
+		if cursor == houses.size():
+			break
+		(households[household_id] as HEHousehold).dwelling_id = houses[cursor]
+		free[houses[cursor]] = int(free[houses[cursor]]) - 1
 
 ## Housing state of one settlement. `modeled` is false for a world that never
 ## set housing up (then nothing below limits it). `capacity` counts
@@ -983,9 +1086,16 @@ func _innermost_plain_house(settlement_id: int) -> HEHouse:
 	var best: HEHouse = null
 	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
 		var house: HEHouse = dwellings[dwelling_id]
-		if not house.is_dense() and (best == null or house.id < best.id):
+		if not house.is_dense() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
 			best = house
 	return best
+
+## Whether a tenement under construction already targets house `dwelling_id`.
+func _upgrade_pending(dwelling_id: int) -> bool:
+	for entry in _constructions:
+		if entry["upgrade_dwelling_id"] == dwelling_id:
+			return true
+	return false
 
 func _count_plain_houses(s: HESettlement) -> int:
 	var count := 0
@@ -994,34 +1104,28 @@ func _count_plain_houses(s: HESettlement) -> int:
 			count += 1
 	return count
 
-## Ids of households with no house: the settlement's households sorted by id,
-## the first `capacity` of them housed, the rest homeless.
+## Ids (ascending) of the settlement's households with no house, after
+## bringing assignments up to date.
 func _homeless_household_ids(settlement_id: int) -> Array[int]:
 	var homeless: Array[int] = []
-	var housing := get_housing_report(settlement_id)
-	if not housing["modeled"]:
+	_reconcile_housing(settlement_id)
+	if not (settlements[settlement_id] as HESettlement).housing_modeled:
 		return homeless
-	var ids: Array[int] = []
-	ids.assign((settlements[settlement_id] as HESettlement).household_ids)
-	ids.sort()
-	for i in range(int(housing["capacity"]), ids.size()):
-		homeless.append(ids[i])
+	for household_id in get_household_ids(settlement_id):
+		if (households[household_id] as HEHousehold).dwelling_id == -1:
+			homeless.append(household_id)
 	return homeless
 
-## "housed", "homeless", or "unlimited" (housing not modeled). Same ordering
-## rule as _homeless_household_ids: the lowest-id households fill the houses.
+## "housed", "homeless", or "unlimited" (housing not modeled). Reads the
+## assignment, checking the house still stands in this settlement in case a
+## caller changed `dwellings` since the last reconcile.
 func _housing_status_of(h: HEHousehold) -> String:
 	var s: HESettlement = settlements[h.settlement_id]
 	if not s.housing_modeled:
 		return "unlimited"
-	var capacity := 0
-	for dwelling_id in s.dwelling_ids:
-		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
-	var lower := 0
-	for household_id in s.household_ids:
-		if household_id < h.id:
-			lower += 1
-	return "homeless" if lower >= capacity else "housed"
+	if h.dwelling_id != -1 and s.dwelling_ids.has(h.dwelling_id) and dwellings.has(h.dwelling_id):
+		return "housed"
+	return "homeless"
 
 ## The settlement's Government Warehouse, or null if it has not built one.
 func _government_warehouse(settlement_id: int) -> HEBusiness:
@@ -1066,6 +1170,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var repeatable: bool = option.get("repeatable", false)
 	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
+	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
+		return "under construction"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1112,21 +1218,72 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.balance -= gold
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
+		var entry := {"settlement_id": settlement_id, "startup": option.get("startup", false),
+			"upgrade_dwelling_id": -1, "complete_day": day + construction_days}
 		if option.get("category", "") == "housing":
 			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
 			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
 			if upgradable != null:
-				upgradable.upgrade_to_dense()
-			else:
-				add_dwelling(house)
-			return true
-		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
-		if option.get("startup", false):
-			add_new_business(building)
+				entry["upgrade_dwelling_id"] = upgradable.id
+			entry["record"] = house
 		else:
-			add_business(building)
+			entry["record"] = option["make"].call(next_business_id(), settlement_id)
+		_constructions.append(entry)
+		_finish_due_constructions()
 		return true
 	return false
+
+## Whether a non-repeatable `type_key` is already paid for and being built.
+func _construction_pending(settlement_id: int, type_key: String) -> bool:
+	for entry in _constructions:
+		if entry["settlement_id"] == settlement_id and entry["record"].type_key == type_key:
+			return true
+	return false
+
+## Opens every construction whose days are up: the building joins the town
+## exactly as an instant build used to.
+func _finish_due_constructions() -> void:
+	var waiting: Array[Dictionary] = []
+	for entry in _constructions:
+		if day < int(entry["complete_day"]):
+			waiting.append(entry)
+			continue
+		var record = entry["record"]
+		if record is HEHouse:
+			var target: int = entry["upgrade_dwelling_id"]
+			if target != -1 and dwellings.has(target) and not (dwellings[target] as HEHouse).is_dense():
+				(dwellings[target] as HEHouse).upgrade_to_dense()
+				_reconcile_housing(int(entry["settlement_id"]))
+			else:
+				add_dwelling(record)
+		elif entry["startup"]:
+			add_new_business(record)
+		else:
+			add_business(record)
+	_constructions = waiting
+
+## One entry per government build still standing as a foundation, oldest
+## first: {settlement_id, type_key, name, business_id, dwelling_id (each -1
+## unless the build is that kind; the id is the one the finished building
+## keeps), upgrade_dwelling_id, complete_day, days_left}.
+func get_construction_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	for entry in _constructions:
+		if settlement_id != -1 and entry["settlement_id"] != settlement_id:
+			continue
+		var record = entry["record"]
+		var is_house: bool = record is HEHouse
+		out.append({
+			"settlement_id": entry["settlement_id"],
+			"type_key": record.type_key,
+			"name": record.name,
+			"business_id": -1 if is_house else record.id,
+			"dwelling_id": record.id if is_house and entry["upgrade_dwelling_id"] == -1 else -1,
+			"upgrade_dwelling_id": entry["upgrade_dwelling_id"],
+			"complete_day": entry["complete_day"],
+			"days_left": maxi(0, int(entry["complete_day"]) - day),
+		})
+	return out
 
 ## What the warehouse still lacks for `option`'s goods cost: commodity ->
 ## missing units, empty when the cost has no goods or the warehouse covers it
@@ -1154,7 +1311,8 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null:
 		return "none"
-	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+	if not option.get("repeatable", false) and (has_business_of_type(settlement_id, option["type_key"]) \
+			or _construction_pending(settlement_id, option["type_key"])):
 		return "none"
 	if gov.balance < float(build_cost_for(settlement_id, option).get("gold", 0.0)):
 		return "none"
@@ -1168,14 +1326,13 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 			return "can_order"
 	return "ordered"
 
-## The Government build button's action. Builds `type_key` if it can be built
-## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## The Government build button's action. Starts building `type_key` if it can
+## be built right now ("built" -- paid for; it stands as a foundation for
+## construction_days first). Otherwise, if the only thing missing is warehouse goods,
 ## sets the warehouse's standing buy order for each missing good up to the
 ## build's cost ("ordered") -- the player presses again once the goods arrive.
 ## The order is left standing, so the warehouse keeps restocking for the next
 ## one. Returns "" when nothing was done.
-## TODO(construction): the build itself is still instant; see
-## HEScenarioSeeds.government_buildings().
 func request_government_build(settlement_id: int, type_key: String) -> String:
 	if build_government_building(settlement_id, type_key):
 		return "built"
@@ -1222,6 +1379,9 @@ func next_business_id() -> int:
 	var next_id := 1
 	for business_id in businesses.keys():
 		next_id = maxi(next_id, business_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEBusiness:
+			next_id = maxi(next_id, (entry["record"] as HEBusiness).id + 1)
 	return next_id
 
 ## Whether `settlement_id` already has a business of buildable kind
@@ -1237,6 +1397,7 @@ func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()
 		day += 1
+		_finish_due_constructions()
 
 # ---------------------------------------------------------------------------
 # Public query contract
@@ -1353,6 +1514,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"employer_business_id": h.employer_business_id,
 		"is_employed": h.is_employed(),
 		"housing_status": _housing_status_of(h),
+		"dwelling_id": h.dwelling_id,
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
@@ -2302,6 +2464,10 @@ func _daily_tick() -> void:
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
 		_reconcile_employment(record)
+	# Emigration, old age, adoption and coming-of-age splits add and remove
+	# households; whoever is new or freed a house is (re)housed before the day
+	# closes, so every report between ticks reads current assignments.
+	_reconcile_all_housing()
 	_finalize_daily_record(record)
 
 func _reset_household_daily_records() -> void:
