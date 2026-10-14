@@ -4,6 +4,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://scripts/sim/harness/check_town_view.gd
 
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 var failures := 0
@@ -26,7 +27,7 @@ func _run() -> void:
 	# Loaded at runtime: the dashboard script needs the GameState autoload, which
 	# is not registered yet while this script itself is being compiled.
 	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
-	dashboard_script.pending_builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+	dashboard_script.pending_builder = Callable(HEFixtures, "build_three_business_economy")
 	var dashboard: Control = (load("res://scenes/sim/he_dashboard.tscn") as PackedScene).instantiate()
 	root.add_child(dashboard)
 	dashboard._speed_multiplier = 0.0
