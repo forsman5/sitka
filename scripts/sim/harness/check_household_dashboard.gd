@@ -88,7 +88,7 @@ func _run() -> void:
 	for day in range(40):
 		sim.advance_ticks(1)
 		dashboard._refresh()
-	var rows: Array = dashboard._household_table_rows()
+	var rows: Array = dashboard._simulation.get_household_table_snapshot()
 	check(rows.size() == sim.get_household_ids().size(), "Snapshot has one row per household")
 	for row in rows:
 		var h: Dictionary = sim.get_household_summary(row["id"])
@@ -121,6 +121,24 @@ func _run() -> void:
 	table._on_employer_pressed(-12345) # unknown household: no employer, no navigation
 	check(dashboard._selected_business_id == unemployed_before, "Unknown employer press does nothing")
 
+	# Hidden views cost nothing: the Town tab and Jobs list are showing, so the
+	# Goods/Needs/Businesses/Housing pages and the Households table are idle.
+	dashboard.reset_perf()
+	for day in range(5):
+		sim.advance_ticks(1)
+		dashboard._refresh()
+	var perf: Dictionary = dashboard.perf_report()
+	for visible_group in ["HEADER", "TOWN_STATS", "JOBS"]:
+		check(perf.has(visible_group) and perf[visible_group]["calls"] == 5, "%s refreshes every day while visible (got %s)" % [visible_group, perf.get(visible_group)])
+	for hidden in ["MARKET", "NEEDS", "BUSINESS_ROWS", "HOUSEHOLDS"]:
+		check(not perf.has(hidden), "%s must not refresh while hidden (got %s)" % [hidden, perf.get(hidden)])
+	# Opening a hidden tab catches it up on the next frame.
+	dashboard._households_page.get_parent().current_tab = dashboard._households_page.get_index()
+	await process_frame
+	await process_frame
+	check(dashboard.perf_report().has("HOUSEHOLDS"), "Opening the Households tab refreshes it")
+	var expected_ids: Array = sim.get_household_ids()
+	check(table.row_count() == expected_ids.size(), "Households table is current after opening (%d vs %d)" % [table.row_count(), expected_ids.size()])
 	_check_warehouse_strip(dashboard, sim)
 
 	print("Household dashboard check: %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
