@@ -31,8 +31,9 @@ const ART := {
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
 	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
-	# Placeholder: the tavern is the biggest non-civic model in the pack.
-	"tenement": {"model": "building_tavern_blue.gltf", "width": 5.5},
+	# Barracks reads as communal housing (bunk rows, multiple doors/windows)
+	# rather than a business, closer to a 4-household tenement than the tavern.
+	"tenement": {"model": "building_barracks_blue.gltf", "width": 6.5},
 }
 ## Houses alternate between this and ART["house"] by site id, for variety.
 const HOUSE_ALT_ART := {"model": "building_home_B_blue.gltf", "width": 4.5}
