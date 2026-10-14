@@ -320,7 +320,7 @@ func _advance_town_time(delta: float) -> void:
 func _load_scenario() -> void:
 	var builder := pending_builder
 	if not builder.is_valid():
-		builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+		builder = Callable(HEScenarioSeeds, "build_preset").bind("small_village")
 	_simulation = HESimulation.new(SEED, builder)
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:

@@ -5,6 +5,7 @@ extends SceneTree
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 const SEED := 4242
@@ -36,7 +37,7 @@ func _reports(builder: Callable) -> Array:
 	return HESimulation.new(SEED, builder).get_business_reports()
 
 func _default_builder() -> Callable:
-	return Callable(HEScenarioSeeds, "build_three_business_economy")
+	return Callable(HEFixtures, "build_three_business_economy")
 
 ## [layout, business reports, dwelling reports]
 func _layout_for(builder: Callable) -> Array:
@@ -77,7 +78,7 @@ func _check_default_scenario_sites() -> void:
 	_assert(types["cattle_ranch"]["zone"] == HETownLayout.ZONE_PASTURE, "Ranch should land in the pasture zone")
 
 func _check_custom_scenario_shows_only_its_businesses() -> void:
-	var builder := Callable(HEScenarioSeeds, "build_custom").bind([HEScenarioSeeds.WOODLOT_BUSINESS_ID, HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID])
+	var builder := Callable(HEFixtures, "build_custom").bind([HEScenarioSeeds.WOODLOT_BUSINESS_ID, HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID])
 	var built := _layout_for(builder)
 	var layout = built[0]
 	var reports: Array = built[1]
@@ -95,7 +96,7 @@ func _check_regeneration_is_deterministic() -> void:
 
 func _check_scenarios_differ() -> void:
 	var a := _positions(_layout_for(_default_builder())[0])
-	var b := _positions(_layout_for(Callable(HEScenarioSeeds, "build_economy_with_charcoal_burner"))[0])
+	var b := _positions(_layout_for(Callable(HEFixtures, "build_economy_with_charcoal_burner"))[0])
 	_assert(a != b, "A different scenario should produce its own layout")
 
 func _live_report(business_id: int, type_key: String, name: String) -> Dictionary:
@@ -284,9 +285,9 @@ func _check_roads_and_frontage() -> void:
 	print("  roads: %d at start, %d after +80 houses (%d unplaced)" % [roads.size(), grown.size(), layout.unplaced_dwelling_ids().size()])
 
 func _check_scenario_key_identity() -> void:
-	var a := Callable(HEScenarioSeeds, "build_custom").bind([3, 1, 2])
-	var b := Callable(HEScenarioSeeds, "build_custom").bind([1, 2, 3])
-	var c := Callable(HEScenarioSeeds, "build_custom").bind([1, 2])
+	var a := Callable(HEFixtures, "build_custom").bind([3, 1, 2])
+	var b := Callable(HEFixtures, "build_custom").bind([1, 2, 3])
+	var c := Callable(HEFixtures, "build_custom").bind([1, 2])
 	_assert(HETownLayout.scenario_key_for(a) == HETownLayout.scenario_key_for(b), "Roster order must not change scenario identity")
 	_assert(HETownLayout.scenario_key_for(a) != HETownLayout.scenario_key_for(c), "Different rosters must have different identity")
 	_assert(HETownLayout.scenario_key_for(_default_builder()) != HETownLayout.scenario_key_for(a), "Presets and custom rosters must differ")

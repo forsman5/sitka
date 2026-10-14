@@ -2,6 +2,7 @@ extends SceneTree
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
@@ -160,7 +161,8 @@ func _check_business_fails_at_credit_limit() -> void:
 	print("  woodlot deleted at the credit limit with %.0f written off; a zero-worker Trader stayed at zero" % -debt)
 
 func _new_sim(builder_method: String, price_adjustment_enabled: bool = true) -> HESimulation:
-	return HESimulation.new(SEED, Callable(HEScenarioSeeds, builder_method), price_adjustment_enabled)
+	var source = HEScenarioSeeds if builder_method == "build_two_settlement_economy" else HEFixtures
+	return HESimulation.new(SEED, Callable(source, builder_method), price_adjustment_enabled)
 
 func _assert(condition: bool, message: String) -> void:
 	if not condition:
@@ -513,7 +515,7 @@ func _check_every_business_kind_is_buildable() -> void:
 
 	# A world seeded with every registered kind: whatever it contains beyond
 	# the Government must be in the registry, under the id it was seeded with.
-	var full := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind(ids), true)
+	var full := HESimulation.new(SEED, Callable(HEFixtures, "build_custom").bind(ids), true)
 	var unregistered: Array[String] = []
 	for business_id in full.businesses.keys():
 		var b: HEBusiness = full.businesses[business_id]
@@ -525,7 +527,7 @@ func _check_every_business_kind_is_buildable() -> void:
 	_assert(full.businesses.size() - 1 == types.size(), "Seeding every registered kind should create exactly one business each (plus the Government)")
 
 	# Each kind, built mid-run into a town that has none of the optional ones.
-	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_custom").bind([HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID]), true)
+	var sim := HESimulation.new(SEED, Callable(HEFixtures, "build_custom").bind([HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID]), true)
 	var settlement_id: int = sim.get_settlement_ids()[0]
 	var created := 0
 	for entry in types:
@@ -1375,7 +1377,7 @@ func _check_export_settings_derived_from_commodities() -> void:
 	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
 	# Farm + Woodlot + Trader only: no Sheep Farm, ranch, Butcher or mine.
 	var bare := HESimulation.new(SEED, func(rng: RandomNumberGenerator) -> Dictionary:
-		return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, trader_id]))
+		return HEFixtures.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, trader_id]))
 	var bare_rows := bare.get_trader_export_settings(trader_id)
 	var bare_goods: Array = []
 	for option in bare_rows:
@@ -2223,7 +2225,7 @@ func _check_livestock_goods() -> void:
 	# No spurious rows: nothing to sell, buy or export means no livestock listing,
 	# and a Trader alone (spare export capacity) does not create one.
 	for included in [[HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID], [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.TRADER_BUSINESS_ID]]:
-		var bare := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, included), true)
+		var bare := HESimulation.new(SEED, func(rng): return HEFixtures.build_custom(rng, included), true)
 		bare.advance_ticks(30)
 		var bare_summary := bare.get_market_summary()
 		_assert(not bare_summary.has("Cattle") and not bare_summary.has("Sheep"), "A settlement with no ranch or Butcher should list no livestock, roster %s" % [included])
@@ -2238,7 +2240,7 @@ func _check_livestock_export_toggle() -> void:
 	var by_setting := {}
 	for enabled in [true, false]:
 		var roster := [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID, HEScenarioSeeds.TRADER_BUSINESS_ID, HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
-		var sim := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, roster), true)
+		var sim := HESimulation.new(SEED, func(rng): return HEFixtures.build_custom(rng, roster), true)
 		sim.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, cattle, enabled)
 		var ranch: HEBusiness = sim.businesses[HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID]
 		sim.advance_ticks(HESimulation.HERD_EVAL_INTERVAL_DAYS - 1)
@@ -2694,7 +2696,7 @@ func _check_housing() -> void:
 	for builder in ["build_three_business_economy_with_bloomery", "build_economy_with_bloomery_and_iron_mine", "build_economy_with_charcoal_burner", "build_lopsided_start"]:
 		var other := _new_sim(builder)
 		_assert(other.get_housing_report(1)["capacity"] >= other.get_housing_report(1)["households"], "%s seeds enough housing" % builder)
-	var custom := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID]), true)
+	var custom := HESimulation.new(SEED, func(rng): return HEFixtures.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID]), true)
 	_assert(custom.get_housing_report(1)["capacity"] >= custom.get_housing_report(1)["households"], "Custom roster seeds enough housing")
 
 	var house_option: Dictionary = {}

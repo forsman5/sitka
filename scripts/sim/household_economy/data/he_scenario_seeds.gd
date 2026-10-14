@@ -14,6 +14,7 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
+const HEPresets = preload("res://scripts/sim/household_economy/data/he_presets.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 
 const SETTLEMENT_ID := 1
@@ -40,6 +41,8 @@ const GOVERNMENT_BUSINESS_ID := 9
 const CHARCOAL_BURNER_BUSINESS_ID := 10
 ## Opt-in, like the Bloomery whose iron it buys.
 const TOOLSMITH_BUSINESS_ID := 11
+## Only seeded by presets that start with a Government Warehouse.
+const WAREHOUSE_BUSINESS_ID := 12
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
 const WAREHOUSE_BUILD_COST := 100.0
@@ -51,7 +54,7 @@ const HOUSE_BUILD_TIMBER := 50.0
 ## A tenement shelters HEHouse.DENSE_CAPACITY households for twice a house.
 const TENEMENT_BUILD_GOLD := 30.0
 const TENEMENT_BUILD_TIMBER := 100.0
-## Seeded housing: one house per starting household, plus this fraction extra
+## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
 const HOUSING_STARTING_HEADROOM := 0.35
@@ -111,7 +114,7 @@ const WOODLOT_FIELD_START_DAYS: Array[int] = [0, 45, 90, 135]
 ## dominant employer. Not land-based, so it keeps a flat authored ceiling.
 const TRADER_MAX_CAPACITY := 20
 
-## Opt-in only -- see build_three_business_economy_with_bloomery(). Smaller
+## Opt-in only -- a preset with a Bloomery crew. Smaller
 ## than Farm/Woodlot's ceiling, similar in scale to the Trader: a workshop,
 ## not a whole settlement's dominant employer. Legacy (non-field) business,
 ## so this IS the hard ceiling, not a land-derived one.
@@ -127,7 +130,7 @@ const TOOLSMITH_MIN_CAPACITY := 6
 const TOOLSMITH_STARTING_CAPACITY := 12
 const TOOLSMITH_MAX_CAPACITY := 16
 
-## Opt-in only -- see build_economy_with_charcoal_burner(). A small workshop
+## Opt-in only -- a preset crew. A small workshop
 ## like the Bloomery: legacy (non-field) business, so this is its hard ceiling.
 const CHARCOAL_BURNER_MAX_CAPACITY := 10
 const CHARCOAL_BURNER_GRACE_DAYS := 21
@@ -529,13 +532,13 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## WORKER_CAPACITY so nobody starts unemployed by construction, unless a
 ## scenario deliberately wants that). `bloomery_capacity` defaults to 0,
 ## meaning "no Bloomery at all" -- the toggle a caller wants IS which
-## scenario builder it picks (see he_dashboard.gd's SCENARIOS and
-## build_three_business_economy_with_bloomery below), not a capacity of
+## preset it picks (see HEPresets), not a capacity of
 ## zero on a business that still exists: a Bloomery that was never
 ## constructed here can never later appear on its own, since there is no
 ## such business id in `businesses`.
-static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, charcoal_burner_capacity: int = 0, toolsmith_capacity: int = 0) -> Dictionary:
-	var settlement := HESettlement.new(SETTLEMENT_ID, "Testholm")
+static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, charcoal_burner_capacity: int = 0, toolsmith_capacity: int = 0, options: Dictionary = {}) -> Dictionary:
+	var household_count: int = int(options.get("households", HOUSEHOLD_COUNT))
+	var settlement := HESettlement.new(SETTLEMENT_ID, str(options.get("settlement_name", "Testholm")))
 
 	var farm := make_farm(FARM_BUSINESS_ID, SETTLEMENT_ID, farm_capacity, FARM_FIELD_START_DAYS)
 
@@ -559,9 +562,9 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 
 	var farm_days_to_first_harvest: int = FARM_GROWTH_DAYS - FARM_FIELD_START_DAYS.max()
-	farm.add_stock(Commodity.Type.GRAIN, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	farm.add_stock(Commodity.Type.GRAIN, household_count * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.GRAIN) * farm_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 	var woodlot_days_to_first_harvest: int = WOODLOT_GROWTH_DAYS - WOODLOT_FIELD_START_DAYS.max()
-	woodlot.add_stock(Commodity.Type.TIMBER, HOUSEHOLD_COUNT * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
+	woodlot.add_stock(Commodity.Type.TIMBER, household_count * HOUSEHOLD_SIZE * HENeeds.units_per_person_daily(Commodity.Type.TIMBER) * woodlot_days_to_first_harvest * STARTING_STOCK_HEADROOM)
 
 	var businesses: Dictionary[int, HEBusiness] = {
 		FARM_BUSINESS_ID: farm,
@@ -624,7 +627,7 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 	var toolsmith_workers_assigned := 0
 	var charcoal_burner_workers_assigned := 0
 	var trader_workers_assigned := 0
-	for i in HOUSEHOLD_COUNT:
+	for i in household_count:
 		var household_id := i + 1
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE, SETTLEMENT_ID)
 		household.add_stock(Commodity.Type.GRAIN, grain_buffer)
@@ -661,7 +664,17 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 		settlement.household_ids.append(household_id)
 
 	add_government(settlement, households, businesses, GOVERNMENT_BUSINESS_ID)
-	var dwellings := seed_housing(settlement, HOUSEHOLD_COUNT)
+	var gov: HEBusiness = businesses[GOVERNMENT_BUSINESS_ID]
+	gov.balance += float(options.get("treasury_bonus", 0.0))
+	var dwellings := seed_housing(settlement, household_count, int(options.get("houses", -1)), int(options.get("tenements", 0)))
+	var warehouse_stock: Dictionary = options.get("warehouse_stock", {})
+	if options.get("warehouse", false):
+		# Staffed at the first weekly reconcile (HESimulation._ensure_warehouse_staff).
+		var warehouse := make_warehouse(WAREHOUSE_BUSINESS_ID, SETTLEMENT_ID)
+		for commodity in warehouse_stock:
+			warehouse.add_stock(commodity, float(warehouse_stock[commodity]))
+		businesses[WAREHOUSE_BUSINESS_ID] = warehouse
+		settlement.business_ids.append(WAREHOUSE_BUSINESS_ID)
 
 	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses, "dwellings": dwellings}
 
@@ -669,11 +682,15 @@ static func _build_world(farm_capacity: int, woodlot_capacity: int, trader_capac
 ## plus HOUSING_STARTING_HEADROOM, marks housing as modeled there, and returns
 ## the dwellings dict for the builder's world. Public so a multi-town builder
 ## can house each settlement.
-static func seed_housing(settlement: HESettlement, household_count: int) -> Dictionary[int, HEHouse]:
+static func seed_housing(settlement: HESettlement, household_count: int, house_count: int = -1, tenement_count: int = 0) -> Dictionary[int, HEHouse]:
 	var dwellings: Dictionary[int, HEHouse] = {}
-	var house_count := ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM))
+	if house_count < 0:
+		house_count = ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM))
 	for i in house_count:
 		var house := HEHouse.new(i + 1, settlement.id, "House %d" % (i + 1))
+		# The innermost (lowest-id) houses are the ones already densified.
+		if i < tenement_count:
+			house.upgrade_to_dense()
 		dwellings[house.id] = house
 		settlement.dwelling_ids.append(house.id)
 	settlement.housing_modeled = true
@@ -725,119 +742,50 @@ static func add_government(settlement: HESettlement, households: Dictionary, bus
 		admin.employer_business_id = government_id
 	return gov
 
-## Evenly staffed on day one -- HOUSEHOLD_COUNT*WORKER_CAPACITY workers split
-## with a small slice going to the Trader and the rest split 50/50 between
-## Farm and Woodlot. With the recipe rates above, Woodlot's output is
-## structurally oversupplied relative to Farm-household fuel demand, so its
-## wage should fall below the reference wage and its capacity should
-## contract over time, while Farm's grows -- the "let it tune itself"
-## scenario, rather than hand-balancing the recipe rates. The Trader takes
-## some of the edge off that divergence (it exports Woodlot's surplus
-## timber for a bit of extra revenue) without erasing it, since it only
-## ever touches stock above a comfortable reserve.
-static func build_three_business_economy(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 8
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
-	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader)
+## Builds a starting world from a preset spec (see HEPresets): the save-game
+## format for a new town. Crews not listed are zero; whatever worker capacity
+## is left after the named crews is split between Farm and Woodlot by
+## `farm_share`. Ranches and the Butcher always exist and self-staff.
+static func build_from_spec(spec: Dictionary) -> Dictionary:
+	var crews: Dictionary = spec.get("crews", {})
+	var households: int = int(spec["households"])
+	var trader := int(crews.get("trader", 0))
+	var bloomery := int(crews.get("bloomery", 0))
+	var iron_mine := int(crews.get("iron_mine", 0))
+	var charcoal_burner := int(crews.get("charcoal_burner", 0))
+	var toolsmith := int(crews.get("toolsmith", 0))
+	var remainder := households * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
+	var farm := (int(round(remainder * float(spec.get("farm_share", 0.5)))) / WORKER_CAPACITY) * WORKER_CAPACITY
+	var options := {
+		"households": households,
+		"settlement_name": str(spec.get("settlement_name", spec.get("label", "Village"))),
+		"houses": int(spec.get("housing", {}).get("houses", -1)),
+		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
+		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
+	}
+	var warehouse: Dictionary = spec.get("warehouse", {})
+	if not warehouse.is_empty():
+		options["warehouse"] = true
+		var stock: Dictionary = {}
+		for good in warehouse.get("stock", {}):
+			stock[_commodity_by_key(str(good))] = float(warehouse["stock"][good])
+		options["warehouse_stock"] = stock
+	return build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
 
-## Same as build_three_business_economy, plus a fourth, opt-in business: the
-## Bloomery, which buys wood from the Woodlot and iron ore imported by the
-## Trader to smelt iron, then relies on that same Trader to export every bit
-## of it (see he_simulation.gd's _run_input_purchasing/_run_trade -- no
-## household ever wants iron directly, so it all leaves the settlement).
-## This is the toggle: pick this builder (see he_dashboard.gd's SCENARIOS)
-## instead of build_three_business_economy to turn the Bloomery on for a new
-## sim, or the plain builder above to leave it out entirely.
-static func build_three_business_economy_with_bloomery(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 8
-	var bloomery := 8
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery
-	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, bloomery)
+## A starting town by preset key (HEPresets.keys()). The builder Callable the
+## dashboard takes: `Callable(HEScenarioSeeds, "build_preset").bind(key)`.
+static func build_preset(_rng: RandomNumberGenerator, key: String) -> Dictionary:
+	var spec := HEPresets.spec(key)
+	assert(not spec.is_empty(), "Unknown preset '%s'" % key)
+	return build_from_spec(spec)
 
-## Local-ore variant: the Iron Mine puts ore into its business inventory,
-## where the Bloomery buys it on the following day before the Trader gets a
-## chance to export any remaining surplus. _run_input_purchasing also
-## prefers this local seller over the Trader's outside-import fallback.
-static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 8
-	var bloomery := 8
-	var iron_mine := 8
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine
-	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, bloomery, iron_mine)
-
-## A town with a Toolsmith and no iron production of its own: no local seller
-## of iron exists, so the Trader imports it (see HESimulation's
-## _run_input_purchasing), as the valley's Staithe smithy gets its iron from
-## elsewhere. Existing builders leave the Toolsmith out so their outcomes stay
-## comparable.
-static func build_economy_with_toolsmith(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 8
-	var toolsmith := TOOLSMITH_STARTING_CAPACITY
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - toolsmith
-	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, 0, 0, 0, toolsmith)
-
-## Eight businesses: the Iron Mine scenario plus a Charcoal Burner that turns
-## the Woodlot's timber into charcoal. Households switch to charcoal when it
-## is the cheaper way to heat a home (see HESimulation._satisfier_cascade);
-## the Bloomery's heat is bought the same way. The burner's own timber input
-## is raw material, not a need slot, so it stays timber.
-static func build_economy_with_charcoal_burner(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 8
-	var bloomery := 8
-	var iron_mine := 8
-	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner
-	var half := (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-	return _build_world(half, remainder - half, trader, bloomery, iron_mine, charcoal_burner)
-
-## Deliberately mis-staffed the OTHER way on day one -- Woodlot overstaffed,
-## Farm understaffed -- to make the self-correction visible fast rather
-## than waiting for the balanced scenario's slower drift. The Trader starts
-## with a smaller slice still, since it's a release valve, not a primary
-## employer.
-static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
-	var trader := 6
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader
-	var farm := int(remainder * 0.2)
-	return _build_world(farm, remainder - farm, trader)
-
-## Player-chosen roster from the household economy config page. `included`
-## is an array of business ids (the *_BUSINESS_ID constants); anything absent
-## is built by _build_world and then dropped, so it never exists in the sim.
-## Trader/Bloomery/Iron Mine start with the same 8-worker slices the presets
-## use, and whatever is left splits evenly between Farm and Woodlot (or all
-## goes to whichever one is present). Ranches self-bootstrap, so they take no
-## day-one staff. Needs Farm or Woodlot -- nothing else makes grain or fuel.
-static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictionary:
-	var trader: int = 8 if included.has(TRADER_BUSINESS_ID) else 0
-	var bloomery: int = 8 if included.has(BLOOMERY_BUSINESS_ID) else 0
-	var iron_mine: int = 8 if included.has(IRON_MINE_BUSINESS_ID) else 0
-	var charcoal_burner: int = CHARCOAL_BURNER_STARTING_CREW if included.has(CHARCOAL_BURNER_BUSINESS_ID) else 0
-	var toolsmith: int = TOOLSMITH_STARTING_CAPACITY if included.has(TOOLSMITH_BUSINESS_ID) else 0
-	var remainder := HOUSEHOLD_COUNT * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
-	var has_farm := included.has(FARM_BUSINESS_ID)
-	var has_woodlot := included.has(WOODLOT_BUSINESS_ID)
-	var farm := 0
-	var woodlot := 0
-	if has_farm and has_woodlot:
-		farm = (remainder / WORKER_CAPACITY / 2) * WORKER_CAPACITY
-		woodlot = remainder - farm
-	elif has_farm:
-		farm = remainder
-	elif has_woodlot:
-		woodlot = remainder
-	var world := _build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith)
-	var businesses: Dictionary = world["businesses"]
-	var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
-	for business_id in businesses.keys():
-		if business_id != GOVERNMENT_BUSINESS_ID and not included.has(business_id):
-			businesses.erase(business_id)
-			settlement.business_ids.erase(business_id)
-	return world
+static func _commodity_by_key(key: String) -> int:
+	match key:
+		"grain": return Commodity.Type.GRAIN
+		"timber": return Commodity.Type.TIMBER
+		"wool": return Commodity.Type.WOOL
+	assert(false, "Unknown commodity '%s' in a preset spec" % key)
+	return Commodity.Type.GRAIN
 
 ## Small disconnected pair used to prove that settlement-local markets,
 ## employment pools, and summaries do not leak into one another.
