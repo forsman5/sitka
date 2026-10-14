@@ -44,6 +44,10 @@ static var selected_character: String = "person"
 ## chooser scene while validating; hide that field before release.
 static var sheep_repro_percent: float = 10.0
 
+## Sheep in the flock at the start of a fresh run (set from the chooser scene).
+## The pen grows to fit.
+static var start_sheep_count: int = 25
+
 ## Per-character body, camera and animation settings. Models face +Z at identity,
 ## so they are rotated half a turn to face the -Z movement direction.
 const CHARACTERS := {

@@ -26,12 +26,6 @@ const DUSK_SECONDS := 120.0
 const LOSS_CHANCE := 0.4
 ## Pause between the last sheep entering the pen and the end-of-day screen.
 const EARLY_END_DELAY := 1.5
-const STARTING_FLOCK_MIN := 3
-const STARTING_FLOCK_MAX := 5
-## The pen starts at its default size and grows by this many segments (each way)
-## per PEN_GROW_STEP sheep beyond what the default pen holds.
-const PEN_BASE_CAPACITY := 10
-const PEN_GROW_STEP := 6
 
 ## Run state carried across the next-day scene reload. _continuing is set only by
 ## the Next Day button, so entering from the menu always starts a fresh run.
@@ -73,7 +67,7 @@ func _ready() -> void:
 	else:
 		_day = 1
 		_flock_ages.clear()
-		for i in randi_range(STARTING_FLOCK_MIN, STARTING_FLOCK_MAX):
+		for i in OnFootPlayer.start_sheep_count:
 			_flock_ages.append(OnFootSheep.ADULT_AGE)
 	GameState.time_of_day = START_TIME_OF_DAY
 	_build_environment()
@@ -366,7 +360,7 @@ func _spawn_companion(spawn: Vector3) -> void:
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
 	_pen = SheepPen.new()
-	var grow := maxi(0, ceili((_flock_ages.size() - PEN_BASE_CAPACITY) / float(PEN_GROW_STEP)))
+	var grow := SheepPen.growth_for(_flock_ages.size(), _pen.segments_wide, _pen.segments_deep, _pen.gate_slot)
 	_pen.segments_wide += grow
 	_pen.segments_deep += grow
 	_pen.name = "SheepPen"
