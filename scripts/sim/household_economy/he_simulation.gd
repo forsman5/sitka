@@ -649,6 +649,20 @@ const TOOL_FILL_FRACTION_PER_DAY := 0.1
 ## future player policy can change it per sim. 0.0 turns the tax off.
 var sales_tax_rate: float = SALES_TAX_RATE
 
+## Player tax policy range and its morale effect: every point below the
+## default is worth +TAX_MORALE_PER_POINT morale (so 2% = +10%), every point
+## above is worth the same penalty (15% = -33%).
+const MAX_SALES_TAX_RATE := 0.15
+const TAX_MORALE_PER_POINT := 10.0 / 3.0 / 100.0
+
+func set_sales_tax_rate(rate: float) -> void:
+	sales_tax_rate = clampf(rate, 0.0, MAX_SALES_TAX_RATE)
+
+## Morale shift from the tax rate, applied to every person: positive below
+## the default rate, negative above it.
+func tax_morale_effect() -> float:
+	return (SALES_TAX_RATE - sales_tax_rate) * 100.0 * TAX_MORALE_PER_POINT
+
 ## Named "emigrate" rather than "die" -- placeholder terminology until H1
 ## actually connects to the wider valley (see docs/river-valley-vertical-
 ## slice.md) and a household on the brink of starvation has somewhere real
@@ -1128,9 +1142,9 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
 		"health": h.health(),
-		"morale": h.morale(),
+		"morale": h.morale(1.0, true, tax_morale_effect()),
 		"health_losses": h.health_losses(),
-		"morale_penalties": h.morale_penalties(),
+		"morale_penalties": h.morale_penalties(1.0, true, tax_morale_effect()),
 		"morale_bonuses": h.morale_bonuses(),
 		"rolling_grain_fulfillment_30d": h.rolling_grain_fulfillment(),
 		"has_migration_pressure": h.demographics.has_migration_pressure,
@@ -1157,6 +1171,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	var morale_total := 0.0
 	var health_factors := {}
 	var morale_factors := {}
+	var tax_effect := tax_morale_effect()
 	var morale_bonus_factors := {}
 	for household_id in get_household_ids(settlement_id):
 		var h: HEHousehold = households[household_id]
@@ -1170,11 +1185,11 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 		for member in members:
 			var v: float = member["v"]
 			health_total += h.health(v)
-			morale_total += h.morale(v, member["works"])
+			morale_total += h.morale(v, member["works"], tax_effect)
 			population += 1
 			for loss in h.health_losses(v):
 				_add_factor(health_factors, loss["label"], loss["loss"])
-			for penalty in h.morale_penalties(v, member["works"]):
+			for penalty in h.morale_penalties(v, member["works"], tax_effect):
 				_add_factor(morale_factors, penalty["label"], penalty["penalty"])
 			for bonus in h.morale_bonuses():
 				_add_factor(morale_bonus_factors, bonus["label"], bonus["bonus"])
@@ -1190,7 +1205,7 @@ func get_population_wellbeing(settlement_id: int = -1) -> Dictionary:
 	}
 
 func _add_factor(factors: Dictionary, label: String, amount: float) -> void:
-	if amount <= 0.001:
+	if absf(amount) <= 0.001:
 		return
 	var entry: Dictionary = factors.get_or_add(label, {"total": 0.0, "people": 0})
 	entry["total"] += amount
@@ -1258,14 +1273,14 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"note": note,
 		"vulnerability": vulnerability,
 		"health": h.health(vulnerability),
-		"morale": h.morale(vulnerability, is_worker),
-		"morale_penalties": h.morale_penalties(vulnerability, is_worker),
+		"morale": h.morale(vulnerability, is_worker, tax_morale_effect()),
+		"morale_penalties": h.morale_penalties(vulnerability, is_worker, tax_morale_effect()),
 		"morale_bonuses": h.morale_bonuses(),
 		"needs": needs,
 		"employer_business_id": h.employer_business_id if is_worker else -1,
 	}
 
-func get_business_reports(settlement_id: int = -1) -> Array:
+func get_business_reports(settlement_id: int = -1, include_detail: bool = true) -> Array:
 	var out: Array = []
 	var ids := businesses.keys()
 	ids.sort()
@@ -1290,9 +1305,6 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			"last_cash_change": b.last_cash_change,
 			"last_planned_units": b.last_planned_units,
 			"last_actual_units": b.last_actual_units,
-			"balance_history": b.balance_history(),
-			"ledger": b.ledger_history(1).back() if not b.ledger_history(1).is_empty() else {},
-			"ledger_history": b.ledger_history(),
 			"last_wage_per_worker": b.last_wage_per_worker,
 			"rolling_average_wage": b.rolling_average_wage(),
 			"rolling_average_revenue_per_worker": b.rolling_average_revenue_per_worker(),
@@ -1304,8 +1316,13 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			# report the real countdown to it, not days_until_next_harvest()'s
 			# constant growth_days stand-in (which sell-pace logic wants).
 			"days_to_next_harvest": (HERD_EVAL_INTERVAL_DAYS - day % HERD_EVAL_INTERVAL_DAYS) if b.kind == HEBusiness.Kind.HERD else b.days_until_next_harvest(),
-			"fields": _field_reports(b),
 		}
+		if include_detail:
+			var recent_ledger := b.ledger_history(1)
+			report["balance_history"] = b.balance_history()
+			report["ledger"] = recent_ledger.back() if not recent_ledger.is_empty() else {}
+			report["ledger_history"] = b.ledger_history()
+			report["fields"] = _field_reports(b)
 		if b.uses_field_model():
 			var projection := _next_harvest_projection(b, int(report["employed_workers"]))
 			report["next_harvest_expected_units"] = projection["expected_units"]
@@ -1337,9 +1354,11 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			if treasury != null:
 				report["balance"] = treasury.balance
 				report["last_cash_change"] = treasury.last_cash_change
-				report["balance_history"] = treasury.balance_history()
+				if include_detail:
+					report["balance_history"] = treasury.balance_history()
 				report["cash_runway_days"] = _business_cash_runway_days(treasury)
-			report["warehouse_orders"] = _warehouse_order_rows(b)
+			if include_detail:
+				report["warehouse_orders"] = _warehouse_order_rows(b)
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
@@ -1350,11 +1369,12 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["wool_stock"] = b.stock(Commodity.Type.WOOL) if b.species == HEBusiness.Species.SHEEP else 0.0
 			report["last_wool_produced"] = b.last_wool_produced
 			report["last_hardship_butchered"] = b.last_hardship_butchered
-			report["herd_events"] = b.herd_events.duplicate(true)
-			report["cull_target"] = herd_cull_target(b)
-			report["cull_target_min"] = herd_cull_target_range(b).x
-			report["cull_target_max"] = herd_cull_target_range(b).y
-			if b.species == HEBusiness.Species.SHEEP:
+			if include_detail:
+				report["herd_events"] = b.herd_events.duplicate(true)
+				report["cull_target"] = herd_cull_target(b)
+				report["cull_target_min"] = herd_cull_target_range(b).x
+				report["cull_target_max"] = herd_cull_target_range(b).y
+			if include_detail and b.species == HEBusiness.Species.SHEEP:
 				var sustaining := wool_sustaining_herd_counts(b)
 				report["wool_sustaining_unstaffed"] = int(sustaining.x)
 				report["wool_sustaining_current"] = int(sustaining.y)
@@ -1366,20 +1386,21 @@ func get_business_reports(settlement_id: int = -1) -> Array:
 			report["recipe_id"] = b.recipe.id
 			report["output_commodity"] = Commodity.name_of(output_commodity)
 			report["stock"] = b.stock(output_commodity)
-			var input_inventory := {}
-			for input_commodity in b.recipe.inputs.keys():
-				input_inventory[Commodity.name_of(input_commodity)] = b.stock(input_commodity)
-			report["input_inventory"] = input_inventory
-			# {flow: [{"commodity": name, "values": Array[float]}]} -- one entry
-			# per good, so a multi-good recipe is just more series.
-			var flow_history := {}
-			for flow in HEBusiness.ALL_SERIES:
-				var flow_series: Array = []
-				var history := b.flow_history(flow)
-				for commodity in history.keys():
-					flow_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
-				flow_history[flow] = flow_series
-			report["flow_history"] = flow_history
+			if include_detail:
+				var input_inventory := {}
+				for input_commodity in b.recipe.inputs.keys():
+					input_inventory[Commodity.name_of(input_commodity)] = b.stock(input_commodity)
+				report["input_inventory"] = input_inventory
+				# {flow: [{"commodity": name, "values": Array[float]}]} -- one entry
+				# per good, so a multi-good recipe is just more series.
+				var flow_history := {}
+				for flow in HEBusiness.ALL_SERIES:
+					var flow_series: Array = []
+					var history := b.flow_history(flow)
+					for commodity in history.keys():
+						flow_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
+					flow_history[flow] = flow_series
+				report["flow_history"] = flow_history
 		out.append(report)
 	return out
 
@@ -2767,7 +2788,7 @@ func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity
 ## on offer. A need with several satisfiers is cleared cheapest-first, so the
 ## cheaper good takes what it can and the next one is asked for the rest
 ## instead of the household going without when the cheaper good runs short.
-func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
+func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade: Array[Commodity.Type] = []) -> float:
 	var need := HENeeds.for_commodity(commodity)
 	if need == null or not _need_served(h.settlement_id, need):
 		return 0.0
@@ -2777,7 +2798,7 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type) -> float:
 		# and anything after it in that order as a fallback; goods that clear
 		# BEFORE the favourite are skipped, so a household that finds meat
 		# dearer than posted keeps buying grain until meat is clearly cheaper.
-		var cascade := _household_cascade(h.settlement_id, need)
+		var cascade := shared_cascade if not shared_cascade.is_empty() else _household_cascade(h.settlement_id, need)
 		if not cascade.has(commodity):
 			return 0.0
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
@@ -3596,10 +3617,14 @@ func _household_funded_demand(settlement_id: int, commodity: Commodity.Type) -> 
 	var price: float = (markets[settlement_id] as HEMarket).price[commodity]
 	if price <= 0.0:
 		return 0.0
+	var need := HENeeds.for_commodity(commodity)
+	var cascade: Array[Commodity.Type] = []
+	if need != null and need.unit_values.size() > 1:
+		cascade = _household_cascade(settlement_id, need)
 	var total := 0.0
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
-		total += minf(_desired_purchase(h, commodity), maxf(0.0, h.balance / price))
+		total += minf(_desired_purchase(h, commodity, cascade), maxf(0.0, h.balance / price))
 	return total
 
 ## One commodity's daily clearing. The seller side is now a single business
@@ -3636,8 +3661,9 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	# household going without -- only the last satisfier records it as unmet.
 	var need := HENeeds.for_commodity(commodity)
 	var defers_shortfall := false
+	var cascade: Array[Commodity.Type] = []
 	if need != null and need.unit_values.size() > 1:
-		var cascade := _household_cascade(settlement_id, need)
+		cascade = _household_cascade(settlement_id, need)
 		defers_shortfall = cascade.has(commodity) and cascade.back() != commodity
 
 	var requests_funded: Dictionary = {}
@@ -3646,7 +3672,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
-		var desired_qty: float = _desired_purchase(h, commodity)
+		var desired_qty: float = _desired_purchase(h, commodity, cascade)
 		if desired_qty > 0.0001:
 			total_wanted += desired_qty
 			var available_balance: float = starting_balance[household_id] - reserved_spend.get(household_id, 0.0)
