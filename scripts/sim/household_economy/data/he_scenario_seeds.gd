@@ -812,7 +812,23 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		for good in warehouse.get("stock", {}):
 			stock[_commodity_by_key(str(good))] = float(warehouse["stock"][good])
 		options["warehouse_stock"] = stock
-	return build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	var world := build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	# `include` (type_keys) drops the unlisted businesses, as the roster picker
+	# needs; absent = keep everything the world made.
+	if spec.has("include"):
+		var included: Array = spec["include"]
+		var businesses: Dictionary = world["businesses"]
+		var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
+		for entry in business_types():
+			if not included.has(entry["type_key"]):
+				businesses.erase(entry["id"])
+				settlement.business_ids.erase(entry["id"])
+	return world
+
+## The builder Callable for a spec that is not a named preset (the setup page's
+## Custom roster): `Callable(HEScenarioSeeds, "build_spec").bind(spec)`.
+static func build_spec(_rng: RandomNumberGenerator, spec: Dictionary) -> Dictionary:
+	return build_from_spec(spec)
 
 ## A starting town by preset key (HEPresets.keys()). The builder Callable the
 ## dashboard takes: `Callable(HEScenarioSeeds, "build_preset").bind(key)`.
