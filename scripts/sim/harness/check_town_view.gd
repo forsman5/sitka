@@ -36,7 +36,9 @@ func _run() -> void:
 	var layout: HETownLayout = dashboard._town_layout
 	check(view != null and not view.visible, "Town view exists and starts hidden")
 	var business_count: int = dashboard._simulation.get_business_reports().size()
-	check(view.site_node_count() == business_count, "Every live business is drawn (%d sites, %d businesses)" % [view.site_node_count(), business_count])
+	var house_count: int = dashboard._simulation.get_dwelling_reports().size()
+	check(house_count > 0, "The seeded town should have houses")
+	check(view.site_node_count() == business_count + house_count, "Every business and house is drawn (%d sites, %d businesses, %d houses)" % [view.site_node_count(), business_count, house_count])
 	for key in ["government", "farm", "cattle_ranch", "sheep_farm"]:
 		var found := false
 		for site in layout.get_sites():
@@ -135,6 +137,16 @@ func _run() -> void:
 			check(after[site_id] == before[site_id], "Creating a business moved site %d" % site_id)
 		check(after.size() == before.size() + 1, "A new business should add exactly one site")
 		check(view.site_node_count() == after.size() - (1 if not layout.get_site(0)["built"] else 0), "View should draw every built site")
+
+	# A house built mid-run (the Government build menu's "house") gets a plot
+	# and the housing readout follows the housing report.
+	var drawn_before: int = view.site_node_count()
+	var house_script: GDScript = load("res://scripts/sim/household_economy/records/he_house.gd")
+	dashboard._simulation.add_dwelling(house_script.new(dashboard._simulation.next_dwelling_id(), dashboard._town_settlement_id()))
+	dashboard._refresh()
+	check(view.site_node_count() == drawn_before + 1, "A new house should add exactly one drawn site")
+	check(view._housing_label.text.begins_with("Housing: %d houses" % (house_count + 1)), "Town view should show the housing report (got '%s')" % view._housing_label.text)
+	check(dashboard._housing_label.text.begins_with("%d houses" % (house_count + 1)), "Dashboard Town tab should show housing (got '%s')" % dashboard._housing_label.text)
 
 	# A failed business leaves its building, vacant, for the next business.
 	var after_count: int = view.site_node_count()

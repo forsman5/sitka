@@ -1,5 +1,5 @@
 class_name HEBusiness
-extends RefCounted
+extends "res://scripts/sim/household_economy/records/he_building.gd"
 
 ## A city-owned productive site -- a "Farm" or "Woodlot" building, not
 ## something any household owns. It hires households (as whole units, never
@@ -117,14 +117,8 @@ const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL
 enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
 enum Species { CATTLE, SHEEP }
 
-var id: int
-var settlement_id: int
-var name: String
+## id, settlement_id, name and type_key come from HEBuilding.
 var kind: Kind
-## Which buildable business this is ("farm", "trader", ...), set by the
-## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
-## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
-var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int

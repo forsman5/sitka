@@ -56,4 +56,5 @@ Treat town layout as stable runtime data, separate from 3D nodes and from the ec
 - Business reports now carry `type_key` (the government's is `"government"`).
 - Decisions: every business kind is placed (none deferred); ranches use a visual-only copy of the RTS barn box, farm/woodlot/trader/others use the blue home/tavern models, government the castle. Unplaced businesses (no room) are counted in the view.
 - Checks: `scripts/sim/harness/check_town_layout.gd`, `check_town_view.gd` (headless); `capture_town_view.gd` (needs a renderer).
+- Housing: houses are a second occupant kind (`dwelling_id`) in a residential zone, from `get_dwelling_reports()`; see `docs/household-housing.md`.
 - `run_household_economy.gd` currently reports 4 failures (Trader/adoption) on master as well; unrelated to this change.

@@ -73,6 +73,7 @@ func _init() -> void:
 	_check_government_taxes()
 	_check_government_warehouse()
 	_check_government_build_costs()
+	_check_housing()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
 
@@ -2787,6 +2788,76 @@ func _check_government_build_costs() -> void:
 	warehouse.add_stock(timber, 8.0)
 	_assert(sim.government_build_blocker(1, option) == "", "Stocked warehouse covers the goods cost")
 	_assert(HEScenarioSeeds.cost_text(option["cost"]) == "5 Timber" or HEScenarioSeeds.cost_text(option["cost"]).contains("5"), "cost_text lists goods")
+
+## Housing: houses are buildings, not businesses. A house is built by the
+## government for gold from the treasury plus timber from the warehouse (so it
+## needs a warehouse), is repeatable, shelters one household, and a full town
+## cuts births while homeless households shed members.
+func _check_housing() -> void:
+	print("\n=== Housing: government-built houses, saturation, homelessness ===")
+	var sim := _new_sim("build_three_business_economy")
+	var seeded: Dictionary = sim.get_housing_report(1)
+	_assert(seeded["modeled"], "The seeded town models housing")
+	_assert(seeded["capacity"] >= seeded["households"], "Seeded housing covers the starting households (%d for %d)" % [seeded["capacity"], seeded["households"]])
+	_assert(not seeded["saturated"] and seeded["homeless_households"] == 0, "A freshly seeded town has a free house")
+	for builder in ["build_three_business_economy_with_bloomery", "build_economy_with_bloomery_and_iron_mine", "build_economy_with_charcoal_burner", "build_lopsided_start"]:
+		var other := _new_sim(builder)
+		_assert(other.get_housing_report(1)["capacity"] >= other.get_housing_report(1)["households"], "%s seeds enough housing" % builder)
+	var custom := HESimulation.new(SEED, func(rng): return HEScenarioSeeds.build_custom(rng, [HEScenarioSeeds.FARM_BUSINESS_ID]), true)
+	_assert(custom.get_housing_report(1)["capacity"] >= custom.get_housing_report(1)["households"], "Custom roster seeds enough housing")
+
+	var house_option: Dictionary = {}
+	for option in HEScenarioSeeds.government_buildings():
+		if option["type_key"] == "house":
+			house_option = option
+	_assert(not house_option.is_empty(), "The government can build houses")
+	_assert(is_equal_approx(house_option["cost"]["gold"], 15.0) and is_equal_approx(house_option["cost"]["goods"][Commodity.Type.TIMBER], 50.0), "A house costs 15 gold + 50 timber")
+	var gov: HEBusiness = sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID]
+	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 500.0
+	_assert(sim.government_build_blocker(1, house_option) == "needs a government warehouse", "No warehouse: house is blocked on the warehouse (got '%s')" % sim.government_build_blocker(1, house_option))
+	_assert(not sim.build_government_building(1, "house"), "A house cannot be built without a warehouse")
+
+	_assert(sim.build_government_building(1, "warehouse"), "Warehouse builds")
+	var warehouse := sim._government_warehouse(1)
+	_assert(sim.government_build_blocker(1, house_option).contains("has 0"), "Empty warehouse can't supply the timber")
+	_assert(sim.build_goods_order_state(1, house_option) == "can_order", "Short of timber with a warehouse: the build can order it")
+	_assert(sim.request_government_build(1, "house") == "ordered", "Pressing build orders the missing timber")
+	var timber_order: Dictionary = warehouse.warehouse_orders.get(Commodity.Type.TIMBER, {})
+	_assert(is_equal_approx(float(timber_order.get("buy_up_to", 0.0)), 50.0), "The standing order targets the house's timber cost")
+	_assert(sim.build_goods_order_state(1, house_option) == "ordered", "With the order standing, the state is ordered")
+	_assert(sim.request_government_build(1, "house") == "", "Pressing again before the goods arrive does nothing")
+	sim.advance_ticks(10)
+	_assert(warehouse.stock(Commodity.Type.TIMBER) >= 50.0 - EPSILON, "The order stocks the warehouse with timber (has %.1f)" % warehouse.stock(Commodity.Type.TIMBER))
+	var timber_before := warehouse.stock(Commodity.Type.TIMBER)
+	var houses_before: int = sim.get_housing_report(1)["houses"]
+	var treasury_before := gov.balance
+	_assert(sim.build_government_building(1, "house"), "House builds from treasury gold + warehouse timber")
+	_assert(sim.get_housing_report(1)["houses"] == houses_before + 1, "A house was added")
+	_assert(absf(treasury_before - gov.balance - 15.0) < EPSILON, "The house cost 15 gold")
+	_assert(absf(timber_before - warehouse.stock(Commodity.Type.TIMBER) - 50.0) < EPSILON, "The house consumed 50 timber from the warehouse")
+	warehouse.add_stock(Commodity.Type.TIMBER, 60.0)
+	_assert(sim.build_government_building(1, "house"), "Houses are repeatable")
+	_assert(sim.businesses.size() == sim.businesses.keys().size() and not sim.has_business_of_type(1, "house"), "Houses are not businesses")
+
+	# Saturation: drop all houses -> every household homeless, births scaled
+	# down and members shed. Compare against an identical town with housing.
+	var housed := _new_sim("build_three_business_economy")
+	var evicted := _new_sim("build_three_business_economy")
+	var evicted_settlement: HESettlement = evicted.settlements[1]
+	evicted.dwellings.clear()
+	evicted_settlement.dwelling_ids.clear()
+	var report: Dictionary = evicted.get_housing_report(1)
+	_assert(report["saturated"] and report["homeless_households"] == report["households"], "Without houses the whole town is homeless")
+	_assert(evicted.get_household_summary(evicted.get_household_ids()[0])["housing_status"] == "homeless", "An evicted household reports homeless")
+	_assert(housed.get_household_summary(housed.get_household_ids()[0])["housing_status"] == "housed", "A housed household reports housed")
+	var pop_start: int = housed.get_city_summary()["population"]
+	housed.advance_ticks(720)
+	evicted.advance_ticks(720)
+	var housed_summary: Dictionary = housed.get_city_summary()
+	var evicted_summary: Dictionary = evicted.get_city_summary()
+	print("  population %d -> housed %d, homeless %d; emigrations %d vs %d; births %d vs %d" % [pop_start, housed_summary["population"], evicted_summary["population"], housed_summary["emigrations_total"], evicted_summary["emigrations_total"], housed_summary["births_total"], evicted_summary["births_total"]])
+	_assert(evicted_summary["emigrations_total"] > housed_summary["emigrations_total"], "Homeless households emigrate far more")
+	_assert(evicted_summary["population"] < housed_summary["population"], "A homeless town ends smaller than a housed one")
 
 ## Government + sales tax: every domestic sale remits a slice to the town
 ## treasury, which pays one permanent administrator and never overdrafts.
