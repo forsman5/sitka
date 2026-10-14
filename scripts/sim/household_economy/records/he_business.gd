@@ -144,6 +144,33 @@ var need_inputs: Dictionary[Commodity.Type, int] = {}
 ## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
 var processes_livestock: bool = false
 
+## Industrial tools (see docs/tools-industrial-demand-plan.md). A business that
+## uses tools wants `tools_per_worker` of them on hand per employed worker and
+## wears out `tool_wear_per_worker_day` of them per worker-day. Tools sit in its
+## ordinary inventory (TOOLS), and the share of its crew they cover sets its
+## productivity -- never below TOOL_PRODUCTIVITY_FLOOR, so a tool-starved
+## business is poorer, not stopped. 0 = does not use tools. Inert unless the
+## simulation turns industrial tools on and a seller of tools exists in the
+## town (HESimulation._tool_productivity).
+var tools_per_worker: float = 0.0
+var tool_wear_per_worker_day: float = 0.0
+const TOOL_PRODUCTIVITY_FLOOR := 0.6
+
+func uses_tools() -> bool:
+	return tools_per_worker > 0.0
+
+## Share of `employed` workers the held tools cover, 0..1 (1 when it needs none).
+func tool_coverage(employed: int) -> float:
+	var needed := float(employed) * tools_per_worker
+	if needed <= 0.0:
+		return 1.0
+	return clampf(stock(Commodity.Type.TOOLS) / needed, 0.0, 1.0)
+
+## Output multiplier from tool coverage: TOOL_PRODUCTIVITY_FLOOR with none, 1.0
+## with full coverage.
+func tool_productivity(employed: int) -> float:
+	return TOOL_PRODUCTIVITY_FLOOR + (1.0 - TOOL_PRODUCTIVITY_FLOOR) * tool_coverage(employed)
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0

@@ -633,6 +633,18 @@ var day: int = 0
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
 
+## Industrial tools (docs/tools-industrial-demand-plan.md): businesses that use
+## tools (HEBusiness.uses_tools) wear them out, buy replacements from the
+## town's tool seller (_run_tool_purchasing) and produce less without them --
+## but only in a town where a business sells tools, so towns without a
+## Toolsmith are unaffected.
+##
+## A business short of its target tool stock asks for at most this share of the
+## shortfall a day (or three days of wear, whichever is more), so equipping a
+## new crew from nothing takes a couple of weeks instead of draining the
+## Toolsmith in a day and crowding households out.
+const TOOL_FILL_FRACTION_PER_DAY := 0.1
+
 ## Sales tax fraction, a plain variable (not the const) so harnesses and a
 ## future player policy can change it per sim. 0.0 turns the tax off.
 var sales_tax_rate: float = SALES_TAX_RATE
@@ -789,6 +801,10 @@ func add_new_business(b: HEBusiness) -> void:
 	var crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, _capacity_floor(b), b.max_capacity)
 	b.capacity = crew
 	var startup_allowance: float = HEScenarioSeeds.startup_cash(b, crew)
+	# A crew of tool users also needs its first tools, bought from the town's
+	# tool seller -- but only in a town that has one.
+	if b.uses_tools() and _tools_in_play(b.settlement_id):
+		startup_allowance += float(crew) * b.tools_per_worker * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.TOOLS]
 	b.balance += startup_allowance
 	b.ledger_add("injection", startup_allowance)
 	var startup_cycle := maxi(b.growth_days, b.startup_cycle_days)
@@ -1385,6 +1401,17 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true) 
 						flow_series.append({"commodity": Commodity.name_of(commodity), "values": history[commodity]})
 					flow_history[flow] = flow_series
 				report["flow_history"] = flow_history
+		if include_detail and b.uses_tools():
+			var tool_crew := _business_employed_worker_count(b.id)
+			report["tools"] = {
+				"active": _tools_in_play(b.settlement_id),
+				"stock": b.stock(Commodity.Type.TOOLS),
+				"needed": float(tool_crew) * b.tools_per_worker,
+				"wear_per_day": float(tool_crew) * b.tool_wear_per_worker_day,
+				"coverage": b.tool_coverage(tool_crew),
+				"productivity": _tool_productivity(b),
+				"floor": HEBusiness.TOOL_PRODUCTIVITY_FLOOR,
+			}
 		out.append(report)
 	return out
 
@@ -1720,6 +1747,12 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 			elif not SUBSISTENCE_COMMODITIES.has(commodity):
 				offered = _seller_trade_offer(b, commodity)["quantity"]
 			sellers.append({"owner": b.name, "business_id": b.id, "offered": offered, "stock": stock})
+		if commodity == Commodity.Type.TOOLS and b.uses_tools() and _tools_in_play(settlement_id):
+			var ask := _tool_request(b, _business_employed_worker_count(b.id))
+			if ask["requested"] > 0.0001:
+				buyers.append({"owner": b.name, "business_id": b.id, "requested": ask["requested"],
+					"funded": minf(ask["requested"], maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
+					"stock": stock})
 		if b.recipe.inputs.has(commodity):
 			var planned: float = float(_business_employed_worker_count(b.id)) * b.recipe.outputs[b.output_commodity()]
 			var desired: float = maxf(0.0, planned * b.recipe.inputs[commodity] * PRODUCTION_INPUT_BUFFER_DAYS - stock)
@@ -2009,8 +2042,10 @@ func _daily_tick() -> void:
 	var record := _new_daily_record()
 	_pay_wages(record)
 	_run_input_purchasing(record)
+	_run_tool_purchasing(record)
 	_run_livestock_purchasing(record)
 	_run_production(record)
+	_run_tool_wear(record)
 	_run_market(record)
 	_register_business_only_offers()
 	_run_trade(record)
@@ -2368,7 +2403,7 @@ func _run_production(record: Dictionary) -> void:
 		if b.kind == HEBusiness.Kind.HERD:
 			# Husbandry accrues daily; _run_herds turns it into a care
 			# fraction at the next review (HERD_LABOR_PER_HEAD_PER_DAY).
-			b.care_worker_days += float(_business_employed_worker_count(business_id))
+			b.care_worker_days += float(_business_employed_worker_count(business_id)) * _tool_productivity(b)
 			continue
 		if b.kind != HEBusiness.Kind.PRODUCTION:
 			continue
@@ -2381,7 +2416,7 @@ func _run_production(record: Dictionary) -> void:
 		var employed := _business_employed_worker_count(business_id)
 		var output_commodity := b.output_commodity()
 		var rate: float = b.recipe.outputs[output_commodity]
-		var planned: float = float(employed) * rate
+		var planned: float = float(employed) * rate * _tool_productivity(b)
 		var units: float = planned * b.last_input_fulfillment_ratio
 		for input_commodity in b.recipe.inputs.keys():
 			if b.need_inputs.has(input_commodity):
@@ -2403,6 +2438,84 @@ func _run_production(record: Dictionary) -> void:
 		b.last_output_produced = {output_commodity: units}
 		var name := Commodity.name_of(output_commodity)
 		record["produced"][name] = record["produced"].get(name, 0.0) + units
+
+## The output multiplier `b` gets from the tools it holds today: 1.0 unless
+## industrial tools are on, `b` uses tools, and its town has a seller of tools
+## (without one there is no tools economy to be short of). See
+## HEBusiness.tool_productivity.
+func _tool_productivity(b: HEBusiness) -> float:
+	if not b.uses_tools() or not _tools_in_play(b.settlement_id):
+		return 1.0
+	return b.tool_productivity(_business_employed_worker_count(b.id))
+
+func _tools_in_play(settlement_id: int) -> bool:
+	return _business_selling(settlement_id, Commodity.Type.TOOLS) != null
+
+## What a tool-using business is short of (target stock minus held) and how
+## much of that it asks the seller for today. Shared by purchasing and the
+## market view so the Buyers list shows the request purchasing actually makes.
+func _tool_request(buyer: HEBusiness, employed: int) -> Dictionary:
+	var target: float = float(employed) * (buyer.tools_per_worker + buyer.tool_wear_per_worker_day * PRODUCTION_INPUT_BUFFER_DAYS)
+	var shortfall: float = maxf(0.0, target - buyer.stock(Commodity.Type.TOOLS))
+	var daily_wear: float = float(employed) * buyer.tool_wear_per_worker_day
+	return {"shortfall": shortfall,
+		"requested": minf(shortfall, maxf(daily_wear * TARGET_BUFFER_DAYS, shortfall * TOOL_FILL_FRACTION_PER_DAY))}
+
+## Tool-using businesses top their tools up to one per worker plus a buffer of
+## wear (PRODUCTION_INPUT_BUFFER_DAYS), buying from the town's tool seller out
+## of the same paced offer households draw on (_business_offer -- no reserve for
+## households, no Trader import: with no local seller there is no tools economy).
+## It runs after recipe inputs so a cash-short business pays for what it
+## consumes first, and a missing tool only lowers productivity -- it never
+## enters last_input_fulfillment_ratio.
+func _run_tool_purchasing(record: Dictionary) -> void:
+	var tools := Commodity.Type.TOOLS
+	var ids: Array = businesses.keys()
+	ids.sort()
+	for business_id in ids:
+		var buyer: HEBusiness = businesses[business_id]
+		if not buyer.uses_tools() or not _tools_in_play(buyer.settlement_id):
+			continue
+		var employed := _business_employed_worker_count(business_id)
+		if employed <= 0:
+			continue
+		var ask := _tool_request(buyer, employed)
+		var shortfall: float = ask["shortfall"]
+		if shortfall <= 0.0001:
+			continue
+		var requested: float = ask["requested"]
+		var daily_wear: float = float(employed) * buyer.tool_wear_per_worker_day
+		var price: float = (markets[buyer.settlement_id] as HEMarket).price[tools]
+		var offer := _business_offer(buyer.settlement_id, tools, {}, false, requested)
+		var budget := _input_budget(buyer, employed, daily_wear * price)
+		var affordable_ratio: float = clampf(budget / (requested * price), 0.0, 1.0) if price > 0.0 else 1.0
+		var purchase_ratio := minf(minf(requested, offer) / requested, affordable_ratio)
+		var signal_today := _price_signal_entry(buyer.settlement_id, tools)
+		signal_today["funded_business"] += requested * affordable_ratio
+		signal_today["business_buffer_request"] += shortfall * affordable_ratio
+		if purchase_ratio > 0.0:
+			_settle_purchase(buyer, buyer, tools, requested, requested * purchase_ratio, requested * affordable_ratio, record, {})
+
+## Daily wear: each tool-using business loses tool_wear_per_worker_day per
+## employed worker from its held tools, booked as consumed goods and charged
+## against its revenue at the market price like any other consumed input, so
+## capacity tuning sees the cost as the tool is used up. Runs after production,
+## which used today's opening stock.
+func _run_tool_wear(record: Dictionary) -> void:
+	for business_id in businesses.keys():
+		var b: HEBusiness = businesses[business_id]
+		if not b.uses_tools() or not _tools_in_play(b.settlement_id):
+			continue
+		var employed := _business_employed_worker_count(business_id)
+		if employed <= 0:
+			continue
+		var worn: float = b.consume(Commodity.Type.TOOLS, float(employed) * b.tool_wear_per_worker_day)
+		if worn <= 0.0:
+			continue
+		b.add_flow(HEBusiness.FLOW_CONSUMED, Commodity.Type.TOOLS, worn)
+		var tools_name := Commodity.name_of(Commodity.Type.TOOLS)
+		record["consumed"][tools_name] = record["consumed"].get(tools_name, 0.0) + worn
+		b.last_revenue -= worn * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.TOOLS]
 
 ## Production's use of a need-input slot (HEBusiness.need_inputs): `quantity`
 ## is in units of the recipe's own input commodity; it is spent from whichever
@@ -2435,10 +2548,11 @@ func _burn_need_input(b: HEBusiness, input_commodity: Commodity.Type, quantity: 
 ## whole point of a harvest cycle over a flat daily rate.
 func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 	var employed := _business_employed_worker_count(b.id)
+	var effective_workers := float(employed) * _tool_productivity(b)
 	var output_commodity := b.output_commodity()
 	var harvested := 0.0
 	for f in b.fields:
-		var share: float = float(employed) * (f.area / b.land_area_acres) if b.land_area_acres > 0.0 else 0.0
+		var share: float = effective_workers * (f.area / b.land_area_acres) if b.land_area_acres > 0.0 else 0.0
 		f.labor_applied += share
 		f.days_growing += 1
 		if f.days_growing < b.growth_days:
@@ -4839,7 +4953,7 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 ## net revenue the work really earns.
 func _run_butchery(b: HEBusiness, record: Dictionary) -> void:
 	var workers := _business_employed_worker_count(b.id)
-	var worker_days_left := float(workers)
+	var worker_days_left := float(workers) * _tool_productivity(b)
 	var cattle_meat_per_worker_day: float = BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE] / BUTCHERY_WORKER_DAYS_PER_HEAD[HEBusiness.Species.CATTLE]
 	var produced: Dictionary[Commodity.Type, float] = {Commodity.Type.MEAT: 0.0, Commodity.Type.LEATHER: 0.0}
 	for species in BUTCHERY_SPECIES_ORDER:

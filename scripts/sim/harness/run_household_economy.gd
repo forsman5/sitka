@@ -67,6 +67,7 @@ func _init() -> void:
 	_check_livestock_export_toggle()
 	_check_butcher_processes_livestock()
 	_check_toolsmith_supplies_tools()
+	_check_industrial_tools_model()
 	_check_needs_catalog()
 	_check_need_substitutes()
 	_check_fuel_fallback()
@@ -2397,6 +2398,114 @@ func _check_toolsmith_supplies_tools() -> void:
 	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with a Toolsmith present, worst gap %.4f" % worst_stock_gap)
 	_assert(worst_money_gap < EPSILON, "Money did not reconcile with a Toolsmith present, worst gap %.4f" % worst_money_gap)
 	_check_demographic_invariants(sim)
+
+## Industrial tools (docs/tools-industrial-demand-plan.md): tool-using
+## businesses wear tools out, buy replacements from the Toolsmith and lose
+## output without them, down to a floor -- but only in a town with a seller of
+## tools, so every scenario without a Toolsmith is unaffected.
+func _check_industrial_tools_model() -> void:
+	print("\n=== Industrial tools: coverage, floor, wear, gate ===")
+	var floor_value := HEBusiness.TOOL_PRODUCTIVITY_FLOOR
+	var farm := HEScenarioSeeds.make_farm(1, 1, 4)
+	_assert(farm.uses_tools() and is_equal_approx(farm.tool_wear_per_worker_day, 1.0 / 300.0), "A Farm should use tools, worn out over 300 worker-days")
+	_assert(not HEScenarioSeeds.make_toolsmith(2, 1).uses_tools(), "The Toolsmith should not use tools yet (its stock is also its product)")
+	_assert(is_equal_approx(farm.tool_productivity(4), floor_value), "No tools should give exactly the floor")
+	farm.add_stock(Commodity.Type.TOOLS, 2.0)
+	_assert(is_equal_approx(farm.tool_coverage(4), 0.5) and is_equal_approx(farm.tool_productivity(4), floor_value + (1.0 - floor_value) * 0.5),
+		"Half the crew equipped should give halfway between the floor and full")
+	farm.add_stock(Commodity.Type.TOOLS, 20.0)
+	_assert(is_equal_approx(farm.tool_productivity(4), 1.0), "More tools than workers should not exceed 1.0")
+	_assert(is_equal_approx(farm.tool_productivity(0), 1.0), "No workers need no tools")
+
+	# On, with a toolsmith in town: floor without tools, wear when held.
+	var worn_sim := _new_sim("build_economy_with_toolsmith")
+	var worn_farm: HEBusiness = worn_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	worn_farm.inventory[Commodity.Type.TOOLS] = 0.0
+	_assert(is_equal_approx(worn_sim._tool_productivity(worn_farm), floor_value), "A toolless Farm should sit at the floor when tools are on and sold in town")
+	var crew := worn_sim._business_employed_worker_count(worn_farm.id)
+	# Exactly its purchase target, so today's purchasing has nothing to add and
+	# the day's change is pure wear.
+	var target: float = float(crew) * (worn_farm.tools_per_worker + worn_farm.tool_wear_per_worker_day * HESimulation.PRODUCTION_INPUT_BUFFER_DAYS)
+	worn_farm.inventory[Commodity.Type.TOOLS] = target
+	_assert(is_equal_approx(worn_sim._tool_productivity(worn_farm), 1.0), "A fully equipped Farm should be at 1.0")
+	worn_sim.advance_ticks(1)
+	var expected_left: float = target - float(crew) * worn_farm.tool_wear_per_worker_day
+	_assert(absf(worn_farm.stock(Commodity.Type.TOOLS) - expected_left) < 0.0001,
+		"One day should wear workers x wear-rate tools: have %.4f, expected %.4f" % [worn_farm.stock(Commodity.Type.TOOLS), expected_left])
+
+	# On, no toolsmith: no tools economy, so no wear and no productivity loss.
+	var bare_sim := _new_sim("build_three_business_economy")
+	var bare_farm: HEBusiness = bare_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	_assert(is_equal_approx(bare_sim._tool_productivity(bare_farm), 1.0), "Without a tools seller, productivity should stay 1.0")
+	bare_farm.add_stock(Commodity.Type.TOOLS, 5.0)
+	bare_sim.advance_ticks(3)
+	_assert(is_equal_approx(bare_farm.stock(Commodity.Type.TOOLS), 5.0), "Without a tools seller, tools should not wear")
+	print("  coverage maths, floor, gate and wear as expected")
+
+	# Bootstrap: a town with a Toolsmith starts every tool user equipped for its
+	# day-one crew; a town without one holds no tools at all.
+	var seeded := _new_sim("build_economy_with_toolsmith")
+	var equipped_users := 0
+	for business in seeded.businesses.values():
+		if business.uses_tools():
+			equipped_users += 1
+			_assert(business.stock(Commodity.Type.TOOLS) >= float(business.capacity) * business.tools_per_worker - 0.0001,
+				"%s should start equipped for its day-one crew" % business.name)
+	_assert(equipped_users >= 2, "The toolsmith scenario should have tool users to equip")
+	_assert(bare_farm.stock(Commodity.Type.TOOLS) == 5.0 and _new_sim("build_three_business_economy").businesses[HEScenarioSeeds.FARM_BUSINESS_ID].stock(Commodity.Type.TOOLS) == 0.0,
+		"A town without a Toolsmith should seed no tools")
+	# A business built mid-run gets the money for its first tools.
+	var created := HEScenarioSeeds.make_iron_mine(seeded.next_business_id(), HEScenarioSeeds.SETTLEMENT_ID)
+	var created_crew := clampi(HEScenarioSeeds.NEW_BUSINESS_STARTING_CAPACITY, seeded._capacity_floor(created), created.max_capacity)
+	seeded.add_new_business(created)
+	var tool_price: float = (seeded.markets[HEScenarioSeeds.SETTLEMENT_ID] as HEMarket).price[Commodity.Type.TOOLS]
+	var expected_cash: float = HEScenarioSeeds.startup_cash(created, created_crew) + float(created_crew) * created.tools_per_worker * tool_price
+	_assert(absf(created.balance - expected_cash) < 0.0001, "A created tool user's startup cash should include its first tools: %.2f vs %.2f" % [created.balance, expected_cash])
+
+	# Purchasing: a business with no tools buys them from the Toolsmith and climbs
+	# back off the floor.
+	var buy_sim := _new_sim("build_economy_with_toolsmith")
+	var buy_farm: HEBusiness = buy_sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	buy_farm.inventory[Commodity.Type.TOOLS] = 0.0
+	# The market view lists the starved farm among the tools buyers.
+	var tool_detail := buy_sim.get_market_detail(HEScenarioSeeds.SETTLEMENT_ID, Commodity.Type.TOOLS)
+	var farm_listed := false
+	for buyer in tool_detail["buyers"]:
+		if buyer.get("business_id", -1) == buy_farm.id:
+			farm_listed = true
+	_assert(farm_listed, "A tool-short business should appear among the tools market's buyers")
+	buy_sim.advance_ticks(40)
+	var restocked := buy_farm.stock(Commodity.Type.TOOLS)
+	var restocked_productivity := buy_sim._tool_productivity(buy_farm)
+	print("  farm restocked from nothing: %.1f tools, productivity %.2f after 40 days" % [restocked, restocked_productivity])
+	_assert(restocked > 1.0 and restocked_productivity > floor_value + 0.1, "An unequipped Farm should buy tools from the Toolsmith and recover")
+
+	# Goods and money reconcile with wear in the books. Every tool user starts
+	# equipped so wear actually runs.
+	var run_sim := _new_sim("build_economy_with_toolsmith")
+	for business_id in run_sim.businesses.keys():
+		var b: HEBusiness = run_sim.businesses[business_id]
+		if b.uses_tools():
+			b.add_stock(Commodity.Type.TOOLS, 20.0)
+	var reconciled := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled.append_array(HESimulation.LIVESTOCK_GOODS)
+	reconciled.append(Commodity.Type.IRON)
+	var worn_total := 0.0
+	var worst_stock_gap := 0.0
+	var worst_money_gap := 0.0
+	run_sim.advance_ticks(360)
+	for record in run_sim.get_daily_history(360):
+		for c in reconciled:
+			var name := Commodity.name_of(c)
+			var expected: float = record["opening_stock"][name] + record["produced"].get(name, 0.0) + (record["imported"] as Dictionary).get(name, 0.0) \
+				- record["consumed"].get(name, 0.0) - (record["exported"] as Dictionary).get(name, 0.0) - (record["goods_written_off"] as Dictionary).get(c, 0.0)
+			worst_stock_gap = maxf(worst_stock_gap, absf(record["closing_stock"][name] - expected))
+		var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+		worst_money_gap = maxf(worst_money_gap, absf(record["closing_money"] - expected_money))
+		worn_total += record["consumed"].get("Tools", 0.0)
+	print("  360 days: %.1f tools consumed (households + wear) | worst stock gap %.4f, worst money gap %.4f" % [worn_total, worst_stock_gap, worst_money_gap])
+	_assert(worst_stock_gap < EPSILON, "Goods did not reconcile with industrial tool wear, worst gap %.4f" % worst_stock_gap)
+	_assert(worst_money_gap < EPSILON, "Money did not reconcile with industrial tool wear, worst gap %.4f" % worst_money_gap)
 
 ## The catalog is what every consumption/market/reserve loop reads, so pin its
 ## shape: the three needs, today's one satisfier each, and food alone driving
