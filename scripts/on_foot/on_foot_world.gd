@@ -26,8 +26,6 @@ const DUSK_SECONDS := 120.0
 const LOSS_CHANCE := 0.4
 ## Pause between the last sheep entering the pen and the end-of-day screen.
 const EARLY_END_DELAY := 1.5
-const STARTING_FLOCK_MIN := 3
-const STARTING_FLOCK_MAX := 5
 ## The pen starts at its default size and grows by this many segments (each way)
 ## per PEN_GROW_STEP sheep beyond what the default pen holds.
 const PEN_BASE_CAPACITY := 10
@@ -73,7 +71,7 @@ func _ready() -> void:
 	else:
 		_day = 1
 		_flock_ages.clear()
-		for i in randi_range(STARTING_FLOCK_MIN, STARTING_FLOCK_MAX):
+		for i in OnFootPlayer.start_sheep_count:
 			_flock_ages.append(OnFootSheep.ADULT_AGE)
 	GameState.time_of_day = START_TIME_OF_DAY
 	_build_environment()
