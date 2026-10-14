@@ -20,7 +20,15 @@
   function build(meta) {
     var short = (meta.sha || "").slice(0, 7);
     var title = "PR #" + meta.number + " – " + meta.title;
-    document.title = title;
+    // Godot's web runtime writes document.title (project name) when the engine boots and on
+    // window-title changes, so set it now and re-assert whenever something else changes it.
+    function applyTitle() {
+      if (document.title !== title) document.title = title;
+    }
+    applyTitle();
+    new MutationObserver(applyTitle).observe(document.head || document.documentElement, {
+      subtree: true, childList: true, characterData: true,
+    });
 
     var root = el("div", {
       position: "fixed", top: "8px", left: "8px", zIndex: "2147483647",
