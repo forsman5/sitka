@@ -17,6 +17,8 @@ extends RefCounted
 ##                 exist and staff themselves.
 ##   farm_share    float   share of the remaining workers on the Farm (0..1)
 ##   housing       {houses}  seeded dwellings (one household each)
+##   include       [type_key]  optional: keep only these businesses (plus the
+##                 Government and Warehouse); absent keeps every default one
 ##   treasury_bonus float  gold added to the government's starting float
 ##   warehouse     {stock: {grain|timber|wool: units}}  present = a Government
 ##                 Warehouse already stands, holding this stock (what a
@@ -72,6 +74,60 @@ const PRESETS := {
 ## Display order on the setup page.
 const ORDER := ["small_village", "mining_village", "large_village"]
 const DEFAULT_KEY := "small_village"
+
+## Starting crews a Custom roster gives each trade it includes.
+const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_burner": 2, "toolsmith": 12}
+## Farm and Woodlot are the only food and fuel makers; a roster needs one.
+const CUSTOM_REQUIRED_ANY := ["farm", "woodlot"]
+const CUSTOM_MIN_HOUSEHOLDS := 10
+const CUSTOM_MAX_HOUSEHOLDS := 50
+
+## The business type_keys a preset starts with: its crewed trades plus the
+## ones every town gets (Farm, Woodlot, Trader, ranches, Butcher).
+static func included_trades(spec: Dictionary) -> Array:
+	var trades := ["farm", "woodlot", "trader", "cattle_ranch", "sheep_farm", "butcher"]
+	for crew_key in spec.get("crews", {}):
+		if int(spec["crews"][crew_key]) > 0 and not trades.has(crew_key):
+			trades.append(crew_key)
+	return trades
+
+## A spec for a hand-picked roster: `included` is business type_keys. Staffed
+## crews come from CUSTOM_CREWS; Farm and Woodlot split the rest (all of it to
+## whichever is present). Housing, treasury and warehouse use the small-village
+## defaults, scaled by household count.
+static func custom_spec(included: Array, households: int) -> Dictionary:
+	var crews: Dictionary = {}
+	for trade in CUSTOM_CREWS:
+		if included.has(trade):
+			crews[trade] = CUSTOM_CREWS[trade]
+	var share := 0.5
+	if included.has("farm") and not included.has("woodlot"):
+		share = 1.0
+	elif included.has("woodlot") and not included.has("farm"):
+		share = 0.0
+	var sorted_include := included.duplicate()
+	sorted_include.sort()
+	return {
+		"format": FORMAT,
+		"key": "custom",
+		"label": "Custom",
+		"blurb": "A hand-picked roster.",
+		"settlement_name": "Custom Village",
+		"households": households,
+		"crews": crews,
+		"farm_share": share,
+		"include": sorted_include,
+		"housing": {"houses": ceili(households * 1.2)},
+		"treasury_bonus": 5.0 * households,
+		"warehouse": {"stock": {"timber": 7.5 * households}},
+	}
+
+## Whether a roster can be started: it needs a Farm or a Woodlot.
+static func custom_roster_valid(included: Array) -> bool:
+	for required in CUSTOM_REQUIRED_ANY:
+		if included.has(required):
+			return true
+	return false
 
 static func keys() -> Array:
 	return ORDER.duplicate()

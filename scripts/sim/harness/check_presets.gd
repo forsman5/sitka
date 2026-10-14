@@ -21,6 +21,7 @@ func _init() -> void:
 	for key in HEPresets.keys():
 		_check_preset(key)
 	_check_large_village_houses_and_builds()
+	_check_custom_roster()
 	_check_rejects_bad_specs()
 	print("PRESETS %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
@@ -72,6 +73,28 @@ func _check_large_village_houses_and_builds() -> void:
 	_assert(int(sim.get_housing_report(settlement_id)["houses"]) == int(before["houses"]) + 1, "A house was added")
 	layout.reconcile(sim.get_business_reports(), sim.get_dwelling_reports())
 	_assert(layout.unplaced_dwelling_ids().is_empty(), "The new house finds a lot")
+
+## The setup page's Custom roster: a spec with `include` builds only the ticked
+## businesses at the chosen household count and runs.
+func _check_custom_roster() -> void:
+	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
+	var roster := ["farm", "woodlot", "trader", "bloomery", "iron_mine"]
+	var spec := HEPresets.custom_spec(roster, 24)
+	_assert(HEPresets.validate(spec).is_empty(), "A custom spec validates: %s" % str(HEPresets.validate(spec)))
+	var sim := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_spec").bind(spec), true)
+	_assert(sim.get_household_ids().size() == 24, "Custom household count is honored")
+	for entry in HEScenarioSeeds.business_types():
+		_assert(sim.has_business_of_type(settlement_id, entry["type_key"]) == roster.has(entry["type_key"]),
+			"Custom roster presence for %s" % entry["type_key"])
+	_assert(sim._government_warehouse(settlement_id) != null, "A custom town keeps its warehouse")
+	sim.advance_ticks(180)
+	_assert(int(sim.get_city_summary()["population"]) > 0, "A custom town runs")
+	var restored: Variant = JSON.parse_string(JSON.stringify(spec))
+	_assert(restored is Dictionary and (restored as Dictionary)["include"].size() == roster.size(), "A custom spec survives JSON")
+	_assert(not HEPresets.custom_roster_valid(["trader", "butcher"]), "A roster with no Farm or Woodlot is invalid")
+	_assert(HEPresets.custom_roster_valid(["woodlot"]), "A Woodlot alone is enough to start")
+	var woodlot_only := HEPresets.custom_spec(["woodlot"], 20)
+	_assert(float(woodlot_only["farm_share"]) == 0.0, "A woodlot-only roster puts everyone on the Woodlot")
 
 func _check_rejects_bad_specs() -> void:
 	var bad := HEPresets.spec("small_village")
