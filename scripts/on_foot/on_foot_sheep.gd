@@ -12,6 +12,12 @@ const ADULT_AGE := 2
 const LAMB_SCALE := 0.6
 
 @export var flee_speed: float = 5.5
+## Flee speed scales with distance from the player: full speed inside
+## (scare radius - flee_full_speed_inset), easing linearly down to
+## flee_edge_speed_mult of flee_speed at the scare radius, so sheep at the edge
+## of the ring meander away at a trot instead of snapping on and off.
+@export var flee_full_speed_inset: float = 7.0
+@export_range(0.0, 1.0) var flee_edge_speed_mult: float = 0.33
 @export var turn_rate: float = 6.0
 @export var accel: float = 14.0
 @export var arena_half_size: float = 90.0
@@ -137,7 +143,7 @@ func _physics_process(delta: float) -> void:
 	if flee_dir != Vector3.ZERO:
 		_fleeing = true
 		desired = flee_dir
-		speed = flee_speed
+		speed = flee_speed * _flee_speed_factor()
 	else:
 		_state_left -= delta
 		if _state_left <= 0.0:
@@ -221,6 +227,22 @@ func _flee_direction() -> Vector3:
 		return Vector3.ZERO
 	away = away.normalized() if dist > 0.01 else Vector3.FORWARD
 	return (away + _edge_push() + _separation()).normalized()
+
+## Flee speed multiplier: 1.0 within the inner zone, easing linearly to
+## flee_edge_speed_mult at the scare radius. A bark-startled sheep bolts at full
+## speed regardless of distance.
+func _flee_speed_factor() -> float:
+	if _startled_left > 0.0 or _player == null:
+		return 1.0
+	var scare := 8.0
+	if _player.has_method("scare_radius"):
+		scare = _player.call("scare_radius")
+	var off := global_position - _player.global_position
+	off.y = 0.0
+	var inner := maxf(scare - flee_full_speed_inset, 0.0)
+	var span := maxf(scare - inner, 0.001)
+	var t := clampf((off.length() - inner) / span, 0.0, 1.0)
+	return lerpf(1.0, flee_edge_speed_mult, t)
 
 ## Gentle wander that keeps drifting back toward the rest of the flock.
 func _pick_wander_dir() -> Vector3:
