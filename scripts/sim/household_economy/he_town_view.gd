@@ -45,7 +45,13 @@ const HOUSE_ART_POOL: Array[Dictionary] = [
 	{"model": "building_home_A_blue.gltf", "width": 4.5},
 	{"model": "building_home_B_blue.gltf", "width": 4.5},
 	{"model": "tent.gltf", "width": 4.0},
-	{"model": "building_house_builder_blue.glb", "width": 4.5},
+	# This model's mesh bundles a splayed fence/stilt frame and a ground-puddle
+	# decal into the same primitives as its door/window trim, so they can't be
+	# dropped without losing the trim too. scale_ref sizes the building off its
+	# actual walls+roof+chimney footprint instead of the full (fence-inflated)
+	# bounds, so the house itself matches the others; the fence yard is wider
+	# than the 6x6 house plot and may slightly overlap the plot's margin.
+	{"model": "building_house_builder_blue.glb", "width": 4.5, "scale_ref": Vector2(0.98, 1.12)},
 ]
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
@@ -493,6 +499,10 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	return model
 
 ## Scales a freshly built model to the art's width and sits it on the ground.
+## art["scale_ref"] (optional Vector2 x/z), when present, replaces the live
+## mesh bounds for the scale-factor math, so a model whose true bounds are
+## inflated by non-building decoration (see building_house_builder_blue's
+## entry in HOUSE_ART_POOL) can still be sized off its actual footprint.
 func _place_on_ground(building: Node3D, art: Dictionary, offset: Vector3) -> void:
 	var bounds := AABB()
 	var first := true
@@ -504,7 +514,10 @@ func _place_on_ground(building: Node3D, art: Dictionary, offset: Vector3) -> voi
 		first = false
 	if first:
 		return
-	var factor: float = float(art["width"]) / maxf(maxf(bounds.size.x, bounds.size.z), 0.001)
+	var ref_size := Vector2(bounds.size.x, bounds.size.z)
+	if art.has("scale_ref"):
+		ref_size = art["scale_ref"]
+	var factor: float = float(art["width"]) / maxf(maxf(ref_size.x, ref_size.y), 0.001)
 	if art["model"] == "barn":
 		factor = float(art["width"]) / BARN_SIZE.x
 	building.scale = Vector3.ONE * factor
