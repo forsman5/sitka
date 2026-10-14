@@ -31,6 +31,8 @@ const ART := {
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
 	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
+	# Placeholder: the tavern is the biggest non-civic model in the pack.
+	"tenement": {"model": "building_tavern_blue.gltf", "width": 5.5},
 }
 ## Houses alternate between this and ART["house"] by site id, for variety.
 const HOUSE_ALT_ART := {"model": "building_home_B_blue.gltf", "width": 4.5}
@@ -422,7 +424,7 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	label.modulate = Color.WHITE if occupied else Color(0.8, 0.8, 0.8)
 	# A dense residential zone would drown the map in text; houses are
 	# identified by selecting them.
-	label.visible = type_key != HETownLayout.HOUSE_TYPE_KEY
+	label.visible = not HETownLayout.is_housing_type(type_key)
 	label.position = Vector3(0.0, 9.0, 0.0) + Vector3(building_offset.x, 0.0, 0.0).rotated(Vector3.UP, body.rotation.y)
 	root.add_child(label)
 	return {"root": root, "label": label}
@@ -546,6 +548,8 @@ func _refresh_info() -> void:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
 		var shelter := "Shelters one household."
+		if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
+			shelter = "Shelters several households."
 		var housing_line := housing_text(_housing)
 		_info_body.text = shelter if housing_line == "" else "%s\n%s" % [shelter, housing_line]
 		return

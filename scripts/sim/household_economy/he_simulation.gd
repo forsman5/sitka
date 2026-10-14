@@ -829,11 +829,29 @@ func get_housing_report(settlement_id: int) -> Dictionary:
 	return {
 		"modeled": s.housing_modeled,
 		"houses": s.dwelling_ids.size(),
+		"upgradable_houses": _count_plain_houses(s),
 		"capacity": capacity,
 		"households": household_count,
 		"homeless_households": maxi(0, household_count - capacity) if s.housing_modeled else 0,
 		"saturated": s.housing_modeled and household_count >= capacity,
 	}
+
+## The lowest-id plain house of the settlement, or null. Ids are handed out in
+## placement order (nearest the civic anchor first), so this is the innermost.
+func _innermost_plain_house(settlement_id: int) -> HEHouse:
+	var best: HEHouse = null
+	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
+		var house: HEHouse = dwellings[dwelling_id]
+		if not house.is_dense() and (best == null or house.id < best.id):
+			best = house
+	return best
+
+func _count_plain_houses(s: HESettlement) -> int:
+	var count := 0
+	for dwelling_id in s.dwelling_ids:
+		if not (dwellings[dwelling_id] as HEHouse).is_dense():
+			count += 1
+	return count
 
 ## Ids of households with no house: the settlement's households sorted by id,
 ## the first `capacity` of them housed, the rest homeless.
@@ -930,7 +948,12 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
 		if option.get("category", "") == "housing":
-			add_dwelling(option["make"].call(next_dwelling_id(), settlement_id))
+			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
+			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
+			if upgradable != null:
+				upgradable.upgrade_to_dense()
+			else:
+				add_dwelling(house)
 			return true
 		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
 		if option.get("startup", false):

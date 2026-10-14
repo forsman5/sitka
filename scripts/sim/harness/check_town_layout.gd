@@ -19,6 +19,7 @@ func _init() -> void:
 	_check_incremental_allocation_keeps_sites()
 	_check_failure_vacates_and_reuse_fills_it()
 	_check_houses_fill_the_residential_zone()
+	_check_tenement_upgrade_in_place()
 	_check_full_roster_fits()
 	_check_no_overlap_and_bounds_under_load()
 	_check_roads_and_frontage()
@@ -173,6 +174,27 @@ func _check_houses_fill_the_residential_zone() -> void:
 	layout.reconcile(reports, dwellings)
 	_assert(layout.site_of_business(500).get("zone", HETownLayout.ZONE_HOUSING) != HETownLayout.ZONE_HOUSING, "A business must not move into a house")
 	_assert(layout.site_of_dwelling(9999).get("business_id", 0) == HETownLayout.NO_BUSINESS, "A house site stays a house site")
+
+func _check_tenement_upgrade_in_place() -> void:
+	var built := _layout_for(_default_builder())
+	var layout = built[0]
+	var dwellings: Array = built[2].duplicate(true)
+	_assert(not layout.prefers_densify(), "A default town has room: no pressure to densify")
+	var before := _positions(layout)
+	var first: Dictionary = dwellings[0]
+	var site_before: Dictionary = layout.site_of_dwelling(int(first["dwelling_id"]))
+	first["type_key"] = "tenement"
+	first["name"] = "Tenement"
+	_assert(layout.reconcile(built[1], dwellings), "Upgrading a house should change the layout")
+	var site_after: Dictionary = layout.site_of_dwelling(int(first["dwelling_id"]))
+	_assert(site_after["site_id"] == site_before["site_id"] and site_after["position"] == site_before["position"], "An upgrade keeps the site")
+	_assert(site_after["type_key"] == "tenement", "The site takes the tenement kind")
+	_assert(_positions(layout) == before, "An upgrade moves and adds nothing")
+	# Packing past the static network's capacity flips the densify preference.
+	for i in range(60):
+		dwellings.append(_dwelling_report(5000 + i))
+	layout.reconcile(built[1], dwellings)
+	_assert(layout.prefers_densify(), "A crowded town should prefer densifying")
 
 func _check_full_roster_fits() -> void:
 	# Every unique business type plus the government and its warehouse: the

@@ -1128,10 +1128,17 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	_housing_blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
 	box.add_child(_housing_blocker_label)
 
+## The housing option the Build button offers: a tenement upgrade once the
+## layout says the town is nearly out of room and a plain house is left to
+## upgrade, otherwise a new house.
 func _house_option_index() -> int:
+	var wanted := "house"
+	if _town_layout != null and _town_layout.prefers_densify() \
+			and int(_simulation.get_housing_report(_town_settlement_id()).get("upgradable_houses", 0)) > 0:
+		wanted = "tenement"
 	var options := HEScenarioSeeds.government_buildings()
 	for i in options.size():
-		if options[i]["type_key"] == "house":
+		if options[i]["type_key"] == wanted:
 			return i
 	return -1
 
@@ -1168,9 +1175,10 @@ func _refresh_housing() -> void:
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
 	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
 	var order_state := _simulation.build_goods_order_state(_town_settlement_id(), option)
-	_housing_build_button.text = "Build house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+	var noun := "house" if option["type_key"] == "house" else "tenement upgrade"
+	_housing_build_button.text = "Build %s (%s)" % [noun, HEScenarioSeeds.cost_text(option["cost"])]
 	if order_state == "can_order":
-		_housing_build_button.text = "Order timber for a house (%s)" % HEScenarioSeeds.cost_text(option["cost"])
+		_housing_build_button.text = "Order timber for a %s (%s)" % [noun, HEScenarioSeeds.cost_text(option["cost"])]
 	_housing_build_button.disabled = blocker != "" and order_state != "can_order"
 	if order_state == "can_order":
 		_housing_blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker

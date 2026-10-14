@@ -2730,6 +2730,23 @@ func _check_housing() -> void:
 	_assert(sim.build_government_building(1, "house"), "Houses are repeatable")
 	_assert(sim.businesses.size() == sim.businesses.keys().size() and not sim.has_business_of_type(1, "house"), "Houses are not businesses")
 
+	# Tenement: upgrades the innermost plain house in place (+3 capacity, no new
+	# lot); only builds a new dense house once every house is already dense.
+	var before: Dictionary = sim.get_housing_report(1)
+	var innermost: int = (sim.settlements[1] as HESettlement).dwelling_ids.min()
+	warehouse.add_stock(Commodity.Type.TIMBER, 400.0)
+	_assert(sim.build_government_building(1, "tenement"), "A tenement builds from treasury gold + warehouse timber")
+	var after: Dictionary = sim.get_housing_report(1)
+	_assert(after["houses"] == before["houses"], "A tenement upgrades a house instead of adding a lot")
+	_assert(after["capacity"] == before["capacity"] + 3, "An upgrade adds three households of capacity")
+	_assert(sim.dwellings[innermost].type_key == "tenement", "The innermost house was the one upgraded")
+	_assert(after["upgradable_houses"] == before["upgradable_houses"] - 1, "One fewer plain house to upgrade")
+	for dwelling_id in (sim.settlements[1] as HESettlement).dwelling_ids:
+		sim.dwellings[dwelling_id].upgrade_to_dense()
+	var dense_houses: int = sim.get_housing_report(1)["houses"]
+	_assert(sim.build_government_building(1, "tenement"), "With no plain house left a tenement is built new")
+	_assert(sim.get_housing_report(1)["houses"] == dense_houses + 1, "...as an added lot")
+
 	# Saturation: drop all houses -> every household homeless, births scaled
 	# down and members shed. Compare against an identical town with housing.
 	var housed := _new_sim("build_three_business_economy")

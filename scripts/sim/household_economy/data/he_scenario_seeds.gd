@@ -48,6 +48,9 @@ const WAREHOUSE_BUILD_COST := 100.0
 ## one household (HEHouse.capacity_households).
 const HOUSE_BUILD_GOLD := 15.0
 const HOUSE_BUILD_TIMBER := 50.0
+## A tenement shelters HEHouse.DENSE_CAPACITY households for twice a house.
+const TENEMENT_BUILD_GOLD := 30.0
+const TENEMENT_BUILD_TIMBER := 100.0
 ## Seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -315,6 +318,14 @@ static func government_buildings() -> Array[Dictionary]:
 			"hint": "Shelters one household. Needs a Government Warehouse; the build button orders the timber.",
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
+		{"type_key": "tenement", "label": "Tenement", "category": "housing", "repeatable": true,
+			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER}),
+			"hint": "Upgrades the innermost house in place to shelter %d households (a new tenement if none is left to upgrade)." % HEHouse.DENSE_CAPACITY,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_dense()
+				return house},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"startup": false,
