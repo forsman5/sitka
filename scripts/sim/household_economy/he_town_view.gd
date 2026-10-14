@@ -56,6 +56,10 @@ const STAND_COLOR := Color(0.2, 0.38, 0.2)
 const PLAZA_COLOR := Color(0.7, 0.62, 0.46)
 const ROAD_COLOR := Color(0.62, 0.55, 0.42)
 const LANE_COLOR := Color(0.66, 0.6, 0.47)
+## Front-door footpath to the road, in the road's own colour.
+const PATH_WIDTH := 1.4
+## How far the path starts inside the building's footprint, so no gap shows.
+const PATH_BUILDING_TUCK := 0.3
 const VACANT_OVERLAY := Color(0.45, 0.45, 0.45, 0.55)
 const SELECTION_COLOR := Color(1.0, 0.9, 0.2, 0.45)
 
@@ -409,6 +413,7 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
 	if type_key == HETownLayout.HOUSE_TYPE_KEY and int(site["site_id"]) % 2 == 1:
 		art = HOUSE_ALT_ART
+	_add_door_path(root, site, art)
 	var building := _make_building(art, occupied)
 	building.position = building_offset
 	body.add_child(building)
@@ -428,6 +433,31 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	label.position = Vector3(0.0, 9.0, 0.0) + Vector3(building_offset.x, 0.0, 0.0).rotated(Vector3.UP, body.rotation.y)
 	root.add_child(label)
 	return {"root": root, "label": label}
+
+## A footpath from the building's front face to the site's access point on the
+## road centreline. It starts under the building and ends under the road
+## ribbon, and is sunk just below both surfaces (road top 0.08, plaza top
+## 0.10), so only the stretch of bare ground between them shows and the road
+## is never recoloured. Drawn in the site's root space.
+func _add_door_path(root: Node3D, site: Dictionary, art: Dictionary) -> void:
+	var access: Vector2 = site["access"]
+	if not access.is_finite():
+		return
+	var origin: Vector2 = site["position"]
+	var direction := (access - origin).normalized()
+	var door := maxf(float(art["width"]) * 0.5 - PATH_BUILDING_TUCK, 0.0)
+	var length := origin.distance_to(access) - door
+	if length < 0.3:
+		return
+	var path := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(length, 0.1, PATH_WIDTH)
+	path.mesh = mesh
+	path.material_override = _flat_material(ROAD_COLOR)
+	var middle := direction * (door + length * 0.5)
+	path.position = Vector3(middle.x, 0.02, middle.y)
+	path.rotation.y = -direction.angle()
+	root.add_child(path)
 
 func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	if art["model"] == "barn":

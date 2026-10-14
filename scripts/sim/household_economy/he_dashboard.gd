@@ -201,6 +201,11 @@ var _business_detail_cull_target_hint: Label
 ## tick, and rewriting the box then would clobber whatever's being typed.
 var _cull_target_loaded_for: int = -1
 var _business_detail_warehouse_section: VBoxContainer
+var _business_detail_tax_section: VBoxContainer
+var _tax_slider: HSlider
+var _tax_label: Label
+var _tax_effect_label: Label
+var _tax_slider_loaded_for: int = -1
 var _business_detail_warehouse_grid: GridContainer
 var _warehouse_rows: Dictionary = {} # commodity -> {stock, price, buy, sell, keep}
 var _warehouse_orders_loaded_for: int = -1
@@ -645,6 +650,30 @@ func _build_ui() -> void:
 	_business_detail_herd_events_display.scroll_active = false
 	_business_detail_herd_events_section.add_child(_business_detail_herd_events_display)
 
+	# Government tax policy: one slider for the sales tax rate. Its value is
+	# loaded from the sim only when a government is first shown (see
+	# _refresh_tax_section) so the periodic refresh never fights a drag.
+	_business_detail_tax_section = VBoxContainer.new()
+	detail_content.add_child(_business_detail_tax_section)
+	var tax_title := Label.new()
+	tax_title.text = "Tax policy"
+	tax_title.add_theme_font_size_override("font_size", 14)
+	_business_detail_tax_section.add_child(tax_title)
+	_tax_label = Label.new()
+	_business_detail_tax_section.add_child(_tax_label)
+	_tax_slider = HSlider.new()
+	_tax_slider.min_value = 0.0
+	_tax_slider.max_value = HESimulation.MAX_SALES_TAX_RATE * 100.0
+	_tax_slider.step = 1.0
+	_tax_slider.custom_minimum_size = Vector2(240, 0)
+	_tax_slider.value_changed.connect(_on_tax_slider_changed)
+	_business_detail_tax_section.add_child(_tax_slider)
+	_tax_effect_label = Label.new()
+	_tax_effect_label.add_theme_font_size_override("font_size", 12)
+	_tax_effect_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_tax_effect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_business_detail_tax_section.add_child(_tax_effect_label)
+
 	# Warehouse standing orders: the section is built once, its rows (one per
 	# tradeable good) the first time a warehouse report arrives -- see
 	# _refresh_warehouse_orders.
@@ -1040,7 +1069,7 @@ func _factor_tip_section(caption: String, average: float, factors: Array, popula
 	if factors.is_empty():
 		return text + "\n  Nothing is lowering it."
 	for factor in factors:
-		text += "\n  %s: -%.1f pts (affects %d of %d people)" % [factor["label"], factor["avg_loss"] * 100.0, factor["people"], population]
+		text += "\n  %s: %+.1f pts (affects %d of %d people)" % [factor["label"], -factor["avg_loss"] * 100.0, factor["people"], population]
 	return text
 
 func _on_population_hover(hovering: bool) -> void:
@@ -1423,7 +1452,7 @@ func _refresh_household_detail() -> void:
 			_add_household_detail_line("    %s shortfall: -%.0f%% health" % [loss["label"], loss["loss"] * 100.0])
 	_add_meter_row(_household_detail_content, "Morale", h["morale"])
 	for penalty in h["morale_penalties"]:
-		_add_household_detail_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+		_add_household_detail_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
 	for bonus in h["morale_bonuses"]:
 		_add_household_detail_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
@@ -1575,7 +1604,7 @@ func _refresh_person_detail() -> void:
 	_add_meter_row(_person_detail_content, "Health", p["health"])
 	_add_meter_row(_person_detail_content, "Morale", p["morale"])
 	for penalty in p["morale_penalties"]:
-		_add_person_line("    %s: -%.0f%% morale" % [penalty["label"], penalty["penalty"] * 100.0])
+		_add_person_line("    %s: %+.0f%% morale" % [penalty["label"], -penalty["penalty"] * 100.0])
 	for bonus in p["morale_bonuses"]:
 		_add_person_line("    %s: +%.0f%% morale" % [bonus["label"], bonus["bonus"] * 100.0])
 
@@ -2181,11 +2210,37 @@ func _refresh_business_detail() -> void:
 	if _business_detail_warehouse_section.visible:
 		_refresh_warehouse_orders(report)
 
+	_business_detail_tax_section.visible = report["kind"] == "government"
+	if _business_detail_tax_section.visible:
+		_refresh_tax_section(report)
+
 	_business_detail_transaction_section.visible = report["kind"] == "trader"
 	if _business_detail_transaction_section.visible:
 		_refresh_trader_transactions()
 	_refresh_business_employment()
 	_refresh_business_detail_employees()
+
+## Syncs the tax slider's caption and morale-effect text to the sim's rate;
+## the slider's own value is loaded only when this government is first shown.
+func _refresh_tax_section(report: Dictionary) -> void:
+	if _tax_slider_loaded_for != _selected_business_id:
+		_tax_slider_loaded_for = _selected_business_id
+		_tax_slider.set_value_no_signal(roundf(report["sales_tax_rate"] * 100.0))
+	_update_tax_labels()
+
+func _update_tax_labels() -> void:
+	var effect := _simulation.tax_morale_effect()
+	_tax_label.text = "Sales tax: %.0f%% (default %.0f%%)" % [_simulation.sales_tax_rate * 100.0, HESimulation.SALES_TAX_RATE * 100.0]
+	if effect > 0.001:
+		_tax_effect_label.text = "Low taxes: +%.0f%% morale for everyone, but less treasury income." % (effect * 100.0)
+	elif effect < -0.001:
+		_tax_effect_label.text = "High taxes: -%.0f%% morale for everyone, but more treasury income." % (-effect * 100.0)
+	else:
+		_tax_effect_label.text = "Default rate: no morale effect. Lower rates raise morale (+10%% at 2%%); higher rates lower it (max %.0f%%)." % (HESimulation.MAX_SALES_TAX_RATE * 100.0)
+
+func _on_tax_slider_changed(value: float) -> void:
+	_simulation.set_sales_tax_rate(value / 100.0)
+	_update_tax_labels()
 
 ## The warehouse's order table. Rows are created once (a per-refresh rebuild
 ## would split a click across two widget instances, like the HUD's buttons);

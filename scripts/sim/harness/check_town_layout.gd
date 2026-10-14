@@ -259,6 +259,13 @@ func _check_roads_and_frontage() -> void:
 			_assert(gap >= inradius - 0.01, "Site %d (%s) sits on road %d" % [site["site_id"], site["type_key"], road["road_id"]])
 		if site["zone"] == HETownLayout.ZONE_HOUSING:
 			_assert(site["road_id"] >= 0 and site["road_id"] < roads.size(), "House site %d should record the road it fronts" % site["site_id"])
+			var access: Vector2 = site["access"]
+			_assert(access.is_finite(), "House site %d should have a door access point" % site["site_id"])
+			if access.is_finite():
+				var road: Dictionary = roads[site["road_id"]]
+				_assert(_distance_to_polyline(access, road["points"]) < 0.01, "Site %d's access point should lie on its road" % site["site_id"])
+				# Door to road: at most the setback jitter plus half a ribbon, a short walk.
+				_assert(site["position"].distance_to(access) <= 3.0 + 1.0 + 1.2 + float(road["width"]) * 0.5 + 1.5, "Site %d is too far from its road" % site["site_id"])
 	# Roads are deterministic and only ever grow.
 	var again = _layout_for(_default_builder())[0]
 	_assert(again.get_roads().size() == roads.size(), "Road network must be a pure function of the scenario")
