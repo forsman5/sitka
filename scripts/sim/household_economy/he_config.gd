@@ -10,6 +10,7 @@ extends Control
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEPresets = preload("res://scripts/sim/household_economy/data/he_presets.gd")
 const HEDashboard = preload("res://scripts/sim/household_economy/he_dashboard.gd")
+const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
 const EscapeMenu = preload("res://scripts/ui/escape_menu.gd")
 
 var _preset_picker: OptionButton
@@ -17,6 +18,10 @@ var _blurb_label: Label
 var _detail_label: Label
 var _custom_box: VBoxContainer
 var _household_spin: SpinBox
+var _gold_spin: SpinBox
+var _houses_spin: SpinBox
+var _tenements_spin: SpinBox
+var _farm_share_spin: SpinBox
 var _checks: Dictionary = {} # business type_key -> CheckBox
 var _warning_label: Label
 var _start_button: Button
@@ -25,6 +30,22 @@ func _ready() -> void:
 	EscapeMenu.attach_to(self)
 	_build_ui()
 	_apply_preset(HEPresets.keys().find(HEPresets.DEFAULT_KEY))
+
+func _add_spin_row(caption: String, min_value: float, max_value: float, step: float, value: float) -> SpinBox:
+	var row := HBoxContainer.new()
+	_custom_box.add_child(row)
+	var label := Label.new()
+	label.text = caption
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(label)
+	var spin := SpinBox.new()
+	spin.min_value = min_value
+	spin.max_value = max_value
+	spin.step = step
+	spin.value = value
+	spin.value_changed.connect(func(_v: float) -> void: _on_custom_edited())
+	row.add_child(spin)
+	return spin
 
 func _custom_index() -> int:
 	return HEPresets.keys().size()
@@ -66,18 +87,11 @@ func _build_ui() -> void:
 	_custom_box = VBoxContainer.new()
 	_custom_box.add_theme_constant_override("separation", 6)
 	vbox.add_child(_custom_box)
-	var household_row := HBoxContainer.new()
-	_custom_box.add_child(household_row)
-	var household_label := Label.new()
-	household_label.text = "Households"
-	household_row.add_child(household_label)
-	_household_spin = SpinBox.new()
-	_household_spin.min_value = HEPresets.CUSTOM_MIN_HOUSEHOLDS
-	_household_spin.max_value = HEPresets.CUSTOM_MAX_HOUSEHOLDS
-	_household_spin.step = 1
-	_household_spin.value = 30
-	_household_spin.value_changed.connect(func(_v: float) -> void: _on_custom_edited())
-	household_row.add_child(_household_spin)
+	_household_spin = _add_spin_row("Households", HEPresets.CUSTOM_MIN_HOUSEHOLDS, HEPresets.CUSTOM_MAX_HOUSEHOLDS, 1, 30)
+	_gold_spin = _add_spin_row("Starting gold (treasury)", 0, HEPresets.CUSTOM_MAX_GOLD, 25, 150)
+	_houses_spin = _add_spin_row("Houses (1 household each)", 0, HEPresets.CUSTOM_MAX_HOUSES, 1, 36)
+	_tenements_spin = _add_spin_row("Tenements (%d households each)" % HEHouse.DENSE_CAPACITY, 0, HEPresets.CUSTOM_MAX_HOUSES, 1, 0)
+	_farm_share_spin = _add_spin_row("Farm share of field workers (%)", 0, 100, 5, 50)
 	var businesses_label := Label.new()
 	businesses_label.text = "Businesses to include"
 	_custom_box.add_child(businesses_label)
@@ -114,6 +128,12 @@ func _load_custom_controls(spec: Dictionary) -> void:
 	for type_key in _checks:
 		(_checks[type_key] as CheckBox).set_pressed_no_signal(trades.has(type_key))
 	_household_spin.set_value_no_signal(int(spec["households"]))
+	var housing: Dictionary = spec.get("housing", {})
+	var tenements := int(housing.get("tenements", 0))
+	_tenements_spin.set_value_no_signal(tenements)
+	_houses_spin.set_value_no_signal(int(housing.get("houses", ceili(int(spec["households"]) * 1.2))) - tenements)
+	_gold_spin.set_value_no_signal(float(spec.get("treasury_bonus", 0.0)))
+	_farm_share_spin.set_value_no_signal(roundi(float(spec.get("farm_share", 0.5)) * 100.0))
 
 func _apply_preset(index: int) -> void:
 	_preset_picker.select(index)
@@ -157,7 +177,12 @@ func _update_start_state() -> void:
 
 func _on_start_pressed() -> void:
 	if _preset_picker.selected == _custom_index():
-		var spec := HEPresets.custom_spec(_included(), int(_household_spin.value))
+		var spec := HEPresets.custom_spec(_included(), int(_household_spin.value), {
+			"houses": int(_houses_spin.value),
+			"tenements": int(_tenements_spin.value),
+			"treasury_bonus": _gold_spin.value,
+			"farm_share": _farm_share_spin.value / 100.0,
+		})
 		HEDashboard.pending_builder = Callable(HEScenarioSeeds, "build_spec").bind(spec)
 	else:
 		var key: String = HEPresets.keys()[_preset_picker.selected]

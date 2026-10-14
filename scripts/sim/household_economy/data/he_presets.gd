@@ -82,6 +82,9 @@ const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_bur
 const CUSTOM_REQUIRED_ANY := ["farm", "woodlot"]
 const CUSTOM_MIN_HOUSEHOLDS := 10
 const CUSTOM_MAX_HOUSEHOLDS := 50
+## The town layout seats roughly this many houses before reporting them unplaced.
+const CUSTOM_MAX_HOUSES := 100
+const CUSTOM_MAX_GOLD := 5000
 
 ## The business type_keys a preset starts with: its crewed trades plus the
 ## ones every town gets (Farm, Woodlot, Trader, ranches, Butcher).
@@ -94,20 +97,23 @@ static func included_trades(spec: Dictionary) -> Array:
 
 ## A spec for a hand-picked roster: `included` is business type_keys. Staffed
 ## crews come from CUSTOM_CREWS; Farm and Woodlot split the rest (all of it to
-## whichever is present). Housing, treasury and warehouse use the small-village
-## defaults, scaled by household count.
-static func custom_spec(included: Array, households: int) -> Dictionary:
+## whichever is present). `options` overrides the household-scaled defaults:
+## `houses` (plain houses), `tenements`, `treasury_bonus` (gold) and
+## `farm_share` (used only when both Farm and Woodlot are included).
+static func custom_spec(included: Array, households: int, options: Dictionary = {}) -> Dictionary:
 	var crews: Dictionary = {}
 	for trade in CUSTOM_CREWS:
 		if included.has(trade):
 			crews[trade] = CUSTOM_CREWS[trade]
-	var share := 0.5
+	var share := float(options.get("farm_share", 0.5))
 	if included.has("farm") and not included.has("woodlot"):
 		share = 1.0
 	elif included.has("woodlot") and not included.has("farm"):
 		share = 0.0
 	var sorted_include := included.duplicate()
 	sorted_include.sort()
+	var plain_houses := int(options.get("houses", ceili(households * 1.2)))
+	var tenements := int(options.get("tenements", 0))
 	return {
 		"format": FORMAT,
 		"key": "custom",
@@ -118,8 +124,8 @@ static func custom_spec(included: Array, households: int) -> Dictionary:
 		"crews": crews,
 		"farm_share": share,
 		"include": sorted_include,
-		"housing": {"houses": ceili(households * 1.2)},
-		"treasury_bonus": 5.0 * households,
+		"housing": {"houses": plain_houses + tenements, "tenements": tenements},
+		"treasury_bonus": float(options.get("treasury_bonus", 5.0 * households)),
 		"warehouse": {"stock": {"timber": 7.5 * households}},
 	}
 
