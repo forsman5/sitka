@@ -4,210 +4,122 @@
 
 Fill the Town view with little villagers who live the day the simulation just computed. Each household member is a visible villager. They wake at their house, walk the roads to the business that employs them, work, come home, and disappear indoors at night.
 
-Most of the groundwork exists already:
+The groundwork this builds on:
 
-- **Clock.** The Town view runs its own clock (`he_dashboard.gd:_advance_town_time`, `GameState.town_day_seconds`). The view's lighting follows it (`HETownView.set_time_of_day`). The sim ticks once per visual day at `TOWN_TICK_PHASE` (05:30). That is before villagers are awake, so roster changes from a tick (jobs, births, departures, new houses) happen while everyone is indoors.
-- **Jobs.** `HEHousehold.employer_business_id` holds the job. A household works as one unit for one employer. `HETownLayout.site_of_business()` gives the workplace site.
-- **Houses and roads.** Houses are layout sites with a `road_id` and an `access` point on the road centreline. Roads are polylines that only grow.
+- **Clock.** The Town view runs its own clock (`he_dashboard.gd:_advance_town_time`, `GameState.town_day_seconds`), and the lighting follows it (`HETownView.set_time_of_day`). The sim ticks once per visual day at `TOWN_TICK_PHASE` (05:30), before villagers are awake. So roster changes from a tick (jobs, births, departures, new houses) happen while everyone is indoors.
+- **Jobs.** `HEHousehold.employer_business_id`. A household works as one unit for one employer, and `HETownLayout.site_of_business()` gives the workplace.
+- **Layout.** Houses and businesses are layout sites with an `access` point on a road. Roads only grow, and sites never move.
 
-**Missing:**
+Rule kept from the town view plan: the simulation owns economic truth, the layout owns positions, and the view only renders. Villager motion is cosmetic and never feeds back into the economy.
 
-1. **House assignment.** Housing is a pooled capacity today. Households are not assigned to a house (`TODO(housing-assignment)`). Homeless status is derived from household id order.
-2. **Villager identity and a model.** Members exist only as age arrays on the household. Nothing is rendered.
-3. **Movement.** There is no path network over the roads and no daily schedule.
+## Phases
 
-Rule kept from the town view plan: the simulation owns economic truth, the layout owns positions, and the view only renders. Villager motion is cosmetic. It never feeds back into the economy.
+### Done (PR #87)
 
-## 1. Simulation: assign houses to households
+**Houses assigned (sim).**
+- `HEHousehold.dwelling_id` is written only by `HESimulation._reconcile_housing`. It runs:
+  - at sim start;
+  - at the end of every tick;
+  - in `add_dwelling`;
+  - in `_finish_due_constructions`, after a tenement upgrade.
+- A household keeps its house for life. Unhoused households take the lowest-id house with room, so the town fills from the centre out.
+- Homeless means `dwelling_id == -1`. It is the same set and the same counts as the old pooled rule; `run_household_economy.gd` output was byte-identical.
+- Reports:
+  - `get_household_summary()["dwelling_id"]`;
+  - `get_dwelling_reports()` entries carry `capacity` and `occupant_household_ids`;
+  - `get_villager_reports(settlement_id)` is the cheap per-household roster, with house, employer, status and ages.
+- The full rules are in `docs/household-housing.md`.
 
-### Data
+**Villager identity.**
+- A villager is `(household_id, member_number)`: 1-based, workers first, the same numbering as the dashboard's person page.
+- Members have no persistent ids. When one leaves, later members shift down a number.
+- Looks:
+  - body model, male or female, seeded per villager;
+  - skin tone seeded per household;
+  - children at 0.6 scale.
 
-- `HEHousehold.dwelling_id: int = -1`. This is the source of truth: the house this household lives in, or -1 when homeless or when housing is not modeled.
-- House occupancy is **derived**, not stored twice. A house's occupants are the households whose `dwelling_id` matches. If a reverse index is ever needed for speed, rebuild it inside the same reconcile function so the two can never drift.
+**Road paths (from #88).** `he_town_paths.gd` (`HETownPaths`) is a pure-data route graph over the road polylines and every site's door and access point.
+- `path(from_site, to_site)` returns door → road → door, cached, with return trips reversed.
+- `refresh()` follows `layout.revision` and keeps cached routes, because routes stay valid as the town grows.
+- It is not used yet.
 
-### Rules
+**Villagers on screen.** `he_villagers.gd`, owned by `HETownView`.
+- One visual-only `Casual_Male`/`Casual_Female` per person, milling about in the front yard of their own house. Homeless villagers mill at the plaza edge, and housemates spread out.
+- They are frozen while paused or while the Town view is hidden.
+- Clicking a villager opens a person window:
+  - household and member, role and age, employer, household size, home;
+  - **Show home** selects the house and centres the camera on it;
+  - **Person details** opens the dashboard person page.
+- The house panel lists its households.
 
-All assignment goes through one function, `HESimulation._reconcile_housing(settlement_id)`:
+**Performance.**
+- Animations advance by hand: at most 64 a frame, only on screen, and none zoomed out past ortho size 50.
+- Villagers cast no shadows.
+- Skin materials are shared per tone.
+- Results at 120 households (480 villagers, whole town in view):
 
-1. **Sticky.** A housed household keeps its house for life. It loses it only when the household is removed (emigration, old age, adoption).
-2. **Free slots.** A house has `capacity_households` slots: 1 for a plain house, 4 for a tenement. An upgrade in place adds 3 free slots to the same house.
-3. **Fill order.** Unhoused households are taken in ascending id. Each one takes a free slot in the house with the **lowest dwelling id**, which is the innermost house because ids follow placement order. This is deterministic and keeps the town filled from the centre outward.
-4. **Unmodeled housing** (`housing_modeled == false`). Everyone keeps `dwelling_id = -1`, with status `"unlimited"`.
+  | Build | Before | After |
+  |---|---|---|
+  | Browser | 125 ms | 17 ms |
+  | Desktop | 27 ms | 8.5 ms |
 
-Call it:
+- Measure with `perf_town_villagers.gd` on desktop, or with `scenes/sim/perf_town_villagers.tscn` as the main scene of a web export.
 
-- at the start of `_daily_tick`, so the monthly homeless emigration pass reads current assignments;
-- after household removal, splits and adoption inside the tick (or once at the end of the tick);
-- from `add_dwelling()` and the tenement upgrade, so a new house is occupied the same day.
+**Checks.**
+- `check_housing_assignment.gd`.
+- `check_town_paths.gd`.
+- `check_town_view.gd`: villagers, picking, person window, Show home, Person details, both models.
+- `capture_town_view.gd` takes `--villager`, `--zoom` and `--tilt`.
 
-### Homelessness keeps the same numbers
+### Remaining
 
-- `_homeless_household_ids()` and `_housing_status_of()` switch from "id rank past capacity" to `dwelling_id == -1`. Iterate in sorted id order, as now.
-- Capacity and household counts are unchanged, so homeless counts match today's. New households always have higher ids, so in practice the same households end up homeless.
-- **Acceptance:** `run_household_economy.gd` produces the same populations, emigration and housing totals as on master. Any difference must be explained before merge. Master already reports 4 Trader/adoption failures; those are unrelated.
+**1. Indoors at night.**
+- New `he_villager_schedule.gd`. A villager's state comes straight from `(key, sim day, time of day, roster)`, with no stored state, so pause, speed changes and fast-forward cannot drift it.
+- Housed villagers go inside between about 21:00 and 05:30, each with seeded jitter, and reappear at their door in the morning.
+- Homeless villagers stay visible at the plaza overnight, so homelessness shows on the map.
+- Uses the existing clock. No routing yet.
 
-### Reports
+**2. Commuting.** Morning and evening walks along `HETownPaths`:
 
-- `get_household_summary()` gains `dwelling_id`.
-- `get_dwelling_reports()` gains `occupant_household_ids` (sorted). The house info panel in the Town view can then say "Home of household 12 (4 people)".
-- New lightweight query `get_villager_reports(settlement_id) -> Array`, ascending household id. It is cheap because the view calls it on every tick, and the heavy `get_household_summary` is not suitable:
-  ```
-  {household_id, dwelling_id, employer_business_id, housing_status,
-   worker_ages: PackedInt32Array, dependent_ages: PackedInt32Array}
-  ```
-- Update `docs/household-housing.md`: remove "not assigned" from *Still open* and document the rules above.
+| Time | Employed adult | Unemployed adult | Child |
+|------|----------------|------------------|-------|
+| 06:00–08:00 | Door → workplace | Door → plaza | Plays near home |
+| 17:00–19:30 | Workplace → home (some via the trader/plaza) | Plaza → home | Heads home |
 
-### Check
+- Each leg's duration fits its window. Speed is path length ÷ duration, capped, so a long commute leaves earlier instead of sprinting.
+- `town_day_seconds` only changes real-time speed, never the route.
 
-New harness `scripts/sim/harness/check_housing_assignment.gd`:
+**3. Work.**
+- Field, pasture and woodlot workers wander slowly inside the footprint from a seeded spot.
+- Town-business workers go inside (hidden) with brief trips to the door.
+- Unemployed adults loiter at the plaza.
+- Check: at noon, every employed worker is inside their employer's footprint.
 
-- Seeded presets start with every household housed up to capacity, with no house over capacity.
-- Assignments survive many ticks unchanged for surviving households.
-- A removed household frees its slot, and the next unhoused household takes it.
-- A new house or tenement upgrade is occupied in the same call.
-- With unmodeled housing, every household is `"unlimited"` with `dwelling_id = -1`.
+**4. Zoomed-out detail (#93).** Drawing 480 full skinned models is most of what's left (about 7 ms in the browser). Past a zoom threshold, swap to a low-detail mesh or a batched stand-in.
 
-## 2. Villager identity
-
-There are no persistent member ids yet. A villager's key is `(household_id, role, slot)`: role is `worker` or `dependent`, and slot is the index into that household's age array. That is enough for visuals:
-
-- When a member leaves, the household's array shrinks from the back, so that villager disappears. Other villagers can shift slot but keep their household, house, job and appearance.
-- Appearance is seeded from `household_id` (shared tint per household) plus slot (small hue/scale jitter). A family therefore reads as a family, and a split-off household gets its own colour.
-- Body model (male or female) is seeded from the villager key, so it stays the same for a villager across days and ticks. There are no recorded sexes in the sim, so this is purely cosmetic, roughly half and half. If the sim ever tracks it, the report field replaces the seed.
-- Dependents render as children at about 0.6 scale, the same idea as `OnFootSheep.LAMB_SCALE`. Dependents past `AGING_THRESHOLD_DAYS` who have not left home render at adult size.
-
-Persistent member ids (the `last_promoted_member_numbers` placeholder in `he_household.gd`) are a separate, later change. Nothing here depends on them.
-
-## 3. Road paths (layout side, pure data)
-
-New `scripts/sim/household_economy/he_town_paths.gd` (`RefCounted`, no nodes), built from an `HETownLayout`:
-
-- **Graph.**
-  - Nodes are road polyline points. Each spoke's first point joins the civic anchor (0, 0).
-  - A lane's first point lies on its parent road. Split the parent segment there and join them.
-  - Each site's `access` point is projected onto its road and inserted as a node.
-- **Off-road sites.** Field and pasture businesses have `access == Vector2.INF`. Connect them with a straight leg from the nearest road point to the footprint edge.
-- **Path query.** `path(from_site_id, to_site_id) -> PackedVector2Array` returns door → access → graph shortest path (A*/Dijkstra) → access → door, cached per site pair.
-- **Rebuild.** Roads only grow, so rebuild when `layout.road_count()` changes and keep the cache otherwise.
-- A valley consumer can reuse it later through the same coordinate transform as sites.
-
-Check `check_town_paths.gd`: every built site is reachable from the civic anchor. Paths stay on road ribbons except for door and off-road legs. A path is the same before and after unrelated sites are added.
-
-## 4. Daily schedule (pure function of time)
-
-New `scripts/sim/household_economy/he_villager_schedule.gd`. A villager's position is computed directly from `(villager key, day, time_of_day, roster, paths)`: no physics, no steering, no stored state. Pause, speed changes, switching views and the dashboard's fast-forward therefore can never desync or drift the crowd.
-
-Default timeline (hours). Each villager gets seeded jitter of about ±30 min, keyed by villager key and sim day, so they do not move in lockstep:
-
-| Time | Employed adult | Unemployed adult | Child | Homeless |
-|------|----------------|------------------|-------|----------|
-| 05:30 | Indoors (sim ticks) | Indoors | Indoors | Asleep at the plaza edge |
-| 06:00–08:00 | Leaves the door, walks to the workplace | Leaves; walks to the civic plaza | Steps out, plays near home | Gets up |
-| 08:00–17:00 | **Works.** Field/pasture/woodlot: slow wander inside the footprint. Town business: goes inside (hidden), with brief trips to the door | Loiters at the plaza | Plays near home or the plaza | Loiters at the plaza |
-| 17:00–19:30 | Walks home; some stop at the trader/plaza on the way | Walks home | Heads home | Stays at the plaza |
-| 19:30–21:00 | Near own door, then goes inside | Same | Inside | Plaza |
-| 21:00–05:30 | Hidden indoors | Hidden | Hidden | Visible and lying at the plaza: homelessness shows on the map |
-
-- **Walk speed.** Each walking leg gets a duration that fits its time window. Speed is path length / duration, with a cap so a long commute leaves early instead of sprinting. `town_day_seconds` changes real-time speed only, never the route.
-- **Workplace slots.** Each worker gets a seeded point inside its employer's footprint. In a field, that point drifts slowly along the furrows.
-- **Ticks.** `sync()` hands the view a new roster when the sim ticks at 05:30. New villagers appear at their door at their wake time. Departed villagers are simply absent. A job change shows as a different morning walk.
-
-Check `check_villager_schedule.gd`:
-
-- Everyone housed is hidden from 21:00 to 05:30.
-- Every employed worker is inside its employer's footprint at noon.
-- Positions are continuous over time, with no teleports except entering and leaving doors.
-- The same inputs always produce the same positions.
-
-## 5. Rendering and the model
-
-New `scripts/sim/household_economy/he_villagers.gd`, a `Node3D` under the town view's `_sites_root`. `HETownView` owns it and feeds it from `sync()` and `set_time_of_day()`.
-
-- **Models.** Two body models, picked per villager (see section 2):
-  - `assets/models/people/Casual_Male.fbx`, already used by `on_foot_player.gd`, with clips `CharacterArmature|Idle`, `|Walk` and `|Run`.
-  - `assets/models/people/Casual_Female.fbx`, added to this branch in commit `14b7272`. It comes from the same Quaternius Ultimate Animated Character Pack as the male model and should share its skeleton and `CharacterArmature|*` clip names, so one animation code path drives both. Slice 4 confirms this headlessly before relying on it.
-  - Both are instanced visual-only, scaled to about 1.7 world units (houses are 4.5 wide).
-  - A per-household tint is applied as `material_override` or a shared tinted material per household colour.
-  - Walk while moving, idle while working or loitering. Playback speed follows walk speed.
-- **Pooling.** Villager nodes are pooled by key. A roster change adds and removes the difference and never rebuilds the crowd.
-- **Budget.** Starting populations are about 80 (small), 120 (mining) and 192 (large village; 4 per household). Plan for about 300 skinned characters. Measure with the large village first.
-  - If frame time suffers: drop animation (pose only) beyond a camera-zoom threshold.
-  - Then hide children when zoomed out.
-  - Last resort: a `MultiMeshInstance3D` capsule impostor at far zoom.
-  - Decide from the measurement, not ahead of it.
-- **Labels and selection.** No villager labels, matching houses. Clicking a villager selects it. The info panel shows its household, home and employer and links to business details through the existing `details_requested` signal. Site clicks keep priority when the click lands on a footprint with no villager under it.
-- **House panel.** It shows occupants from `occupant_household_ids` instead of the generic "Shelters one household".
-
-Checks:
-
-- Extend `check_town_view.gd`. The villager count matches the roster headcount (housed plus homeless). Everyone is hidden at midnight. Nodes are reused across a tick.
-- Extend `capture_town_view.gd` with captures at 07:00 (commute) and 12:00 (work), at default zoom.
-
-## Delivery slices
-
-Each slice is its own PR against `master`:
-
-1. **House assignment in the sim:** `dwelling_id`, `_reconcile_housing`, homeless via assignment, reports, `check_housing_assignment.gd`, housing doc update. No visual change except the house info panel. Acceptance is matching `run_household_economy` totals.
-2. **Road paths:** `he_town_paths.gd` plus its check. There is no visual change, but a debug toggle can draw a sample path.
-3. **Schedule:** `he_villager_schedule.gd` plus its check, pure data.
-4. **Villagers on screen:** `he_villagers.gd`, model, tint, animation, pooling, view and capture checks, performance pass on the large village.
-5. **Polish:** villager selection and info, homeless camp at the plaza, house occupants panel, evening market stop.
-
-Slices 1–3 are independent and can be built in parallel. Slice 4 needs all three.
-
-### First deliverable (PR #87)
-
-PR #87 ships slices 1 and 2 plus a static part of slice 4. Villagers are on screen and clickable, but there is no schedule, routing or commuting yet.
-
-- **House assignment (slice 1):** done as specified in section 1. `check_housing_assignment.gd` covers it. `run_household_economy.gd` output is byte-identical to master.
-- **Road paths (slice 2):** `he_town_paths.gd`, from PR #88. Nothing uses it yet.
-- **Villagers (`he_villagers.gd`):**
-  - One visual-only model per household member, keyed `(household_id, member_number)`, with the dashboard's numbering.
-  - Members mill about in their house's front yard (the strip between the front wall and the road). Homeless villagers mill at the plaza edge.
-  - Each new spot is the best of 4 random candidates, farthest from housemates, so a family spreads out.
-  - Body model seeded per villager (female only when `Casual_Female.fbx` is present). Skin tone seeded per household. Children at 0.6 scale.
-  - Milling and animations stop while the dashboard is paused or the Town view is hidden.
-- **Town view:**
-  - Clicking a villager (screen-space pick, ahead of sites) opens a person window: household and member, role and age, employer, household size, and home.
-  - **Show home** selects the house and centres the camera on it. **Person details** opens the dashboard's person page.
-  - The house panel lists its households.
-- **Checks:** `check_town_view.gd` covers:
-  - one villager per person;
-  - villagers in their own yard;
-  - milling, and freezing while paused;
-  - a real click pick;
-  - the person window;
-  - Show home;
-  - Person details.
-
-  `capture_town_view.gd` gains `--villager`, `--zoom` and `--tilt`.
-- **Not yet:** the day/night schedule (villagers stay out all night), commuting along the paths, and work.
+**5. Polish.**
+- Evening market stop.
+- A visible homeless camp at the plaza.
+- Persistent member ids, replacing the `last_promoted_member_numbers` placeholder, so a villager keeps its identity when a housemate leaves.
 
 ## Questions to settle
 
-1. **Models (settled).** Male and female models (`Casual_Male.fbx`, `Casual_Female.fbx`), split by a per-villager seed, plus per-household tints. Children use the adult models at about 0.6 scale until a child model is sourced.
-2. **Should children walk around?** Proposed: yes, they stay near home or the plaza. That roughly doubles the visible crowd.
-3. **Where do split-off households live?** Proposed: the innermost free house (simple, deterministic). Alternative: the free house nearest the parent's house, so families cluster. This could be the first step toward the household compounds noted as open in the town view plan.
-4. **Inside or outside at work?** Proposed: workers at town businesses (trader, bloomery and similar) go inside. Field, pasture and woodlot workers stay visible.
+Settled in #87:
+- **Models:** male and female bodies picked by seed, skin tone per household, adult models scaled down for children.
+- **Children:** yes, they are drawn and mill about with their household.
+- **Performance budget:** 64 animation updates a frame, no animation past zoom 50, no villager shadows.
+
+Still open:
+1. **Where do split-off households live?** Today it's the innermost free house. The alternative is the free house nearest the parents, so families cluster: a first step toward household compounds.
+2. **Inside or outside at work?** Proposed: town-business workers go inside, while field, pasture and woodlot workers stay visible.
+3. **Should the night rule come before commuting?** Proposed: yes, as phase 1 above. It is small, and villagers standing outside all night is the most visible gap.
 
 ## Current-code anchors
 
-- `scripts/sim/household_economy/he_simulation.gd`: `_homeless_household_ids`, `_housing_status_of`, `add_dwelling`, `_daily_tick`, `_write_off_and_remove_households`, `_split_off_new_household`, `get_household_summary`, `get_dwelling_reports`
-- `scripts/sim/household_economy/records/he_household.gd`: `employer_business_id`, `_worker_ages`, `_dependent_ages`, `AGING_THRESHOLD_DAYS`
-- `scripts/sim/household_economy/records/he_house.gd`: `capacity_households`, `upgrade_to_dense`
-- `scripts/sim/household_economy/he_town_layout.gd`: sites (`access`, `road_id`, `footprint`), `get_roads()`, `site_of_business`, `site_of_dwelling`
-- `scripts/sim/household_economy/he_town_view.gd`: `sync()`, `set_time_of_day()`, selection and info panel
-- `scripts/sim/household_economy/he_dashboard.gd`: `_advance_town_time`, `TOWN_TICK_PHASE`, the town view `sync` call sites
-- `scripts/on_foot/on_foot_player.gd`: the `Casual_Male.fbx` instancing and animation clip names to reuse
-- `assets/models/people/Casual_Male.fbx`, `Casual_Female.fbx`: villager body models
-
-## Implementation status (slice 2: road paths)
-
-Done: `scripts/sim/household_economy/he_town_paths.gd` (`HETownPaths`, `RefCounted`) with `scripts/sim/harness/check_town_paths.gd`.
-
-- `HETownPaths.new(layout: HETownLayout)`
-- `path(from_site_id, to_site_id) -> PackedVector2Array`: door, road graph vertices, door. Empty if a site is unknown or unreachable. Cached per pair; computed in canonical order (lower id first) so a return trip is the exact reverse. Collinear vertices are dropped so a route is unchanged when unrelated sites are inserted into its road segments.
-- `refresh() -> bool`: rebuilds the graph when `layout.revision` changed. It keeps cached routes, because existing routes stay valid, and drops only cached empty results and the per-source shortest-path trees. `path()` calls it automatically.
-- Search: a binary-heap Dijkstra builds one shortest-path tree per source, so later queries from that source walk the tree. On the large village: 196 nodes, build 1.4 ms, 110 routes 5.7 ms cold and 0.05 ms warm.
-- `static path_length(points) -> float`.
-- Off-road sites remember their road attach point, so later lanes never reroute them. The road graph is a tree (lanes are dead-end branches), so existing routes survive road growth.
+- `scripts/sim/household_economy/he_simulation.gd`: `_reconcile_housing`, `get_villager_reports`, `get_dwelling_reports`, `_finish_due_constructions`
+- `scripts/sim/household_economy/he_villagers.gd`: roster sync, milling, picking, animation budget
+- `scripts/sim/household_economy/he_town_paths.gd`: route graph (`path`, `refresh`, `path_length`)
+- `scripts/sim/household_economy/he_town_view.gd`: `sync()`, person window, `select_villager`, `focus_on`
+- `scripts/sim/household_economy/he_dashboard.gd`: `_advance_town_time`, `TOWN_TICK_PHASE`, the Town view refresh group
+- `scripts/sim/harness/perf_town_villagers.gd`, `perf_town_villagers_runner.gd`: frame-time measurement
+- `assets/models/people/Casual_Male.fbx`, `Casual_Female.fbx`: villager models (`CharacterArmature|Idle`/`Walk`)
