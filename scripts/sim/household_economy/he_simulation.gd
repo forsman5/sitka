@@ -240,6 +240,104 @@ const TRADER_CAPACITY_PER_WORKER := 8.0
 ## seasonal-scale processes, not daily ones.
 const HERD_EVAL_INTERVAL_DAYS := 90
 
+# ---------------------------------------------------------------------------
+# Seasons
+# ---------------------------------------------------------------------------
+
+## Four 90-day seasons make a 360-day year, the same calendar the pooled
+## valley (simulation.gd) runs. Day 0 is the first day of spring; a season is
+## a pure function of the day, so it needs no stored state and is identical
+## in every run. HERD_EVAL_INTERVAL_DAYS equals DAYS_PER_SEASON, so every
+## herd review closes exactly one season (the one containing `day` when
+## (day + 1) is a multiple of 90).
+const DAYS_PER_SEASON := 90
+const SEASONS_PER_YEAR := 4
+const DAYS_PER_YEAR := DAYS_PER_SEASON * SEASONS_PER_YEAR
+enum Season { SPRING, SUMMER, AUTUMN, WINTER }
+const SEASON_NAMES: Array[String] = ["Spring", "Summer", "Autumn", "Winter"]
+
+## Output multipliers by the season a harvest or shearing LANDS in, copied
+## from the pooled valley's seed (valley_seed.gd). They set the SHAPE of the
+## year; what a harvest or wool review actually adds to a business's
+## inventory is scaled by seasonal_yield_scale (the curve divided by its own
+## yearly mean), so H1's calibrated annual output -- FARM_YIELD_PER_AREA and
+## friends were sized to hit a yearly target -- is unchanged and seasons only
+## move WHEN it arrives. Nothing else is touched, so every unit is still
+## produced once, held by one business, and sold or consumed through the
+## usual market and ledgers. Goods not listed (iron, charcoal...) are not
+## seasonal.
+const SEASONAL_OUTPUT_MODIFIER: Dictionary[Commodity.Type, Array] = {
+	Commodity.Type.GRAIN: [0.8, 1.0, 1.6, 0.1],
+	Commodity.Type.TIMBER: [1.0, 1.0, 1.0, 0.6],
+	Commodity.Type.WOOL: [1.5, 1.5, 0.5, 0.2],
+}
+
+## How far ahead a seller looks for a lean season it must carry stock into
+## (seasonal_carry_days): two seasons, so the glut that arrives in autumn is
+## held for winter but summer's harvest is not held for a winter 270 days off.
+const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
+
+## Winter fodder: grain each head of a herd needs over a winter. Cattle carry
+## the pooled valley's FODDER_PER_HEAD_PER_SEASON (3.0); sheep scale it by the
+## forage ratio H1 already uses for grazing land (SHEEP_LAND_PER_HEAD over
+## CATTLE_LAND_PER_HEAD), since a sheep is worth ~1/20 of a cow here and a
+## flat 3.0 would cost more than the animal. Ranches buy it ahead of winter
+## (_run_fodder_purchasing) and eat it from their own inventory at the winter
+## review. The share of the need actually covered sets that winter's
+## mortality: full cover is the usual FED rate, none is the NEGLECTED rate,
+## linear between (underfed herds lose more).
+const FODDER_PER_HEAD_PER_WINTER: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 3.0,
+	HEBusiness.Species.SHEEP: 0.45, # 3.0 * SHEEP_LAND_PER_HEAD (0.15) / CATTLE_LAND_PER_HEAD (1.0)
+}
+
+static func season_of_day(p_day: int) -> int:
+	return (p_day / DAYS_PER_SEASON) % SEASONS_PER_YEAR
+
+static func season_name_of_day(p_day: int) -> String:
+	return SEASON_NAMES[season_of_day(p_day)]
+
+## The authored valley multiplier for `commodity` on `p_day`; 1.0 for a good
+## with no seasonal curve.
+static func seasonal_output_modifier(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 1.0
+	return float((SEASONAL_OUTPUT_MODIFIER[commodity] as Array)[season_of_day(p_day)])
+
+## Days of ordinary local use the lean seasons AHEAD leave unsupplied, looking
+## SEASONAL_CARRY_LOOKAHEAD_DAYS forward from `p_day`: for each day, how far its
+## multiplier falls below the curve's mean (as a share of the mean), summed.
+## Grain carries ~80 days through autumn, tapering through winter, and almost
+## nothing in spring and summer; 0 for a good with no curve. A seller keeps this
+## much back from export on top of its usual cover (_seller_trade_offer), so an
+## autumn glut is carried through the winter it was meant for rather than
+## shipped out at the floor price, while spring and summer exports are
+## untouched. It only withholds EXPORT; local sales are unaffected.
+static func seasonal_carry_days(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 0.0
+	var curve: Array = SEASONAL_OUTPUT_MODIFIER[commodity]
+	var total := 0.0
+	for modifier in curve:
+		total += float(modifier)
+	var mean: float = total / float(curve.size())
+	var days := 0.0
+	for offset in SEASONAL_CARRY_LOOKAHEAD_DAYS:
+		days += maxf(0.0, mean - seasonal_output_modifier(commodity, p_day + offset)) / mean
+	return days
+
+## What a harvest or shearing on `p_day` is actually multiplied by: the
+## authored multiplier over the curve's yearly mean, so the four seasons
+## average exactly 1.0 and a year's output matches the unseasonal model.
+static func seasonal_yield_scale(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 1.0
+	var curve: Array = SEASONAL_OUTPUT_MODIFIER[commodity]
+	var total := 0.0
+	for modifier in curve:
+		total += float(modifier)
+	return seasonal_output_modifier(commodity, p_day) * float(curve.size()) / total
+
 ## Both ranches graze the SAME finite pasture, shared per settlement --
 ## cattle need far more of it per head than sheep (~6-7x, per husbandry
 ## research: a mature cow's forage need scales with its much larger body
@@ -1159,8 +1257,16 @@ func get_household_ids(settlement_id: int = -1) -> Array[int]:
 	ids.sort()
 	return ids
 
+## day, plus the calendar it falls in: season index (Season), season_name,
+## day_of_season (0-based) and year (0-based, DAYS_PER_YEAR days each).
 func get_clock_summary() -> Dictionary:
-	return {"day": day}
+	return {
+		"day": day,
+		"season": season_of_day(day),
+		"season_name": season_name_of_day(day),
+		"day_of_season": day % DAYS_PER_SEASON,
+		"year": day / DAYS_PER_YEAR,
+	}
 
 ## Lightweight rows for the household table: exactly the fields it shows, in
 ## one pass, with no need arrays, explanations, or per-person detail. Use
@@ -1438,6 +1544,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			var projection := _next_harvest_projection(b, int(report["employed_workers"]))
 			report["next_harvest_expected_units"] = projection["expected_units"]
 			report["next_harvest_yield_fraction"] = projection["yield_fraction"]
+			report["next_harvest_season_modifier"] = projection["season_modifier"]
 		if b.kind == HEBusiness.Kind.TRADER:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
@@ -1491,6 +1598,15 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				report["wool_sustaining_current"] = int(sustaining.y)
 				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
+			var fodder_target: float = b.herd_size * FODDER_PER_HEAD_PER_WINTER[b.species]
+			report["fodder_stock"] = b.stock(Commodity.Type.GRAIN)
+			report["fodder_target"] = fodder_target
+			report["fodder_cover"] = minf(1.0, b.stock(Commodity.Type.GRAIN) / fodder_target) if fodder_target > 0.0 else 1.0
+			report["last_review_season"] = b.last_review_season
+			report["last_review_season_name"] = SEASON_NAMES[b.last_review_season] if b.last_review_season >= 0 else ""
+			report["last_fodder_needed"] = b.last_fodder_needed
+			report["last_fodder_eaten"] = b.last_fodder_eaten
+			report["wool_season_modifier"] = seasonal_yield_scale(Commodity.Type.WOOL, day) if b.species == HEBusiness.Species.SHEEP else 1.0
 			report["care_workers_needed"] = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species]
 		else:
 			var output_commodity := b.output_commodity()
@@ -1606,9 +1722,12 @@ func _next_harvest_projection(b: HEBusiness, employed: int) -> Dictionary:
 	var projected_labor: float = next_field.labor_applied + daily_labor * maxi(0, days_remaining)
 	var required_labor: float = next_field.area * b.labor_per_area_per_day * b.growth_days
 	var yield_fraction: float = clampf(projected_labor / required_labor, 0.0, 1.0) if required_labor > 0.0 else 0.0
+	# The harvest lands `days_remaining` days from now, in that day's season.
+	var season_modifier := seasonal_yield_scale(b.output_commodity(), day + maxi(0, days_remaining))
 	return {
-		"expected_units": next_field.area * b.yield_per_area * yield_fraction,
+		"expected_units": next_field.area * b.yield_per_area * yield_fraction * season_modifier,
 		"yield_fraction": yield_fraction,
+		"season_modifier": season_modifier,
 	}
 
 ## Every commodity with a REAL presence in this settlement's market right
@@ -2668,7 +2787,7 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 			continue
 		var labor_required: float = f.area * b.labor_per_area_per_day * b.growth_days
 		var efficiency: float = clampf(f.labor_applied / labor_required, 0.0, 1.0) if labor_required > 0.0 else 0.0
-		harvested += f.area * b.yield_per_area * efficiency
+		harvested += f.area * b.yield_per_area * efficiency * seasonal_yield_scale(output_commodity, day)
 		f.days_growing = 0
 		f.labor_applied = 0.0
 	b.add_stock(output_commodity, harvested)
@@ -4192,7 +4311,7 @@ func _adjust_trader_bids(trader: HEBusiness, offers: Array[Dictionary], capacity
 ## bid ceiling leaves a wage of spread, below iron's cost ratio) and starved the
 ## Bloomery, so the bypass is load-bearing until iron's recipe/price is retuned.
 func _seller_trade_offer(seller: HEBusiness, commodity: Commodity.Type) -> Dictionary:
-	var horizon := float(_days_until_next_supply(seller))
+	var horizon := float(_days_until_next_supply(seller)) + seasonal_carry_days(commodity, day)
 	var routine := _routine_local_use(seller, commodity)
 	var outstanding := _outstanding_funded_shortage(seller.settlement_id, commodity)
 	var next_day := _next_day_input_need(seller, commodity)
@@ -4377,15 +4496,36 @@ func _run_herds(record: Dictionary) -> void:
 		b.care_worker_days = 0.0
 		b.last_care_fraction = care
 
-		var loss_rate: float = (HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]) * (1.0 - HERD_STAFFED_MORTALITY_CUT * care)
+		# The review closes the season containing `day`. A winter review also
+		# eats the herd's own fodder, and how much of it there was moves the
+		# herd's mortality from FED toward NEGLECTED. Births stay a flat
+		# per-review rate: bunching them into three seasons made each cull a
+		# third bigger and skipped winter's, more than the Butcher could take.
+		var review_season := season_of_day(day)
+		var fodder_needed := 0.0
+		var fodder_eaten := 0.0
+		var fodder_cover := 1.0
+		if review_season == Season.WINTER:
+			fodder_needed = herd_before * FODDER_PER_HEAD_PER_WINTER[b.species]
+			fodder_eaten = b.consume(Commodity.Type.GRAIN, fodder_needed)
+			fodder_cover = fodder_eaten / fodder_needed if fodder_needed > 0.0 else 1.0
+			if fodder_eaten > 0.0:
+				b.add_flow(HEBusiness.FLOW_CONSUMED, Commodity.Type.GRAIN, fodder_eaten)
+				_accumulate(record["consumed"], Commodity.name_of(Commodity.Type.GRAIN), fodder_eaten)
+		var base_loss: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
+		var starved_loss: float = lerpf(HERD_LOSS_RATE_NEGLECTED[b.species], HERD_LOSS_RATE_FED[b.species], fodder_cover)
+		var loss_rate: float = maxf(base_loss, starved_loss) * (1.0 - HERD_STAFFED_MORTALITY_CUT * care)
 		var born: float = herd_before * HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER * (1.0 + HERD_STAFFED_REPRODUCTION_BONUS * care)
 		var died: float = herd_before * loss_rate
 		b.herd_size = clampf(herd_before + born - died, 0.0, max_herd_by_land)
-		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "care": care, "herd_after": b.herd_size})
+		b.last_review_season = review_season
+		b.last_fodder_needed = fodder_needed
+		b.last_fodder_eaten = fodder_eaten
+		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "care": care, "herd_after": b.herd_size, "season": review_season, "fodder_needed": fodder_needed, "fodder_eaten": fodder_eaten})
 
 		b.last_wool_produced = 0.0
 		if b.species == HEBusiness.Species.SHEEP:
-			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL * (1.0 + HERD_STAFFED_WOOL_BONUS * care)
+			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL * (1.0 + HERD_STAFFED_WOOL_BONUS * care) * seasonal_yield_scale(Commodity.Type.WOOL, day)
 			b.add_stock(Commodity.Type.WOOL, wool)
 			b.last_wool_produced = wool
 			_accumulate(record["produced"], Commodity.name_of(Commodity.Type.WOOL), wool)
@@ -4710,6 +4850,56 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if slot_needed > 0.0001:
 				production_ratio = minf(production_ratio, minf(slot_needed, slot_need.held(buyer)) / slot_needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+	_run_fodder_purchasing(record, trader_import_capacity)
+
+## What a ranch may spend on fodder today: its cash plus half of the wage
+## overdraft it is allowed (_wage_overdraft_limit, which a ranch backs with its
+## herd), so fodder can never use up the credit its crew is paid from. A herd
+## that cannot be fed on that budget goes into winter underfed.
+func _fodder_budget(b: HEBusiness) -> float:
+	var wage_bill: float = float(_business_employed_worker_count(b.id)) * _reference_wage_per_worker(b.settlement_id)
+	return maxf(0.0, b.balance + 0.5 * _wage_overdraft_limit(b, wage_bill))
+
+## Ranches stock their winter fodder in the autumn (and top up through
+## winter, up to the review that eats it). It is an ordinary purchase --
+## the same local seller or Trader import, price, tax and ledger lines as a
+## recipe input, paid from the ranch's own cash within the same bounded
+## credit -- so the grain, the money and the seller's sale are all
+## accounted exactly as any other business input. The need is spread over the
+## days left in the buying window rather than bought at once.
+func _run_fodder_purchasing(record: Dictionary, trader_import_capacity: Dictionary) -> void:
+	var s := season_of_day(day)
+	if s < Season.AUTUMN:
+		return
+	# Autumn buys against the days until winter starts; winter against the days
+	# until its review closes the season.
+	var window_end: int = (day / DAYS_PER_SEASON + (1 if s == Season.AUTUMN else 2)) * DAYS_PER_SEASON
+	var days_left: int = maxi(1, window_end - day)
+	for business_id in businesses.keys():
+		var buyer: HEBusiness = businesses[business_id]
+		if buyer.kind != HEBusiness.Kind.HERD or buyer.herd_size <= 0.0:
+			continue
+		var wanted: float = maxf(0.0, buyer.herd_size * FODDER_PER_HEAD_PER_WINTER[buyer.species] - buyer.stock(Commodity.Type.GRAIN))
+		var requested: float = wanted / float(days_left)
+		if requested <= 0.0001:
+			continue
+		var price: float = (markets[buyer.settlement_id] as HEMarket).price[Commodity.Type.GRAIN]
+		var offer := _business_offer(buyer.settlement_id, Commodity.Type.GRAIN, trader_import_capacity, true, requested)
+		var ratio := minf(1.0, offer / requested)
+		var cost := requested * price
+		var affordable_ratio := 1.0
+		if cost > 0.0001:
+			affordable_ratio = clampf(_fodder_budget(buyer) / cost, 0.0, 1.0)
+		var signal_today := _price_signal_entry(buyer.settlement_id, Commodity.Type.GRAIN)
+		signal_today["funded_business"] += requested * affordable_ratio
+		signal_today["business_buffer_request"] += wanted * affordable_ratio
+		if _business_selling(buyer.settlement_id, Commodity.Type.GRAIN) == null:
+			signal_today["import_capacity"] = maxf(signal_today["import_capacity"], offer)
+		var purchase_ratio := minf(ratio, affordable_ratio)
+		if purchase_ratio <= 0.0:
+			continue
+		_settle_purchase(buyer, buyer, Commodity.Type.GRAIN, requested, requested * purchase_ratio, requested * affordable_ratio, record, trader_import_capacity)
 
 ## Executes one business purchase of `bought` units of `commodity` at today's
 ## posted price: `payer` is debited (the buyer itself for a recipe input, the
