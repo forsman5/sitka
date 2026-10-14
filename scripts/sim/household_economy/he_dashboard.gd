@@ -1208,9 +1208,10 @@ func _refresh_housing() -> void:
 	var blocker := _simulation.government_build_blocker(_town_settlement_id(), option)
 	var order_state := _simulation.build_goods_order_state(_town_settlement_id(), option)
 	var noun := "house" if option["type_key"] == "house" else "tenement upgrade"
-	_housing_build_button.text = "Build %s (%s)" % [noun, HEScenarioSeeds.cost_text(option["cost"])]
+	var cost_text := HEScenarioSeeds.cost_text(_simulation.build_cost_for(_town_settlement_id(), option))
+	_housing_build_button.text = "Build %s (%s)" % [noun, cost_text]
 	if order_state == "can_order":
-		_housing_build_button.text = "Order timber for a %s (%s)" % [noun, HEScenarioSeeds.cost_text(option["cost"])]
+		_housing_build_button.text = "Order timber for a %s (%s)" % [noun, cost_text]
 	_housing_build_button.disabled = blocker != "" and order_state != "can_order"
 	if order_state == "can_order":
 		_housing_blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
@@ -2786,7 +2787,7 @@ func _refresh_government_build_menu() -> void:
 		var gov_option: Dictionary = gov_options[i]
 		var blocker := _simulation.government_build_blocker(_town_settlement_id(), gov_option)
 		var order_state := _simulation.build_goods_order_state(_town_settlement_id(), gov_option)
-		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(gov_option["cost"])]
+		var item_text := "%s (%s)" % [gov_option["label"], HEScenarioSeeds.cost_text(_simulation.build_cost_for(_town_settlement_id(), gov_option))]
 		if blocker == "already built":
 			item_text = "%s (already built)" % gov_option["label"]
 		elif order_state == "can_order":

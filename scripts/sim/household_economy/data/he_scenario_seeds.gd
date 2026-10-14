@@ -51,9 +51,13 @@ const WAREHOUSE_BUILD_COST := 100.0
 ## one household (HEHouse.capacity_households).
 const HOUSE_BUILD_GOLD := 15.0
 const HOUSE_BUILD_TIMBER := 50.0
-## A tenement shelters HEHouse.DENSE_CAPACITY households for twice a house.
-const TENEMENT_BUILD_GOLD := 30.0
-const TENEMENT_BUILD_TIMBER := 100.0
+## Tenement prices follow the house rate per household gained: a new tenement
+## adds HEHouse.DENSE_CAPACITY households, an upgrade adds one fewer (the house
+## it replaces already counted), so both cost more than a house.
+const TENEMENT_BUILD_GOLD := 60.0
+const TENEMENT_BUILD_TIMBER := 200.0
+const TENEMENT_UPGRADE_GOLD := 45.0
+const TENEMENT_UPGRADE_TIMBER := 150.0
 ## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -323,6 +327,9 @@ static func government_buildings() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
 		{"type_key": "tenement", "label": "Tenement", "category": "housing", "repeatable": true,
 			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER}),
+			# Charged instead of `cost` while a plain house is left to upgrade
+			# (see HESimulation.build_cost_for).
+			"upgrade_cost": build_cost(TENEMENT_UPGRADE_GOLD, {Commodity.Type.TIMBER: TENEMENT_UPGRADE_TIMBER}),
 			"hint": "Upgrades the innermost house in place to shelter %d households (a new tenement if none is left to upgrade)." % HEHouse.DENSE_CAPACITY,
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse:
