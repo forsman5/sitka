@@ -196,7 +196,14 @@ var _business_flow_view := 0 # index into FLOW_VIEWS; kept across business selec
 var _business_flow_hidden: Dictionary = {} # series name -> true for lines toggled off in the legend
 var _flow_series_names: Array = [] # names of the current view's lines, set by _refresh_business_flow_chart
 var _flow_legend_key := "" # what the legend buttons were last built for
-var _business_detail_grid: GridContainer
+var _business_detail_grid: GridContainer # header facts above the tabs
+# One facts grid per tab (see _build_business_detail_tabs); rows are rebuilt
+# every refresh while the tab widgets and the selected tab persist.
+var _business_detail_tabs: TabContainer
+var _business_detail_cash_grid: GridContainer
+var _business_detail_stock_grid: GridContainer
+var _business_detail_productivity_grid: GridContainer
+var _business_detail_herd_controls_section: VBoxContainer
 var _business_detail_cull_target_box: SpinBox
 var _business_detail_cull_target_hint: Label
 ## Which business the cull-target box was last loaded for. The box is only
@@ -574,23 +581,43 @@ func _build_ui() -> void:
 	detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_business_detail_overview_scroll.add_child(detail_content)
 
-	var cash_history_label := Label.new()
-	_cash_history_label = cash_history_label
-	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	detail_content.add_child(cash_history_label)
-
-	_business_detail_sparkline = HESparkline.new()
-	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
-	detail_content.add_child(_business_detail_sparkline)
-
-	_business_detail_flow_chart = _build_flow_chart(detail_content)
-
+	# Identity facts stay above the tabs; everything else lives on one of four
+	# pages. Pages are plain containers inside the one outer scroll, and the
+	# tabs are built once so the selected tab survives the periodic refresh.
 	_business_detail_grid = GridContainer.new()
 	_business_detail_grid.columns = 2
 	detail_content.add_child(_business_detail_grid)
 
+	_business_detail_tabs = TabContainer.new()
+	_business_detail_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_content.add_child(_business_detail_tabs)
+	var cash_page := _add_business_detail_tab("Cash")
+	var stocks_page := _add_business_detail_tab("Stocks")
+	var productivity_page := _add_business_detail_tab("Productivity")
+	var events_page := _add_business_detail_tab("Events")
+
+	# Cash: balance history, then the money facts and the operating ledger.
+	var cash_history_label := Label.new()
+	_cash_history_label = cash_history_label
+	cash_history_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	cash_page.add_child(cash_history_label)
+
+	_business_detail_sparkline = HESparkline.new()
+	_business_detail_sparkline.custom_minimum_size = Vector2(0, 60)
+	cash_page.add_child(_business_detail_sparkline)
+
+	_business_detail_cash_grid = _new_detail_grid(cash_page)
+
+	# Stocks: goods flow chart, then what the business holds.
+	_business_detail_flow_chart = _build_flow_chart(stocks_page)
+	_business_detail_stock_grid = _new_detail_grid(stocks_page)
+
+	# Productivity: what lifts or limits output (crew morale, tools, land,
+	# husbandry), then who is on the crew.
+	_business_detail_productivity_grid = _new_detail_grid(productivity_page)
+
 	_business_detail_transaction_section = VBoxContainer.new()
-	detail_content.add_child(_business_detail_transaction_section)
+	events_page.add_child(_business_detail_transaction_section)
 
 	var transaction_header := HBoxContainer.new()
 	_business_detail_transaction_section.add_child(transaction_header)
@@ -622,10 +649,14 @@ func _build_ui() -> void:
 
 	# Built once, shown for whichever herd business is selected (Cattle Ranch
 	# and Sheep Farm both) -- lines come from _format_event, same as the blotter.
+	# The cull target is a husbandry setting, so it sits on the Productivity
+	# page; the events log below it stays on Events.
+	_business_detail_herd_controls_section = VBoxContainer.new()
+	productivity_page.add_child(_business_detail_herd_controls_section)
 	_business_detail_herd_events_section = VBoxContainer.new()
-	detail_content.add_child(_business_detail_herd_events_section)
+	events_page.add_child(_business_detail_herd_events_section)
 	var cull_target_row := HBoxContainer.new()
-	_business_detail_herd_events_section.add_child(cull_target_row)
+	_business_detail_herd_controls_section.add_child(cull_target_row)
 	var cull_target_label := Label.new()
 	cull_target_label.text = "Cull target (head)"
 	cull_target_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
@@ -643,7 +674,7 @@ func _build_ui() -> void:
 	_business_detail_cull_target_hint.add_theme_font_size_override("font_size", 12)
 	_business_detail_cull_target_hint.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	_business_detail_cull_target_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_business_detail_herd_events_section.add_child(_business_detail_cull_target_hint)
+	_business_detail_herd_controls_section.add_child(_business_detail_cull_target_hint)
 	var herd_events_title := Label.new()
 	herd_events_title.text = "Herd events (births, culls, hardship butchering)"
 	herd_events_title.add_theme_font_size_override("font_size", 14)
@@ -658,7 +689,7 @@ func _build_ui() -> void:
 	# loaded from the sim only when a government is first shown (see
 	# _refresh_tax_section) so the periodic refresh never fights a drag.
 	_business_detail_tax_section = VBoxContainer.new()
-	detail_content.add_child(_business_detail_tax_section)
+	cash_page.add_child(_business_detail_tax_section)
 	var tax_title := Label.new()
 	tax_title.text = "Tax policy"
 	tax_title.add_theme_font_size_override("font_size", 14)
@@ -682,7 +713,7 @@ func _build_ui() -> void:
 	# tradeable good) the first time a warehouse report arrives -- see
 	# _refresh_warehouse_orders.
 	_business_detail_warehouse_section = VBoxContainer.new()
-	detail_content.add_child(_business_detail_warehouse_section)
+	stocks_page.add_child(_business_detail_warehouse_section)
 	var warehouse_title := Label.new()
 	warehouse_title.text = "Market orders (paid from the treasury)"
 	warehouse_title.add_theme_font_size_override("font_size", 14)
@@ -698,7 +729,7 @@ func _build_ui() -> void:
 	_business_detail_warehouse_section.add_child(_business_detail_warehouse_grid)
 
 	var employment_section := VBoxContainer.new()
-	detail_content.add_child(employment_section)
+	events_page.add_child(employment_section)
 	var employment_header := HBoxContainer.new()
 	employment_section.add_child(employment_header)
 	var employment_title := Label.new()
@@ -728,11 +759,11 @@ func _build_ui() -> void:
 	var employees_label := Label.new()
 	employees_label.text = "Employees"
 	employees_label.add_theme_font_size_override("font_size", 14)
-	detail_content.add_child(employees_label)
+	productivity_page.add_child(employees_label)
 
 	_business_detail_employee_grid = GridContainer.new()
 	_business_detail_employee_grid.columns = 5
-	detail_content.add_child(_business_detail_employee_grid)
+	productivity_page.add_child(_business_detail_employee_grid)
 	_trader_settings_scroll = ScrollContainer.new()
 	_trader_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_trader_settings_scroll.visible = false
@@ -2114,9 +2145,10 @@ func _refresh_business_detail() -> void:
 	_business_detail_sparkline.set_data(_tail(report["balance_history"]))
 	_refresh_business_flow_chart(report)
 
-	for child in _business_detail_grid.get_children():
-		_business_detail_grid.remove_child(child)
-		child.queue_free()
+	for grid in [_business_detail_grid, _business_detail_cash_grid, _business_detail_stock_grid, _business_detail_productivity_grid]:
+		for child in grid.get_children():
+			grid.remove_child(child)
+			child.queue_free()
 
 	var runway: float = report["cash_runway_days"]
 	var runway_text := "inf" if is_inf(runway) else ("%.0fd" % runway)
@@ -2125,6 +2157,10 @@ func _refresh_business_detail() -> void:
 		["Capacity", "%d / %d" % [report["capacity"], report["max_capacity"]]],
 		["Employed", "%d workers / %d households" % [report["employed_workers"], report["employed_household_count"]]],
 	]
+	# `rows` is the header above the tabs; the rest go to their tab's grid.
+	var cash_rows: Array = []
+	var stock_rows: Array = []
+	var productivity_rows: Array = []
 	if report.has("herd_size"):
 		# A herd's last_actual_units is what the periodic review culled (once
 		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
@@ -2137,25 +2173,25 @@ func _refresh_business_detail() -> void:
 			if order_row["stock"] > 0.0001:
 				held_parts.append([order_row["name"], "%s %.1f" % [order_row["name"], order_row["stock"]]])
 		if held_parts.is_empty():
-			rows.append(["Inventory", "empty"])
+			stock_rows.append(["Inventory", "empty"])
 		else:
-			rows.append(["Inventory", held_parts])
+			stock_rows.append(["Inventory", held_parts])
 	elif report["kind"] != "trader":
-		rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
+		stock_rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
 		var input_parts: Array = []
 		for commodity_name in (report["input_inventory"] as Dictionary).keys():
 			input_parts.append([commodity_name, "%s %.1f" % [commodity_name, report["input_inventory"][commodity_name]]])
-		rows.append(["Input inventory", input_parts])
+		stock_rows.append(["Input inventory", input_parts])
 	if report.has("tools"):
 		var tools: Dictionary = report["tools"]
 		var tools_name := Commodity.name_of(Commodity.Type.TOOLS)
-		rows.append(["Tools inventory", [[tools_name, "%s %.1f (%.1f needed for full coverage, %.0f%% covered)" % [tools_name, tools["stock"], tools["needed"], tools["coverage"] * 100.0]]]])
+		stock_rows.append(["Tools inventory", [[tools_name, "%s %.1f (%.1f needed for full coverage, %.0f%% covered)" % [tools_name, tools["stock"], tools["needed"], tools["coverage"] * 100.0]]]])
 		if not tools["active"]:
-			rows.append(["Tool use", "no tool seller in town, so tools have no effect"])
+			productivity_rows.append(["Tool use", "no tool seller in town, so tools have no effect"])
 		else:
 			var boost: float = tools["productivity"] / tools["floor"] - 1.0
-			rows.append(["Tool use", "using %.2f tools/day to boost productivity by %.0f%% (running at %.0f%% of full output)" % [tools["wear_per_day"], boost * 100.0, tools["productivity"] * 100.0]])
+			productivity_rows.append(["Tool use", "using %.2f tools/day to boost productivity by %.0f%% (running at %.0f%% of full output)" % [tools["wear_per_day"], boost * 100.0, tools["productivity"] * 100.0]])
 	if report.has("crew_morale") and report["crew_morale"]["workers"] > 0:
 		var crew: Dictionary = report["crew_morale"]
 		var morale_boost: float = crew["multiplier"] - 1.0
@@ -2164,8 +2200,8 @@ func _refresh_business_detail() -> void:
 			morale_text += ", boosting output by %.0f%%" % (morale_boost * 100.0)
 		else:
 			morale_text += ", no output bonus (needs morale above 100%)"
-		rows.append(["Productivity from morale", morale_text])
-	rows.append_array([
+		productivity_rows.append(["Productivity from morale", morale_text])
+	cash_rows.append_array([
 		["Treasury" if report["kind"] == "warehouse" else "Cash", "%.1f" % report["balance"]],
 		["Cash runway", runway_text],
 		["Revenue/worker (avg)", "%.3f" % report["rolling_average_revenue_per_worker"]],
@@ -2180,41 +2216,48 @@ func _refresh_business_detail() -> void:
 	# accumulation kept as separate figures (goods built up are not cash).
 	var ledger: Dictionary = report.get("ledger", {})
 	if not ledger.is_empty():
-		rows.append(["Sales today", "households %.2f · businesses %.2f · export %.2f" % [ledger["sales_household"], ledger["sales_business"], ledger["sales_export"] + ledger["sales_other"] + ledger["trade_margin"]]])
-		rows.append(["Inputs bought today", "local %.2f · imported %.2f" % [ledger["input_local"], ledger["input_import"]]])
-		rows.append(["Wages · sales tax", "%.2f · %.2f" % [ledger["wages"], ledger["taxes"]]])
-		rows.append(["Cash profit today", "%.2f" % ledger["cash_profit"]])
-		rows.append(["Stock accumulated today", "%+.2f of goods (output %.1f, inputs %.1f held)" % [ledger["stock_change_value"], ledger["output_stock_value"], ledger["input_stock_value"]]])
+		cash_rows.append(["Sales today", "households %.2f · businesses %.2f · export %.2f" % [ledger["sales_household"], ledger["sales_business"], ledger["sales_export"] + ledger["sales_other"] + ledger["trade_margin"]]])
+		cash_rows.append(["Inputs bought today", "local %.2f · imported %.2f" % [ledger["input_local"], ledger["input_import"]]])
+		cash_rows.append(["Wages · sales tax", "%.2f · %.2f" % [ledger["wages"], ledger["taxes"]]])
+		cash_rows.append(["Cash profit today", "%.2f" % ledger["cash_profit"]])
+		cash_rows.append(["Stock accumulated today", "%+.2f of goods (output %.1f, inputs %.1f held)" % [ledger["stock_change_value"], ledger["output_stock_value"], ledger["input_stock_value"]]])
 		var recent: Array = (report["ledger_history"] as Array).slice(-30)
 		var profit_30 := 0.0
 		var stock_30 := 0.0
 		for entry in recent:
 			profit_30 += entry["cash_profit"]
 			stock_30 += entry["stock_change_value"]
-		rows.append(["Last %d days (avg/day)" % recent.size(), "cash profit %.2f · stock accumulated %+.2f" % [profit_30 / recent.size(), stock_30 / recent.size()]])
+		cash_rows.append(["Last %d days (avg/day)" % recent.size(), "cash profit %.2f · stock accumulated %+.2f" % [profit_30 / recent.size(), stock_30 / recent.size()]])
 	if report["land_area_acres"] > 0.0:
-		rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
-		rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
+		productivity_rows.append(["Land", "%.0f acres" % report["land_area_acres"]])
+		productivity_rows.append(["Next harvest", "%dd" % report["days_to_next_harvest"]])
 	if report.has("herd_size"):
-		rows.append(["Species", [[report["species"], report["species"]]]])
-		rows.append(["Herd size", "%.1f head" % report["herd_size"]])
-		rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
-		rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
+		productivity_rows.append(["Species", [[report["species"], report["species"]]]])
+		productivity_rows.append(["Herd size", "%.1f head" % report["herd_size"]])
+		productivity_rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
+		productivity_rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		# Wool is a sheep-only product; a cattle ranch has no wool to report.
 		if report["species"] == "Sheep":
 			var wool_name := Commodity.name_of(Commodity.Type.WOOL)
-			rows.append(["Wool in stock", [[wool_name, "%.1f" % report["wool_stock"]]]])
-			rows.append(["Last wool produced", [[wool_name, "%.2f" % report["last_wool_produced"]]]])
-		rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
+			stock_rows.append(["Wool in stock", [[wool_name, "%.1f" % report["wool_stock"]]]])
+			stock_rows.append(["Last wool produced", [[wool_name, "%.2f" % report["last_wool_produced"]]]])
+		productivity_rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
+	for row in cash_rows:
+		_add_detail_row(row[0], row[1], _business_detail_cash_grid)
+	for row in stock_rows:
+		_add_detail_row(row[0], row[1], _business_detail_stock_grid)
+	for row in productivity_rows:
+		_add_detail_row(row[0], row[1], _business_detail_productivity_grid)
 
 	var fields: Array = report["fields"]
 	for i in fields.size():
 		var f: Dictionary = fields[i]
-		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]])
+		_add_detail_row("Field %d" % (i + 1), "%.0f ac, day %d/%d" % [f["area"], f["days_growing"], f["growth_days"]], _business_detail_productivity_grid)
 
 	_business_detail_herd_events_section.visible = report.has("herd_events")
+	_business_detail_herd_controls_section.visible = report.has("herd_events")
 	if _business_detail_herd_events_section.visible:
 		if _cull_target_loaded_for != _selected_business_id:
 			_cull_target_loaded_for = _selected_business_id
@@ -2449,11 +2492,26 @@ func _on_business_flow_series_toggled(series_name: String) -> void:
 ## value is either plain text or an Array of [commodity_name, text] parts;
 ## each part gets the good's icon in front of its text (the name stays in the
 ## text so the icon is decoration, never the only identifier).
-func _add_detail_row(label_text: String, value) -> void:
+func _add_business_detail_tab(title: String) -> VBoxContainer:
+	var page := VBoxContainer.new()
+	page.name = title
+	page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_business_detail_tabs.add_child(page)
+	return page
+
+func _new_detail_grid(parent: Control) -> GridContainer:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	parent.add_child(grid)
+	return grid
+
+func _add_detail_row(label_text: String, value, grid: GridContainer = null) -> void:
+	if grid == null:
+		grid = _business_detail_grid
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	_business_detail_grid.add_child(label)
+	grid.add_child(label)
 	if value is Array:
 		var box := HBoxContainer.new()
 		box.add_theme_constant_override("separation", 12)
@@ -2461,11 +2519,11 @@ func _add_detail_row(label_text: String, value) -> void:
 			# A third element marks text that names several goods inline
 			# (the Trader's "Export (...) / Import (...)" summary).
 			box.add_child(_inline_goods_cell(part[1]) if part.size() > 2 and part[2] else _goods_cell(part[0], part[1], 0.0, true))
-		_business_detail_grid.add_child(box)
+		grid.add_child(box)
 		return
 	var value_label := Label.new()
 	value_label.text = value
-	_business_detail_grid.add_child(value_label)
+	grid.add_child(value_label)
 
 ## Text that mentions goods by name; each mention gets its icon placed right
 ## before it, e.g. "Export (Grain, Timber)" -> "Export ([icon]Grain, [icon]Timber)".
