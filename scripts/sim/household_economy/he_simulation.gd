@@ -1672,7 +1672,8 @@ func get_trader_export_settings(business_id: int) -> Array:
 		var fraction := _trader_bid_fraction(trader, commodity)
 		out.append({"commodity_id": commodity, "name": Commodity.name_of(commodity),
 			"enabled": _trader_export_enabled[business_id].get(commodity, false),
-			"reference_price": reference, "bid_fraction": fraction, "bid_price": reference * fraction})
+			"reference_price": reference, "bid_fraction": fraction, "bid_price": reference * fraction,
+			"stored": _town_stored(trader.settlement_id, commodity)})
 	return out
 
 func set_trader_export_enabled(business_id: int, commodity: Commodity.Type, enabled: bool) -> void:

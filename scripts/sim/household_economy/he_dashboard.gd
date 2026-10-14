@@ -1740,6 +1740,7 @@ func _rebuild_trader_settings() -> void:
 		checkbox.text = option["name"]
 		if option["reference_price"] > 0.0:
 			checkbox.text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
+		checkbox.text += "   stored %.1f" % option["stored"]
 		var option_icon := Commodity.icon_of(option["commodity_id"])
 		if option_icon != null:
 			checkbox.icon = option_icon
