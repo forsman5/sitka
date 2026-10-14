@@ -5,6 +5,10 @@ inputs:
   dest:
     description: "Directory under the server root: 'sitka' or 'previews/sitka-pr-<n>'."
     required: true
+  meta-file:
+    description: "Optional path to a _preview.json; when set, it is shipped with the build and the PR overlay is injected into index.html."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -36,6 +40,19 @@ runs:
         godot --headless --export-release "Web" exports/web/index.html
         test -f exports/web/index.html
         godot --headless --main-pack exports/web/index.pck --script "$PWD/scripts/ci/check_web_assets.gd"
+
+    # Previews only. The overlay script is static; per-PR details live in _preview.json,
+    # which pr-preview.yml can rewrite later without a rebuild.
+    - name: Inject PR overlay
+      if: inputs.meta-file != ''
+      shell: bash
+      env:
+        META_FILE: ${{ inputs.meta-file }}
+      run: |
+        cp "$META_FILE" exports/web/_preview.json
+        cp "$GITHUB_ACTION_PATH/preview-overlay.js" exports/web/preview-overlay.js
+        sed -i 's#</head>#<script src="preview-overlay.js"></script></head>#' exports/web/index.html
+        grep -q 'preview-overlay.js' exports/web/index.html
 
     - uses: ./.github/actions/setup-kubectl
 
