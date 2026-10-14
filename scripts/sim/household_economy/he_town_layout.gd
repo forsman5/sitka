@@ -183,6 +183,7 @@ func _init(p_scenario_key: String, p_settlement_id: int, starting_reports: Array
 		"type_key": "",
 		"label": "",
 		"built": false,
+		"under_construction": false,
 	})
 	reconcile(starting_reports, starting_dwellings)
 
@@ -201,12 +202,27 @@ static func scenario_key_for(builder: Callable) -> String:
 ## Brings the layout in line with the live businesses. Vacates sites whose
 ## business is gone, then seats unseated businesses (government first, then
 ## ascending id), then seats new houses in the residential zone. `dwellings`
-## is get_dwelling_reports(). Returns whether anything changed.
-func reconcile(reports: Array, dwellings: Array = []) -> bool:
+## is get_dwelling_reports(), `constructions` get_construction_reports(): a
+## build still under construction takes the site its finished building will
+## keep (same id), flagged `under_construction` until it opens. Returns
+## whether anything changed.
+func reconcile(reports: Array, dwellings: Array = [], constructions: Array = []) -> bool:
 	var live: Dictionary = {} # business_id -> report
 	for report in reports:
 		if int(report["settlement_id"]) == settlement_id:
 			live[int(report["business_id"])] = report
+	var building_businesses: Dictionary = {} # business_id -> true
+	var building_dwellings: Dictionary = {} # dwelling_id -> construction report
+	for construction in constructions:
+		if int(construction["settlement_id"]) != settlement_id:
+			continue
+		if int(construction["business_id"]) != NO_BUSINESS:
+			live[int(construction["business_id"])] = construction
+			building_businesses[int(construction["business_id"])] = true
+		elif int(construction["dwelling_id"]) != NO_BUSINESS:
+			building_dwellings[int(construction["dwelling_id"])] = construction
+	if not building_dwellings.is_empty():
+		dwellings = dwellings + building_dwellings.values()
 	var changed := false
 	for site in _sites:
 		var occupant: int = site["business_id"]
@@ -282,6 +298,11 @@ func reconcile(reports: Array, dwellings: Array = []) -> bool:
 		house_site["label"] = str(house_reports[dwelling_id].get("name", "House"))
 		house_site["built"] = true
 		changed = true
+	for site in _sites:
+		var under: bool = building_businesses.has(site["business_id"]) or building_dwellings.has(site["dwelling_id"])
+		if site["under_construction"] != under:
+			site["under_construction"] = under
+			changed = true
 	if changed:
 		revision += 1
 	return changed
@@ -401,6 +422,7 @@ func _allocate_from(zones: Array) -> int:
 				"type_key": "",
 				"label": "",
 				"built": false,
+				"under_construction": false,
 			})
 			return _sites.size() - 1
 	return -1

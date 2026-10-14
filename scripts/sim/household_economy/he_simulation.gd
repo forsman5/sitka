@@ -717,6 +717,17 @@ var _import_cost_total := 0.0
 ## here: that is an ordinary purchase from a local seller or the Trader.
 var _construction_spend_total := 0.0
 
+## Days a government build stands as a foundation before the building opens
+## (see build_government_building). The cost is paid when it is ordered.
+const CONSTRUCTION_DAYS := 2
+## 0 opens government builds instantly (the harness's cost checks use this).
+var construction_days: int = CONSTRUCTION_DAYS
+## Government builds paid for but not yet standing, oldest first:
+## {settlement_id, record (HEBusiness or HEHouse, its id reserved), startup,
+## upgrade_dwelling_id (-1 unless a tenement upgrades that house), complete_day}.
+## TODO(construction): no labor yet -- a build just waits out the days.
+var _constructions: Array[Dictionary] = []
+
 ## Most units of one good a warehouse order buys or sells in a day, so a single
 ## order cannot drain a town's stock (or flood the Trader) in one tick.
 const WAREHOUSE_DAILY_TRADE_CAP := 10.0
@@ -838,6 +849,9 @@ func next_dwelling_id() -> int:
 	var next_id := 1
 	for dwelling_id in dwellings.keys():
 		next_id = maxi(next_id, dwelling_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEHouse:
+			next_id = maxi(next_id, (entry["record"] as HEHouse).id + 1)
 	return next_id
 
 ## One entry per house, ascending id: {dwelling_id, settlement_id, name,
@@ -885,9 +899,16 @@ func _innermost_plain_house(settlement_id: int) -> HEHouse:
 	var best: HEHouse = null
 	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
 		var house: HEHouse = dwellings[dwelling_id]
-		if not house.is_dense() and (best == null or house.id < best.id):
+		if not house.is_dense() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
 			best = house
 	return best
+
+## Whether a tenement under construction already targets house `dwelling_id`.
+func _upgrade_pending(dwelling_id: int) -> bool:
+	for entry in _constructions:
+		if entry["upgrade_dwelling_id"] == dwelling_id:
+			return true
+	return false
 
 func _count_plain_houses(s: HESettlement) -> int:
 	var count := 0
@@ -968,6 +989,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var repeatable: bool = option.get("repeatable", false)
 	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
+	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
+		return "under construction"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1014,21 +1037,71 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.balance -= gold
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
+		var entry := {"settlement_id": settlement_id, "startup": option.get("startup", false),
+			"upgrade_dwelling_id": -1, "complete_day": day + construction_days}
 		if option.get("category", "") == "housing":
 			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
 			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
 			if upgradable != null:
-				upgradable.upgrade_to_dense()
-			else:
-				add_dwelling(house)
-			return true
-		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
-		if option.get("startup", false):
-			add_new_business(building)
+				entry["upgrade_dwelling_id"] = upgradable.id
+			entry["record"] = house
 		else:
-			add_business(building)
+			entry["record"] = option["make"].call(next_business_id(), settlement_id)
+		_constructions.append(entry)
+		_finish_due_constructions()
 		return true
 	return false
+
+## Whether a non-repeatable `type_key` is already paid for and being built.
+func _construction_pending(settlement_id: int, type_key: String) -> bool:
+	for entry in _constructions:
+		if entry["settlement_id"] == settlement_id and entry["record"].type_key == type_key:
+			return true
+	return false
+
+## Opens every construction whose days are up: the building joins the town
+## exactly as an instant build used to.
+func _finish_due_constructions() -> void:
+	var waiting: Array[Dictionary] = []
+	for entry in _constructions:
+		if day < int(entry["complete_day"]):
+			waiting.append(entry)
+			continue
+		var record = entry["record"]
+		if record is HEHouse:
+			var target: int = entry["upgrade_dwelling_id"]
+			if target != -1 and dwellings.has(target) and not (dwellings[target] as HEHouse).is_dense():
+				(dwellings[target] as HEHouse).upgrade_to_dense()
+			else:
+				add_dwelling(record)
+		elif entry["startup"]:
+			add_new_business(record)
+		else:
+			add_business(record)
+	_constructions = waiting
+
+## One entry per government build still standing as a foundation, oldest
+## first: {settlement_id, type_key, name, business_id, dwelling_id (each -1
+## unless the build is that kind; the id is the one the finished building
+## keeps), upgrade_dwelling_id, complete_day, days_left}.
+func get_construction_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	for entry in _constructions:
+		if settlement_id != -1 and entry["settlement_id"] != settlement_id:
+			continue
+		var record = entry["record"]
+		var is_house: bool = record is HEHouse
+		out.append({
+			"settlement_id": entry["settlement_id"],
+			"type_key": record.type_key,
+			"name": record.name,
+			"business_id": -1 if is_house else record.id,
+			"dwelling_id": record.id if is_house and entry["upgrade_dwelling_id"] == -1 else -1,
+			"upgrade_dwelling_id": entry["upgrade_dwelling_id"],
+			"complete_day": entry["complete_day"],
+			"days_left": maxi(0, int(entry["complete_day"]) - day),
+		})
+	return out
 
 ## What the warehouse still lacks for `option`'s goods cost: commodity ->
 ## missing units, empty when the cost has no goods or the warehouse covers it
@@ -1056,7 +1129,8 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null:
 		return "none"
-	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+	if not option.get("repeatable", false) and (has_business_of_type(settlement_id, option["type_key"]) \
+			or _construction_pending(settlement_id, option["type_key"])):
 		return "none"
 	if gov.balance < float(build_cost_for(settlement_id, option).get("gold", 0.0)):
 		return "none"
@@ -1070,14 +1144,13 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 			return "can_order"
 	return "ordered"
 
-## The Government build button's action. Builds `type_key` if it can be built
-## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## The Government build button's action. Starts building `type_key` if it can
+## be built right now ("built" -- paid for; it stands as a foundation for
+## construction_days first). Otherwise, if the only thing missing is warehouse goods,
 ## sets the warehouse's standing buy order for each missing good up to the
 ## build's cost ("ordered") -- the player presses again once the goods arrive.
 ## The order is left standing, so the warehouse keeps restocking for the next
 ## one. Returns "" when nothing was done.
-## TODO(construction): the build itself is still instant; see
-## HEScenarioSeeds.government_buildings().
 func request_government_build(settlement_id: int, type_key: String) -> String:
 	if build_government_building(settlement_id, type_key):
 		return "built"
@@ -1124,6 +1197,9 @@ func next_business_id() -> int:
 	var next_id := 1
 	for business_id in businesses.keys():
 		next_id = maxi(next_id, business_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEBusiness:
+			next_id = maxi(next_id, (entry["record"] as HEBusiness).id + 1)
 	return next_id
 
 ## Whether `settlement_id` already has a business of buildable kind
@@ -1139,6 +1215,7 @@ func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()
 		day += 1
+		_finish_due_constructions()
 
 # ---------------------------------------------------------------------------
 # Public query contract
