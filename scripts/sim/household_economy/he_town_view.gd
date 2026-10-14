@@ -45,6 +45,7 @@ const HOUSE_ART_POOL: Array[Dictionary] = [
 	{"model": "building_home_A_blue.gltf", "width": 4.5},
 	{"model": "building_home_B_blue.gltf", "width": 4.5},
 	{"model": "tent.gltf", "width": 4.0},
+	{"model": "building_house_builder_blue.glb", "width": 4.5},
 ]
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
