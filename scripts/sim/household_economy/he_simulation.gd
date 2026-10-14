@@ -609,6 +609,18 @@ const SALES_TAX_RATE := 0.05
 
 var settlements: Dictionary[int, HESettlement] = {}
 var households: Dictionary[int, HEHousehold] = {}
+
+## Derived employment index: business ID -> ordered employee household IDs
+## (households' iteration order, so wage accumulation order matches the old
+## full scans). Membership only; worker totals are summed from current
+## demographics at query time so aging/death/emigration can never leave them
+## stale. Rebuilt lazily in one household pass after anything marks it dirty:
+## an employer change (HEHousehold.employment_changed), or a household being
+## added or removed. Rebuilds replace the dictionary rather than mutating it,
+## so a reference taken earlier stays a valid snapshot.
+var _employment_members: Dictionary = {}
+var _employment_dirty := true
+var _employment_rebuild_count := 0
 var businesses: Dictionary[int, HEBusiness] = {}
 ## Houses, keyed by their own id space (not shared with `businesses`). Each
 ## household lives in one (HEHousehold.dwelling_id) -- see _reconcile_housing.
@@ -705,6 +717,17 @@ var _import_cost_total := 0.0
 ## here: that is an ordinary purchase from a local seller or the Trader.
 var _construction_spend_total := 0.0
 
+## Days a government build stands as a foundation before the building opens
+## (see build_government_building). The cost is paid when it is ordered.
+const CONSTRUCTION_DAYS := 2
+## 0 opens government builds instantly (the harness's cost checks use this).
+var construction_days: int = CONSTRUCTION_DAYS
+## Government builds paid for but not yet standing, oldest first:
+## {settlement_id, record (HEBusiness or HEHouse, its id reserved), startup,
+## upgrade_dwelling_id (-1 unless a tenement upgrades that house), complete_day}.
+## TODO(construction): no labor yet -- a build just waits out the days.
+var _constructions: Array[Dictionary] = []
+
 ## Most units of one good a warehouse order buys or sells in a day, so a single
 ## order cannot drain a town's stock (or flood the Trader) in one tick.
 const WAREHOUSE_DAILY_TRADE_CAP := 10.0
@@ -745,6 +768,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 		var legacy_settlement: HESettlement = world["settlement"]
 		settlements[legacy_settlement.id] = legacy_settlement
 	households = world["households"]
+	_invalidate_employment()
 	businesses = world["businesses"]
 	if world.has("dwellings"):
 		dwellings = world["dwellings"]
@@ -827,6 +851,9 @@ func next_dwelling_id() -> int:
 	var next_id := 1
 	for dwelling_id in dwellings.keys():
 		next_id = maxi(next_id, dwelling_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEHouse:
+			next_id = maxi(next_id, (entry["record"] as HEHouse).id + 1)
 	return next_id
 
 ## One entry per house, ascending id: {dwelling_id, settlement_id, name,
@@ -961,9 +988,16 @@ func _innermost_plain_house(settlement_id: int) -> HEHouse:
 	var best: HEHouse = null
 	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
 		var house: HEHouse = dwellings[dwelling_id]
-		if not house.is_dense() and (best == null or house.id < best.id):
+		if not house.is_dense() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
 			best = house
 	return best
+
+## Whether a tenement under construction already targets house `dwelling_id`.
+func _upgrade_pending(dwelling_id: int) -> bool:
+	for entry in _constructions:
+		if entry["upgrade_dwelling_id"] == dwelling_id:
+			return true
+	return false
 
 func _count_plain_houses(s: HESettlement) -> int:
 	var count := 0
@@ -1038,6 +1072,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var repeatable: bool = option.get("repeatable", false)
 	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
+	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
+		return "under construction"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1084,22 +1120,72 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.balance -= gold
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
+		var entry := {"settlement_id": settlement_id, "startup": option.get("startup", false),
+			"upgrade_dwelling_id": -1, "complete_day": day + construction_days}
 		if option.get("category", "") == "housing":
 			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
 			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
 			if upgradable != null:
-				upgradable.upgrade_to_dense()
-				_reconcile_housing(settlement_id)
-			else:
-				add_dwelling(house)
-			return true
-		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
-		if option.get("startup", false):
-			add_new_business(building)
+				entry["upgrade_dwelling_id"] = upgradable.id
+			entry["record"] = house
 		else:
-			add_business(building)
+			entry["record"] = option["make"].call(next_business_id(), settlement_id)
+		_constructions.append(entry)
+		_finish_due_constructions()
 		return true
 	return false
+
+## Whether a non-repeatable `type_key` is already paid for and being built.
+func _construction_pending(settlement_id: int, type_key: String) -> bool:
+	for entry in _constructions:
+		if entry["settlement_id"] == settlement_id and entry["record"].type_key == type_key:
+			return true
+	return false
+
+## Opens every construction whose days are up: the building joins the town
+## exactly as an instant build used to.
+func _finish_due_constructions() -> void:
+	var waiting: Array[Dictionary] = []
+	for entry in _constructions:
+		if day < int(entry["complete_day"]):
+			waiting.append(entry)
+			continue
+		var record = entry["record"]
+		if record is HEHouse:
+			var target: int = entry["upgrade_dwelling_id"]
+			if target != -1 and dwellings.has(target) and not (dwellings[target] as HEHouse).is_dense():
+				(dwellings[target] as HEHouse).upgrade_to_dense()
+				_reconcile_housing(int(entry["settlement_id"]))
+			else:
+				add_dwelling(record)
+		elif entry["startup"]:
+			add_new_business(record)
+		else:
+			add_business(record)
+	_constructions = waiting
+
+## One entry per government build still standing as a foundation, oldest
+## first: {settlement_id, type_key, name, business_id, dwelling_id (each -1
+## unless the build is that kind; the id is the one the finished building
+## keeps), upgrade_dwelling_id, complete_day, days_left}.
+func get_construction_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	for entry in _constructions:
+		if settlement_id != -1 and entry["settlement_id"] != settlement_id:
+			continue
+		var record = entry["record"]
+		var is_house: bool = record is HEHouse
+		out.append({
+			"settlement_id": entry["settlement_id"],
+			"type_key": record.type_key,
+			"name": record.name,
+			"business_id": -1 if is_house else record.id,
+			"dwelling_id": record.id if is_house and entry["upgrade_dwelling_id"] == -1 else -1,
+			"upgrade_dwelling_id": entry["upgrade_dwelling_id"],
+			"complete_day": entry["complete_day"],
+			"days_left": maxi(0, int(entry["complete_day"]) - day),
+		})
+	return out
 
 ## What the warehouse still lacks for `option`'s goods cost: commodity ->
 ## missing units, empty when the cost has no goods or the warehouse covers it
@@ -1127,7 +1213,8 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null:
 		return "none"
-	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+	if not option.get("repeatable", false) and (has_business_of_type(settlement_id, option["type_key"]) \
+			or _construction_pending(settlement_id, option["type_key"])):
 		return "none"
 	if gov.balance < float(build_cost_for(settlement_id, option).get("gold", 0.0)):
 		return "none"
@@ -1141,14 +1228,13 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 			return "can_order"
 	return "ordered"
 
-## The Government build button's action. Builds `type_key` if it can be built
-## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## The Government build button's action. Starts building `type_key` if it can
+## be built right now ("built" -- paid for; it stands as a foundation for
+## construction_days first). Otherwise, if the only thing missing is warehouse goods,
 ## sets the warehouse's standing buy order for each missing good up to the
 ## build's cost ("ordered") -- the player presses again once the goods arrive.
 ## The order is left standing, so the warehouse keeps restocking for the next
 ## one. Returns "" when nothing was done.
-## TODO(construction): the build itself is still instant; see
-## HEScenarioSeeds.government_buildings().
 func request_government_build(settlement_id: int, type_key: String) -> String:
 	if build_government_building(settlement_id, type_key):
 		return "built"
@@ -1195,6 +1281,9 @@ func next_business_id() -> int:
 	var next_id := 1
 	for business_id in businesses.keys():
 		next_id = maxi(next_id, business_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEBusiness:
+			next_id = maxi(next_id, (entry["record"] as HEBusiness).id + 1)
 	return next_id
 
 ## Whether `settlement_id` already has a business of buildable kind
@@ -1210,6 +1299,7 @@ func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()
 		day += 1
+		_finish_due_constructions()
 
 # ---------------------------------------------------------------------------
 # Public query contract
@@ -2386,10 +2476,8 @@ func _pay_wages(record: Dictionary) -> void:
 		b.record_wage_day(wage_per_worker)
 		b.last_wage_shortfall = shortfall
 		var total_paid := 0.0
-		for household_id in households.keys():
+		for household_id in _employment_index().get(business_id, []):
 			var h: HEHousehold = households[household_id]
-			if h.employer_business_id != business_id:
-				continue
 			var pay: float = wage_per_worker * h.worker_capacity()
 			h.balance += pay
 			total_paid += pay
@@ -2451,11 +2539,9 @@ func _herd_collateral(b: HEBusiness) -> float:
 func _fail_business(business_id: int, record: Dictionary) -> void:
 	var b: HEBusiness = businesses[business_id]
 	var laid_off := 0
-	for household_id in households.keys():
-		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			h.employer_business_id = -1
-			laid_off += 1
+	for household_id in (_employment_index().get(business_id, []) as Array).duplicate():
+		(households[household_id] as HEHousehold).employer_business_id = -1
+		laid_off += 1
 	var goods_written_off: Dictionary[Commodity.Type, float] = {}
 	for c in inventory_goods():
 		var amount := b.stock(c)
@@ -3288,6 +3374,7 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 	})
 	(settlements[orphan.settlement_id] as HESettlement).household_ids.erase(household_id)
 	households.erase(household_id)
+	_invalidate_employment()
 	return true
 
 ## Shared by _evaluate_emigration and _evaluate_old_age: each `household_ids`
@@ -3310,6 +3397,7 @@ func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
 				goods_written_off[c] = goods_written_off.get(c, 0.0) + amount
 		(settlements[h.settlement_id] as HESettlement).household_ids.erase(household_id)
 		households.erase(household_id)
+	_invalidate_employment()
 
 	_money_written_off_total += money_written_off
 	for c in goods_written_off.keys():
@@ -3358,6 +3446,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 
 	for new_household in new_households:
 		households[new_household.id] = new_household
+		_invalidate_employment()
 		(settlements[new_household.settlement_id] as HESettlement).household_ids.append(new_household.id)
 
 	_births_total += births
@@ -3714,16 +3803,17 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 	var business_ids := businesses.keys()
 	business_ids.sort()
 
+	# One index snapshot serves the whole layoff pass: a layoff only changes
+	# its own business's membership, and each business is visited once.
+	var layoff_snapshot := _employment_index()
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
 		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
-		for household_id in households.keys():
-			if (households[household_id] as HEHousehold).employer_business_id == business_id:
-				employed_ids.append(household_id)
+		employed_ids.assign(layoff_snapshot.get(business_id, []))
 		employed_ids.sort()
-		var employed_workers := _business_employed_worker_count(business_id)
+		var employed_workers := _workers_in(employed_ids)
 		var i := employed_ids.size() - 1
 		# i >= 1: never lay off the last household, whatever its size.
 		while employed_workers > b.capacity and i >= 1:
@@ -3758,11 +3848,15 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		var pool_index := 0
 		var local_business_ids := (settlements[settlement_id] as HESettlement).business_ids.duplicate()
 		local_business_ids.sort()
+		# Hires only move unemployed households into the business being
+		# filled, so one snapshot gives every business its starting count
+		# without a rebuild after each hire.
+		var hiring_snapshot := _employment_index()
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
 				continue # TODO(builders): hire builder_slots households here once modeled
-			var employed_workers := _business_employed_worker_count(business_id)
+			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
 			# TODO(butcher hiring): this hires to `capacity` whatever the business has to
 			# work with. A Butcher is hired the day workers are free, but a ranch's
 			# first cull is 1.5-3 years out (herds start well below their cull target),
@@ -5275,9 +5369,7 @@ func get_government_summary(settlement_id: int) -> Dictionary:
 	if gov == null:
 		return {}
 	var admin_ids: Array[int] = []
-	for household_id in households.keys():
-		if (households[household_id] as HEHousehold).employer_business_id == gov.id:
-			admin_ids.append(household_id)
+	admin_ids.assign(_employment_index().get(gov.id, []))
 	admin_ids.sort()
 	return {
 		"business_id": gov.id,
@@ -5342,23 +5434,45 @@ func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> 
 		total += _daily_need(h, commodity)
 	return total
 
-func _business_employed_worker_count(business_id: int) -> int:
+func _invalidate_employment() -> void:
+	_employment_dirty = true
+
+## Fresh business ID -> Array[int] of employee household IDs. Callers must not
+## mutate the arrays.
+func _employment_index() -> Dictionary:
+	if _employment_dirty:
+		var members: Dictionary = {}
+		var listener := _invalidate_employment
+		for household_id in households.keys():
+			var h: HEHousehold = households[household_id]
+			h.employment_changed = listener
+			if h.employer_business_id == -1:
+				continue
+			if not members.has(h.employer_business_id):
+				members[h.employer_business_id] = [] as Array[int]
+			(members[h.employer_business_id] as Array[int]).append(household_id)
+		_employment_members = members
+		_employment_dirty = false
+		_employment_rebuild_count += 1
+	return _employment_members
+
+func _workers_in(member_ids: Array) -> int:
 	var total := 0
-	for household_id in households.keys():
-		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			total += h.worker_capacity()
+	for household_id in member_ids:
+		total += (households[household_id] as HEHousehold).worker_capacity()
 	return total
+
+func _business_employed_worker_count(business_id: int) -> int:
+	return _workers_in(_employment_index().get(business_id, []))
 
 ## Worker count weighted by each employing household's morale bonus (see
 ## HEHousehold.productivity_multiplier): what production actually gets out of
 ## the crew. Equals the plain headcount when nobody's morale is above 100%.
 func _business_effective_worker_count(business_id: int) -> float:
 	var total := 0.0
-	for household_id in households.keys():
+	for household_id in _employment_index().get(business_id, []):
 		var h: HEHousehold = households[household_id]
-		if h.employer_business_id == business_id:
-			total += float(h.worker_capacity()) * h.productivity_multiplier()
+		total += float(h.worker_capacity()) * h.productivity_multiplier()
 	return total
 
 ## The crew's average morale (per worker, so a big household counts for more)
@@ -5367,10 +5481,8 @@ func _business_effective_worker_count(business_id: int) -> float:
 func _business_crew_morale(business_id: int) -> Dictionary:
 	var workers := 0
 	var morale_total := 0.0
-	for household_id in households.keys():
+	for household_id in _employment_index().get(business_id, []):
 		var h: HEHousehold = households[household_id]
-		if h.employer_business_id != business_id:
-			continue
 		workers += h.worker_capacity()
 		morale_total += float(h.worker_capacity()) * h.morale()
 	if workers == 0:
@@ -5382,11 +5494,26 @@ func _business_crew_morale(business_id: int) -> Dictionary:
 	}
 
 func _business_employed_household_count(business_id: int) -> int:
-	var total := 0
+	return (_employment_index().get(business_id, []) as Array).size()
+
+## Debug oracle: true when the index equals an independent full scan. Used by
+## the acceptance harness after mutation boundaries.
+func employment_index_matches_scan() -> bool:
+	var scanned: Dictionary = {}
 	for household_id in households.keys():
-		if (households[household_id] as HEHousehold).employer_business_id == business_id:
-			total += 1
-	return total
+		var employer: int = (households[household_id] as HEHousehold).employer_business_id
+		if employer == -1:
+			continue
+		if not scanned.has(employer):
+			scanned[employer] = []
+		scanned[employer].append(household_id)
+	var indexed := _employment_index()
+	if indexed.size() != scanned.size():
+		return false
+	for business_id in scanned.keys():
+		if not indexed.has(business_id) or (indexed[business_id] as Array) != (scanned[business_id] as Array):
+			return false
+	return true
 
 ## Appends today's opening price (this tick's actual clearing price, before
 ## _adjust_price mutates it for tomorrow) to each commodity's trailing

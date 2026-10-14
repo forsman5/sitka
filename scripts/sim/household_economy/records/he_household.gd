@@ -106,7 +106,18 @@ var settlement_id: int
 ## or -1 if unemployed. A household always works as one unit -- it doesn't
 ## split workers across two employers -- see he_simulation.gd's weekly
 ## labor reconciliation.
-var employer_business_id: int = -1
+var employer_business_id: int = -1:
+	set(value):
+		if value == employer_business_id:
+			return
+		employer_business_id = value
+		if employment_changed.is_valid():
+			employment_changed.call()
+
+## Set by the owning HESimulation so its employment index learns of every
+## employer change, including direct writes from harness fixtures. Never
+## carries state of its own.
+var employment_changed: Callable
 
 ## The house (HESimulation.dwellings id) this household lives in, or -1 when
 ## it is homeless or its settlement does not model housing. Only

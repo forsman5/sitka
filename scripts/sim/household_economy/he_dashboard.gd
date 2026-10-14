@@ -3394,7 +3394,7 @@ func _refresh_visible_groups(ignore_mouse_guard: bool) -> void:
 				if reports.is_empty():
 					reports = _simulation.get_business_reports(-1, false)
 				var dwellings := _simulation.get_dwelling_reports()
-				_town_layout.reconcile(reports, dwellings)
+				_town_layout.reconcile(reports, dwellings, _simulation.get_construction_reports())
 				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 				_town_view_synced = true
 			HEPresenter.Group.BUSINESS_ROWS:
@@ -3504,6 +3504,9 @@ func _ensure_business_rows(reports: Array) -> void:
 		if not _business_rows.has(report["business_id"]):
 			rows_stale = true
 	if rows_stale:
+		# A government build that just finished construction has no name yet.
+		for report in reports:
+			_business_names[report["business_id"]] = report["name"]
 		_rebuild_business_rows()
 
 func _refresh_business_row_values(reports: Array) -> void:

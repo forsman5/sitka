@@ -341,7 +341,8 @@ static func government_business_costs() -> Dictionary:
 ## `startup` marks a business that gets the new-business crew and seed cash
 ## (HESimulation.add_new_business); the Warehouse runs on the treasury instead.
 static func government_buildings() -> Array[Dictionary]:
-	# TODO(construction): government builds are instant and need no labor. Add
+	# TODO(construction): government builds wait HESimulation.CONSTRUCTION_DAYS
+	# as a foundation but need no labor. Add
 	# construction jobs at the government building, and longer term a
 	# construction business that does the work.
 	var options: Array[Dictionary] = [

@@ -82,6 +82,13 @@ const PATH_WIDTH := 1.4
 ## How far the path starts inside the building's footprint, so no gap shows.
 const PATH_BUILDING_TUCK := 0.3
 const VACANT_OVERLAY := Color(0.45, 0.45, 0.45, 0.55)
+## A government build still under construction: a bare dirt lot with the RTS
+## game's foundation slab (house_foundation.tscn) and corner stakes.
+const CONSTRUCTION_GROUND_COLOR := Color(0.5, 0.4, 0.27)
+const FOUNDATION_COLOR := Color(0.65, 0.55, 0.38)
+const FOUNDATION_HEIGHT := 0.2
+const STAKE_COLOR := Color(0.4, 0.28, 0.16)
+const STAKE_SIZE := Vector3(0.3, 1.4, 0.3)
 const SELECTION_COLOR := Color(1.0, 0.9, 0.2, 0.45)
 
 static var _scene_cache: Dictionary = {}
@@ -254,7 +261,10 @@ func focus_on(point: Vector2) -> void:
 func selected_business_id() -> int:
 	if _layout == null or _selected_site_id == -1:
 		return -1
-	return int(_layout.get_site(_selected_site_id).get("business_id", -1))
+	var site := _layout.get_site(_selected_site_id)
+	if site.get("under_construction", false):
+		return -1
+	return int(site.get("business_id", -1))
 
 func site_node_count() -> int:
 	return _site_nodes.size()
@@ -481,7 +491,7 @@ func _draw_road(road: Dictionary) -> void:
 func _sync_site(site: Dictionary) -> void:
 	var site_id: int = site["site_id"]
 	var occupied: bool = site["business_id"] != HETownLayout.NO_BUSINESS or site["dwelling_id"] != HETownLayout.NO_BUSINESS
-	var signature := "%s|%s" % [site["type_key"], occupied]
+	var signature := "%s|%s|%s" % [site["type_key"], occupied, site["under_construction"]]
 	var entry: Dictionary = _site_nodes.get(site_id, {})
 	if entry.is_empty() or entry["signature"] != signature:
 		if not entry.is_empty():
@@ -492,6 +502,8 @@ func _sync_site(site: Dictionary) -> void:
 	var label_text := str(site["label"])
 	if not occupied:
 		label_text += " (vacant)" if label_text != "" else "Vacant"
+	elif site["under_construction"]:
+		label_text += " (under construction)"
 	(entry["label"] as Label3D).text = label_text
 
 func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
@@ -509,7 +521,11 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	var footprint: Vector2 = site["footprint"]
 	var type_key: String = site["type_key"]
 	var building_offset := Vector3.ZERO
-	match type_key:
+	var under_construction: bool = site["under_construction"]
+	var dressing := "construction" if under_construction else type_key
+	match dressing:
+		"construction":
+			_add_patch(body, footprint, CONSTRUCTION_GROUND_COLOR, 0.05)
 		"farm":
 			_add_field(body, footprint)
 			building_offset = Vector3(-footprint.x * 0.5 + 4.5, 0.0, 0.0)
@@ -525,10 +541,13 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	if type_key == HETownLayout.HOUSE_TYPE_KEY:
 		art = HOUSE_ART_POOL[int(site["site_id"]) % HOUSE_ART_POOL.size()]
 	_add_door_path(root, site, art)
-	var building := _make_building(art, occupied)
-	building.position = building_offset
-	body.add_child(building)
-	_place_on_ground(building, art, building_offset)
+	if under_construction:
+		_add_foundation(body, float(art["width"]), building_offset)
+	else:
+		var building := _make_building(art, occupied)
+		building.position = building_offset
+		body.add_child(building)
+		_place_on_ground(building, art, building_offset)
 
 	var label := Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -618,6 +637,26 @@ func _place_on_ground(building: Node3D, art: Dictionary, offset: Vector3) -> voi
 	var center := bounds.get_center()
 	building.position = offset + Vector3(-center.x, -bounds.position.y, -center.z) * factor
 
+## The slab a building will stand on, `width` square, with a stake at each corner.
+func _add_foundation(body: Node3D, width: float, offset: Vector3) -> void:
+	var slab := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(width, FOUNDATION_HEIGHT, width)
+	slab.mesh = mesh
+	slab.material_override = _flat_material(FOUNDATION_COLOR)
+	slab.position = offset + Vector3(0.0, 0.1 + FOUNDATION_HEIGHT * 0.5, 0.0)
+	body.add_child(slab)
+	var corner := width * 0.5 - STAKE_SIZE.x * 0.5
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			var stake := MeshInstance3D.new()
+			var stake_mesh := BoxMesh.new()
+			stake_mesh.size = STAKE_SIZE
+			stake.mesh = stake_mesh
+			stake.material_override = _flat_material(STAKE_COLOR)
+			stake.position = offset + Vector3(sx * corner, 0.1 + STAKE_SIZE.y * 0.5, sz * corner)
+			body.add_child(stake)
+
 func _add_patch(parent: Node3D, size: Vector2, color: Color, y: float, offset := Vector3.ZERO) -> void:
 	var patch := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
@@ -701,6 +740,11 @@ func _refresh_info() -> void:
 	(_selection_marker.mesh as BoxMesh).size = Vector3(footprint.x + 1.0, 0.15, footprint.y + 1.0)
 	_selection_marker.position = Vector3(center.x, 0.2, center.y)
 	_selection_marker.rotation.y = -float(site["rotation"])
+	if site["under_construction"]:
+		_details_button.visible = false
+		_info_title.text = "%s (under construction)" % str(site["label"])
+		_info_body.text = "Foundation laid. The building opens once construction finishes."
+		return
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
