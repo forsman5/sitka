@@ -25,6 +25,15 @@ func _row_names(grid: GridContainer) -> Array[String]:
 			names.append((children[i] as Label).text)
 	return names
 
+## Every tab only refreshes while it is the selected one, so a check that reads
+## all four has to visit them.
+func _show_all_tabs(dashboard: Control) -> void:
+	var tabs: TabContainer = dashboard._business_detail_tabs
+	for i in tabs.get_tab_count():
+		tabs.current_tab = i
+		dashboard._refresh_business_detail()
+	tabs.current_tab = 0
+
 func _run() -> void:
 	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
 	dashboard_script.pending_builder = Callable(HEFixtures, "build_three_business_economy")
@@ -44,6 +53,7 @@ func _run() -> void:
 
 	# A staffed farm: identity above the tabs, money / goods / output drivers split.
 	dashboard._on_business_row_selected(HEScenarioSeeds.FARM_BUSINESS_ID)
+	_show_all_tabs(dashboard)
 	var header := _row_names(dashboard._business_detail_grid)
 	check(header.has("Capacity") and header.has("Employed") and not header.has("Cash"), "Header holds identity facts only (got %s)" % [header])
 	var cash := _row_names(dashboard._business_detail_cash_grid)
@@ -64,6 +74,7 @@ func _run() -> void:
 
 	# A herd: husbandry controls on Productivity, event log on Events.
 	dashboard._on_business_row_selected(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
+	_show_all_tabs(dashboard)
 	check(dashboard._business_detail_herd_controls_section.visible and dashboard._business_detail_herd_events_section.visible,
 		"A herd business shows its controls and its event log")
 	check(dashboard._business_detail_herd_controls_section.get_parent() == tabs.get_child(2),
@@ -75,12 +86,36 @@ func _run() -> void:
 
 	# A non-herd business hides the herd sections entirely.
 	dashboard._on_business_row_selected(HEScenarioSeeds.FARM_BUSINESS_ID)
+	_show_all_tabs(dashboard)
 	check(not dashboard._business_detail_herd_controls_section.visible, "Herd controls hide for a farm")
 
 	# Government: tax policy sits with the money.
 	dashboard._on_business_row_selected(HEScenarioSeeds.GOVERNMENT_BUSINESS_ID)
+	_show_all_tabs(dashboard)
 	check(dashboard._business_detail_tax_section.visible and dashboard._business_detail_tax_section.get_parent() == tabs.get_child(0),
 		"Tax policy belongs to the Cash tab")
+
+	# Hidden tabs cost nothing: with Cash selected, only Cash (and the header)
+	# refresh as days pass; switching tabs catches the new one up.
+	dashboard._on_business_row_selected(HEScenarioSeeds.FARM_BUSINESS_ID)
+	tabs.current_tab = 0
+	dashboard._refresh_business_detail()
+	dashboard.reset_perf()
+	for day in range(5):
+		dashboard._simulation.advance_ticks(1)
+		dashboard._refresh()
+	var perf: Dictionary = dashboard.perf_report()
+	check(perf.has("BUSINESS_DETAIL_CASH") and perf["BUSINESS_DETAIL_CASH"]["calls"] == 5, "The selected Cash tab refreshes every day (got %s)" % [perf.get("BUSINESS_DETAIL_CASH")])
+	check(perf.has("BUSINESS_DETAIL_HEADER"), "The header above the tabs keeps refreshing")
+	for hidden in ["BUSINESS_DETAIL_STOCKS", "BUSINESS_DETAIL_PRODUCTIVITY", "BUSINESS_DETAIL_EVENTS"]:
+		check(not perf.has(hidden), "%s must not refresh while hidden (got %s)" % [hidden, perf.get(hidden)])
+	dashboard.reset_perf()
+	tabs.current_tab = 2
+	await process_frame
+	await process_frame
+	perf = dashboard.perf_report()
+	check(perf.has("BUSINESS_DETAIL_PRODUCTIVITY"), "Opening a tab refreshes it on the next frame")
+	check(_row_names(dashboard._business_detail_productivity_grid).has("Land"), "The opened tab shows current rows")
 
 	print("business tabs check: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))
 	quit(0 if failures == 0 else 1)

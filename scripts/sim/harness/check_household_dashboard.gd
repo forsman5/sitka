@@ -42,6 +42,34 @@ func _check_presenter() -> void:
 	check(slow.take_dirty().size() == HEPresenter.Group.size(), "A request dirties every group")
 	check(not slow.due(0.0), "A request is consumed by one presentation")
 
+## Top-bar warehouse stock: most units first, cut off with "..." when narrow;
+## plus the town view's own Government build button.
+func _check_warehouse_strip(dashboard: Control, sim) -> void:
+	const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+	const Commodity = preload("res://scripts/sim/records/commodity.gd")
+	var settlement_id: int = dashboard._town_settlement_id()
+	check(sim.get_warehouse_inventory(settlement_id).is_empty(), "No warehouse -> empty inventory")
+	var warehouse = HEScenarioSeeds.make_warehouse(sim.next_business_id(), settlement_id)
+	sim.add_new_business(warehouse)
+	warehouse.inventory[Commodity.Type.IRON] = 5.0
+	warehouse.inventory[Commodity.Type.TIMBER] = 40.0
+	warehouse.inventory[Commodity.Type.TOOLS] = 12.0
+	warehouse.inventory[Commodity.Type.WOOL] = 0.0
+	var inventory: Array = sim.get_warehouse_inventory(settlement_id)
+	check(inventory.size() == 3, "Empty goods are left out of the inventory")
+	check(inventory[0]["commodity"] == Commodity.Type.TIMBER and inventory[2]["commodity"] == Commodity.Type.IRON, "Inventory is sorted by units, most first")
+	dashboard._refresh_warehouse_strip()
+	dashboard._warehouse_strip.size = Vector2(2000, 30)
+	dashboard._layout_warehouse_strip()
+	var items: Array = dashboard._warehouse_strip_items
+	check(items.size() == 3 and items[0].visible and items[2].visible, "A wide strip shows every held good")
+	check(not dashboard._warehouse_strip_more.visible, "No ellipsis when everything fits")
+	dashboard._warehouse_strip.size = Vector2(items[0].get_combined_minimum_size().x + 60, 30)
+	dashboard._layout_warehouse_strip()
+	check(items[0].visible and not items[2].visible, "A narrow strip keeps the largest stock and drops the rest")
+	check(dashboard._warehouse_strip_more.visible, "Ellipsis shown when goods are cut off")
+	check(dashboard._town_gov_build_popup != null and dashboard._town_gov_build_popup.item_count == HEScenarioSeeds.government_buildings().size(), "Town view has a Government build menu")
+
 func _run() -> void:
 	_check_presenter()
 	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
@@ -60,7 +88,7 @@ func _run() -> void:
 	for day in range(40):
 		sim.advance_ticks(1)
 		dashboard._refresh()
-	var rows: Array = dashboard._household_table_rows()
+	var rows: Array = dashboard._simulation.get_household_table_snapshot()
 	check(rows.size() == sim.get_household_ids().size(), "Snapshot has one row per household")
 	for row in rows:
 		var h: Dictionary = sim.get_household_summary(row["id"])
@@ -92,6 +120,26 @@ func _run() -> void:
 	var unemployed_before: int = dashboard._selected_business_id
 	table._on_employer_pressed(-12345) # unknown household: no employer, no navigation
 	check(dashboard._selected_business_id == unemployed_before, "Unknown employer press does nothing")
+
+	# Hidden views cost nothing: the Town tab and Jobs list are showing, so the
+	# Goods/Needs/Businesses/Housing pages and the Households table are idle.
+	dashboard.reset_perf()
+	for day in range(5):
+		sim.advance_ticks(1)
+		dashboard._refresh()
+	var perf: Dictionary = dashboard.perf_report()
+	for visible_group in ["HEADER", "TOWN_STATS", "JOBS"]:
+		check(perf.has(visible_group) and perf[visible_group]["calls"] == 5, "%s refreshes every day while visible (got %s)" % [visible_group, perf.get(visible_group)])
+	for hidden in ["MARKET", "NEEDS", "BUSINESS_ROWS", "HOUSEHOLDS"]:
+		check(not perf.has(hidden), "%s must not refresh while hidden (got %s)" % [hidden, perf.get(hidden)])
+	# Opening a hidden tab catches it up on the next frame.
+	dashboard._households_page.get_parent().current_tab = dashboard._households_page.get_index()
+	await process_frame
+	await process_frame
+	check(dashboard.perf_report().has("HOUSEHOLDS"), "Opening the Households tab refreshes it")
+	var expected_ids: Array = sim.get_household_ids()
+	check(table.row_count() == expected_ids.size(), "Households table is current after opening (%d vs %d)" % [table.row_count(), expected_ids.size()])
+	_check_warehouse_strip(dashboard, sim)
 
 	print("Household dashboard check: %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
 	quit(0 if failures == 0 else 1)

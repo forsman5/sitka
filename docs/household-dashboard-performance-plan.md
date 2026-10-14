@@ -7,24 +7,36 @@ The doc has two parts: what exists now (the structure the work builds on), and w
 ## Current structure
 
 ### Refresh groups
-`_refresh()` is an immediate, full refresh that calls named groups in a fixed order:
+`_refresh()` marks every group dirty and runs the ones whose view is on screen (`_refresh_visible_groups`). A group whose view is hidden stays dirty, does no work, and runs once the first time its view is shown.
 
-| Group (`HEPresenter.Group`) | Function | Contents |
-|---|---|---|
-| `HEADER` | `_refresh_header` | day label, treasury, population summary, extinction check |
-| `TOWN` | `_refresh_town_and_housing` | town stats/charts, housing tab, government build menu |
-| `MARKET_NEEDS` | `_refresh_market_and_needs` | market grid and detail, needs tab and detail |
-| `BUSINESSES` | `_refresh_businesses` | business rows, town map sync, jobs tab, open business detail (all four tabs) |
-| `HOUSEHOLDS` | `_refresh_households` | household table |
-| `DETAILS` | household and person detail | open household/person detail panels |
-| `BLOTTER` | `_refresh_blotter` | event log |
+| Group (`HEPresenter.Group`) | Shown when |
+|---|---|
+| `HEADER` | always (day, treasury, population summary, extinction check) |
+| `TOWN_STATS` | Town tab is the current top-level tab |
+| `HOUSING` | Town tab (summary line) or Housing tab (details and build buttons) |
+| `MARKET`, `MARKET_DETAIL` | Goods tab; market detail panel open |
+| `NEEDS`, `NEED_DETAIL` | Needs tab; need detail panel open |
+| `TOWN_VIEW` | town map on screen (synced once at start so the map is populated when first opened) |
+| `BUSINESS_ROWS` | Businesses tab (also refreshes the government build menu) |
+| `JOBS` | Jobs list tab |
+| `BUSINESS_DETAIL_HEADER` | business page open (title, identity rows, which type-specific sections show) |
+| `BUSINESS_DETAIL_CASH` / `_STOCKS` / `_PRODUCTIVITY` / `_EVENTS` | business page open on that tab |
+| `HOUSEHOLDS` | Households list tab |
+| `HOUSEHOLD_DETAIL`, `PERSON_DETAIL` | those panels open |
+| `BLOTTER` | blotter expanded |
 
-Detail panels are rebuilt from scratch, so they are skipped while a mouse button is down (a swapped-out button would eat the click); the next refresh catches up. All groups currently refresh every time.
+Visibility comes from `_group_visible`. Tab pages are judged from their `TabContainer`'s `current_tab` (the page's own visibility settles a frame late); panels use `is_visible_in_tree()`, so Town view hides every dashboard group.
+
+Tab, panel, town-map, and blotter visibility changes call `_on_view_changed`, which coalesces to one deferred `_refresh_visible_groups` per frame so a newly shown view catches up immediately.
+
+Detail panels are rebuilt from scratch, so they are not taken while a mouse button is down (a swapped-out button would eat the click); they stay dirty and the next pass catches up. Direct responses to a click (selection, in-page controls) pass `ignore_mouse_guard`.
+
+Timing: `perf_report()` returns per-group `{calls, total_ms, mean_ms}`; `reset_perf()` clears it. Checks use call counts to prove hidden groups do no work.
 
 ### Household table (`he_household_table.gd`, `HEHouseholdTable`)
 A pure view of the Households tab. It receives presentation rows through `set_snapshot(rows, business_names)` and reports clicks through `row_selected(household_id)` and `employer_pressed(business_id)`. It owns its row controls and rebuilds them only when the set of household IDs changes. It never reads the simulation. Row shape is documented at the top of the file.
 
-The dashboard builds the rows in `_household_table_rows()` from the rich `get_household_summary()` per household. That is the seam where the lightweight simulation snapshot (below) goes.
+The rows come from `HESimulation.get_household_table_snapshot()`, a single pass that returns only the displayed fields; `get_household_summary()` stays the detail query for the one open household. The Jobs tab's unemployment line uses `get_unemployment_summary()` instead of per-household summaries.
 
 ### Presenter (`he_presenter.gd`, `HEPresenter`)
 Pure bookkeeping for when and what to present; no nodes and no simulation access.
@@ -37,7 +49,7 @@ Pure bookkeeping for when and what to present; no nodes and no simulation access
 The dashboard's `PRESENT_INTERVAL_SECONDS` is `0.0`, which presents on every simulated step. Raising it is the wall-clock throttle.
 
 ### Business detail page
-The open business's detail page has identity facts above a four-tab bar (Cash, Stocks, Productivity, Events). Tabs are built once so the selected tab and in-progress spin-box edits survive refreshes. `_refresh_business_detail()` currently fetches full-detail reports, builds the rows for all four tabs, and clears and recreates all four grids on every refresh, whichever tab is open. Detail work is therefore not yet proportional to what is visible; see section 3.
+The open business's page has identity facts above a four-tab bar (Cash, Stocks, Productivity, Events). Tabs are built once so the selected tab and in-progress edits survive refreshes. Each tab is its own group: the header always refreshes while the page is open; a tab's rows, charts, and lists (Cash: sparkline, ledger, tax policy; Stocks: flow chart, inventory, warehouse orders; Productivity: morale/tools/land/husbandry, fields, employees; Events: herd events, Trader transactions, employment blotter) are only built while that tab is selected. One report is fetched per pass via `get_business_reports(-1, true, business_id)`, which skips every other business. `_refresh_business_detail()` is the "refresh the open page now" entry point.
 
 ### Checks
 `scripts/sim/harness/check_household_dashboard.gd` covers presenter cadence/coalescing/immediate requests, table row count, snapshot parity with rich summaries, no rebuild for an unchanged household set, and click routing. `check_town_view.gd` and `check_town_layout.gd` cover the dashboard scene around it.
@@ -45,19 +57,19 @@ The open business's detail page has identity facts above a four-tab bar (Cash, S
 ## Suspected cost (until timed)
 
 - The household table creates a permanent set of `Control` nodes per household (buttons and labels for identity, employer, housing, demographics, stocks, balance, unmet needs). A `ScrollContainer` clips drawing but does not virtualize them; around 100 households this is more than a thousand retained controls in layout, theme, input, and text updates.
-- Every row refresh calls `get_household_summary()`, which builds inventory and unmet-demand dictionaries, need and satisfier arrays, health/morale explanations, and demographic age arrays the table never shows. That query is right for one selected household, not the whole table.
-- `_refresh()` updates every view regardless of which tab is visible, and the business detail page does the same for its four tabs: it fetches full-detail reports (balance/ledger histories, herd events) via `get_business_reports()`, scans for the selected business, rebuilds all four grids with `queue_free`, redraws the cash sparkline and goods flow chart, and refreshes the employee list and event logs, even though only one tab shows.
 - The employment index measured employment lookup at under 1% of a simulated day with no end-to-end tick gain, so do not attribute interaction latency to the simulation or to the UI without separate measurements.
 
 ## Remaining work
 
-### 1. Measurement first
+### 1. Measurement first (counters implemented; matrix not yet run)
+Per-group counters exist (`perf_report()`). Still to do: the timing matrix below.
+
 Development-only timing counters around: `advance_ticks(1)`; complete `_refresh()`; household table snapshot construction; row binding/text updates; control creation/rebuild; each refresh group; town chart history extraction.
 
 Test at 30, 100, 300, and 1,000 households while paused, at 1x, and at the highest speed. Capture p50/p95/max frame time, refresh time, tick time, retained `Control` count, and refresh/rebuild counts. Compare the Households tab against a lightweight tab while paused to separate UI-tree cost from simulation cost. Record the visible tab and whether a detail panel was open.
 
-### 2. Lightweight household table snapshot
-Add a purpose-built simulation query:
+### 2. Lightweight household table snapshot (implemented)
+The simulation query:
 
 ```gdscript
 func get_household_table_snapshot(settlement_id: int = -1) -> Array[Dictionary]
@@ -65,17 +77,15 @@ func get_household_table_snapshot(settlement_id: int = -1) -> Array[Dictionary]
 
 Each row carries only what the table shows (the shape `HEHouseholdTable` already consumes): stable ID, employer business ID, housing status, workers, dependents, displayed commodity stocks, balance, food stress, unmet scarcity, unmet unaffordable demand. No member-level details, explanations, full need objects, satisfier arrays, or copied histories. One pass over the relevant households, without calling other rich report methods. Employer names are resolved in the dashboard from its business-name map. `get_household_summary()` stays the detail query for the one selected household.
 
-Then `_household_table_rows()` becomes a call to the snapshot.
-
 Acceptance: the table refresh makes no per-row `get_household_summary()` calls; table values match the rich-summary fields in a harness across ordinary and lifecycle days; snapshot generation is measured independently and scales with the requested households.
 
-### 3. Visibility-aware refresh
-Retain the top-level and nested `TabContainer` references and connect `tab_changed`. Narrow which groups `_refresh()` takes from the presenter to those whose views are actually visible; an inactive group stays dirty and refreshes once when opened. Candidates: active top-level tab, active nested list tab, selected detail panel only when visible, Town view only when visible, blotter only when expanded.
+### 3. Visibility-aware refresh (implemented)
+Summary of the policy now in place; the original requirements follow. Retain the top-level and nested `TabContainer` references and connect `tab_changed`. Narrow which groups `_refresh()` takes from the presenter to those whose views are actually visible; an inactive group stays dirty and refreshes once when opened. Candidates: active top-level tab, active nested list tab, selected detail panel only when visible, Town view only when visible, blotter only when expanded.
 
 Do not infer visibility from `Control.visible` alone; ancestor visibility and active tab state matter. Keep the policy in one place (the presenter or a single dashboard function), not scattered through refresh functions.
 
-#### Business detail tabs
-Apply the same policy one level down, to the page's Cash / Stocks / Productivity / Events tabs:
+#### Business detail tabs (implemented)
+The same policy one level down, to the page's Cash / Stocks / Productivity / Events tabs:
 
 - Build rows, charts, and lists only for the selected tab (`_business_detail_tabs.current_tab`). Cash owns the balance sparkline, cash/ledger rows, and the government tax section; Stocks owns the goods flow chart, inventory rows, wool rows, and warehouse orders; Productivity owns morale/tool/land/husbandry rows, field rows, and the employee list; Events owns the employment blotter, herd events, and Trader transactions. Header facts above the tabs always refresh.
 - Connect `tab_changed` so an unselected tab refreshes once on open and then follows the normal cadence. Treat a business selection change as dirtying all of that page's tabs.
@@ -108,7 +118,7 @@ Acceptance: retained row controls stay bounded as population grows; scrolling ne
 1. Timing counters and a baseline.
 2. Lightweight snapshot with parity checks.
 3. Visibility-aware groups.
-3a. Business detail tab gating (can land with or right after step 3; it reuses the same visibility policy).
+3a. Business detail tab gating (done with step 3).
 4. Wall-clock throttle (verify skipped presentations never skip simulation ticks).
 5. Row virtualization (pagination is an acceptable intermediate).
 6. Re-run the timing matrix, document which costs moved, and test a production export as well as editor/headless.
