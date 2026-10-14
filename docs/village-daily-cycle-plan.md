@@ -97,7 +97,9 @@ Rule kept from the town view plan: the simulation owns economic truth, the layou
 
 **4. Zoomed-out detail (#93).** Drawing 480 full skinned models is most of what's left (about 7 ms in the browser). Past a zoom threshold, swap to a low-detail mesh or a batched stand-in.
 
-**5. Polish.**
+**5. Split-off households near their parents.** See *Questions to settle*.
+
+**6. Polish.**
 - Evening market stop.
 - A visible homeless camp at the plaza.
 - Persistent member ids, replacing the `last_promoted_member_numbers` placeholder, so a villager keeps its identity when a housemate leaves.
@@ -109,10 +111,10 @@ Settled in #87:
 - **Children:** yes, they are drawn and mill about with their household.
 - **Performance budget:** 64 animation updates a frame, no animation past zoom 50, villager shadows off by default (a setting).
 
-Still open:
-1. **Where do split-off households live?** Today it's the innermost free house. The alternative is the free house nearest the parents, so families cluster: a first step toward household compounds.
-2. **Inside or outside at work?** Proposed: town-business workers go inside, while field, pasture and woodlot workers stay visible.
-3. **Should the night rule come before commuting?** Proposed: yes, as phase 1 above. It is small, and villagers standing outside all night is the most visible gap.
+Decided after #87:
+- **Split-off households** move into the free house nearest their parents' house, so families cluster (a first step toward household compounds). Today they take the innermost free house. The sim doesn't know house positions, so the layout has to supply distances, e.g. a distance callback handed to `_reconcile_housing`. Not built yet.
+- **At work:** town-business workers go inside, while field, pasture and woodlot workers stay visible.
+- **Order:** phases 1–3 (night, commuting, work) ship together in one stacked PR.
 
 ## Current-code anchors
 
