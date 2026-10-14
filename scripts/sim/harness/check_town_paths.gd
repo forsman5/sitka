@@ -23,6 +23,8 @@ func _init() -> void:
 		_check_symmetry(preset)
 		_check_stability_under_growth(preset)
 	_check_unknown_sites()
+	_check_cache_survives_rebuild()
+	_report_timing()
 	print("TOWN PATHS %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
 
@@ -160,3 +162,54 @@ func _check_unknown_sites() -> void:
 	_assert(paths.path(0, 99999).is_empty(), "Unknown destination must give an empty path")
 	_assert(paths.path(-5, 0).is_empty(), "Unknown origin must give an empty path")
 	_assert(HETownPaths.path_length(PackedVector2Array([Vector2.ZERO, Vector2(3, 4)])) == 5.0, "path_length")
+
+func _check_cache_survives_rebuild() -> void:
+	var built := _layout_for("large_village")
+	var layout = built[0]
+	var paths := HETownPaths.new(layout)
+	var house := _first_house(layout)
+	var kept := {}
+	for site in _built_sites(layout):
+		kept[site["site_id"]] = paths.path(house["site_id"], site["site_id"])
+	var dwellings: Array = built[2].duplicate()
+	dwellings.append(_dwelling_report(9500))
+	var revision: int = layout.revision
+	layout.reconcile(built[1], dwellings)
+	_assert(layout.revision != revision, "adding a house should bump the revision")
+	_assert(paths.refresh(), "refresh should rebuild after a revision bump")
+	var fresh := HETownPaths.new(layout)
+	for id in kept:
+		_assert(paths.path(house["site_id"], id) == kept[id], "kept route to %d changed after a rebuild" % id)
+		_assert(fresh.path(house["site_id"], id) == kept[id], "kept route to %d differs from a fresh one" % id)
+
+## Printed, never asserted: large_village graph size, build time, and routes
+## from every house to its nearest business and to the civic site.
+func _report_timing() -> void:
+	var layout = _layout_for("large_village")[0]
+	var t0 := Time.get_ticks_usec()
+	var paths := HETownPaths.new(layout)
+	var build_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	var houses: Array = []
+	var businesses: Array = []
+	for site in _built_sites(layout):
+		if site["zone"] == HETownLayout.ZONE_HOUSING:
+			houses.append(site)
+		elif site["site_id"] != HETownLayout.CIVIC_SITE_ID:
+			businesses.append(site)
+	var pairs: Array = []
+	for h in houses:
+		var best: Dictionary = {}
+		for b in businesses:
+			if best.is_empty() or (h["position"] as Vector2).distance_squared_to(b["position"]) < (h["position"] as Vector2).distance_squared_to(best["position"]):
+				best = b
+		pairs.append(Vector2i(h["site_id"], best.get("site_id", HETownLayout.CIVIC_SITE_ID)))
+		pairs.append(Vector2i(h["site_id"], HETownLayout.CIVIC_SITE_ID))
+	var cold_us := Time.get_ticks_usec()
+	for pair in pairs:
+		paths.path(pair.x, pair.y)
+	cold_us = Time.get_ticks_usec() - cold_us
+	var warm_us := Time.get_ticks_usec()
+	for pair in pairs:
+		paths.path(pair.x, pair.y)
+	warm_us = Time.get_ticks_usec() - warm_us
+	print("  timing large_village: %d graph nodes, build %.2f ms; %d routes (%d houses) cold %.2f ms, warm %.3f ms" % [paths._nodes.size(), build_ms, pairs.size(), houses.size(), float(cold_us) / 1000.0, float(warm_us) / 1000.0])

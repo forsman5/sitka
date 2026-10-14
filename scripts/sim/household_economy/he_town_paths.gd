@@ -47,18 +47,25 @@ var _site_node: Dictionary = {} # site id -> node id
 var _site_door: Dictionary = {} # site id -> Vector2
 var _offroad_attach: Dictionary = {} # site id -> road point (kept across rebuilds)
 var _cache: Dictionary = {} # Vector2i(from, to) -> PackedVector2Array
+var _trees: Dictionary = {} # source node id -> predecessor array (per graph build)
 
 func _init(layout: HETownLayout) -> void:
 	_layout = layout
 	refresh()
 
-## Rebuilds the graph and clears the cache if the layout changed. Returns
-## whether it rebuilt.
+## Rebuilds the graph if the layout changed. Returns whether it rebuilt.
+## Cached routes survive: sites never move and roads only grow, so a route
+## between two existing sites stays valid. Only empty results (a site that was
+## not yet built) are dropped. Shortest-path trees hold node ids, which a
+## rebuild renumbers, so those are cleared.
 func refresh() -> bool:
 	if _layout.revision == _built_revision:
 		return false
 	_built_revision = _layout.revision
-	_cache.clear()
+	for key in _cache.keys():
+		if (_cache[key] as PackedVector2Array).is_empty():
+			_cache.erase(key)
+	_trees.clear()
 	_build()
 	return true
 
@@ -123,36 +130,12 @@ static func _push(points: PackedVector2Array, p: Vector2) -> void:
 	if points.is_empty() or not points[points.size() - 1].is_equal_approx(p):
 		points.append(p)
 
-## Node ids from `start` to `goal`, or empty if unreachable.
+## Node ids from `start` to `goal`, or empty if unreachable. Walks the
+## shortest-path tree of `start`, which is computed once and cached per source.
 func _shortest(start: int, goal: int) -> PackedInt32Array:
-	var count := _nodes.size()
-	var dist := PackedFloat64Array()
-	dist.resize(count)
-	dist.fill(INF)
-	var previous := PackedInt32Array()
-	previous.resize(count)
-	previous.fill(-1)
-	var done := PackedByteArray()
-	done.resize(count)
-	dist[start] = 0.0
-	while true:
-		var best := -1
-		var best_dist := INF
-		for i in count:
-			if done[i] == 0 and dist[i] < best_dist:
-				best = i
-				best_dist = dist[i]
-		if best < 0 or best == goal:
-			break
-		done[best] = 1
-		var neighbours: Dictionary = _adjacency[best]
-		for n in neighbours:
-			var candidate: float = best_dist + float(neighbours[n])
-			if candidate < dist[n]:
-				dist[n] = candidate
-				previous[n] = best
 	var route := PackedInt32Array()
-	if is_inf(dist[goal]):
+	var previous: PackedInt32Array = _tree_from(start)
+	if goal != start and previous[goal] == -1:
 		return route
 	var node := goal
 	while node != -1:
@@ -160,6 +143,82 @@ func _shortest(start: int, goal: int) -> PackedInt32Array:
 		node = previous[node]
 	route.reverse()
 	return route
+
+## Predecessor of every node on its shortest path from `source` (-1: the
+## source itself or unreachable). Binary-heap Dijkstra; equal distances break
+## toward the lower node id.
+func _tree_from(source: int) -> PackedInt32Array:
+	if _trees.has(source):
+		return _trees[source]
+	var count := _nodes.size()
+	var dist := PackedFloat64Array()
+	dist.resize(count)
+	dist.fill(INF)
+	var previous := PackedInt32Array()
+	previous.resize(count)
+	previous.fill(-1)
+	dist[source] = 0.0
+	var heap_dist := PackedFloat64Array([0.0])
+	var heap_node := PackedInt32Array([source])
+	while not heap_node.is_empty():
+		var d := heap_dist[0]
+		var node := heap_node[0]
+		_heap_pop(heap_dist, heap_node)
+		if d > dist[node]:
+			continue # stale entry
+		var neighbours: Dictionary = _adjacency[node]
+		for n in neighbours:
+			var candidate: float = d + float(neighbours[n])
+			if candidate < dist[n]:
+				dist[n] = candidate
+				previous[n] = node
+				_heap_push(heap_dist, heap_node, candidate, n)
+	_trees[source] = previous
+	return previous
+
+static func _heap_less(da: float, na: int, db: float, nb: int) -> bool:
+	return da < db or (da == db and na < nb)
+
+static func _heap_push(hd: PackedFloat64Array, hn: PackedInt32Array, d: float, n: int) -> void:
+	hd.append(d)
+	hn.append(n)
+	var i := hd.size() - 1
+	while i > 0:
+		var parent := (i - 1) >> 1
+		if not _heap_less(hd[i], hn[i], hd[parent], hn[parent]):
+			break
+		var td := hd[i]
+		var tn := hn[i]
+		hd[i] = hd[parent]
+		hn[i] = hn[parent]
+		hd[parent] = td
+		hn[parent] = tn
+		i = parent
+
+static func _heap_pop(hd: PackedFloat64Array, hn: PackedInt32Array) -> void:
+	var last := hd.size() - 1
+	hd[0] = hd[last]
+	hn[0] = hn[last]
+	hd.resize(last)
+	hn.resize(last)
+	var i := 0
+	while true:
+		var l := i * 2 + 1
+		var r := l + 1
+		var m := i
+		if l < last and _heap_less(hd[l], hn[l], hd[m], hn[m]):
+			m = l
+		if r < last and _heap_less(hd[r], hn[r], hd[m], hn[m]):
+			m = r
+		if m == i:
+			break
+		var td := hd[i]
+		var tn := hn[i]
+		hd[i] = hd[m]
+		hn[i] = hn[m]
+		hd[m] = td
+		hn[m] = tn
+		i = m
 
 # --- Graph construction -----------------------------------------------------------
 
