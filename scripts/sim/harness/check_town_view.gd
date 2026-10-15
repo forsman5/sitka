@@ -220,6 +220,12 @@ func _run() -> void:
 		if (node as MeshInstance3D).material_overlay != null:
 			roofs += 1
 	check(roofs > 0, "Buildings carry the snow overlay")
+	var snowy_trees := 0
+	for node in view._sites_root.find_children("*", "MeshInstance3D", true, false):
+		var tree := node as MeshInstance3D
+		if tree.mesh is CylinderMesh and tree.material_overlay != null:
+			snowy_trees += 1
+	check(snowy_trees > 0, "Woodlot trees carry the snow overlay")
 	snow_sim.day = 380
 	dashboard._refresh_header()
 	check(view.snow_cover() == 0.0 and not snow_layer.visible, "Snow is gone by summer (cover %.2f)" % view.snow_cover())

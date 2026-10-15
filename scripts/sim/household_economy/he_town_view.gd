@@ -116,6 +116,7 @@ var _clock_label: Label
 var _time_of_day := 0.25
 var _snow_material: ShaderMaterial
 var _snow_ground_material: ShaderMaterial
+var _snow_tree_material: ShaderMaterial
 var _snow_layer: MeshInstance3D
 var _snow_cover := 0.0
 
@@ -244,6 +245,7 @@ func set_snow_cover(amount: float) -> void:
 		return
 	_snow_material.set_shader_parameter("cover", _snow_cover)
 	_snow_ground_material.set_shader_parameter("cover", _snow_cover)
+	_snow_tree_material.set_shader_parameter("cover", _snow_cover)
 	_snow_layer.visible = _snow_cover > 0.001
 
 func snow_cover() -> float:
@@ -368,6 +370,13 @@ func _build_world() -> void:
 
 	_snow_material = ShaderMaterial.new()
 	_snow_material.shader = SNOW_SHADER
+	# Conifer cones are steep (side normals point only ~17 degrees above the
+	# horizon), so trees let snow settle on much steeper faces than roofs do.
+	_snow_tree_material = ShaderMaterial.new()
+	_snow_tree_material.shader = SNOW_SHADER
+	_snow_tree_material.set_shader_parameter("settle_min", 0.05)
+	_snow_tree_material.set_shader_parameter("settle_range", 0.2)
+	_snow_tree_material.set_shader_parameter("opacity", 0.9)
 	# The ground layer is cooler and part see-through, so roads and fields
 	# read beneath it and the brighter roofs stand out against it.
 	_snow_ground_material = ShaderMaterial.new()
@@ -751,6 +760,7 @@ func _add_stand(body: Node3D, footprint: Vector2, seed_value: int) -> void:
 		cone.height = 4.0
 		tree.mesh = cone
 		tree.material_override = _flat_material(Color(0.12, 0.3, 0.14))
+		tree.material_overlay = _snow_tree_material
 		tree.position = Vector3(
 			rng.randf_range(-footprint.x * 0.5 + 8.0, footprint.x * 0.5 - 2.0),
 			2.0,
