@@ -2575,8 +2575,8 @@ func _pay_wages(record: Dictionary) -> void:
 			b.last_wage_per_worker = 0.0
 			record["wages_paid"][business_id] = 0.0
 			continue
-		var reference_wage := _reference_wage_per_worker(b.settlement_id)
-		var total_needed: float = reference_wage * employed
+		var wage := _wage_paid_per_worker(b)
+		var total_needed: float = wage * employed
 		# A government pays only out of what its treasury actually holds -- no
 		# overdraft allowance, unlike a business that expects to earn it back.
 		# A warehouse has no cash of its own: its crew is paid by the treasury.
@@ -3663,7 +3663,7 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 	var reference_wages := {}
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
-		var reference_wage := _reference_wage_per_worker(b.settlement_id)
+		var reference_wage := _capacity_benchmark_wage(b.settlement_id)
 		reference_wages[b.settlement_id] = reference_wage
 		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 			# Staffed by the seed / _ensure_administrator, not by revenue
@@ -3895,7 +3895,7 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 	var employed := _business_employed_worker_count(b.id)
 	if employed <= 0:
 		return INF
-	var daily_wage_bill: float = _reference_wage_per_worker(b.settlement_id) * employed
+	var daily_wage_bill: float = _wage_paid_per_worker(b) * employed
 	if daily_wage_bill <= 0.0:
 		return INF
 	var stock_value := 0.0
@@ -4391,7 +4391,7 @@ func _trader_bid_fraction(trader: HEBusiness, commodity: Commodity.Type) -> floa
 func _trader_max_bid_fraction(settlement_id: int, reference_price: float) -> float:
 	if reference_price <= 0.0:
 		return TRADER_BID_FRACTION_MIN
-	var spread_floor := minf(_reference_wage_per_worker(settlement_id) / TRADER_CAPACITY_PER_WORKER, reference_price * 0.5)
+	var spread_floor := minf(_wage_liquidity_scale(settlement_id) / TRADER_CAPACITY_PER_WORKER, reference_price * 0.5)
 	return maxf(TRADER_BID_FRACTION_MIN, 1.0 - spread_floor / reference_price)
 
 ## One good's offer against the Trader's bid, as the day's allocation and the
@@ -5035,7 +5035,7 @@ func _run_input_purchasing(record: Dictionary) -> void:
 ## herd), so fodder can never use up the credit its crew is paid from. A herd
 ## that cannot be fed on that budget goes into winter underfed.
 func _fodder_budget(b: HEBusiness) -> float:
-	var wage_bill: float = float(_business_employed_worker_count(b.id)) * _reference_wage_per_worker(b.settlement_id)
+	var wage_bill: float = float(_business_employed_worker_count(b.id)) * _wage_paid_per_worker(b)
 	return maxf(0.0, b.balance + 0.5 * _wage_overdraft_limit(b, wage_bill))
 
 ## Ranches stock their winter fodder in the autumn (and top up through
@@ -5188,7 +5188,7 @@ func _run_warehouse_orders(record: Dictionary) -> void:
 			for imported in trader.last_imported.values():
 				used += imported
 			import_capacity[trader.id] = maxf(0.0, float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER - used)
-		var wage_reserve: float = WAREHOUSE_WAGE_RESERVE_DAYS * _reference_wage_per_worker(settlement_id) \
+		var wage_reserve: float = WAREHOUSE_WAGE_RESERVE_DAYS * _wage_liquidity_scale(settlement_id) \
 			* float(_business_employed_worker_count(treasury.id) + _business_employed_worker_count(warehouse.id))
 
 		var commodities: Array = warehouse.warehouse_orders.keys()
@@ -5292,7 +5292,7 @@ func _allocate_need_purchase(settlement_id: int, need: HENeed, shortfall: float,
 ## buffer the business would hold anyway, and a business with no cash and no
 ## headroom (at its wage floor) is still locked out.
 func _input_budget(buyer: HEBusiness, employed: int, daily_input_cost: float) -> float:
-	var wage_floor := -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * _reference_wage_per_worker(buyer.settlement_id) * employed
+	var wage_floor := -WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * _wage_paid_per_worker(buyer) * employed
 	var headroom := maxf(0.0, buyer.balance - wage_floor)
 	return maxf(buyer.balance, 0.0) + minf(headroom, INPUT_CREDIT_DAYS * daily_input_cost)
 
@@ -5769,10 +5769,68 @@ func _average_price_history(settlement_id: int, c: Commodity.Type) -> float:
 ## (profitable, should grow); below it, it structurally can't sustain the
 ## households working there (unprofitable, should shrink), regardless of
 ## what its production recipe's rate happens to be.
+## How a business's wage is set (see _wage_paid_per_worker).
+const WAGE_MODEL_SUBSISTENCE := 0 ## every business pays the derived reference wage
+const WAGE_MODEL_PRODUCTIVITY := 1 ## a share of the business's own return per worker, never below the reference
+## Which model _wage_paid_per_worker uses. Subsistence is the original rule and
+## the default; productivity is switched on by harnesses and (later) settings.
+var wage_model: int = WAGE_MODEL_SUBSISTENCE
+## Productivity model: the share of a business's net return per worker (sales
+## less inputs and taxes, over the staffing window) paid out as the wage.
+const LABOUR_SHARE := 0.6
+var labour_share: float = LABOUR_SHARE
+var _wage_paid_cache: Dictionary = {} # business id -> {"day": int, "wage": float}
+
 ## Fraction paid above the subsistence-derived wage (0 = exactly subsistence).
 ## An experiment lever for measure_household_slack / measure_wage_margin; the
 ## capacity loop and every wage-linked floor read it through the reference wage.
 var reference_wage_margin: float = 0.0
+
+## The reference wage plays three roles, kept apart so each can change alone.
+## Under WAGE_MODEL_SUBSISTENCE all three return the same derived value.
+##
+## A. What `b` pays each of its workers today (the wage actually paid, and the
+##    wage bill its own cash runway, fodder budget and input credit are sized on).
+func _wage_paid_per_worker(b: HEBusiness) -> float:
+	var reservation := _reference_wage_per_worker(b.settlement_id)
+	if wage_model != WAGE_MODEL_PRODUCTIVITY:
+		return reservation
+	# A treasury-paid crew has no revenue of its own to share.
+	if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
+		return reservation
+	var cached: Dictionary = _wage_paid_cache.get(b.id, {})
+	if cached.get("day", -1) == day:
+		return float(cached["wage"])
+	# The household reservation is the floor; what the business can fund is
+	# bounded by _pay_wages' available cash and by the share itself (< 1).
+	var wage := maxf(reservation, labour_share * _net_return_per_worker(b))
+	_wage_paid_cache[b.id] = {"day": day, "wage": wage}
+	return wage
+
+## B. The benchmark a business's return per worker is judged against when its
+##    capacity is tuned (_evaluate_business_capacity, _staffing_decision).
+func _capacity_benchmark_wage(settlement_id: int) -> float:
+	return _reference_wage_per_worker(settlement_id)
+
+## C. The wage scale settlement-wide reserves are sized on (the Trader's spread
+##    floor, the Warehouse's wage reserve) -- not any one business's own bill.
+func _wage_liquidity_scale(settlement_id: int) -> float:
+	return _reference_wage_per_worker(settlement_id)
+
+## `b`'s net return per employed worker over its staffing window: sales less
+## inputs and taxes, the same quantity _staffing_decision judges. 0 until the
+## ledger holds enough rows to trust it.
+func _net_return_per_worker(b: HEBusiness) -> float:
+	var window := b.rolling_window_days()
+	var needed_rows: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else (window if b.has_long_cycle() else mini(window, 14))
+	if b.ledger_history(window).size() < needed_rows:
+		return 0.0
+	var money_window: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else window
+	var sales := 0.0
+	for key in ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin"]:
+		sales += b.ledger_average(key, money_window)
+	var net := sales - b.ledger_average("input_consumed_value", money_window) - b.ledger_average("taxes", money_window)
+	return maxf(0.0, net / maxf(1.0, b.ledger_average("employed", money_window)))
 
 func _reference_wage_per_worker(settlement_id: int) -> float:
 	var total_workers := 0
