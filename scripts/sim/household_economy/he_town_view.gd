@@ -876,11 +876,13 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 		return ""
 	var is_worker := index < workers.size()
 	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var sexes: PackedInt32Array = report["worker_sexes"] if is_worker else report["dependent_sexes"]
+	var sex: int = sexes[index if is_worker else index - workers.size()]
 	var lines: Array[String] = []
 	var role := "Worker"
 	if not is_worker:
 		role = "Child" if age < HEHousehold.AGING_THRESHOLD_DAYS else "Adult living at home"
-	lines.append("%s, age %d years %d days" % [role, age / 365, age % 365])
+	lines.append("%s, %s, age %d years %d days" % [role, HEHousehold.sex_label(sex).to_lower(), age / 365, age % 365])
 	if is_worker:
 		var employer_id := int(report["employer_business_id"])
 		if employer_id == -1:

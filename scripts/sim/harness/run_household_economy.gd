@@ -1606,7 +1606,7 @@ func _check_field_model_dynamics() -> void:
 			# The land cap: only land-based businesses have one. (A ranch's
 			# max_capacity is a staffing ceiling that a multi-worker household can
 			# step over when it is hired whole.)
-			if report["land_area_acres"] > 0.0 and employed > report["max_capacity"]:
+			if report["land_area_acres"] > 0.0 and not report.has("herd_size") and employed > report["max_capacity"]:
 				over_cap_by = max(over_cap_by, employed - report["max_capacity"])
 			var reference: float = report["reference_wage_per_worker"]
 			var floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * reference * employed
@@ -1775,6 +1775,8 @@ func _check_demographic_invariants(sim: HESimulation) -> void:
 		_assert(h["worker_capacity"] >= 0, "Household %d has negative worker_capacity: %d" % [household_id, h["worker_capacity"]])
 		var worker_ages: Array = h["worker_ages"]
 		_assert(worker_ages.size() == h["worker_capacity"], "Household %d: worker_ages has %d entries but worker_capacity=%d" % [household_id, worker_ages.size(), h["worker_capacity"]])
+		_assert((h["worker_sexes"] as Array).size() == worker_ages.size() and (h["dependent_sexes"] as Array).size() == ages.size(),
+			"Household %d: sexes out of step with ages (%d/%d workers, %d/%d dependents)" % [household_id, (h["worker_sexes"] as Array).size(), worker_ages.size(), (h["dependent_sexes"] as Array).size(), ages.size()])
 		_assert(not (h["worker_capacity"] == 0 and h["dependents"] > 0),
 			"Household %d has %d dependents but 0 workers -- should have been dissolved and adopted (see _adopt_orphaned_dependents), not left stuck" % [household_id, h["dependents"]])
 
@@ -1935,13 +1937,13 @@ func _check_herds_grow_and_cull() -> void:
 		return
 
 	print("  after %d years: cattle herd=%.1f (cull target %.0f) stock=%.1f | sheep herd=%.1f (cull target %.0f) stock=%.1f wool_stock=%.1f" % [
-		intervals * HESimulation.HERD_EVAL_INTERVAL_DAYS / 360, cattle["herd_size"], HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE], cattle["stock"],
-		sheep["herd_size"], HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP], sheep["stock"], sheep["wool_stock"]])
+		intervals * HESimulation.HERD_EVAL_INTERVAL_DAYS / 360, cattle["herd_size"], HESimulation.default_cull_target(HEBusiness.Species.CATTLE, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.CATTLE]), cattle["stock"],
+		sheep["herd_size"], HESimulation.default_cull_target(HEBusiness.Species.SHEEP, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.SHEEP]), sheep["stock"], sheep["wool_stock"]])
 
 	_assert(cattle["herd_size"] > HEScenarioSeeds.CATTLE_STARTING_HERD, "Cattle herd should have grown from its seeded starting size")
 	_assert(sheep["herd_size"] > HEScenarioSeeds.SHEEP_STARTING_HERD, "Sheep herd should have grown from its seeded starting size")
-	_assert(cattle["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.CATTLE] + EPSILON, "Cattle herd should never exceed its cull target, got %.2f" % cattle["herd_size"])
-	_assert(sheep["herd_size"] <= HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP] + EPSILON, "Sheep herd should never exceed its cull target, got %.2f" % sheep["herd_size"])
+	_assert(cattle["herd_size"] <= HESimulation.default_cull_target(HEBusiness.Species.CATTLE, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.CATTLE]) + EPSILON, "Cattle herd should never exceed its cull target, got %.2f" % cattle["herd_size"])
+	_assert(sheep["herd_size"] <= HESimulation.default_cull_target(HEBusiness.Species.SHEEP, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.SHEEP]) + EPSILON, "Sheep herd should never exceed its cull target, got %.2f" % sheep["herd_size"])
 	# Where a cull ends up (an outlet's inventory, or home-butchered into
 	# meat) depends on which businesses survived, so count the culls themselves.
 	var culled := {"Cattle": 0.0, "Sheep": 0.0}
@@ -1952,9 +1954,11 @@ func _check_herds_grow_and_cull() -> void:
 	_assert(culled["Sheep"] > 0.0, "Sheep Farm should have culled at least once in the last two years")
 	_assert(sheep["wool_stock"] > 0.0, "Sheep Farm should have accumulated some wool by now")
 
-	var land_used: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD + sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
-	print("  shared grazing land used: %.1f / %.1f" % [land_used, HESimulation.SETTLEMENT_GRAZING_LAND])
-	_assert(land_used <= HESimulation.SETTLEMENT_GRAZING_LAND + EPSILON, "Cattle and sheep together should never claim more than SETTLEMENT_GRAZING_LAND, used %.2f" % land_used)
+	var cattle_land: float = cattle["herd_size"] * HESimulation.CATTLE_LAND_PER_HEAD
+	var sheep_land: float = sheep["herd_size"] * HESimulation.SHEEP_LAND_PER_HEAD
+	print("  grazing land used: cattle %.1f / %.1f acres, sheep %.1f / %.1f acres" % [cattle_land, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.CATTLE], sheep_land, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.SHEEP]])
+	_assert(cattle_land <= HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.CATTLE] + EPSILON, "The cattle herd should never claim more than its ranch's land, used %.2f" % cattle_land)
+	_assert(sheep_land <= HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.SHEEP] + EPSILON, "The sheep herd should never claim more than its farm's land, used %.2f" % sheep_land)
 
 ## Wool sells to local households through the same market Farm/Woodlot use
 ## (proving _business_selling's new Kind.HERD/Species.SHEEP branch actually
@@ -1968,13 +1972,13 @@ func _check_herd_cull_target_is_configurable() -> void:
 	var sim := _new_sim("build_three_business_economy")
 	var sheep_id := HEScenarioSeeds.SHEEP_FARM_BUSINESS_ID
 	var sheep: HEBusiness = sim.businesses[sheep_id]
-	var default_target := HESimulation.HERD_CULL_TARGET[HEBusiness.Species.SHEEP]
+	var default_target := HESimulation.default_cull_target(HEBusiness.Species.SHEEP, HESimulation.DEFAULT_RANCH_LAND_ACRES[HEBusiness.Species.SHEEP])
 	_assert(is_equal_approx(sim.herd_cull_target(sheep), default_target), "An untouched ranch should use its species default cull target")
 	var default_capacity := sheep.max_capacity
 
 	# Raising it: the staff ceiling grows with the bigger herd to look after.
-	var raised := sim.set_herd_cull_target(sheep_id, 400.0)
-	_assert(is_equal_approx(raised, 400.0), "A target inside the allowed range should be applied as given, got %.1f" % raised)
+	var raised := sim.set_herd_cull_target(sheep_id, 250.0)
+	_assert(is_equal_approx(raised, 250.0), "A target inside the allowed range should be applied as given, got %.1f" % raised)
 	_assert(sheep.max_capacity > default_capacity, "A bigger cull target should raise the ranch's staff ceiling (%d -> %d)" % [default_capacity, sheep.max_capacity])
 
 	# Lowering it below the herd: next review culls straight down to it.
