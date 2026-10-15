@@ -227,7 +227,16 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 			var entry: Dictionary = view.villagers()._villagers[Vector2i(int(report["household_id"]), i + 1)]
 			if bool(entry["female"]) != (sexes[i] == HEHousehold.SEX_FEMALE):
 				sex_mismatches += 1
-	check(sex_mismatches == 0, "Each villager's body follows the member's sex (%d mismatches)" % sex_mismatches)
+	var same_sex_couples := 0
+	var couples := 0
+	for report in reports:
+		var worker_sexes: PackedInt32Array = report["worker_sexes"]
+		if worker_sexes.size() == 2:
+			couples += 1
+			if worker_sexes[0] == worker_sexes[1]:
+				same_sex_couples += 1
+	check(couples > 0 and same_sex_couples == 0, "Two-worker households are male-female (%d of %d same-sex)" % [same_sex_couples, couples])
+	check(sex_mismatches == 0,"Each villager's body follows the member's sex (%d mismatches)" % sex_mismatches)
 
 	# Shadows follow the GameState setting (off by default). Set directly and
 	# signalled by hand, so the check does not rewrite the user's settings file.

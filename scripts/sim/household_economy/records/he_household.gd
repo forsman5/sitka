@@ -235,7 +235,7 @@ func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_bala
 	balance = p_starting_balance
 	_worker_ages.resize(p_worker_capacity)
 	_worker_ages.fill(AGING_THRESHOLD_DAYS)
-	_worker_sexes = _draw_sexes(p_worker_capacity)
+	_worker_sexes = _draw_paired_sexes(p_worker_capacity)
 	_dependent_sexes = _draw_sexes(p_dependents)
 
 ## Display word for a SEX_* value.
@@ -248,6 +248,17 @@ func _draw_sex() -> int:
 	var sex := hash(Vector2i(id, _members_made)) & 1
 	_members_made += 1
 	return SEX_FEMALE if sex == 1 else SEX_MALE
+
+## Workers alternate sex (first one drawn), so a household's adults are
+## male-female pairs rather than independent flips.
+func _draw_paired_sexes(count: int) -> Array[int]:
+	var out: Array[int] = []
+	for i in count:
+		if i == 0:
+			out.append(_draw_sex())
+		else:
+			out.append(SEX_MALE if out[i - 1] == SEX_FEMALE else SEX_FEMALE)
+	return out
 
 func _draw_sexes(count: int) -> Array[int]:
 	var out: Array[int] = []
@@ -318,7 +329,7 @@ func dependent_ages() -> Array[int]:
 ## lifespan instead of every seeded worker being freshly of age.
 func seed_worker_ages(ages: Array[int]) -> void:
 	_worker_ages = ages.duplicate()
-	_worker_sexes = _draw_sexes(ages.size())
+	_worker_sexes = _draw_paired_sexes(ages.size())
 
 func worker_ages() -> Array[int]:
 	return _worker_ages.duplicate()
