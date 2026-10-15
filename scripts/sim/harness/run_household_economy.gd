@@ -1775,6 +1775,8 @@ func _check_demographic_invariants(sim: HESimulation) -> void:
 		_assert(h["worker_capacity"] >= 0, "Household %d has negative worker_capacity: %d" % [household_id, h["worker_capacity"]])
 		var worker_ages: Array = h["worker_ages"]
 		_assert(worker_ages.size() == h["worker_capacity"], "Household %d: worker_ages has %d entries but worker_capacity=%d" % [household_id, worker_ages.size(), h["worker_capacity"]])
+		_assert((h["worker_sexes"] as Array).size() == worker_ages.size() and (h["dependent_sexes"] as Array).size() == ages.size(),
+			"Household %d: sexes out of step with ages (%d/%d workers, %d/%d dependents)" % [household_id, (h["worker_sexes"] as Array).size(), worker_ages.size(), (h["dependent_sexes"] as Array).size(), ages.size()])
 		_assert(not (h["worker_capacity"] == 0 and h["dependents"] > 0),
 			"Household %d has %d dependents but 0 workers -- should have been dissolved and adopted (see _adopt_orphaned_dependents), not left stuck" % [household_id, h["dependents"]])
 

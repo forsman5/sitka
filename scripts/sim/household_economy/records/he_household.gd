@@ -156,6 +156,22 @@ var _dependent_ages: Array[int] = []
 ## seed_worker_ages() instead, mirroring seed_dependent_ages().
 var _worker_ages: Array[int] = []
 
+## Sex of each current member, parallel to _worker_ages / _dependent_ages
+## (SEX_MALE or SEX_FEMALE). Cosmetic and descriptive for now: nothing in the
+## economy reads it. Drawn from a hash, not the simulation's rng, so adding
+## it cannot shift any run; it travels with the member through promotion,
+## adoption, emigration and death like the age does.
+const SEX_MALE := 0
+const SEX_FEMALE := 1
+var _worker_sexes: Array[int] = []
+var _dependent_sexes: Array[int] = []
+## Members this household has ever created; the hash input for the next
+## drawn sex, so the same history always gives the same sexes.
+var _members_made: int = 0
+## Sexes of whoever the last evaluate_aging() promoted, parallel to
+## last_promoted_member_numbers.
+var last_promoted_sexes: Array[int] = []
+
 ## Member numbers (see the household detail's "Member N" list) of whoever the
 ## last evaluate_aging() promoted, in the order they left. Placeholder until
 ## members have persistent IDs.
@@ -219,6 +235,25 @@ func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_bala
 	balance = p_starting_balance
 	_worker_ages.resize(p_worker_capacity)
 	_worker_ages.fill(AGING_THRESHOLD_DAYS)
+	_worker_sexes = _draw_sexes(p_worker_capacity)
+	_dependent_sexes = _draw_sexes(p_dependents)
+
+## Display word for a SEX_* value.
+static func sex_label(sex: int) -> String:
+	return "Female" if sex == SEX_FEMALE else "Male"
+
+## Next sex for a new member of this household: a pure function of (id,
+## members made so far), so it needs no rng and is stable across runs.
+func _draw_sex() -> int:
+	var sex := hash(Vector2i(id, _members_made)) & 1
+	_members_made += 1
+	return SEX_FEMALE if sex == 1 else SEX_MALE
+
+func _draw_sexes(count: int) -> Array[int]:
+	var out: Array[int] = []
+	for i in count:
+		out.append(_draw_sex())
+	return out
 
 func worker_capacity() -> int:
 	return demographics.worker_capacity
@@ -271,6 +306,7 @@ func rolling_grain_fulfillment() -> float:
 ## every seeded dependent aging into a worker on the exact same day.
 func seed_dependent_ages(ages: Array[int]) -> void:
 	_dependent_ages = ages.duplicate()
+	_dependent_sexes = _draw_sexes(ages.size())
 
 func dependent_ages() -> Array[int]:
 	return _dependent_ages.duplicate()
@@ -282,9 +318,24 @@ func dependent_ages() -> Array[int]:
 ## lifespan instead of every seeded worker being freshly of age.
 func seed_worker_ages(ages: Array[int]) -> void:
 	_worker_ages = ages.duplicate()
+	_worker_sexes = _draw_sexes(ages.size())
 
 func worker_ages() -> Array[int]:
 	return _worker_ages.duplicate()
+
+## World-seed / harness only: overrides the drawn sexes (same count as the
+## members already seeded).
+func seed_dependent_sexes(sexes: Array[int]) -> void:
+	_dependent_sexes = sexes.duplicate()
+
+func seed_worker_sexes(sexes: Array[int]) -> void:
+	_worker_sexes = sexes.duplicate()
+
+func dependent_sexes() -> Array[int]:
+	return _dependent_sexes.duplicate()
+
+func worker_sexes() -> Array[int]:
+	return _worker_sexes.duplicate()
 
 ## Called once per day by HESimulation, after today's grain consumption/
 ## stress update -- ages every current dependent by one day and extends or
@@ -315,8 +366,10 @@ func remove_member_for_emigration() -> void:
 	demographics.remove_member()
 	if removing_a_dependent and not _dependent_ages.is_empty():
 		_dependent_ages.pop_back()
+		_dependent_sexes.pop_back()
 	elif not removing_a_dependent and not _worker_ages.is_empty():
 		_worker_ages.pop_back()
+		_worker_sexes.pop_back()
 
 ## Monthly: removes every dependent whose age has crossed
 ## AGING_THRESHOLD_DAYS from THIS household and returns how many. Jobs are
@@ -339,7 +392,9 @@ func remove_member_for_emigration() -> void:
 func evaluate_aging(rng: RandomNumberGenerator) -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
+	var remaining_sexes: Array[int] = []
 	last_promoted_member_numbers.clear()
+	last_promoted_sexes.clear()
 	var adult_slots := CROWDED_ADULT_COUNT - _worker_ages.size()
 	var adults_seen := 0
 	for i in _dependent_ages.size():
@@ -355,11 +410,14 @@ func evaluate_aging(rng: RandomNumberGenerator) -> int:
 			# 1-based position in the member list (workers first, then
 			# dependents) as of just before promotion.
 			last_promoted_member_numbers.append(_worker_ages.size() + i + 1)
+			last_promoted_sexes.append(_dependent_sexes[i])
 		else:
 			remaining.append(age)
+			remaining_sexes.append(_dependent_sexes[i])
 	if promoted == 0:
 		return 0
 	_dependent_ages = remaining
+	_dependent_sexes = remaining_sexes
 	demographics.dependents -= promoted
 	return promoted
 
@@ -388,14 +446,17 @@ static func leave_home_chance(age: int) -> float:
 func evaluate_old_age_death() -> int:
 	var died := 0
 	var remaining: Array[int] = []
-	for age in _worker_ages:
-		if age >= LIFESPAN_DAYS:
+	var remaining_sexes: Array[int] = []
+	for i in _worker_ages.size():
+		if _worker_ages[i] >= LIFESPAN_DAYS:
 			died += 1
 		else:
-			remaining.append(age)
+			remaining.append(_worker_ages[i])
+			remaining_sexes.append(_worker_sexes[i])
 	if died == 0:
 		return 0
 	_worker_ages = remaining
+	_worker_sexes = remaining_sexes
 	demographics.worker_capacity -= died
 	return died
 
@@ -417,6 +478,7 @@ func evaluate_birth(rng: RandomNumberGenerator, chance_scale: float = 1.0) -> bo
 	if rng.randf() >= BIRTH_MONTHLY_CHANCE * chance_scale:
 		return false
 	_dependent_ages.append(0)
+	_dependent_sexes.append(_draw_sex())
 	demographics.dependents += 1
 	_days_since_last_birth = 0
 	_birth_cooldown_days = roundi(BIRTH_COOLDOWN_DAYS * (1.0 + rng.randf_range(-BIRTH_COOLDOWN_JITTER, BIRTH_COOLDOWN_JITTER)))
@@ -429,8 +491,10 @@ func evaluate_birth(rng: RandomNumberGenerator, chance_scale: float = 1.0) -> bo
 ## BIRTH_* gating: those exist to brake ORGANIC birth-driven growth, not to
 ## turn away a dependent who already exists and just needs a new household
 ## to keep aging in.
-func add_dependent(age: int) -> void:
+## `sex` is the arriving member's own (-1 draws one).
+func add_dependent(age: int, sex: int = -1) -> void:
 	_dependent_ages.append(age)
+	_dependent_sexes.append(sex if sex >= 0 else _draw_sex())
 	demographics.dependents += 1
 
 ## Called daily per need after consumption. Food reads back the lifecycle

@@ -22,8 +22,8 @@ extends Node3D
 ## are rebuilt only when the roster, a house or a job changes, or the sim day
 ## ticks.
 ##
-## Looks: male or female body (Casual_Male / Casual_Female) seeded per
-## villager; skin tone seeded per household so a family resembles itself;
+## Looks: male or female body (Casual_Male / Casual_Female) by the member's
+## sex (HEHousehold.SEX_*, from the villager report); skin tone seeded per household so a family resembles itself;
 ## dependents under HEHousehold.AGING_THRESHOLD_DAYS are children, drawn at
 ## CHILD_SCALE.
 ##
@@ -128,6 +128,8 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 		_roster[household_id] = report
 		var workers: PackedInt32Array = report["worker_ages"]
 		var dependents: PackedInt32Array = report["dependent_ages"]
+		var worker_sexes: PackedInt32Array = report["worker_sexes"]
+		var dependent_sexes: PackedInt32Array = report["dependent_sexes"]
 		var home := _home_site(layout, report)
 		var employer := int(report["employer_business_id"])
 		if not work_sites.has(employer):
@@ -137,6 +139,7 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 			var is_worker := i < workers.size()
 			var age: int = workers[i] if is_worker else dependents[i - workers.size()]
 			var child := not is_worker and age < HEHousehold.AGING_THRESHOLD_DAYS
+			var sex: int = worker_sexes[i] if is_worker else dependent_sexes[i - workers.size()]
 			var role := HEVillagerSchedule.ROLE_CHILD if child else HEVillagerSchedule.ROLE_ADULT
 			var work: Dictionary = {}
 			if is_worker and employer != -1 and not (work_sites[employer] as Dictionary).is_empty():
@@ -144,7 +147,7 @@ func sync(layout: HETownLayout, reports: Array) -> void:
 				work = work_sites[employer]
 			var key := Vector2i(household_id, member_number)
 			wanted[key] = true
-			_place(key, role, child, home, work)
+			_place(key, role, child, sex == HEHousehold.SEX_FEMALE, home, work)
 	for key in _villagers.keys():
 		if not wanted.has(key):
 			(_villagers[key]["node"] as Node3D).queue_free()
@@ -254,9 +257,9 @@ func _work_site(layout: HETownLayout, business_id: int) -> Dictionary:
 		return {}
 	return site
 
-func _place(key: Vector2i, role: String, child: bool, home: Dictionary, work: Dictionary) -> void:
+func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictionary, work: Dictionary) -> void:
 	var entry: Dictionary = _villagers.get(key, {})
-	var female := _is_female(key)
+	female = female and ResourceLoader.exists(FEMALE_MODEL)
 	if not entry.is_empty() and (entry["child"] != child or entry["female"] != female):
 		(entry["node"] as Node3D).queue_free()
 		entry = {}
@@ -426,11 +429,6 @@ func _play(entry: Dictionary, clip: String) -> void:
 	var anim := entry["anim"] as AnimationPlayer
 	if anim != null and anim.has_animation(clip) and anim.current_animation != clip:
 		anim.play(clip, 0.2)
-
-static func _is_female(key: Vector2i) -> bool:
-	if not ResourceLoader.exists(FEMALE_MODEL):
-		return false
-	return hash("body|%d|%d" % [key.x, key.y]) % 2 == 1
 
 ## A model scaled to ADULT_HEIGHT (times CHILD_SCALE), skin toned per
 ## household, standing on y = 0 and facing local +Z.

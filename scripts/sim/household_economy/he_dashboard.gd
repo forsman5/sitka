@@ -1649,11 +1649,13 @@ func _refresh_household_detail() -> void:
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
 	var member_index := 1
-	for age in h["worker_ages"]:
-		_add_member_link(member_index, "worker", age)
+	var worker_sexes: Array = h["worker_sexes"]
+	var dependent_sexes: Array = h["dependent_sexes"]
+	for i in (h["worker_ages"] as Array).size():
+		_add_member_link(member_index, "worker", h["worker_ages"][i], worker_sexes[i])
 		member_index += 1
-	for age in h["dependent_ages"]:
-		_add_member_link(member_index, "dependent", age)
+	for i in (h["dependent_ages"] as Array).size():
+		_add_member_link(member_index, "dependent", h["dependent_ages"][i], dependent_sexes[i])
 		member_index += 1
 
 	_add_household_detail_heading("Health and morale")
@@ -1704,9 +1706,9 @@ func _refresh_household_detail() -> void:
 			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
 			_household_detail_content.add_child(effect)
 
-func _add_member_link(member_number: int, role: String, age: int) -> void:
+func _add_member_link(member_number: int, role: String, age: int, sex: int) -> void:
 	var link := Button.new()
-	link.text = "Member %d: %s, age %s" % [member_number, role, _format_age(age)]
+	link.text = "Member %d: %s, %s, age %s" % [member_number, HEHousehold.sex_label(sex).to_lower(), role, _format_age(age)]
 	link.flat = true
 	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	link.tooltip_text = "Open person detail"
@@ -1792,7 +1794,7 @@ func _refresh_person_detail() -> void:
 	household_row.add_child(household_link)
 	_person_detail_content.add_child(household_row)
 
-	_add_person_line("%s, %s, age %s" % [p["role"], p["life_stage"].to_lower(), _format_age(p["age_days"])])
+	_add_person_line("%s, %s, %s, age %s" % [HEHousehold.sex_label(p["sex"]), p["role"].to_lower(), p["life_stage"].to_lower(), _format_age(p["age_days"])])
 	_add_person_line(p["note"])
 	if p["role"] == "Worker":
 		var employer_id: int = p["employer_business_id"]

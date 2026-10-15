@@ -980,7 +980,8 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 ## One entry per household of the settlement, ascending id -- the cheap roster
 ## a town renderer reads every tick (get_household_summary is far heavier):
 ## {household_id, dwelling_id, employer_business_id, housing_status,
-## worker_ages, dependent_ages}. Ages are in days, one entry per member.
+## worker_ages, dependent_ages, worker_sexes, dependent_sexes}. Ages are in
+## days and sexes are HEHousehold.SEX_*, one entry per member.
 func get_villager_reports(settlement_id: int) -> Array:
 	var out: Array = []
 	for household_id in get_household_ids(settlement_id):
@@ -992,6 +993,8 @@ func get_villager_reports(settlement_id: int) -> Array:
 			"housing_status": _housing_status_of(h),
 			"worker_ages": PackedInt32Array(h.worker_ages()),
 			"dependent_ages": PackedInt32Array(h.dependent_ages()),
+			"worker_sexes": PackedInt32Array(h.worker_sexes()),
+			"dependent_sexes": PackedInt32Array(h.dependent_sexes()),
 		})
 	return out
 
@@ -1528,6 +1531,8 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
 		"dependent_ages": h.dependent_ages(),
 		"worker_ages": h.worker_ages(),
+		"dependent_sexes": h.dependent_sexes(),
+		"worker_sexes": h.worker_sexes(),
 		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
@@ -1611,6 +1616,8 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		return {}
 	var is_worker := index < workers.size()
 	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var sexes := h.worker_sexes() if is_worker else h.dependent_sexes()
+	var sex: int = sexes[index if is_worker else index - workers.size()]
 	var vulnerability := HEHousehold.vulnerability_of(is_worker, age)
 	var role := "Worker"
 	var life_stage := "Adult"
@@ -1647,6 +1654,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"role": role,
 		"life_stage": life_stage,
 		"age_days": age,
+		"sex": sex,
 		"note": note,
 		"vulnerability": vulnerability,
 		"health": h.health(vulnerability),
@@ -3479,8 +3487,10 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 		return false
 
 	var adopter: HEHousehold = households[adopter_id]
-	for age in orphan.dependent_ages():
-		adopter.add_dependent(age)
+	var orphan_ages := orphan.dependent_ages()
+	var orphan_sexes := orphan.dependent_sexes()
+	for i in orphan_ages.size():
+		adopter.add_dependent(orphan_ages[i], orphan_sexes[i])
 	adopter.balance += orphan.balance
 	for c in SUBSISTENCE_COMMODITIES:
 		var amount := orphan.stock(c)
@@ -3556,7 +3566,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		var promoted := h.evaluate_aging(rng)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
-			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i], h.last_promoted_sexes[i]))
 		promotions += promoted
 		var birth_scale := HOUSING_SATURATED_BIRTH_SCALE if saturated.get(h.settlement_id, false) else 1.0
 		if h.evaluate_birth(rng, birth_scale):
@@ -3582,7 +3592,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 ## left, since evaluate_aging() may have promoted several at once this same
 ## period) -- a plain transfer, not a gift from nowhere, so total city
 ## money/goods are unaffected by a household splitting.
-func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int) -> HEHousehold:
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int, sex: int) -> HEHousehold:
 	var new_id := _next_household_id
 	_next_household_id += 1
 	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
@@ -3590,6 +3600,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 	var starting_balance: float = parent.balance * share
 	parent.balance -= starting_balance
 	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance, parent.settlement_id)
+	new_household.seed_worker_sexes([sex] as Array[int])
 
 	for c in SUBSISTENCE_COMMODITIES:
 		var amount: float = parent.stock(c) * share
