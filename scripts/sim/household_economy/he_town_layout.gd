@@ -69,8 +69,8 @@ const COORD_SNAP := 0.5
 const ZONE_SPECS := {
 	ZONE_CIVIC: {"footprint": Vector2(14.0, 14.0), "radius": Vector2(0.0, 0.0)},
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
-	ZONE_FIELD: {"footprint": Vector2(22.0, 16.0), "radius": Vector2(28.0, 48.0)},
-	ZONE_PASTURE: {"footprint": Vector2(26.0, 20.0), "radius": Vector2(46.0, 66.0)},
+	ZONE_FIELD: {"footprint": Vector2(30.0, 22.0), "radius": Vector2(30.0, 72.0)},
+	ZONE_PASTURE: {"footprint": Vector2(32.0, 24.0), "radius": Vector2(58.0, 100.0)},
 	# Lots along the road frontage (see _make_frontage_candidates); no radius band.
 	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0)},
 }

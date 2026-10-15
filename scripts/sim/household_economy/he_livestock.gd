@@ -20,8 +20,8 @@ extends Node3D
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 const SPECIES := {
-	"Sheep": {"model": "res://assets/models/animals/Sheep.fbx", "length": 1.3, "speed": 1.2, "cap": 40, "rep": 1.5},
-	"Cattle": {"model": "res://assets/models/animals/Cow.fbx", "length": 2.4, "speed": 0.9, "cap": 24, "rep": 2.6},
+	"Sheep": {"model": "res://assets/models/animals/Sheep.fbx", "length": 1.3, "speed": 1.2, "cap": 80, "rep": 1.5},
+	"Cattle": {"model": "res://assets/models/animals/Cow.fbx", "length": 2.4, "speed": 0.9, "cap": 40, "rep": 2.6},
 }
 ## Same weights as OnFootSheep's Flocking group.
 const FLOCK_K := 10
