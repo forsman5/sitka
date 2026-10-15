@@ -1879,7 +1879,12 @@ func _check_old_age_orphans_get_adopted() -> void:
 func _build_orphan_world(_rng: RandomNumberGenerator) -> Dictionary:
 	var settlement := HESettlement.new(1, "Testholm")
 	var farm_recipe := Recipe.new("farm", {}, {Commodity.Type.GRAIN: 1.6})
-	var businesses: Dictionary[int, HEBusiness] = {1: HEBusiness.new(1, "Farm", farm_recipe, 50, 2)}
+	var farm := HEBusiness.new(1, "Farm", farm_recipe, 50, 2)
+	# The households begin with enough grain stock that the Farm has no early
+	# sales. Give it runway to keep paying wages until those reserves run down;
+	# otherwise it fails before this demographic regression reaches adulthood.
+	farm.balance = 500.0
+	var businesses: Dictionary[int, HEBusiness] = {1: farm}
 	settlement.business_ids.append(1)
 
 	var h1 := HEHousehold.new(1, 1, 1, 100.0)
