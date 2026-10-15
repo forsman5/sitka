@@ -21,7 +21,7 @@ const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout
 
 const SPECIES := {
 	"Sheep": {"model": "res://assets/models/animals/Sheep.fbx", "length": 1.3, "speed": 1.2, "cap": 200, "rep": 1.5},
-	"Cattle": {"model": "res://assets/models/animals/Cow.fbx", "length": 2.4, "speed": 0.9, "cap": 150, "rep": 2.6},
+	"Cattle": {"model": "res://assets/models/animals/Cow.fbx", "length": 2.4, "speed": 0.9, "cap": 150, "rep": 5.5},
 }
 ## Same weights as OnFootSheep's Flocking group.
 const FLOCK_K := 10
@@ -34,6 +34,8 @@ const W_INERTIA := 1.0
 const NOISE_STRENGTH := 0.5
 const RESAMPLE_INTERVAL := 1.0
 const TURN_RATE := 6.0
+## Share of walking speed a grazing animal uses to ease away from a crowding mate.
+const GRAZE_NUDGE_SPEED := 0.3
 const ACCEL := 14.0
 ## Pasture margin kept clear of animals, and the barn end (barn + door yard).
 const EDGE_MARGIN := 1.5
@@ -230,7 +232,13 @@ func _step_herd(animals: Array, rect: Rect2, spec: Dictionary, delta: float) -> 
 			animal.state_left = _rng.randf_range(2.0, 5.0) if animal.grazing else _rng.randf_range(1.5, 3.5)
 			animal.wander_dir = _wander_dir(animal, rect)
 		if animal.grazing:
-			move_speed = 0.0
+			# Stands to graze, but drifts off a mate that is crowding it.
+			var crowd := _separation(animal, animals, rep_distance)
+			if crowd.length() > 0.05:
+				desired = crowd.normalized()
+				move_speed = speed * GRAZE_NUDGE_SPEED
+			else:
+				move_speed = 0.0
 		else:
 			var steer := animal.wander_dir
 			steer += _separation(animal, animals, rep_distance) * W_REP
