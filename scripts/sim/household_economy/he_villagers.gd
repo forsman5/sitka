@@ -76,6 +76,10 @@ const ANIM_MAX_CATCH_UP := 0.5
 
 static var _scene_cache: Dictionary = {}
 static var _skin_materials: Dictionary = {} # Color -> StandardMaterial3D
+static var _shirt_materials: Dictionary = {} # Color -> StandardMaterial3D
+## The two bodies share every material, so females get their own shirt colour
+## (males keep the model's blue) to tell them apart at a distance.
+const FEMALE_SHIRT := Color(0.72, 0.27, 0.33)
 
 ## While paused the layer does not process; it still jumps to where the
 ## schedule puts everyone when the time changes (or when it becomes paused).
@@ -447,6 +451,8 @@ func _make_model(key: Vector2i, female: bool, child: bool) -> Node3D:
 		var mesh_node := node as MeshInstance3D
 		mesh_node.cast_shadow = _shadow_mode()
 		_apply_skin(mesh_node, tone)
+		if female:
+			_apply_shirt(mesh_node, FEMALE_SHIRT)
 	var anim := model.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if anim != null:
 		# Advanced by hand in _advance_animations, under a per-frame budget.
@@ -469,6 +475,17 @@ static func _apply_skin(mesh_node: MeshInstance3D, tone: Color) -> void:
 			material.albedo_color = tone
 			_skin_materials[tone] = material
 		mesh_node.set_surface_override_material(i, _skin_materials[tone])
+		return
+
+static func _apply_shirt(mesh_node: MeshInstance3D, color: Color) -> void:
+	for i in mesh_node.mesh.get_surface_count():
+		if mesh_node.mesh.surface_get_name(i) != "Shirt":
+			continue
+		if not _shirt_materials.has(color):
+			var material := StandardMaterial3D.new()
+			material.albedo_color = color
+			_shirt_materials[color] = material
+		mesh_node.set_surface_override_material(i, _shirt_materials[color])
 		return
 
 ## SkinTones' weighted tones, picked with a seeded rng instead of the global one.
