@@ -251,6 +251,15 @@ func _run() -> void:
 	dashboard._refresh_header()
 	check(view.snow_cover() == 0.0 and not snow_layer.visible, "Snow is gone by summer (cover %.2f)" % view.snow_cover())
 
+	# Hiring positions must not depend on the Town view having refreshed: a
+	# house added while it is hidden is seated by the next sim day.
+	var hiring_sim: HESimulation = dashboard._simulation
+	var new_house_id := hiring_sim.next_dwelling_id()
+	hiring_sim.add_dwelling(HEHouse.new(new_house_id, dashboard._town_settlement_id()))
+	check(not hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "A house the layout has not seen has no position yet")
+	dashboard._advance_sim_day()
+	check(hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "The next sim day seats a new house for hiring without a Town view refresh")
+
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
 
