@@ -32,11 +32,34 @@ Wages as an outcome, not a formula:
 
 ## Phases
 
-0. **Split the three roles** of the reference wage into separate functions (wage paid, capacity benchmark, liquidity scale) with identical values. No behaviour change; harness outputs byte-identical.
-1. **Pay from productivity**: business wage = clamp(labour share x revenue per worker, reservation, funded cap). Keep the old formula behind a flag for A/B. Gate on `measure_wage_margin` style runs: no rise in failures, employment held.
+0. **Split the three roles** of the reference wage into separate functions (wage paid, capacity benchmark, liquidity scale) with identical values. No behaviour change; harness outputs byte-identical. **Done**: `_wage_paid_per_worker(b)`, `_capacity_benchmark_wage(settlement)`, `_wage_liquidity_scale(settlement)` in `he_simulation.gd`; `run_household_economy.gd` and `measure_money_flows.gd` output is byte-identical.
+1. **Pay from productivity**: business wage = clamp(labour share x revenue per worker, reservation, funded cap). Keep the old formula behind a flag for A/B. Gate on `measure_wage_margin` style runs: no rise in failures, employment held. **Built, off by default**: `wage_model = WAGE_MODEL_PRODUCTIVITY` pays `max(reference, labour_share x net return per worker)`; see "Phase 1 results".
 2. **Reservation and migration**: unemployed or sub-reservation households leave or shrink the town; check against population and `run_household_economy.gd`.
 3. **Grow the basket**: housing/cooking/market services as real needs and jobs, so spendable income has somewhere to go.
 4. **Money pools in businesses**: see "Money audit" below. Profit above the wage never reaches households, so phase 1 is also the distribution fix.
+
+## Phase 1 results (measure_wage_model.gd)
+
+Net return per worker is sales less inputs and taxes over the staffing window (the quantity `_staffing_decision` already judges), not gross revenue: a trader's gross revenue is mostly goods it resells at cost. The reference wage is the floor, so a business with no history, a government and a warehouse pay exactly what they did. The cap is the business's cash (`_pay_wages` already clamps to available) and the share being below 1.
+
+720 days, mean of 3 seeds, margin 0. "Hold" is the share of all money in households.
+
+| Preset / model | Failed | Employed | Income:cost | Households covered | Hold | Wage vs ref |
+|---|---|---|---|---|---|---|
+| Small, subsistence | 0 | 86% | 0.91 | 41% | 7% | 1.0x |
+| Small, share 0.6 | 0 | 82% | 1.54 | 57% | 15% | 1.8x |
+| Small, share 0.8 | 0 | 74% | 1.50 | 54% | 22% | 2.2x |
+| Mining, subsistence | 0 | 94% | 0.98 | 65% | 8% | 1.0x |
+| Mining, share 0.6 | 0 | 93% | 4.13 | 80% | 44% | 4.1x |
+| Mining, share 0.8 | 0 | 94% | 4.75 | 82% | 62% | 5.0x |
+| Large, subsistence | 0 | 94% | 0.99 | 69% | 9% | 1.0x |
+| Large, share 0.6 | 0 | 94% | 4.08 | 77% | 44% | 3.9x |
+| Large, share 0.8 | 0 | 81% | 6.11 | 66% | 68% | 7.3x |
+
+- **Gate met at 0.4 and 0.6**: no business failures in any run, employment within 4 points in the worst case, and households end with 3-5x the cash.
+- **0.8 over-pays**: employment drops 8-12 points in the small and large villages (businesses shrink crews). 0.6 is the proposed default when the model is switched on.
+- **Inequality**: average income:cost is 4x in the mining village but only 80% of households are covered. Wages now differ by employer, so households at high-return businesses (trader, bloomery) are rich and those at farms and woodlots stay near the reference. That is the intended effect of competing on productivity, and what phase 2 and wage-chasing hiring have to address.
+- **Not tested yet**: `run_household_economy.gd`'s assertions were tuned for the subsistence model, so it has not been run with the flag on, and the new model has not been looked at in the town view or dashboard.
 
 ## Money audit (measure_money_flows.gd)
 
