@@ -202,6 +202,34 @@ func _run() -> void:
 		check(not layout.get_site(lot["site_id"])["under_construction"], "The house replaces its foundation")
 		lot_label = view._site_nodes[lot["site_id"]]["label"]
 		check(not lot_label.text.contains("under construction"), "The finished house drops the construction label")
+	# Snow follows the season: bare until late autumn, full through winter,
+	# melting over early spring.
+	check(view.snow_cover_for_day(0 + 100) == 0.0 and view.snow_cover_for_day(200) == 0.0, "No snow in summer or early autumn")
+	check(view.snow_cover_for_day(270) == 1.0 and view.snow_cover_for_day(359) == 1.0, "Full snow through winter")
+	check(view.snow_cover_for_day(265) > 0.0 and view.snow_cover_for_day(265) < 1.0, "Snow settles over late autumn")
+	check(view.snow_cover_for_day(362) > 0.0 and view.snow_cover_for_day(362) < 1.0, "Snow melts over early spring")
+	check(view.snow_cover_for_day(360 + 270) == 1.0, "Snow returns every year")
+	var snow_sim = dashboard._simulation
+	snow_sim.day = 280
+	dashboard._refresh_header()
+	check(view.snow_cover() == 1.0, "The dashboard turns snow on in winter (cover %.2f)" % view.snow_cover())
+	var snow_layer: MeshInstance3D = view._viewport.get_node("Snow")
+	check(snow_layer.visible, "The ground snow layer shows in winter")
+	var roofs := 0
+	for node in view._sites_root.find_children("*", "MeshInstance3D", true, false):
+		if (node as MeshInstance3D).material_overlay != null:
+			roofs += 1
+	check(roofs > 0, "Buildings carry the snow overlay")
+	var snowy_trees := 0
+	for node in view._sites_root.find_children("*", "MeshInstance3D", true, false):
+		var tree := node as MeshInstance3D
+		if tree.mesh is CylinderMesh and tree.material_overlay != null:
+			snowy_trees += 1
+	check(snowy_trees > 0, "Woodlot trees carry the snow overlay")
+	snow_sim.day = 380
+	dashboard._refresh_header()
+	check(view.snow_cover() == 0.0 and not snow_layer.visible, "Snow is gone by summer (cover %.2f)" % view.snow_cover())
+
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
 

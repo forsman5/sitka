@@ -3484,6 +3484,8 @@ func _run_view_refresh() -> void:
 func _refresh_header() -> void:
 	var clock := _simulation.get_clock_summary()
 	_day_label.text = "%s · %s" % [clock["season_name"], _format_day(clock["day"])]
+	if _town_view != null:
+		_town_view.set_snow_cover(HETownView.snow_cover_for_day(clock["day"]))
 	_day_label.tooltip_text = "Season %d of %d, day %d of %d. Harvests, wool and herds follow the season; ranches buy grain for winter fodder in autumn." % [
 		clock["season"] + 1, HESimulation.SEASONS_PER_YEAR, clock["day_of_season"] + 1, HESimulation.DAYS_PER_SEASON]
 	_refresh_treasury()
