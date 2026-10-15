@@ -240,6 +240,104 @@ const TRADER_CAPACITY_PER_WORKER := 8.0
 ## seasonal-scale processes, not daily ones.
 const HERD_EVAL_INTERVAL_DAYS := 90
 
+# ---------------------------------------------------------------------------
+# Seasons
+# ---------------------------------------------------------------------------
+
+## Four 90-day seasons make a 360-day year, the same calendar the pooled
+## valley (simulation.gd) runs. Day 0 is the first day of spring; a season is
+## a pure function of the day, so it needs no stored state and is identical
+## in every run. HERD_EVAL_INTERVAL_DAYS equals DAYS_PER_SEASON, so every
+## herd review closes exactly one season (the one containing `day` when
+## (day + 1) is a multiple of 90).
+const DAYS_PER_SEASON := 90
+const SEASONS_PER_YEAR := 4
+const DAYS_PER_YEAR := DAYS_PER_SEASON * SEASONS_PER_YEAR
+enum Season { SPRING, SUMMER, AUTUMN, WINTER }
+const SEASON_NAMES: Array[String] = ["Spring", "Summer", "Autumn", "Winter"]
+
+## Output multipliers by the season a harvest or shearing LANDS in, copied
+## from the pooled valley's seed (valley_seed.gd). They set the SHAPE of the
+## year; what a harvest or wool review actually adds to a business's
+## inventory is scaled by seasonal_yield_scale (the curve divided by its own
+## yearly mean), so H1's calibrated annual output -- FARM_YIELD_PER_AREA and
+## friends were sized to hit a yearly target -- is unchanged and seasons only
+## move WHEN it arrives. Nothing else is touched, so every unit is still
+## produced once, held by one business, and sold or consumed through the
+## usual market and ledgers. Goods not listed (iron, charcoal...) are not
+## seasonal.
+const SEASONAL_OUTPUT_MODIFIER: Dictionary[Commodity.Type, Array] = {
+	Commodity.Type.GRAIN: [0.8, 1.0, 1.6, 0.1],
+	Commodity.Type.TIMBER: [1.0, 1.0, 1.0, 0.6],
+	Commodity.Type.WOOL: [1.5, 1.5, 0.5, 0.2],
+}
+
+## How far ahead a seller looks for a lean season it must carry stock into
+## (seasonal_carry_days): two seasons, so the glut that arrives in autumn is
+## held for winter but summer's harvest is not held for a winter 270 days off.
+const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
+
+## Winter fodder: grain each head of a herd needs over a winter. Cattle carry
+## the pooled valley's FODDER_PER_HEAD_PER_SEASON (3.0); sheep scale it by the
+## forage ratio H1 already uses for grazing land (SHEEP_LAND_PER_HEAD over
+## CATTLE_LAND_PER_HEAD), since a sheep is worth ~1/20 of a cow here and a
+## flat 3.0 would cost more than the animal. Ranches buy it ahead of winter
+## (_run_fodder_purchasing) and eat it from their own inventory at the winter
+## review. The share of the need actually covered sets that winter's
+## mortality: full cover is the usual FED rate, none is the NEGLECTED rate,
+## linear between (underfed herds lose more).
+const FODDER_PER_HEAD_PER_WINTER: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 3.0,
+	HEBusiness.Species.SHEEP: 0.45, # 3.0 * SHEEP_LAND_PER_HEAD (0.15) / CATTLE_LAND_PER_HEAD (1.0)
+}
+
+static func season_of_day(p_day: int) -> int:
+	return (p_day / DAYS_PER_SEASON) % SEASONS_PER_YEAR
+
+static func season_name_of_day(p_day: int) -> String:
+	return SEASON_NAMES[season_of_day(p_day)]
+
+## The authored valley multiplier for `commodity` on `p_day`; 1.0 for a good
+## with no seasonal curve.
+static func seasonal_output_modifier(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 1.0
+	return float((SEASONAL_OUTPUT_MODIFIER[commodity] as Array)[season_of_day(p_day)])
+
+## Days of ordinary local use the lean seasons AHEAD leave unsupplied, looking
+## SEASONAL_CARRY_LOOKAHEAD_DAYS forward from `p_day`: for each day, how far its
+## multiplier falls below the curve's mean (as a share of the mean), summed.
+## Grain carries ~80 days through autumn, tapering through winter, and almost
+## nothing in spring and summer; 0 for a good with no curve. A seller keeps this
+## much back from export on top of its usual cover (_seller_trade_offer), so an
+## autumn glut is carried through the winter it was meant for rather than
+## shipped out at the floor price, while spring and summer exports are
+## untouched. It only withholds EXPORT; local sales are unaffected.
+static func seasonal_carry_days(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 0.0
+	var curve: Array = SEASONAL_OUTPUT_MODIFIER[commodity]
+	var total := 0.0
+	for modifier in curve:
+		total += float(modifier)
+	var mean: float = total / float(curve.size())
+	var days := 0.0
+	for offset in SEASONAL_CARRY_LOOKAHEAD_DAYS:
+		days += maxf(0.0, mean - seasonal_output_modifier(commodity, p_day + offset)) / mean
+	return days
+
+## What a harvest or shearing on `p_day` is actually multiplied by: the
+## authored multiplier over the curve's yearly mean, so the four seasons
+## average exactly 1.0 and a year's output matches the unseasonal model.
+static func seasonal_yield_scale(commodity: Commodity.Type, p_day: int) -> float:
+	if not SEASONAL_OUTPUT_MODIFIER.has(commodity):
+		return 1.0
+	var curve: Array = SEASONAL_OUTPUT_MODIFIER[commodity]
+	var total := 0.0
+	for modifier in curve:
+		total += float(modifier)
+	return seasonal_output_modifier(commodity, p_day) * float(curve.size()) / total
+
 ## Both ranches graze the SAME finite pasture, shared per settlement --
 ## cattle need far more of it per head than sheep (~6-7x, per husbandry
 ## research: a mature cow's forage need scales with its much larger body
@@ -622,18 +720,18 @@ var _employment_members: Dictionary = {}
 var _employment_dirty := true
 var _employment_rebuild_count := 0
 var businesses: Dictionary[int, HEBusiness] = {}
-## Houses, keyed by their own id space (not shared with `businesses`). Housing
-## is a settlement-wide pool -- see get_housing_report().
+## Houses, keyed by their own id space (not shared with `businesses`). Each
+## household lives in one (HEHousehold.dwelling_id) -- see _reconcile_housing.
 var dwellings: Dictionary[int, HEHouse] = {}
 
 ## Housing rules, applied only to settlements with HESettlement.housing_modeled.
 ## When every house is taken (households >= capacity) a household's monthly
 ## birth chance is scaled by this: births fall by 80% rather than stopping.
 const HOUSING_SATURATED_BIRTH_SCALE := 0.2
-## Households beyond capacity are homeless (the newest households, by id --
-## no one is assigned to a specific house). Each homeless household has this
-## chance per EMIGRATION_EVAL_INTERVAL_DAYS of losing a member to emigration,
-## on top of any starvation emigration.
+## Households without an assigned house are homeless. Assignment is sticky and
+## fills by ascending household id, so these are the newest households. Each
+## homeless household has this chance per EMIGRATION_EVAL_INTERVAL_DAYS of
+## losing a member to emigration, on top of any starvation emigration.
 const HOMELESS_EMIGRATION_CHANCE := 0.3
 var markets: Dictionary[int, HEMarket] = {}
 var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_id -> commodity -> bool
@@ -720,6 +818,17 @@ var _import_cost_total := 0.0
 ## here: that is an ordinary purchase from a local seller or the Trader.
 var _construction_spend_total := 0.0
 
+## Days a government build stands as a foundation before the building opens
+## (see build_government_building). The cost is paid when it is ordered.
+const CONSTRUCTION_DAYS := 2
+## 0 opens government builds instantly (the harness's cost checks use this).
+var construction_days: int = CONSTRUCTION_DAYS
+## Government builds paid for but not yet standing, oldest first:
+## {settlement_id, record (HEBusiness or HEHouse, its id reserved), startup,
+## upgrade_dwelling_id (-1 unless a tenement upgrades that house), complete_day}.
+## TODO(construction): no labor yet -- a build just waits out the days.
+var _constructions: Array[Dictionary] = []
+
 ## Most units of one good a warehouse order buys or sells in a day, so a single
 ## order cannot drain a town's stock (or flood the Trader) in one tick.
 const WAREHOUSE_DAILY_TRADE_CAP := 10.0
@@ -794,6 +903,7 @@ func _init(seed: int, builder: Callable, p_price_adjustment_enabled: bool = true
 	_next_household_id = 1
 	for household_id in households.keys():
 		_next_household_id = maxi(_next_household_id, household_id + 1)
+	_reconcile_all_housing()
 
 ## Registers a business built after the sim started. Takes a free id from
 ## next_business_id(); the caller builds the record. Nothing is charged -- the
@@ -836,17 +946,23 @@ func add_dwelling(house: HEHouse) -> void:
 	var s: HESettlement = settlements[house.settlement_id]
 	s.dwelling_ids.append(house.id)
 	s.housing_modeled = true
+	_reconcile_housing(house.settlement_id)
 
 func next_dwelling_id() -> int:
 	var next_id := 1
 	for dwelling_id in dwellings.keys():
 		next_id = maxi(next_id, dwelling_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEHouse:
+			next_id = maxi(next_id, (entry["record"] as HEHouse).id + 1)
 	return next_id
 
 ## One entry per house, ascending id: {dwelling_id, settlement_id, name,
-## type_key}. Houses live in `dwellings`, a separate id space from businesses,
-## so they never appear in get_business_reports(); a town layout reads this.
+## type_key, capacity, occupant_household_ids (ascending)}. Houses live in
+## `dwellings`, a separate id space from businesses, so they never appear in
+## get_business_reports(); a town layout reads this.
 func get_dwelling_reports(settlement_id: int = -1) -> Array:
+	var occupants := _occupants_by_dwelling()
 	var out: Array = []
 	var ids := dwellings.keys()
 	ids.sort()
@@ -859,8 +975,93 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 			"settlement_id": house.settlement_id,
 			"name": house.name,
 			"type_key": house.type_key,
+			"capacity": house.capacity_households,
+			"occupant_household_ids": occupants.get(house.id, [] as Array[int]),
 		})
 	return out
+
+## One entry per household of the settlement, ascending id -- the cheap roster
+## a town renderer reads every tick (get_household_summary is far heavier):
+## {household_id, dwelling_id, employer_business_id, housing_status,
+## worker_ages, dependent_ages}. Ages are in days, one entry per member.
+func get_villager_reports(settlement_id: int) -> Array:
+	var out: Array = []
+	for household_id in get_household_ids(settlement_id):
+		var h: HEHousehold = households[household_id]
+		out.append({
+			"household_id": h.id,
+			"dwelling_id": h.dwelling_id,
+			"employer_business_id": h.employer_business_id,
+			"housing_status": _housing_status_of(h),
+			"worker_ages": PackedInt32Array(h.worker_ages()),
+			"dependent_ages": PackedInt32Array(h.dependent_ages()),
+		})
+	return out
+
+## dwelling_id -> ascending ids of the households living there.
+func _occupants_by_dwelling() -> Dictionary:
+	var occupants: Dictionary = {}
+	var ids := households.keys()
+	ids.sort()
+	for household_id in ids:
+		var dwelling_id: int = (households[household_id] as HEHousehold).dwelling_id
+		if dwelling_id == -1:
+			continue
+		if not occupants.has(dwelling_id):
+			occupants[dwelling_id] = [] as Array[int]
+		(occupants[dwelling_id] as Array[int]).append(household_id)
+	return occupants
+
+func _reconcile_all_housing() -> void:
+	for settlement_id in settlements.keys():
+		_reconcile_housing(settlement_id)
+
+## Brings house assignments in `settlement_id` in line with its households and
+## houses. The only writer of HEHousehold.dwelling_id. Rules:
+## - Sticky: a housed household keeps its house until it ceases to exist.
+## - A house holds capacity_households households (1, or 4 for a tenement); an
+##   upgrade in place adds free slots to the same house.
+## - Unhoused households, ascending id, each take a slot in the lowest-id house
+##   with room (ids follow placement order, so the innermost first).
+## - A household whose house is gone, belongs to another settlement, or is over
+##   capacity (highest ids leave first) is unhoused before refilling.
+## - A settlement that does not model housing houses nobody.
+## New households always get higher ids than existing ones, so the homeless
+## are always the newest households -- the rule housing used before houses were
+## assigned -- and homeless counts are unchanged by assignment.
+func _reconcile_housing(settlement_id: int) -> void:
+	var s: HESettlement = settlements[settlement_id]
+	var ids: Array[int] = []
+	ids.assign(s.household_ids)
+	ids.sort()
+	if not s.housing_modeled:
+		for household_id in ids:
+			(households[household_id] as HEHousehold).dwelling_id = -1
+		return
+	var free: Dictionary = {} # dwelling_id -> slots left
+	for dwelling_id in s.dwelling_ids:
+		free[dwelling_id] = (dwellings[dwelling_id] as HEHouse).capacity_households
+	var unhoused: Array[int] = []
+	for household_id in ids:
+		var h: HEHousehold = households[household_id]
+		if h.dwelling_id != -1 and int(free.get(h.dwelling_id, 0)) > 0:
+			free[h.dwelling_id] = int(free[h.dwelling_id]) - 1
+		else:
+			h.dwelling_id = -1
+			unhoused.append(household_id)
+	if unhoused.is_empty():
+		return
+	var houses: Array[int] = []
+	houses.assign(s.dwelling_ids)
+	houses.sort()
+	var cursor := 0
+	for household_id in unhoused:
+		while cursor < houses.size() and int(free[houses[cursor]]) <= 0:
+			cursor += 1
+		if cursor == houses.size():
+			break
+		(households[household_id] as HEHousehold).dwelling_id = houses[cursor]
+		free[houses[cursor]] = int(free[houses[cursor]]) - 1
 
 ## Housing state of one settlement. `modeled` is false for a world that never
 ## set housing up (then nothing below limits it). `capacity` counts
@@ -888,9 +1089,16 @@ func _innermost_plain_house(settlement_id: int) -> HEHouse:
 	var best: HEHouse = null
 	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
 		var house: HEHouse = dwellings[dwelling_id]
-		if not house.is_dense() and (best == null or house.id < best.id):
+		if not house.is_dense() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
 			best = house
 	return best
+
+## Whether a tenement under construction already targets house `dwelling_id`.
+func _upgrade_pending(dwelling_id: int) -> bool:
+	for entry in _constructions:
+		if entry["upgrade_dwelling_id"] == dwelling_id:
+			return true
+	return false
 
 func _count_plain_houses(s: HESettlement) -> int:
 	var count := 0
@@ -899,34 +1107,28 @@ func _count_plain_houses(s: HESettlement) -> int:
 			count += 1
 	return count
 
-## Ids of households with no house: the settlement's households sorted by id,
-## the first `capacity` of them housed, the rest homeless.
+## Ids (ascending) of the settlement's households with no house, after
+## bringing assignments up to date.
 func _homeless_household_ids(settlement_id: int) -> Array[int]:
 	var homeless: Array[int] = []
-	var housing := get_housing_report(settlement_id)
-	if not housing["modeled"]:
+	_reconcile_housing(settlement_id)
+	if not (settlements[settlement_id] as HESettlement).housing_modeled:
 		return homeless
-	var ids: Array[int] = []
-	ids.assign((settlements[settlement_id] as HESettlement).household_ids)
-	ids.sort()
-	for i in range(int(housing["capacity"]), ids.size()):
-		homeless.append(ids[i])
+	for household_id in get_household_ids(settlement_id):
+		if (households[household_id] as HEHousehold).dwelling_id == -1:
+			homeless.append(household_id)
 	return homeless
 
-## "housed", "homeless", or "unlimited" (housing not modeled). Same ordering
-## rule as _homeless_household_ids: the lowest-id households fill the houses.
+## "housed", "homeless", or "unlimited" (housing not modeled). Reads the
+## assignment, checking the house still stands in this settlement in case a
+## caller changed `dwellings` since the last reconcile.
 func _housing_status_of(h: HEHousehold) -> String:
 	var s: HESettlement = settlements[h.settlement_id]
 	if not s.housing_modeled:
 		return "unlimited"
-	var capacity := 0
-	for dwelling_id in s.dwelling_ids:
-		capacity += (dwellings[dwelling_id] as HEHouse).capacity_households
-	var lower := 0
-	for household_id in s.household_ids:
-		if household_id < h.id:
-			lower += 1
-	return "homeless" if lower >= capacity else "housed"
+	if h.dwelling_id != -1 and s.dwelling_ids.has(h.dwelling_id) and dwellings.has(h.dwelling_id):
+		return "housed"
+	return "homeless"
 
 ## The settlement's Government Warehouse, or null if it has not built one.
 func _government_warehouse(settlement_id: int) -> HEBusiness:
@@ -971,6 +1173,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 	var repeatable: bool = option.get("repeatable", false)
 	if not repeatable and has_business_of_type(settlement_id, option["type_key"]):
 		return "already built"
+	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
+		return "under construction"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1017,21 +1221,72 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 		gov.balance -= gold
 		gov.last_cash_change -= gold
 		_construction_spend_total += gold
+		var entry := {"settlement_id": settlement_id, "startup": option.get("startup", false),
+			"upgrade_dwelling_id": -1, "complete_day": day + construction_days}
 		if option.get("category", "") == "housing":
 			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
 			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
 			if upgradable != null:
-				upgradable.upgrade_to_dense()
-			else:
-				add_dwelling(house)
-			return true
-		var building: HEBusiness = option["make"].call(next_business_id(), settlement_id)
-		if option.get("startup", false):
-			add_new_business(building)
+				entry["upgrade_dwelling_id"] = upgradable.id
+			entry["record"] = house
 		else:
-			add_business(building)
+			entry["record"] = option["make"].call(next_business_id(), settlement_id)
+		_constructions.append(entry)
+		_finish_due_constructions()
 		return true
 	return false
+
+## Whether a non-repeatable `type_key` is already paid for and being built.
+func _construction_pending(settlement_id: int, type_key: String) -> bool:
+	for entry in _constructions:
+		if entry["settlement_id"] == settlement_id and entry["record"].type_key == type_key:
+			return true
+	return false
+
+## Opens every construction whose days are up: the building joins the town
+## exactly as an instant build used to.
+func _finish_due_constructions() -> void:
+	var waiting: Array[Dictionary] = []
+	for entry in _constructions:
+		if day < int(entry["complete_day"]):
+			waiting.append(entry)
+			continue
+		var record = entry["record"]
+		if record is HEHouse:
+			var target: int = entry["upgrade_dwelling_id"]
+			if target != -1 and dwellings.has(target) and not (dwellings[target] as HEHouse).is_dense():
+				(dwellings[target] as HEHouse).upgrade_to_dense()
+				_reconcile_housing(int(entry["settlement_id"]))
+			else:
+				add_dwelling(record)
+		elif entry["startup"]:
+			add_new_business(record)
+		else:
+			add_business(record)
+	_constructions = waiting
+
+## One entry per government build still standing as a foundation, oldest
+## first: {settlement_id, type_key, name, business_id, dwelling_id (each -1
+## unless the build is that kind; the id is the one the finished building
+## keeps), upgrade_dwelling_id, complete_day, days_left}.
+func get_construction_reports(settlement_id: int = -1) -> Array:
+	var out: Array = []
+	for entry in _constructions:
+		if settlement_id != -1 and entry["settlement_id"] != settlement_id:
+			continue
+		var record = entry["record"]
+		var is_house: bool = record is HEHouse
+		out.append({
+			"settlement_id": entry["settlement_id"],
+			"type_key": record.type_key,
+			"name": record.name,
+			"business_id": -1 if is_house else record.id,
+			"dwelling_id": record.id if is_house and entry["upgrade_dwelling_id"] == -1 else -1,
+			"upgrade_dwelling_id": entry["upgrade_dwelling_id"],
+			"complete_day": entry["complete_day"],
+			"days_left": maxi(0, int(entry["complete_day"]) - day),
+		})
+	return out
 
 ## What the warehouse still lacks for `option`'s goods cost: commodity ->
 ## missing units, empty when the cost has no goods or the warehouse covers it
@@ -1059,7 +1314,8 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 	var gov := _settlement_government(settlement_id) if settlements.has(settlement_id) else null
 	if gov == null:
 		return "none"
-	if not option.get("repeatable", false) and has_business_of_type(settlement_id, option["type_key"]):
+	if not option.get("repeatable", false) and (has_business_of_type(settlement_id, option["type_key"]) \
+			or _construction_pending(settlement_id, option["type_key"])):
 		return "none"
 	if gov.balance < float(build_cost_for(settlement_id, option).get("gold", 0.0)):
 		return "none"
@@ -1073,14 +1329,13 @@ func build_goods_order_state(settlement_id: int, option: Dictionary) -> String:
 			return "can_order"
 	return "ordered"
 
-## The Government build button's action. Builds `type_key` if it can be built
-## right now ("built"). Otherwise, if the only thing missing is warehouse goods,
+## The Government build button's action. Starts building `type_key` if it can
+## be built right now ("built" -- paid for; it stands as a foundation for
+## construction_days first). Otherwise, if the only thing missing is warehouse goods,
 ## sets the warehouse's standing buy order for each missing good up to the
 ## build's cost ("ordered") -- the player presses again once the goods arrive.
 ## The order is left standing, so the warehouse keeps restocking for the next
 ## one. Returns "" when nothing was done.
-## TODO(construction): the build itself is still instant; see
-## HEScenarioSeeds.government_buildings().
 func request_government_build(settlement_id: int, type_key: String) -> String:
 	if build_government_building(settlement_id, type_key):
 		return "built"
@@ -1127,6 +1382,9 @@ func next_business_id() -> int:
 	var next_id := 1
 	for business_id in businesses.keys():
 		next_id = maxi(next_id, business_id + 1)
+	for entry in _constructions:
+		if entry["record"] is HEBusiness:
+			next_id = maxi(next_id, (entry["record"] as HEBusiness).id + 1)
 	return next_id
 
 ## Whether `settlement_id` already has a business of buildable kind
@@ -1142,6 +1400,7 @@ func advance_ticks(days: int) -> void:
 	for i in days:
 		_daily_tick()
 		day += 1
+		_finish_due_constructions()
 
 # ---------------------------------------------------------------------------
 # Public query contract
@@ -1162,8 +1421,16 @@ func get_household_ids(settlement_id: int = -1) -> Array[int]:
 	ids.sort()
 	return ids
 
+## day, plus the calendar it falls in: season index (Season), season_name,
+## day_of_season (0-based) and year (0-based, DAYS_PER_YEAR days each).
 func get_clock_summary() -> Dictionary:
-	return {"day": day}
+	return {
+		"day": day,
+		"season": season_of_day(day),
+		"season_name": season_name_of_day(day),
+		"day_of_season": day % DAYS_PER_SEASON,
+		"year": day / DAYS_PER_YEAR,
+	}
 
 ## Lightweight rows for the household table: exactly the fields it shows, in
 ## one pass, with no need arrays, explanations, or per-person detail. Use
@@ -1250,6 +1517,7 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"employer_business_id": h.employer_business_id,
 		"is_employed": h.is_employed(),
 		"housing_status": _housing_status_of(h),
+		"dwelling_id": h.dwelling_id,
 		"inventory": inventory,
 		"balance": h.balance,
 		"food_stress": h.demographics.food_stress,
@@ -1441,6 +1709,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			var projection := _next_harvest_projection(b, int(report["employed_workers"]))
 			report["next_harvest_expected_units"] = projection["expected_units"]
 			report["next_harvest_yield_fraction"] = projection["yield_fraction"]
+			report["next_harvest_season_modifier"] = projection["season_modifier"]
 		if b.kind == HEBusiness.Kind.TRADER:
 			report["recipe_id"] = "trade"
 			report["output_commodity"] = _trade_summary(b)
@@ -1494,6 +1763,15 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				report["wool_sustaining_current"] = int(sustaining.y)
 				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
+			var fodder_target: float = b.herd_size * FODDER_PER_HEAD_PER_WINTER[b.species]
+			report["fodder_stock"] = b.stock(Commodity.Type.GRAIN)
+			report["fodder_target"] = fodder_target
+			report["fodder_cover"] = minf(1.0, b.stock(Commodity.Type.GRAIN) / fodder_target) if fodder_target > 0.0 else 1.0
+			report["last_review_season"] = b.last_review_season
+			report["last_review_season_name"] = SEASON_NAMES[b.last_review_season] if b.last_review_season >= 0 else ""
+			report["last_fodder_needed"] = b.last_fodder_needed
+			report["last_fodder_eaten"] = b.last_fodder_eaten
+			report["wool_season_modifier"] = seasonal_yield_scale(Commodity.Type.WOOL, day) if b.species == HEBusiness.Species.SHEEP else 1.0
 			report["care_workers_needed"] = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species]
 		else:
 			var output_commodity := b.output_commodity()
@@ -1609,9 +1887,12 @@ func _next_harvest_projection(b: HEBusiness, employed: int) -> Dictionary:
 	var projected_labor: float = next_field.labor_applied + daily_labor * maxi(0, days_remaining)
 	var required_labor: float = next_field.area * b.labor_per_area_per_day * b.growth_days
 	var yield_fraction: float = clampf(projected_labor / required_labor, 0.0, 1.0) if required_labor > 0.0 else 0.0
+	# The harvest lands `days_remaining` days from now, in that day's season.
+	var season_modifier := seasonal_yield_scale(b.output_commodity(), day + maxi(0, days_remaining))
 	return {
-		"expected_units": next_field.area * b.yield_per_area * yield_fraction,
+		"expected_units": next_field.area * b.yield_per_area * yield_fraction * season_modifier,
 		"yield_fraction": yield_fraction,
+		"season_modifier": season_modifier,
 	}
 
 ## Every commodity with a REAL presence in this settlement's market right
@@ -2194,6 +2475,10 @@ func _daily_tick() -> void:
 	if (day + 1) % CAPACITY_EVAL_INTERVAL_DAYS == 0:
 		_evaluate_business_capacity(record)
 		_reconcile_employment(record)
+	# Emigration, old age, adoption and coming-of-age splits add and remove
+	# households; whoever is new or freed a house is (re)housed before the day
+	# closes, so every report between ticks reads current assignments.
+	_reconcile_all_housing()
 	_finalize_daily_record(record)
 
 func _reset_household_daily_records() -> void:
@@ -2679,7 +2964,7 @@ func _run_field_growth(b: HEBusiness, record: Dictionary) -> void:
 			continue
 		var labor_required: float = f.area * b.labor_per_area_per_day * b.growth_days
 		var efficiency: float = clampf(f.labor_applied / labor_required, 0.0, 1.0) if labor_required > 0.0 else 0.0
-		harvested += f.area * b.yield_per_area * efficiency
+		harvested += f.area * b.yield_per_area * efficiency * seasonal_yield_scale(output_commodity, day)
 		f.days_growing = 0
 		f.labor_applied = 0.0
 	b.add_stock(output_commodity, harvested)
@@ -4318,7 +4603,7 @@ func _adjust_trader_bids(trader: HEBusiness, offers: Array[Dictionary], capacity
 ## bid ceiling leaves a wage of spread, below iron's cost ratio) and starved the
 ## Bloomery, so the bypass is load-bearing until iron's recipe/price is retuned.
 func _seller_trade_offer(seller: HEBusiness, commodity: Commodity.Type) -> Dictionary:
-	var horizon := float(_days_until_next_supply(seller))
+	var horizon := float(_days_until_next_supply(seller)) + seasonal_carry_days(commodity, day)
 	var routine := _routine_local_use(seller, commodity)
 	var outstanding := _outstanding_funded_shortage(seller.settlement_id, commodity)
 	var next_day := _next_day_input_need(seller, commodity)
@@ -4503,15 +4788,36 @@ func _run_herds(record: Dictionary) -> void:
 		b.care_worker_days = 0.0
 		b.last_care_fraction = care
 
-		var loss_rate: float = (HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]) * (1.0 - HERD_STAFFED_MORTALITY_CUT * care)
+		# The review closes the season containing `day`. A winter review also
+		# eats the herd's own fodder, and how much of it there was moves the
+		# herd's mortality from FED toward NEGLECTED. Births stay a flat
+		# per-review rate: bunching them into three seasons made each cull a
+		# third bigger and skipped winter's, more than the Butcher could take.
+		var review_season := season_of_day(day)
+		var fodder_needed := 0.0
+		var fodder_eaten := 0.0
+		var fodder_cover := 1.0
+		if review_season == Season.WINTER:
+			fodder_needed = herd_before * FODDER_PER_HEAD_PER_WINTER[b.species]
+			fodder_eaten = b.consume(Commodity.Type.GRAIN, fodder_needed)
+			fodder_cover = fodder_eaten / fodder_needed if fodder_needed > 0.0 else 1.0
+			if fodder_eaten > 0.0:
+				b.add_flow(HEBusiness.FLOW_CONSUMED, Commodity.Type.GRAIN, fodder_eaten)
+				_accumulate(record["consumed"], Commodity.name_of(Commodity.Type.GRAIN), fodder_eaten)
+		var base_loss: float = HERD_LOSS_RATE_FED[b.species] if fed else HERD_LOSS_RATE_NEGLECTED[b.species]
+		var starved_loss: float = lerpf(HERD_LOSS_RATE_NEGLECTED[b.species], HERD_LOSS_RATE_FED[b.species], fodder_cover)
+		var loss_rate: float = maxf(base_loss, starved_loss) * (1.0 - HERD_STAFFED_MORTALITY_CUT * care)
 		var born: float = herd_before * HERD_GROWTH_RATE[b.species] * HERD_GROWTH_RATE_MULTIPLIER * (1.0 + HERD_STAFFED_REPRODUCTION_BONUS * care)
 		var died: float = herd_before * loss_rate
 		b.herd_size = clampf(herd_before + born - died, 0.0, max_herd_by_land)
-		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "care": care, "herd_after": b.herd_size})
+		b.last_review_season = review_season
+		b.last_fodder_needed = fodder_needed
+		b.last_fodder_eaten = fodder_eaten
+		_log_herd_event(b, "herd_birth", {"born": born, "died": died, "fed": fed, "care": care, "herd_after": b.herd_size, "season": review_season, "fodder_needed": fodder_needed, "fodder_eaten": fodder_eaten})
 
 		b.last_wool_produced = 0.0
 		if b.species == HEBusiness.Species.SHEEP:
-			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL * (1.0 + HERD_STAFFED_WOOL_BONUS * care)
+			var wool: float = b.herd_size * WOOL_PER_HEAD_PER_INTERVAL * (1.0 + HERD_STAFFED_WOOL_BONUS * care) * seasonal_yield_scale(Commodity.Type.WOOL, day)
 			b.add_stock(Commodity.Type.WOOL, wool)
 			b.last_wool_produced = wool
 			_accumulate(record["produced"], Commodity.name_of(Commodity.Type.WOOL), wool)
@@ -4836,6 +5142,56 @@ func _run_input_purchasing(record: Dictionary) -> void:
 			if slot_needed > 0.0001:
 				production_ratio = minf(production_ratio, minf(slot_needed, slot_need.held(buyer)) / slot_needed)
 		buyer.last_input_fulfillment_ratio = production_ratio
+
+	_run_fodder_purchasing(record, trader_import_capacity)
+
+## What a ranch may spend on fodder today: its cash plus half of the wage
+## overdraft it is allowed (_wage_overdraft_limit, which a ranch backs with its
+## herd), so fodder can never use up the credit its crew is paid from. A herd
+## that cannot be fed on that budget goes into winter underfed.
+func _fodder_budget(b: HEBusiness) -> float:
+	var wage_bill: float = float(_business_employed_worker_count(b.id)) * _reference_wage_per_worker(b.settlement_id)
+	return maxf(0.0, b.balance + 0.5 * _wage_overdraft_limit(b, wage_bill))
+
+## Ranches stock their winter fodder in the autumn (and top up through
+## winter, up to the review that eats it). It is an ordinary purchase --
+## the same local seller or Trader import, price, tax and ledger lines as a
+## recipe input, paid from the ranch's own cash within the same bounded
+## credit -- so the grain, the money and the seller's sale are all
+## accounted exactly as any other business input. The need is spread over the
+## days left in the buying window rather than bought at once.
+func _run_fodder_purchasing(record: Dictionary, trader_import_capacity: Dictionary) -> void:
+	var s := season_of_day(day)
+	if s < Season.AUTUMN:
+		return
+	# Autumn buys against the days until winter starts; winter against the days
+	# until its review closes the season.
+	var window_end: int = (day / DAYS_PER_SEASON + (1 if s == Season.AUTUMN else 2)) * DAYS_PER_SEASON
+	var days_left: int = maxi(1, window_end - day)
+	for business_id in businesses.keys():
+		var buyer: HEBusiness = businesses[business_id]
+		if buyer.kind != HEBusiness.Kind.HERD or buyer.herd_size <= 0.0:
+			continue
+		var wanted: float = maxf(0.0, buyer.herd_size * FODDER_PER_HEAD_PER_WINTER[buyer.species] - buyer.stock(Commodity.Type.GRAIN))
+		var requested: float = wanted / float(days_left)
+		if requested <= 0.0001:
+			continue
+		var price: float = (markets[buyer.settlement_id] as HEMarket).price[Commodity.Type.GRAIN]
+		var offer := _business_offer(buyer.settlement_id, Commodity.Type.GRAIN, trader_import_capacity, true, requested)
+		var ratio := minf(1.0, offer / requested)
+		var cost := requested * price
+		var affordable_ratio := 1.0
+		if cost > 0.0001:
+			affordable_ratio = clampf(_fodder_budget(buyer) / cost, 0.0, 1.0)
+		var signal_today := _price_signal_entry(buyer.settlement_id, Commodity.Type.GRAIN)
+		signal_today["funded_business"] += requested * affordable_ratio
+		signal_today["business_buffer_request"] += wanted * affordable_ratio
+		if _business_selling(buyer.settlement_id, Commodity.Type.GRAIN) == null:
+			signal_today["import_capacity"] = maxf(signal_today["import_capacity"], offer)
+		var purchase_ratio := minf(ratio, affordable_ratio)
+		if purchase_ratio <= 0.0:
+			continue
+		_settle_purchase(buyer, buyer, Commodity.Type.GRAIN, requested, requested * purchase_ratio, requested * affordable_ratio, record, trader_import_capacity)
 
 ## Executes one business purchase of `bought` units of `commodity` at today's
 ## posted price: `payer` is debited (the buyer itself for a recipe input, the

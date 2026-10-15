@@ -340,7 +340,11 @@ func _configure_tooltip_theme() -> void:
 
 func _process(delta: float) -> void:
 	if embedded_mode:
+		if _town_view != null:
+			_town_view.set_villagers_paused(true)
 		return
+	if _town_view != null:
+		_town_view.set_villagers_paused(_simulation == null or _ended or _speed_multiplier <= 0.0)
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
 		return
 	if _town_view != null and _town_view.visible:
@@ -390,7 +394,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
-		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()))
+		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
 	for report in _simulation.get_business_reports():
@@ -552,6 +556,7 @@ func _build_ui() -> void:
 	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_town_view.visible = false
 	_town_view.details_requested.connect(_on_town_details_requested)
+	_town_view.person_details_requested.connect(_on_town_person_details_requested)
 	_town_view.visibility_changed.connect(_on_view_changed)
 	vbox.add_child(_town_view)
 	_town_view.add_child(_build_town_gov_build_button())
@@ -1330,7 +1335,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 48)
 	box.add_child(grid)
-	for stat in [["houses", "Houses"], ["households", "Households"], ["free", "Free houses"], ["homeless", "Homeless households"]]:
+	for stat in [["houses", "Homes"], ["households", "Households"], ["free", "Free homes"], ["homeless", "Homeless households"]]:
 		var cell := VBoxContainer.new()
 		grid.add_child(cell)
 		var caption := Label.new()
@@ -1345,7 +1350,7 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	var rules := Label.new()
 	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rules.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
-	rules.text = "One house shelters one household; capacity is pooled across the town. When no house is free, births fall by 80%. Households with no house lose members to emigration."
+	rules.text = "One home shelters one household (a house is one home, a tenement several); capacity is pooled across the town. When no home is free, births fall by 80%. Households with no home lose members to emigration."
 	box.add_child(rules)
 
 	# Both housing builds are always offered; the hint says which one the
@@ -1380,7 +1385,7 @@ func _refresh_housing() -> void:
 	var housing := _simulation.get_housing_report(_town_settlement_id())
 	if housing["modeled"]:
 		var free := maxi(0, int(housing["capacity"]) - int(housing["households"]))
-		_housing_label.text = "%d houses / %d households" % [housing["houses"], housing["households"]]
+		_housing_label.text = "%d homes / %d households" % [housing["capacity"], housing["households"]]
 		var color := Color(0.4, 0.75, 0.45)
 		if housing["homeless_households"] > 0:
 			_housing_label.text += " (%d homeless)" % housing["homeless_households"]
@@ -1389,7 +1394,7 @@ func _refresh_housing() -> void:
 			_housing_label.text += " (full)"
 			color = Color(0.9, 0.7, 0.3)
 		_housing_label.add_theme_color_override("font_color", color)
-		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["houses"]
+		(_housing_detail_labels["houses"] as Label).text = "%d" % housing["capacity"]
 		(_housing_detail_labels["households"] as Label).text = "%d" % housing["households"]
 		(_housing_detail_labels["free"] as Label).text = "%d" % free
 		(_housing_detail_labels["homeless"] as Label).text = "%d" % housing["homeless_households"]
@@ -1522,6 +1527,14 @@ func _open_settings_dialog() -> void:
 	day_picker.select(GameState.TOWN_DAY_SECONDS_OPTIONS.find(GameState.town_day_seconds))
 	day_picker.item_selected.connect(func(index: int) -> void: GameState.set_town_day_seconds(GameState.TOWN_DAY_SECONDS_OPTIONS[index]))
 	grid.add_child(day_picker)
+	var shadows_label := Label.new()
+	shadows_label.text = "Villager shadows"
+	grid.add_child(shadows_label)
+	var shadows_check := CheckBox.new()
+	shadows_check.text = "Villagers cast shadows (slower in large towns)"
+	shadows_check.button_pressed = GameState.villager_shadows
+	shadows_check.toggled.connect(GameState.set_villager_shadows)
+	grid.add_child(shadows_check)
 	var dev_label := Label.new()
 	dev_label.text = "Dev mode"
 	grid.add_child(dev_label)
@@ -2510,6 +2523,7 @@ func _refresh_business_detail_productivity(report: Dictionary) -> void:
 		productivity_rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		productivity_rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		productivity_rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
+		productivity_rows.append(["Winter fodder", "%.0f of %.0f grain held (%.0f%%); last winter ate %.0f of %.0f" % [report["fodder_stock"], report["fodder_target"], report["fodder_cover"] * 100.0, report["last_fodder_eaten"], report["last_fodder_needed"]]])
 		productivity_rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in productivity_rows:
 		_add_detail_row(row[0], row[1], _business_detail_productivity_grid)
@@ -3175,6 +3189,10 @@ func _on_town_details_requested(business_id: int) -> void:
 	_set_town_mode(false)
 	_on_business_row_selected(business_id)
 
+func _on_town_person_details_requested(household_id: int, member_number: int) -> void:
+	_set_town_mode(false)
+	_on_person_selected(household_id, member_number)
+
 func _town_settlement_id() -> int:
 	return _simulation.get_settlement_ids()[0]
 
@@ -3333,9 +3351,9 @@ func _group_visible(group: int) -> bool:
 		HEPresenter.Group.TOWN_STATS:
 			return _page_shown(_town_page)
 		HEPresenter.Group.HOUSING:
-			# One refresh feeds the summary line on the Town tab and the
-			# Housing tab's detail labels and build buttons.
-			return _page_shown(_town_page) or _page_shown(_housing_page)
+			# One refresh feeds the top-bar summary line (on screen whatever
+			# tab is open) and the Housing tab's detail labels and buttons.
+			return _housing_label.is_visible_in_tree() or _page_shown(_town_page) or _page_shown(_housing_page)
 		HEPresenter.Group.MARKET:
 			return _page_shown(_goods_page)
 		HEPresenter.Group.MARKET_DETAIL:
@@ -3430,8 +3448,9 @@ func _refresh_visible_groups(ignore_mouse_guard: bool) -> void:
 			HEPresenter.Group.TOWN_VIEW:
 				if reports.is_empty():
 					reports = _simulation.get_business_reports(-1, false)
-				_town_layout.reconcile(reports, _simulation.get_dwelling_reports())
-				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()))
+				var dwellings := _simulation.get_dwelling_reports()
+				_town_layout.reconcile(reports, dwellings, _simulation.get_construction_reports())
+				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 				_town_view_synced = true
 			HEPresenter.Group.BUSINESS_ROWS:
 				if reports.is_empty():
@@ -3507,7 +3526,9 @@ func _run_view_refresh() -> void:
 ## Clock, treasury, population summary, and the extinction check.
 func _refresh_header() -> void:
 	var clock := _simulation.get_clock_summary()
-	_day_label.text = _format_day(clock["day"])
+	_day_label.text = "%s · %s" % [clock["season_name"], _format_day(clock["day"])]
+	_day_label.tooltip_text = "Season %d of %d, day %d of %d. Harvests, wool and herds follow the season; ranches buy grain for winter fodder in autumn." % [
+		clock["season"] + 1, HESimulation.SEASONS_PER_YEAR, clock["day_of_season"] + 1, HESimulation.DAYS_PER_SEASON]
 	_refresh_treasury()
 	_refresh_warehouse_strip()
 	_refresh_population_summary()
@@ -3540,6 +3561,9 @@ func _ensure_business_rows(reports: Array) -> void:
 		if not _business_rows.has(report["business_id"]):
 			rows_stale = true
 	if rows_stale:
+		# A government build that just finished construction has no name yet.
+		for report in reports:
+			_business_names[report["business_id"]] = report["name"]
 		_rebuild_business_rows()
 
 func _refresh_business_row_values(reports: Array) -> void:
@@ -3564,6 +3588,8 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var herd_text := "Herd %.0f · next review in %dd · culled %.1f %s" % [report["herd_size"], maxi(report["days_to_next_harvest"], 0), report["last_actual_units"], report["output_commodity"]]
 			if report.get("last_wool_produced", 0.0) > 0.0:
 				herd_text += " · +%.2f wool" % report["last_wool_produced"]
+			if report["fodder_target"] > 0.0:
+				herd_text += " · fodder %.0f%% of winter need" % (report["fodder_cover"] * 100.0)
 			status_label.text = herd_text
 			status_label.tooltip_text = herd_text
 		elif land > 0.0:
@@ -3571,6 +3597,9 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var expected: float = report["next_harvest_expected_units"]
 			var yield_percent: float = report["next_harvest_yield_fraction"] * 100.0
 			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
+			var harvest_modifier: float = report["next_harvest_season_modifier"]
+			if absf(harvest_modifier - 1.0) > 0.0001:
+				status_text += " · %s ×%.1f" % [HESimulation.season_name_of_day(simulation_day_for_harvest(next_harvest)), harvest_modifier]
 			status_label.text = status_text
 			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
 		elif report["kind"] == "government":
@@ -3622,12 +3651,17 @@ func _refresh_blotter() -> void:
 		return
 	_blotter_display.text = "\n".join(lines)
 
-## Day 456 -> "Year 1, Day 91". Within the first year, just "Day N".
+## Day 456 -> "Year 1, Day 96" on the simulation's 360-day calendar
+## (HESimulation.DAYS_PER_YEAR). Within the first year, just "Day N".
 func _format_day(day: int) -> String:
-	var year := day / 365
+	var year := day / HESimulation.DAYS_PER_YEAR
 	if year <= 0:
 		return "Day %d" % day
-	return "Year %d, Day %d" % [year, day % 365]
+	return "Year %d, Day %d" % [year, day % HESimulation.DAYS_PER_YEAR]
+
+## The day a harvest `days_away` days from now falls on.
+func simulation_day_for_harvest(days_away: int) -> int:
+	return _simulation.get_clock_summary()["day"] + maxi(0, days_away)
 
 ## 456 days -> "1 years 91 days". Ages are durations, so unlike _format_day
 ## the year is always shown.
@@ -3672,7 +3706,13 @@ func _format_event(event: Dictionary) -> String:
 		"herd_birth":
 			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var condition := "" if event["fed"] else " (overgrazed)"
-			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
+			var season_note := ""
+			if event.has("season"):
+				season_note = " (%s review" % HESimulation.SEASON_NAMES[event["season"]]
+				if event["fodder_needed"] > 0.0:
+					season_note += ", fodder %.0f of %.0f grain" % [event["fodder_eaten"], event["fodder_needed"]]
+				season_note += ")"
+			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care%s (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, season_note, event["herd_after"]]
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]

@@ -21,6 +21,9 @@ var town_day_seconds: float = 120.0
 ## Dev mode shows the household-economy dashboard's free "Create business"
 ## menu. Turn it off to force new buildings through the Government build menu.
 var dev_mode: bool = true
+## Whether household Town view villagers cast shadows. Off by default: with a
+## few hundred villagers their shadow pass costs a noticeable share of a frame.
+var villager_shadows: bool = false
 
 @export var gather_speed: float = 1.3
 @export var game_speed: float = 1.0
@@ -112,12 +115,20 @@ func set_dev_mode(enabled: bool) -> void:
 	_save_settings()
 	settings_changed.emit()
 
+func set_villager_shadows(enabled: bool) -> void:
+	if villager_shadows == enabled:
+		return
+	villager_shadows = enabled
+	_save_settings()
+	settings_changed.emit()
+
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("history", "sparkline_days", sparkline_days)
 	cfg.set_value("history", "blotter_days", blotter_days)
 	cfg.set_value("dev", "dev_mode", dev_mode)
 	cfg.set_value("town", "day_seconds", town_day_seconds)
+	cfg.set_value("town", "villager_shadows", villager_shadows)
 	cfg.save(SETTINGS_PATH)
 
 func _load_settings() -> void:
@@ -130,3 +141,4 @@ func _load_settings() -> void:
 	var saved_day_seconds := float(cfg.get_value("town", "day_seconds", town_day_seconds))
 	if TOWN_DAY_SECONDS_OPTIONS.has(saved_day_seconds):
 		town_day_seconds = saved_day_seconds
+	villager_shadows = bool(cfg.get_value("town", "villager_shadows", villager_shadows))

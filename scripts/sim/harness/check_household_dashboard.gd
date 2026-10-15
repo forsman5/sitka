@@ -70,6 +70,21 @@ func _check_warehouse_strip(dashboard: Control, sim) -> void:
 	check(dashboard._warehouse_strip_more.visible, "Ellipsis shown when goods are cut off")
 	check(dashboard._town_gov_build_popup != null and dashboard._town_gov_build_popup.item_count == HEScenarioSeeds.government_buildings().size(), "Town view has a Government build menu")
 
+## The top bar names the current season and follows it across boundaries.
+func _check_season_label(dashboard: Control, sim) -> void:
+	var names := ["Spring", "Summer", "Autumn", "Winter"]
+	var sampled := 0
+	var target_day: int = sim.get_clock_summary()["day"] + 4 * 90
+	while sim.get_clock_summary()["day"] < target_day:
+		sim.advance_ticks(1)
+		var clock: Dictionary = sim.get_clock_summary()
+		if clock["day_of_season"] == 5:
+			dashboard._refresh()
+			var expected: String = names[(clock["day"] / 90) % 4]
+			sampled += 1
+			check(dashboard._day_label.text.begins_with(expected), "Day %d label should start with %s, got '%s'" % [clock["day"], expected, dashboard._day_label.text])
+	check(sampled >= 4, "Sampled the label in every season (got %d)" % sampled)
+
 func _run() -> void:
 	_check_presenter()
 	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
@@ -140,6 +155,7 @@ func _run() -> void:
 	var expected_ids: Array = sim.get_household_ids()
 	check(table.row_count() == expected_ids.size(), "Households table is current after opening (%d vs %d)" % [table.row_count(), expected_ids.size()])
 	_check_warehouse_strip(dashboard, sim)
+	_check_season_label(dashboard, sim)
 
 	print("Household dashboard check: %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
 	quit(0 if failures == 0 else 1)

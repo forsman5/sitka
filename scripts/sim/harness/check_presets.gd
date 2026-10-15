@@ -72,6 +72,7 @@ func _check_large_village_densifies() -> void:
 	_assert(layout.prefers_densify(), "A large village should already prefer densifying")
 	var before := sim.get_housing_report(settlement_id)
 	_assert(int(before["upgradable_houses"]) == int(before["houses"]), "Every seeded house is upgradable")
+	sim.construction_days = 0
 	_assert(sim.build_government_building(settlement_id, "tenement"), "The seeded warehouse and treasury afford a tenement")
 	var after := sim.get_housing_report(settlement_id)
 	_assert(int(after["houses"]) == int(before["houses"]), "A tenement upgrades rather than adds a lot")
