@@ -101,6 +101,7 @@ Settled in #87:
 
 Decided after #87:
 - **Split-off households** move into the free house nearest their parents' house, so families cluster (a first step toward household compounds). Today they take the innermost free house. The sim doesn't know house positions, so the layout has to supply distances, e.g. a distance callback handed to `_reconcile_housing`. Not built yet.
+- **Hiring prefers nearby households.** The weekly hiring pass fills each business from the unemployed pool nearest-first (household id breaks ties; a home with no known position ranks last). The sim has no geography, so `HESimulation.position_lookup` is set by the dashboard from `HETownLayout`; unset (headless runs, tests), hiring stays in household-id order. Positions are the layout's as of its last Town view refresh, so a business without a site yet counts as unknown. Housing is unchanged. Check: `check_job_proximity.gd`.
 - **At work:** town-business workers go inside, while field, pasture and woodlot workers stay visible.
 - **Order:** phases 1–3 (night, commuting, work) ship together in one stacked PR.
 
