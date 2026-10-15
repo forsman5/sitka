@@ -357,6 +357,7 @@ func _advance_town_time(delta: float) -> void:
 	_town_view.set_time_of_day(_town_phase)
 	if ticked:
 		_simulation.advance_ticks(1)
+		_town_view.set_sim_day(_simulation.day)
 		_presenter.note_simulated(1)
 		_refresh()
 
@@ -368,6 +369,7 @@ func _load_scenario() -> void:
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
 	if _town_view != null:
+		_town_view.set_sim_day(_simulation.day)
 		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
 		_town_view.clear_selection()
 	_business_names.clear()
@@ -3404,6 +3406,7 @@ func _refresh_visible_groups(ignore_mouse_guard: bool) -> void:
 					reports = _simulation.get_business_reports(-1, false)
 				var dwellings := _simulation.get_dwelling_reports()
 				_town_layout.reconcile(reports, dwellings, _simulation.get_construction_reports())
+				_town_view.set_sim_day(_simulation.day)
 				_town_view.sync(_town_layout, reports, _simulation.get_housing_report(_town_settlement_id()), dwellings, _simulation.get_villager_reports(_town_settlement_id()))
 				_town_view_synced = true
 			HEPresenter.Group.BUSINESS_ROWS:
