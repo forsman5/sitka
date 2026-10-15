@@ -36,22 +36,7 @@ Wages as an outcome, not a formula:
 1. **Pay from productivity**: business wage = clamp(labour share x revenue per worker, reservation, funded cap). Keep the old formula behind a flag for A/B. Gate on `measure_wage_margin` style runs: no rise in failures, employment held.
 2. **Reservation and migration**: unemployed or sub-reservation households leave or shrink the town; check against population and `run_household_economy.gd`.
 3. **Grow the basket**: housing/cooking/market services as real needs and jobs, so spendable income has somewhere to go.
-4. **Money pools in businesses**: see "Money audit" below. Profit above the wage never reaches households, so phase 1 is also the distribution fix.
-
-## Money audit (measure_money_flows.gd)
-
-Seeded presets, 720 days, margin 0. The identity `change = exports + startup cash - imports - construction - written off` closes to 0, so every flow is accounted for.
-
-| Preset | Money day 0 -> 720 | Exports in | Written off | Held by households at 720 |
-|---|---|---|---|---|
-| Small | 11k -> 14k | 3.5k | 0.4k | 0.8k (6%) |
-| Mining | 12k -> 117k | 109k | 3.7k | 6.0k (5%) |
-| Large | 21k -> 355k | 344k | 9.6k | 16k (5%) |
-
-- **Not a leak, and not the trade gap.** Trade is a net *source*: export revenue is new money (no imports in these presets). The 9.6k "written off" is the savings of households that vanish: 8.2k emigration, 1.4k old age, 0 business failures at margin 0. It is under 3% of what exports bring in.
-- **The real issue is pooling.** Money supply grows ~17x, but ~95% of it sits in businesses: in the large village the trader holds 170k (48%), the bloomery 99k, farms and woodlots 44k. Households hold 16k (~280 each). The same wage formula that pegs pay to subsistence means revenue above the wage is retained as business profit, with no owners, dividends, profit share or tax recirculation.
-- That is why a margin only partly works: the cash is concentrated in exporters (trader, bloomery) while the businesses that fail at +50% (e.g. ranches, which sit negative) are not the ones holding it.
-- **Implication**: a productivity/revenue-share wage (phase 1) would move money from where it is earned to the households working there, and reaching a genuine "wealthy town" is a distribution problem more than a supply one.
+4. **Money audit**: `_money_written_off_total` is ~9.6k g in the large village at margin 0, so money is leaking out at baseline; account for sources and sinks before tuning wealth.
 
 ## Open questions
 
