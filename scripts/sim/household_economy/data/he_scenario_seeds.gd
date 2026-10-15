@@ -145,11 +145,10 @@ const CHARCOAL_BURNER_GRACE_DAYS := 21
 const CHARCOAL_BURNER_STARTING_CREW := 2
 
 ## Starting herd sizes -- deliberately well under either species' cull
-## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
-## both visible within a normal scenario run, not just an instant no-op.
-## Cattle's target/start ratio (1.5x) matches what it always was, just at
-## a bigger absolute scale (see HESimulation.HERD_CULL_TARGET's doc
-## comment) -- keeps the ~900-day time-to-first-cull unchanged.
+## target (HESimulation.default_cull_target of the ranch's land) so growth
+## and the first cull are both visible within a normal scenario run, not
+## just an instant no-op. Cattle's target/start ratio is 1.5x, keeping the
+## ~900-day time-to-first-cull.
 const CATTLE_STARTING_HERD := 100.0
 const SHEEP_STARTING_HERD := 100.0
 
@@ -161,7 +160,8 @@ const SHEEP_STARTING_HERD := 100.0
 ## labor produced nothing; with husbandry now driving wool, mortality and
 ## reproduction, the ceiling just states how many hands the herd can use.
 static func herd_max_capacity(species: HEBusiness.Species) -> int:
-	return ceili(HESimulation.HERD_CULL_TARGET[species] * HESimulation.HERD_LABOR_PER_HEAD_PER_DAY[species])
+	var target := HESimulation.default_cull_target(species, HESimulation.DEFAULT_RANCH_LAND_ACRES[species])
+	return ceili(target * HESimulation.HERD_LABOR_PER_HEAD_PER_DAY[species])
 
 ## Opt-in alongside the Bloomery. Like the workshop, this is a compact,
 ## legacy (daily-output) production site rather than a land/field business.
@@ -260,6 +260,7 @@ static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.
 	var herd := HEBusiness.new(business_id, "Cattle Ranch" if is_cattle else "Sheep Farm", null, herd_max_capacity(species), RANCH_STARTING_CAPACITY, HEBusiness.Kind.HERD, settlement_id, species, CATTLE_STARTING_HERD if is_cattle else SHEEP_STARTING_HERD)
 	herd.type_key = "cattle_ranch" if is_cattle else "sheep_farm"
 	herd.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
+	herd.land_area_acres = HESimulation.DEFAULT_RANCH_LAND_ACRES[species]
 	return herd
 
 static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
