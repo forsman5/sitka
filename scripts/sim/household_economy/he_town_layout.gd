@@ -56,7 +56,7 @@ const DENSE_HOUSE_TYPE_KEY := "tenement"
 ## 54); past it, prefers_densify() says to upgrade houses rather than grow out.
 const DENSIFY_HOUSE_COUNT := 48
 ## Half the side of the square town footprint; sites are kept fully inside it.
-const HALF_EXTENT := 80.0
+const HALF_EXTENT := 160.0
 ## Minimum clear gap between two site footprints.
 const SITE_SPACING := 3.0
 ## Roads and house rows reject a share of a zone's candidates, so there are
@@ -64,13 +64,32 @@ const SITE_SPACING := 3.0
 const CANDIDATES_PER_ZONE := 384
 const COORD_SNAP := 0.5
 
+## Land plots. A business with land (farm, woodlot, ranch) is drawn on a plot
+## sized from its acreage at a compressed scale (one acre = this many square
+## world units; true scale would be ~4,000, a 40-acre farm 400 m across, which
+## no building in the town view could stand beside), so a 375-acre ranch really
+## is a much bigger spread than a 40-acre farm. LAND_PLOT_ASPECT is
+## width / depth. Businesses without land keep their zone's footprint.
+const UNITS2_PER_ACRE := 16.0
+const LAND_PLOT_ASPECT := 1.4
+## A land plot whose edge is farther than this from every road gets a track:
+## a lane grown from the nearest road to the plot, stopping this short of its
+## edge so the lane never overlaps the plot it serves.
+const TRACK_MIN_GAP := 10.0
+const TRACK_END_GAP := 2.5
+const TRACK_ROAD_TRIES := 4
+## Zones whose candidates are tried outermost first, so land spreads out to the
+## rim of town (leaving the middle to houses and trade) instead of landing
+## wherever the spiral happened to start.
+const OUTWARD_ZONES := [ZONE_FIELD, ZONE_PASTURE]
+
 ## footprint: site size; radius: band of distances from the civic anchor in
 ## which candidate centres are generated.
 const ZONE_SPECS := {
 	ZONE_CIVIC: {"footprint": Vector2(14.0, 14.0), "radius": Vector2(0.0, 0.0)},
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
-	ZONE_FIELD: {"footprint": Vector2(30.0, 22.0), "radius": Vector2(30.0, 72.0)},
-	ZONE_PASTURE: {"footprint": Vector2(32.0, 24.0), "radius": Vector2(58.0, 100.0)},
+	ZONE_FIELD: {"footprint": Vector2(30.0, 22.0), "radius": Vector2(55.0, 115.0)},
+	ZONE_PASTURE: {"footprint": Vector2(32.0, 24.0), "radius": Vector2(90.0, 150.0)},
 	# Lots along the road frontage (see _make_frontage_candidates); no radius band.
 	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0)},
 }
@@ -247,9 +266,10 @@ func reconcile(reports: Array, dwellings: Array = [], constructions: Array = [])
 	for business_id in pending:
 		var report: Dictionary = live[business_id]
 		var type_key := _type_key_of(report)
-		var site_index := _vacant_site_index(type_key)
+		var plot := land_footprint(float(report.get("land_area_acres", 0.0)))
+		var site_index := _vacant_site_index(type_key, plot)
 		if site_index == -1:
-			site_index = _allocate_site(type_key)
+			site_index = _allocate_site(type_key, plot)
 		if site_index == -1:
 			_unplaced.append(business_id)
 			continue
@@ -388,22 +408,39 @@ func get_roads() -> Array[Dictionary]:
 static func _type_key_of(report: Dictionary) -> String:
 	return str(report.get("type_key", ""))
 
-func _vacant_site_index(type_key: String) -> int:
+## Plot a business of `acres` land needs: zero (use the zone's footprint) for
+## a business without land.
+static func land_footprint(acres: float) -> Vector2:
+	if acres <= 0.0:
+		return Vector2.ZERO
+	var area := acres * UNITS2_PER_ACRE
+	var width := snappedf(sqrt(area * LAND_PLOT_ASPECT), COORD_SNAP)
+	var depth := snappedf(sqrt(area / LAND_PLOT_ASPECT), COORD_SNAP)
+	return Vector2(width, depth)
+
+## A vacated site a new business can take. A business with land needs a vacant
+## site its plot fits in; any other takes the lowest vacant site as before.
+func _vacant_site_index(type_key: String, needed: Vector2 = Vector2.ZERO) -> int:
 	if type_key == GOVERNMENT_TYPE_KEY and _sites[0]["business_id"] == NO_BUSINESS:
 		return 0
 	for i in range(1, _sites.size()):
-		if _sites[i]["business_id"] == NO_BUSINESS and _sites[i]["dwelling_id"] == NO_BUSINESS:
-			return i
+		if _sites[i]["business_id"] != NO_BUSINESS or _sites[i]["dwelling_id"] != NO_BUSINESS:
+			continue
+		var have: Vector2 = _sites[i]["footprint"]
+		if needed != Vector2.ZERO and (have.x < needed.x or have.y < needed.y):
+			continue
+		return i
 	return -1
 
-func _allocate_site(type_key: String) -> int:
+func _allocate_site(type_key: String, plot: Vector2 = Vector2.ZERO) -> int:
 	var zone: String = TYPE_ZONES.get(type_key, ZONE_TOWN)
-	return _allocate_from(FALLBACK_ORDER[zone])
+	return _allocate_from(FALLBACK_ORDER[zone], plot)
 
 ## First free candidate in `zones` (tried in order) becomes a new, empty site.
-func _allocate_from(zones: Array) -> int:
+## `plot`, when set, replaces the zone's footprint.
+func _allocate_from(zones: Array, plot: Vector2 = Vector2.ZERO) -> int:
 	for candidate_zone in zones:
-		var footprint: Vector2 = ZONE_SPECS[candidate_zone]["footprint"]
+		var footprint: Vector2 = plot if plot != Vector2.ZERO else ZONE_SPECS[candidate_zone]["footprint"]
 		for candidate in _candidates[candidate_zone]:
 			var clearance := 0.0 if candidate.get("frontage", false) else BUSINESS_ROAD_CLEARANCE
 			if not _fits(candidate["position"], footprint, candidate["rotation"], clearance):
@@ -424,8 +461,65 @@ func _allocate_from(zones: Array) -> int:
 				"built": false,
 				"under_construction": false,
 			})
+			if not candidate.get("frontage", false):
+				_add_track(_sites[_sites.size() - 1])
 			return _sites.size() - 1
 	return -1
+
+## Grows a lane from the nearest road to `site` when its plot is far from every
+## road, and makes the lane's end the site's access point (so its door leg is
+## short and the paths graph reaches it over the lane). Tries the nearest few
+## roads' closest points and takes the first lane that stays clear of other
+## sites and roads; with none clear the site stays off-road. Roads only ever
+## grow, so a placed site's track never moves.
+func _add_track(site: Dictionary) -> bool:
+	var center: Vector2 = site["position"]
+	var half: Vector2 = (site["footprint"] as Vector2) * 0.5
+	var rotation: float = site["rotation"]
+	var near: Array = [] # [distance, road_id, point]
+	for road in _roads:
+		var points: PackedVector2Array = road["points"]
+		var best := INF
+		var best_point := Vector2.ZERO
+		for i in range(points.size() - 1):
+			var q := Geometry2D.get_closest_point_to_segment(center, points[i], points[i + 1])
+			var d := q.distance_squared_to(center)
+			if d < best:
+				best = d
+				best_point = q
+		near.append([best, int(road["road_id"]), best_point])
+	near.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	for k in mini(TRACK_ROAD_TRIES, near.size()):
+		var start: Vector2 = near[k][2]
+		var local_start := (start - center).rotated(-rotation)
+		var to_center := -local_start
+		var length := to_center.length()
+		if length < 0.001:
+			continue
+		var dir := to_center / length
+		# Ray from the road point toward the plot centre, entering its box.
+		var t_x := (absf(local_start.x) - half.x) / absf(dir.x) if absf(dir.x) > 0.0001 else -INF
+		var t_y := (absf(local_start.y) - half.y) / absf(dir.y) if absf(dir.y) > 0.0001 else -INF
+		var to_edge := maxf(t_x, t_y)
+		if to_edge <= TRACK_MIN_GAP:
+			return false # close enough to walk, no track needed
+		var world_dir := (center - start).normalized()
+		var end := start + world_dir * (to_edge - TRACK_END_GAP)
+		var lane := {
+			"road_id": _roads.size(),
+			"class": "lane",
+			"width": LANE_WIDTH,
+			"points": PackedVector2Array([start, end]),
+			"parent": int(near[k][1]),
+		}
+		if not _lane_is_clear(lane, []):
+			continue
+		_roads.append(lane)
+		_road_segments.append_array(_segments_of([lane] as Array[Dictionary]))
+		site["road_id"] = lane["road_id"]
+		site["access"] = end
+		return true
+	return false
 
 ## Whether a footprint at `center` yawed by `rotation` is inside the town,
 ## SITE_SPACING clear of every site and `road_clearance` clear of every road.
@@ -675,4 +769,13 @@ static func _make_candidates(zone: String, seed_text: String) -> Array:
 		position = Vector2(snappedf(position.x, COORD_SNAP), snappedf(position.y, COORD_SNAP))
 		var turns := rng.randi() % 2
 		out.append({"position": position, "rotation": float(turns) * PI * 0.5})
+	if OUTWARD_ZONES.has(zone):
+		out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			var ra: float = (a["position"] as Vector2).length_squared()
+			var rb: float = (b["position"] as Vector2).length_squared()
+			if ra != rb:
+				return ra > rb
+			if a["position"].x != b["position"].x:
+				return a["position"].x < b["position"].x
+			return a["position"].y < b["position"].y)
 	return out

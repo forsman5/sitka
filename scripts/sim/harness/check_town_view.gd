@@ -130,8 +130,29 @@ func _run() -> void:
 		dashboard._process(0.25)
 	check(dashboard._simulation.day == paused_day, "Paused town time must not tick the sim")
 	check(not dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "Play", "Town mode shows Pause/Play only")
+	check(dashboard._town_speed_buttons[0].visible and dashboard._town_speed_buttons[1].visible, "Town mode shows the 2x and 5x buttons")
+
+	# Town speed scale: multiplies only the town clock, still one tick per day.
+	dashboard._speed_multiplier = 1.0
+	dashboard._town_speed_buttons[1].pressed.emit() # 5x (toggle_mode flips on click, not emit)
+	check(dashboard._town_speed_scale == 5.0, "5x button should set the town scale to 5")
+	dashboard._town_phase = 0.0
+	dashboard._advance_town_time(0.25)
+	check(absf(dashboard._town_phase - 0.25 * 5.0 / 60.0) < 0.0001, "5x should advance the phase 5x as fast (got %f)" % dashboard._town_phase)
+	var scaled_day: int = dashboard._simulation.day
+	dashboard._town_phase = dashboard.TOWN_TICK_PHASE
+	for i in 60: # 60 s day at 5x = 12 s = 48 frames
+		dashboard._advance_town_time(0.25)
+	check(dashboard._simulation.day == scaled_day + 1, "A 5x town day should still tick the sim once (day %d -> %d)" % [scaled_day, dashboard._simulation.day])
+	dashboard._town_speed_buttons[1].pressed.emit() # toggle off
+	check(dashboard._town_speed_scale == 1.0, "Pressing the active scale again returns to 1x")
+	dashboard._town_speed_buttons[0].pressed.emit()
+	dashboard._speed_buttons[1].pressed.emit() # Play resets
+	check(dashboard._town_speed_scale == 1.0, "Play should reset the town scale to 1x")
+
 	dashboard._set_town_mode(false)
 	check(dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "1x", "Dashboard mode restores the speed buttons")
+	check(not dashboard._town_speed_buttons[0].visible, "Dashboard mode hides the town speed buttons")
 	dashboard._set_town_mode(true)
 	game_state.town_day_seconds = saved_day_seconds
 
