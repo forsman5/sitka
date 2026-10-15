@@ -69,6 +69,9 @@ text = "Large Valleys Simulation"
 [node name="RiverValleyViewButton" type="Button" parent="Panel/VBox"]
 text = "Single Valley (Game View)"
 
+[node name="ValleyGeneratorButton" type="Button" parent="Panel/VBox"]
+text = "Valley Generator (Experiment)"
+
 [node name="OnFootButton" type="Button" parent="Panel/VBox"]
 text = "On Foot"
 
@@ -84,4 +87,5 @@ modulate = Color(0.65, 0.65, 0.75, 1)
 [connection signal="pressed" from="Panel/VBox/HouseholdEconomySimButton" to="." method="_on_household_economy_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/LargeValleysSimButton" to="." method="_on_large_valleys_sim_pressed"]
 [connection signal="pressed" from="Panel/VBox/RiverValleyViewButton" to="." method="_on_river_valley_view_pressed"]
+[connection signal="pressed" from="Panel/VBox/ValleyGeneratorButton" to="." method="_on_valley_generator_pressed"]
 [connection signal="pressed" from="Panel/VBox/OnFootButton" to="." method="_on_on_foot_pressed"]

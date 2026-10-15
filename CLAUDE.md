@@ -14,6 +14,7 @@ Godot 4.6.2 prototype repo holding several **experiments** that share one projec
 | **Single valley** (river valley, game view + sim) | "Single Valley Simulation", "Single Valley (Game View)" | `scripts/valley/`, `scripts/sim/simulation.gd`, `docs/river-valley-vertical-slice.md`, `docs/shared-valley-map.md` | Next integration target: villages in the valley backed by household-economy simulations. |
 | **Large valleys / multivalley** | "Large Valleys Simulation" | `scripts/sim/data/multivalley_seed.gd`, `tools/generate_multivalley.py`, `docs/multivalley-scale-probe.md` | Scale probe, not a content requirement. |
 | **On foot** (sheep herding, dog) | "On Foot" | `scripts/on_foot/`, `docs/sheep-flocking-plan.md` | **Secondary.** Flocking accepted and merged; herding-dog brain is out of scope for now. |
+| **Valley generator** (sketch) | "Valley Generator (Experiment)" | `scripts/valley/gen/`, `docs/valley-generation-sketch.md` | Rough pipeline for generated valleys (terrain, sites, roads, fords) emitting a `ValleyMapDefinition`. Not wired into the valley game view. |
 | **RTS city builder** | "Start Game" | `scripts/entities/`, `scripts/world/`, `scenes/world/` | Original prototype; kept playable, least active. Documented in the RTS sections below. |
 
 ### Candidate end-games (what the experiments are converging toward)
