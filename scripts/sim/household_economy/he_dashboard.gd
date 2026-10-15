@@ -150,6 +150,11 @@ var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_m
 const TOWN_TICK_PHASE := 5.5 / 24.0 # same as Person.WAKE_TIME in the RTS
 var _town_phase: float = TOWN_TICK_PHASE
 var _speed_multiplier: float = 1.0
+## Extra pace for the Town view clock only (the overland sim keeps
+## _speed_multiplier). Session-only: resets to 1x on every launch.
+const TOWN_SPEED_SCALES: Array[float] = [2.0, 5.0]
+var _town_speed_scale: float = 1.0
+var _town_speed_buttons: Array[Button] = []
 var _day_accumulator: float = 0.0
 var _last_town_chart_day := -1
 
@@ -377,7 +382,7 @@ func set_external_town_phase(phase: float) -> void:
 ## one tick per visual day.
 func _advance_town_time(delta: float) -> void:
 	var before := _town_phase
-	var after := before + minf(delta, 0.25) / GameState.town_day_seconds
+	var after := before + minf(delta, 0.25) * _town_speed_scale / GameState.town_day_seconds
 	var ticked := before < TOWN_TICK_PHASE and after >= TOWN_TICK_PHASE
 	_town_phase = fposmod(after, 1.0)
 	_town_view.set_time_of_day(_town_phase)
@@ -505,6 +510,8 @@ func _build_ui() -> void:
 	top_bar.add_child(_make_speed_button("1x", 1.0))
 	top_bar.add_child(_make_speed_button("10x", 10.0))
 	top_bar.add_child(_make_speed_button("100x", 100.0))
+	for factor in TOWN_SPEED_SCALES:
+		top_bar.add_child(_make_town_speed_button(factor))
 
 	# Town, Businesses and Goods share one fixed-height tabbed area. Stacked, the
 	# business list grew with every new business and crowded out the
@@ -1588,10 +1595,32 @@ func _make_speed_button(label: String, speed: float) -> Button:
 		_speed_multiplier = speed
 		if embedded_mode:
 			speed_requested.emit(speed)
+		_town_speed_scale = 1.0 # Play / 1x in town mode is the base pace
+		_sync_town_speed_buttons()
 		_last_town_chart_day = -1
 		_refresh_town())
 	_speed_buttons.append(btn)
 	return btn
+
+## Town-view-only pace buttons (2x, 5x). Also unpauses; leaves the dashboard
+## multiplier alone otherwise.
+func _make_town_speed_button(factor: float) -> Button:
+	var btn := Button.new()
+	btn.text = "%dx" % int(factor)
+	btn.toggle_mode = true
+	btn.visible = false
+	btn.tooltip_text = "Run the town view clock %dx faster to pass days quickly." % int(factor)
+	btn.pressed.connect(func() -> void:
+		_town_speed_scale = 1.0 if _town_speed_scale == factor else factor
+		if _speed_multiplier <= 0.0:
+			_speed_multiplier = 1.0
+		_sync_town_speed_buttons())
+	_town_speed_buttons.append(btn)
+	return btn
+
+func _sync_town_speed_buttons() -> void:
+	for i in range(_town_speed_buttons.size()):
+		_town_speed_buttons[i].set_pressed_no_signal(_town_speed_scale == TOWN_SPEED_SCALES[i])
 
 func _on_blotter_toggle_pressed() -> void:
 	_set_blotter_minimized(not _blotter_minimized)
@@ -3172,7 +3201,7 @@ func _set_town_mode(enabled: bool) -> void:
 		body.visible = not enabled
 	_town_mode_button.text = "Dashboard (resume)" if enabled and embedded_mode else ("Dashboard" if enabled else "Town view")
 	_town_mode_button.tooltip_text = "Return to the dashboard and resume the valley clock." if enabled and embedded_mode else "Switch between the dashboard and a map of the town's buildings."
-	# Standalone Town view has one pace. An embedded view uses the valley clock.
+	# Standalone Town view has its own pace. An embedded view pauses the valley.
 	var standalone_town_time := enabled and not embedded_mode
 	_speed_buttons[1].text = "Play" if standalone_town_time else "1x"
 	_speed_buttons[2].visible = not standalone_town_time
@@ -3180,6 +3209,9 @@ func _set_town_mode(enabled: bool) -> void:
 	if embedded_mode:
 		for button in _speed_buttons:
 			button.visible = not enabled
+	for btn in _town_speed_buttons:
+		btn.visible = standalone_town_time
+	_sync_town_speed_buttons()
 	if enabled:
 		_town_view.set_time_of_day(_town_phase)
 	if changed:
