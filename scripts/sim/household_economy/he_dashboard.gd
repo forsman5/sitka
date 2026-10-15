@@ -2485,6 +2485,7 @@ func _refresh_business_detail_productivity(report: Dictionary) -> void:
 		productivity_rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		productivity_rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
 		productivity_rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
+		productivity_rows.append(["Winter fodder", "%.0f of %.0f grain held (%.0f%%); last winter ate %.0f of %.0f" % [report["fodder_stock"], report["fodder_target"], report["fodder_cover"] * 100.0, report["last_fodder_eaten"], report["last_fodder_needed"]]])
 		productivity_rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in productivity_rows:
 		_add_detail_row(row[0], row[1], _business_detail_productivity_grid)
@@ -3479,7 +3480,9 @@ func _run_view_refresh() -> void:
 ## Clock, treasury, population summary, and the extinction check.
 func _refresh_header() -> void:
 	var clock := _simulation.get_clock_summary()
-	_day_label.text = _format_day(clock["day"])
+	_day_label.text = "%s · %s" % [clock["season_name"], _format_day(clock["day"])]
+	_day_label.tooltip_text = "Season %d of %d, day %d of %d. Harvests, wool and herds follow the season; ranches buy grain for winter fodder in autumn." % [
+		clock["season"] + 1, HESimulation.SEASONS_PER_YEAR, clock["day_of_season"] + 1, HESimulation.DAYS_PER_SEASON]
 	_refresh_treasury()
 	_refresh_warehouse_strip()
 	_refresh_population_summary()
@@ -3539,6 +3542,8 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var herd_text := "Herd %.0f · next review in %dd · culled %.1f %s" % [report["herd_size"], maxi(report["days_to_next_harvest"], 0), report["last_actual_units"], report["output_commodity"]]
 			if report.get("last_wool_produced", 0.0) > 0.0:
 				herd_text += " · +%.2f wool" % report["last_wool_produced"]
+			if report["fodder_target"] > 0.0:
+				herd_text += " · fodder %.0f%% of winter need" % (report["fodder_cover"] * 100.0)
 			status_label.text = herd_text
 			status_label.tooltip_text = herd_text
 		elif land > 0.0:
@@ -3546,6 +3551,9 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var expected: float = report["next_harvest_expected_units"]
 			var yield_percent: float = report["next_harvest_yield_fraction"] * 100.0
 			var status_text := "Growing · harvest in %dd · %.1f %s expected · %.0f%% projected yield" % [next_harvest, expected, report["output_commodity"], yield_percent]
+			var harvest_modifier: float = report["next_harvest_season_modifier"]
+			if absf(harvest_modifier - 1.0) > 0.0001:
+				status_text += " · %s ×%.1f" % [HESimulation.season_name_of_day(simulation_day_for_harvest(next_harvest)), harvest_modifier]
 			status_label.text = status_text
 			status_label.tooltip_text = "%s\n\nProjected from labor already applied plus the current crew continuing until harvest." % status_text
 		elif report["kind"] == "government":
@@ -3597,12 +3605,17 @@ func _refresh_blotter() -> void:
 		return
 	_blotter_display.text = "\n".join(lines)
 
-## Day 456 -> "Year 1, Day 91". Within the first year, just "Day N".
+## Day 456 -> "Year 1, Day 96" on the simulation's 360-day calendar
+## (HESimulation.DAYS_PER_YEAR). Within the first year, just "Day N".
 func _format_day(day: int) -> String:
-	var year := day / 365
+	var year := day / HESimulation.DAYS_PER_YEAR
 	if year <= 0:
 		return "Day %d" % day
-	return "Year %d, Day %d" % [year, day % 365]
+	return "Year %d, Day %d" % [year, day % HESimulation.DAYS_PER_YEAR]
+
+## The day a harvest `days_away` days from now falls on.
+func simulation_day_for_harvest(days_away: int) -> int:
+	return _simulation.get_clock_summary()["day"] + maxi(0, days_away)
 
 ## 456 days -> "1 years 91 days". Ages are durations, so unlike _format_day
 ## the year is always shown.
@@ -3647,7 +3660,13 @@ func _format_event(event: Dictionary) -> String:
 		"herd_birth":
 			var ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			var condition := "" if event["fed"] else " (overgrazed)"
-			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, event["herd_after"]]
+			var season_note := ""
+			if event.has("season"):
+				season_note = " (%s review" % HESimulation.SEASON_NAMES[event["season"]]
+				if event["fodder_needed"] > 0.0:
+					season_note += ", fodder %.0f of %.0f grain" % [event["fodder_eaten"], event["fodder_needed"]]
+				season_note += ")"
+			return "[color=#8fd98f]%s - %s: %.1f born, %.1f died%s, %.0f%% care%s (herd now %.0f)[/color]" % [day, ranch, event["born"], event["died"], condition, event["care"] * 100.0, season_note, event["herd_after"]]
 		"herd_cull":
 			var culling_ranch: String = _business_names.get(event["business_id"], "Business #%d" % event["business_id"])
 			return "[color=#d9c98f]%s - %s: culled %.1f head for sale (herd now %.0f)[/color]" % [day, culling_ranch, event["head"], event["herd_after"]]

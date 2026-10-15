@@ -213,6 +213,12 @@ var cull_target: float = 0.0
 ## staffed share, 0..1) the last review applied to wool, mortality and
 ## reproduction. Starts at the baseline an unstaffed herd gets.
 var last_care_fraction: float = 0.0
+## Kind.HERD only, reporting: the season the last review closed (a
+## HESimulation.Season, -1 before the first), and that review's winter fodder:
+## grain the herd needed and grain it actually ate (both 0.0 outside winter).
+var last_review_season: int = -1
+var last_fodder_needed: float = 0.0
+var last_fodder_eaten: float = 0.0
 
 ## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
 ## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for

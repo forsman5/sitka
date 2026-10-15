@@ -5,6 +5,7 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
 const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.gd")
 const Commodity =preload("res://scripts/sim/records/commodity.gd")
@@ -80,6 +81,10 @@ func _init() -> void:
 	_check_government_construction()
 	_check_business_fails_at_credit_limit()
 	_check_person_health_and_morale()
+	_check_season_calendar()
+	_check_seasonal_production()
+	_check_winter_fodder_and_herd_outcomes()
+	_check_seasons_conserve_and_stay_viable()
 
 	if _ok:
 		print("\nH1 acceptance: PASS")
@@ -3030,18 +3035,22 @@ func _check_government_taxes() -> void:
 		if report["business_id"] == gov_id:
 			capacity_start = report["capacity"]
 			_assert(report["kind"] == "government", "Government report should be kind=government")
+	var wage_total := 0.0
 	for d in days:
 		sim.advance_ticks(1)
 		worst_treasury = minf(worst_treasury, sim.get_government_summary(1)["treasury"])
-		if d >= 30:
-			for report in sim.get_business_reports(1):
-				if report["business_id"] == gov_id and report["wage_shortfall"] > EPSILON:
-					late_shortfall_days += 1
+		for report in sim.get_business_reports(1):
+			if report["business_id"] != gov_id:
+				continue
+			wage_total += report["last_wages_paid"]
+			if d >= 30 and report["wage_shortfall"] > EPSILON:
+				late_shortfall_days += 1
 	summary = sim.get_government_summary(1)
-	var wage_per_day := 0.0
+	# Wages follow prices, which swing with the seasons, so the wage a single
+	# day shows says little: compare the income to the wage averaged over the run.
+	var wage_per_day: float = wage_total / float(days)
 	for report in sim.get_business_reports(1):
 		if report["business_id"] == gov_id:
-			wage_per_day = report["last_wages_paid"]
 			_assert(report["capacity"] == capacity_start, "Government capacity must not self-tune")
 	print("  default rate %.0f%%: tax collected=%.1f (%.2f/day) vs administrator wage %.2f/day, treasury=%.1f, wage-shortfall days after day 30: %d" % [sim.sales_tax_rate * 100.0, summary["tax_collected_total"], summary["tax_collected_total"] / days, wage_per_day, summary["treasury"], late_shortfall_days])
 	_assert(summary["tax_collected_total"] > 0.0, "Sales tax should collect something")
@@ -3103,3 +3112,235 @@ func _total_worker_capacity(sim: HESimulation) -> int:
 	for household_id in sim.get_household_ids():
 		total += sim.get_household_summary(household_id)["worker_capacity"]
 	return total
+
+# ---------------------------------------------------------------------------
+# Seasons
+# ---------------------------------------------------------------------------
+
+## A herd business of `species` in `sim`.
+func _herd_of(sim: HESimulation, species: HEBusiness.Species) -> HEBusiness:
+	for business in sim.businesses.values():
+		var b: HEBusiness = business
+		if b.kind == HEBusiness.Kind.HERD and b.species == species:
+			return b
+	return null
+
+func _check_season_calendar() -> void:
+	print("\n=== Seasons: four 90-day seasons, a 360-day year, visible in the clock ===")
+	var expected := {0: 0, 89: 0, 90: 1, 179: 1, 180: 2, 269: 2, 270: 3, 359: 3, 360: 0, 449: 0, 450: 1, 1079: 3}
+	for d in expected.keys():
+		_assert(HESimulation.season_of_day(d) == expected[d], "Day %d should be in season %d, got %d" % [d, expected[d], HESimulation.season_of_day(d)])
+	_assert(HESimulation.DAYS_PER_YEAR == 360, "A year should be four 90-day seasons")
+	_assert(HESimulation.HERD_EVAL_INTERVAL_DAYS == HESimulation.DAYS_PER_SEASON, "Herd reviews should close exactly one season each")
+
+	var valley := {
+		Commodity.Type.GRAIN: [0.8, 1.0, 1.6, 0.1],
+		Commodity.Type.TIMBER: [1.0, 1.0, 1.0, 0.6],
+		Commodity.Type.WOOL: [1.5, 1.5, 0.5, 0.2],
+	}
+	for commodity in valley.keys():
+		for season in 4:
+			var got := HESimulation.seasonal_output_modifier(commodity, season * HESimulation.DAYS_PER_SEASON)
+			_assert(absf(got - valley[commodity][season]) < 0.0001, "%s modifier for season %d should match the valley seed (%.2f), got %.2f" % [Commodity.name_of(commodity), season, valley[commodity][season], got])
+	_assert(HESimulation.seasonal_output_modifier(Commodity.Type.IRON, 270) == 1.0, "A good without a seasonal curve should not be scaled")
+	_assert(HESimulation.seasonal_yield_scale(Commodity.Type.IRON, 270) == 1.0, "A good without a seasonal curve should not be rescaled")
+	# The export carry looks ahead: heavy through autumn (winter is next), light
+	# in spring and summer, and gone for a good with no curve.
+	var grain := Commodity.Type.GRAIN
+	var carry_autumn := HESimulation.seasonal_carry_days(grain, 180)
+	var carry_summer := HESimulation.seasonal_carry_days(grain, 90)
+	var carry_spring := HESimulation.seasonal_carry_days(grain, 0)
+	_assert(carry_autumn > 70.0 and carry_autumn < 100.0, "Grain should carry ~80 days of use into winter from autumn, got %.1f" % carry_autumn)
+	_assert(carry_summer < 1.0 and carry_spring < 10.0, "Spring and summer should hold back almost nothing (got %.1f, %.1f)" % [carry_spring, carry_summer])
+	_assert(HESimulation.seasonal_carry_days(Commodity.Type.IRON, 180) == 0.0, "A good without a curve carries nothing")
+	# What a harvest is scaled by is the curve over its own yearly mean, so a
+	# year's four seasons average 1.0 and annual output is the unseasonal model's.
+	for commodity in valley.keys():
+		var yearly := 0.0
+		for season in 4:
+			yearly += HESimulation.seasonal_yield_scale(commodity, season * HESimulation.DAYS_PER_SEASON)
+		_assert(absf(yearly / 4.0 - 1.0) < 0.0001, "%s seasonal yield scales should average 1.0 over a year, got %.4f" % [Commodity.name_of(commodity), yearly / 4.0])
+
+	var sim := _new_sim("build_three_business_economy")
+	var seen: Array[String] = []
+	for i in 5:
+		var clock := sim.get_clock_summary()
+		seen.append(clock["season_name"])
+		_assert(clock["season_name"] == HESimulation.SEASON_NAMES[clock["season"]], "Clock season name should match its index")
+		_assert(clock["day_of_season"] == clock["day"] % 90, "Clock day_of_season should be the day within the season")
+		sim.advance_ticks(90)
+	print("  seasons at each 90-day mark: %s" % ", ".join(seen))
+	_assert(seen == ["Spring", "Summer", "Autumn", "Winter", "Spring"], "A run should walk Spring, Summer, Autumn, Winter, Spring")
+	_assert(sim.get_clock_summary()["year"] == 1, "Day 450 should be in year 1 (0-based)")
+
+## Field harvests and shearing scale by the season they land in, and only
+## that: a fully-labored field yields area * yield * modifier.
+func _check_seasonal_production() -> void:
+	print("\n=== Seasons: harvests and wool differ by season ===")
+	var sim := _new_sim("build_three_business_economy")
+	var farm: HEBusiness = sim.businesses[HEScenarioSeeds.FARM_BUSINESS_ID]
+	var woodlot: HEBusiness = sim.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID]
+	var cases := [[farm, Commodity.Type.GRAIN], [woodlot, Commodity.Type.TIMBER]]
+	for case in cases:
+		var b: HEBusiness = case[0]
+		var commodity: Commodity.Type = case[1]
+		var per_season: Array[String] = []
+		for season in 4:
+			# One field ripe and fully labored, the rest far from harvest.
+			for f in b.fields:
+				f.days_growing = 0
+				f.labor_applied = 0.0
+			var field: HEField = b.fields[0]
+			field.days_growing = b.growth_days - 1
+			field.labor_applied = field.area * b.labor_per_area_per_day * b.growth_days
+			sim.day = season * HESimulation.DAYS_PER_SEASON + 45
+			var stock_before := b.stock(commodity)
+			var record := {"produced": {}}
+			sim._run_field_growth(b, record)
+			var harvested := b.stock(commodity) - stock_before
+			var full := field.area * b.yield_per_area
+			var modifier := HESimulation.seasonal_yield_scale(commodity, sim.day)
+			per_season.append("%.0f" % harvested)
+			_assert(absf(harvested - full * modifier) < 0.01,
+				"%s harvest in %s should be %.1f x the full yield %.1f, got %.1f" % [b.name, HESimulation.SEASON_NAMES[season], modifier, full, harvested])
+			_assert(absf(float(record["produced"][Commodity.name_of(commodity)]) - harvested) < 0.01, "%s harvest should be recorded as produced exactly once" % b.name)
+		print("  %s harvest by season (spring..winter): %s" % [b.name, ", ".join(per_season)])
+
+	# Wool lands at the review closing the season: a sheep farm's clip differs
+	# by season for the same herd and care.
+	var clips: Array[float] = []
+	for season in 4:
+		var wool_sim := _new_sim("build_three_business_economy")
+		var sheep := _herd_of(wool_sim, HEBusiness.Species.SHEEP)
+		sheep.add_stock(Commodity.Type.GRAIN, sheep.herd_size * HESimulation.FODDER_PER_HEAD_PER_WINTER[sheep.species])
+		wool_sim.day = season * HESimulation.DAYS_PER_SEASON + HESimulation.DAYS_PER_SEASON - 1
+		var record := wool_sim._new_daily_record()
+		var wool_before := sheep.stock(Commodity.Type.WOOL)
+		wool_sim._run_herds(record)
+		clips.append(sheep.stock(Commodity.Type.WOOL) - wool_before)
+		_assert(absf(sheep.last_wool_produced - clips[season]) < 0.0001, "Sheep wool report should equal the wool added to inventory")
+	var clip_text: Array[String] = []
+	for clip in clips:
+		clip_text.append("%.1f" % clip)
+	print("  sheep wool by review season (spring..winter): %s" % ", ".join(clip_text))
+	_assert(clips[0] > clips[2] and clips[2] > clips[3], "Wool should be heaviest in spring/summer and lightest in winter")
+	_assert(absf(clips[0] / clips[1] - 1.0) < 0.1, "Spring and summer clips should be comparable (same modifier, similar herd)")
+
+## Winter reviews eat the herd's own grain; the share of the need covered sets
+## that winter's mortality.
+func _check_winter_fodder_and_herd_outcomes() -> void:
+	print("\n=== Seasons: winter fodder is consumed and underfed herds lose more ===")
+	var rows: Array[String] = []
+	for species in [HEBusiness.Species.CATTLE, HEBusiness.Species.SHEEP]:
+		var outcomes: Array[float] = []
+		var deaths_fed := 0.0
+		for cover in [1.0, 0.5, 0.0]:
+			var sim := _new_sim("build_three_business_economy")
+			var b: HEBusiness = _herd_of(sim, species)
+			var head: float = b.herd_size
+			var need: float = head * HESimulation.FODDER_PER_HEAD_PER_WINTER[species]
+			b.inventory[Commodity.Type.GRAIN] = need * cover
+			b.care_worker_days = 0.0
+			sim.day = 4 * HESimulation.DAYS_PER_SEASON - 1
+			var record := sim._new_daily_record()
+			var grain_before: float = sim._total_stock_snapshot()["Grain"]
+			sim._run_herds(record)
+			var grain_after: float = sim._total_stock_snapshot()["Grain"]
+			var eaten: float = need * cover
+			_assert(absf(b.stock(Commodity.Type.GRAIN)) < 0.0001, "A winter review should eat all the fodder it can (left %.2f)" % b.stock(Commodity.Type.GRAIN))
+			_assert(absf((grain_before - grain_after) - eaten) < 0.01, "Grain removed from the world should equal the fodder eaten (%.2f vs %.2f)" % [grain_before - grain_after, eaten])
+			_assert(absf(float(record["consumed"].get("Grain", 0.0)) - eaten) < 0.01, "Fodder should be recorded as consumed grain")
+			_assert(absf(b.last_fodder_eaten - eaten) < 0.01 and absf(b.last_fodder_needed - need) < 0.01, "The herd should report its winter fodder need and intake")
+			_assert(b.last_review_season == HESimulation.Season.WINTER, "The review should record that it closed winter")
+			var born: float = b.herd_events.back()["born"]
+			_assert(born > 0.0, "Births are a flat per-review rate, so winter reviews still add young (got %.2f)" % born)
+			outcomes.append(b.herd_size / head)
+			if cover == 1.0:
+				deaths_fed = b.herd_events.back()["died"]
+		rows.append("%s herd retained: fed %.3f, half-fed %.3f, unfed %.3f" % [("Cattle" if species == HEBusiness.Species.CATTLE else "Sheep"), outcomes[0], outcomes[1], outcomes[2]])
+		_assert(outcomes[0] > outcomes[1] and outcomes[1] > outcomes[2], "Less winter fodder should mean a smaller surviving herd (%s)" % rows.back())
+		_assert(deaths_fed > 0.0, "Even a fed herd should lose its baseline mortality in winter")
+	for row in rows:
+		print("  " + row)
+
+	# A non-winter review grows the herd and eats nothing.
+	var spring_sim := _new_sim("build_three_business_economy")
+	var cattle := _herd_of(spring_sim, HEBusiness.Species.CATTLE)
+	cattle.inventory[Commodity.Type.GRAIN] = 50.0
+	cattle.care_worker_days = 0.0
+	var head_before := cattle.herd_size
+	spring_sim.day = HESimulation.DAYS_PER_SEASON - 1
+	spring_sim._run_herds(spring_sim._new_daily_record())
+	_assert(cattle.herd_size > head_before, "A spring review should grow a fed herd")
+	_assert(absf(cattle.stock(Commodity.Type.GRAIN) - 50.0) < 0.0001, "Only winter reviews eat fodder")
+	_assert(cattle.last_fodder_needed == 0.0, "Fodder need should read zero outside winter")
+
+	# Over a real run, ranches buy their fodder in autumn and eat it at winter.
+	var run := _new_sim("build_three_business_economy")
+	var bought := 0.0
+	var eaten_total := 0.0
+	var bought_outside := 0.0
+	var ranch_ids: Array[int] = []
+	for business in run.businesses.values():
+		if (business as HEBusiness).kind == HEBusiness.Kind.HERD:
+			ranch_ids.append((business as HEBusiness).id)
+	for d in 2 * HESimulation.DAYS_PER_YEAR:
+		var season := HESimulation.season_of_day(run.day)
+		run.advance_ticks(1)
+		for id in ranch_ids:
+			if run.businesses.has(id):
+				var flows: Dictionary = (run.businesses[id] as HEBusiness).todays_flows
+				var got := float((flows.get(HEBusiness.FLOW_BOUGHT, {}) as Dictionary).get(Commodity.Type.GRAIN, 0.0))
+				bought += got
+				if season < HESimulation.Season.AUTUMN:
+					bought_outside += got
+				eaten_total += float((flows.get(HEBusiness.FLOW_CONSUMED, {}) as Dictionary).get(Commodity.Type.GRAIN, 0.0))
+	print("  two years: ranches bought %.0f grain, ate %.0f at winter reviews" % [bought, eaten_total])
+	_assert(bought > 0.0, "Ranches should buy winter fodder in the autumn")
+	_assert(bought_outside < 0.0001, "Ranches should not buy fodder before autumn (%.1f bought)" % bought_outside)
+	_assert(eaten_total > 0.0, "Ranches should eat their fodder at winter reviews")
+	_assert(eaten_total <= bought + 0.01, "Ranches cannot eat more fodder than they bought (they start with none)")
+
+## Over several years every unit of goods and money still reconciles, nothing
+## goes wrong at the season boundaries, and the economy keeps going through
+## the winters.
+func _check_seasons_conserve_and_stay_viable() -> void:
+	print("\n=== Seasons: stock and money conserve, and the economy survives several winters ===")
+	var sim := _new_sim("build_three_business_economy")
+	var start_population := sim._total_population()
+	var reconciled := HESimulation.SUBSISTENCE_COMMODITIES.duplicate()
+	reconciled.append_array(HESimulation.LIVESTOCK_GOODS)
+	var worst_stock := 0.0
+	var worst_money := 0.0
+	var min_grain := INF
+	var settled_min_grain := INF # years 3+, once the first winters have set the town's carry
+	var good_years := 0
+	var years := 5
+	for year in years:
+		sim.advance_ticks(HESimulation.DAYS_PER_YEAR)
+		for record in sim.get_daily_history(HESimulation.DAYS_PER_YEAR):
+			for c in reconciled:
+				var name := Commodity.name_of(c)
+				var expected: float = record["opening_stock"][name] + record["produced"].get(name, 0.0) - record["consumed"].get(name, 0.0) \
+					- (record["exported"] as Dictionary).get(name, 0.0) - (record["goods_written_off"] as Dictionary).get(c, 0.0)
+				worst_stock = maxf(worst_stock, absf(record["closing_stock"][name] - expected))
+			var expected_money: float = record["opening_money"] - float(record["money_written_off"]) + float(record["export_revenue"]) - float(record["import_cost"])
+			worst_money = maxf(worst_money, absf(record["closing_money"] - expected_money))
+			min_grain = minf(min_grain, record["closing_stock"]["Grain"])
+			if year >= 2:
+				settled_min_grain = minf(settled_min_grain, record["closing_stock"]["Grain"])
+		var herds_alive := 0
+		for business in sim.businesses.values():
+			if (business as HEBusiness).kind == HEBusiness.Kind.HERD and (business as HEBusiness).herd_size > 0.0:
+				herds_alive += 1
+		print("  year %d: population %d (start %d), unemployed households %d, herds alive %d, minimum town grain so far %.0f" % [year + 1, sim._total_population(), start_population, sim._unemployed_household_count(), herds_alive, min_grain])
+		if sim._total_population() > 0 and herds_alive == 2:
+			good_years += 1
+	print("  worst stock gap %.4f, worst money gap %.4f over %d years" % [worst_stock, worst_money, years])
+	_assert(settled_min_grain > 0.0, "The town should carry grain through every winter from year 3 on, but ran out (minimum %.1f)" % settled_min_grain)
+	_assert(worst_stock < EPSILON, "Seasonal stock did not reconcile, worst gap %.4f" % worst_stock)
+	_assert(worst_money < EPSILON, "Seasonal money did not reconcile, worst gap %.4f" % worst_money)
+	_assert(good_years == years, "Population and both herds should survive every one of %d years (%d did)" % [years, good_years])
+	_assert(sim._total_population() >= start_population / 2, "Population should not collapse across seasons (%d from %d)" % [sim._total_population(), start_population])
+	for business_id in [HEScenarioSeeds.FARM_BUSINESS_ID, HEScenarioSeeds.WOODLOT_BUSINESS_ID]:
+		_assert(sim.businesses.has(business_id), "Farm and Woodlot should still be trading after %d years" % years)
