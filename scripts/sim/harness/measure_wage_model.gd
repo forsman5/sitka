@@ -10,6 +10,7 @@ extends SceneTree
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEWages = preload("res://scripts/sim/household_economy/he_wages.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
@@ -17,10 +18,10 @@ const SEEDS := [20260901, 7, 424242]
 const PRESETS := ["small_village", "mining_village", "large_village"]
 ## [label, wage_model, labour_share]
 const VARIANTS := [
-	["subsistence", HESimulation.WAGE_MODEL_SUBSISTENCE, 0.0],
-	["productivity 0.4", HESimulation.WAGE_MODEL_PRODUCTIVITY, 0.4],
-	["productivity 0.6", HESimulation.WAGE_MODEL_PRODUCTIVITY, 0.6],
-	["productivity 0.8", HESimulation.WAGE_MODEL_PRODUCTIVITY, 0.8],
+	["subsistence", HEWages.MODEL_SUBSISTENCE, 0.0],
+	["productivity 0.4", HEWages.MODEL_PRODUCTIVITY, 0.4],
+	["productivity 0.6", HEWages.MODEL_PRODUCTIVITY, 0.6],
+	["productivity 0.8", HEWages.MODEL_PRODUCTIVITY, 0.8],
 ]
 const DAYS := 720
 const SAMPLE_EVERY := 30
@@ -56,9 +57,9 @@ func _run(preset: String, variant: Array) -> void:
 func _run_one(preset: String, variant: Array, seed_value: int) -> Dictionary:
 	var builder := Callable(HEScenarioSeeds, "build_preset").bind(preset)
 	var sim := HESimulation.new(seed_value, builder)
-	sim.wage_model = variant[1]
+	sim.wages.model = variant[1]
 	if variant[2] > 0.0:
-		sim.labour_share = variant[2]
+		sim.wages.labour_share = variant[2]
 	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
 	var seen: Dictionary = {}
 	for id in sim.businesses.keys():
@@ -106,7 +107,7 @@ func _run_one(preset: String, variant: Array, seed_value: int) -> Dictionary:
 			if inc >= c:
 				covered += 1
 		var total_money: float = sim._total_money()
-		var reference: float = sim._reference_wage_per_worker(settlement_id)
+		var reference: float = sim.wages.reference_wage_per_worker(settlement_id)
 		if cost > 0.0:
 			out["ratio"] += income / cost
 		out["employed"] += float(employed) / maxf(households, 1)

@@ -4,7 +4,7 @@ extends SceneTree
 ## Runs each preset for DAYS with HESimulation.reference_wage_margin set to
 ## each value in MARGINS and reports solvency (business failures, money written
 ## off), employment, population, and household income against subsistence cost
-## (cost measured the same way as _reference_wage_per_worker, without the margin).
+## (cost measured the same way as HEWages.reference_wage_per_worker, without the margin).
 ## Run: Godot --headless --path . --script res://scripts/sim/harness/measure_wage_margin.gd
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
@@ -39,7 +39,7 @@ func _head_cost(sim, settlement_id: int) -> float:
 func _run(preset: String, margin: float) -> void:
 	var builder := Callable(HEScenarioSeeds, "build_preset").bind(preset)
 	var sim := HESimulation.new(SEED, builder)
-	sim.reference_wage_margin = margin
+	sim.wages.reference_wage_margin = margin
 	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
 	var seen: Dictionary = {}
 	for id in sim.businesses.keys():

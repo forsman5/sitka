@@ -248,7 +248,7 @@ var last_cash_change: float = 0.0
 ## How much of today's full reference-wage bill this business couldn't
 ## cover out of its own cash (balance is allowed to run generously negative
 ## before wages get rationed -- see he_simulation.gd's WAGE_NEGATIVE_
-## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
+## BALANCE_FLOOR_DAYS and HEWages.pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
 
 ## Capacity self-tuning leaves this business alone until this day -- a newly
@@ -273,7 +273,7 @@ var _balance_history: Array[float] = []
 ## Reporting only: today's goods movements through this business's own
 ## storage, {flow: {Commodity.Type: units}}, where flow is one of the FLOW_*
 ## constants below (PRODUCED is derived from last_output_produced instead).
-## Reset every tick by he_simulation.gd's _pay_wages, filled by add_flow()
+## Reset every tick by he_simulation.gd's HEWages.pay_wages, filled by add_flow()
 ## from each place goods actually move, and folded into _flow_history by
 ## record_flow_day() at the end of the day.
 var todays_flows: Dictionary = {}
@@ -292,7 +292,7 @@ var _wage_history: Array[float] = []
 
 ## Rolling sales-revenue-per-employed-worker-day history, oldest first,
 ## capped at rolling_window_days() -- THIS, not the wage (which is now
-## simply set to the going reference wage every day, see _pay_wages), is
+## simply set to the going reference wage every day, see HEWages.pay_wages), is
 ## what _evaluate_business_capacity compares against the reference wage to
 ## decide growth/shrink, per he_simulation.gd's doc comment there.
 var _revenue_per_worker_history: Array[float] = []

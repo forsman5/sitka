@@ -338,7 +338,7 @@ func _check_conservation() -> void:
 	# Households never carry the businesses' overdraft allowance -- their
 	# balance must still never go negative. A business, though, is allowed
 	# to run down to its own WAGE_NEGATIVE_BALANCE_FLOOR_DAYS floor (see
-	# he_simulation.gd's _pay_wages) before wages get rationed, so its floor
+	# he_simulation.gd's HEWages.pay_wages) before wages get rationed, so its floor
 	# -- not zero -- is the right bound to check here, same formula
 	# _check_field_model_dynamics already uses.
 	var min_stock := INF
@@ -360,7 +360,7 @@ func _check_conservation() -> void:
 		# The business's ACTUAL overdraft limit (a ranch's is backed by its herd),
 		# not the generic 60-day floor.
 		var business: HEBusiness = sim.businesses[report["business_id"]]
-		var floor: float = -sim._wage_overdraft_limit(business, report["reference_wage_per_worker"] * report["employed_workers"])
+		var floor: float = -sim.wages.overdraft_limit(business, report["reference_wage_per_worker"] * report["employed_workers"])
 		worst_business_floor_breach = max(worst_business_floor_breach, floor - report["balance"])
 	print("  minimum stock=%.3f, minimum household balance=%.3f, worst business wage-floor breach=%.4f" % [min_stock, min_household_balance, worst_business_floor_breach])
 	_assert(min_stock >= -EPSILON, "Some stock went negative: %.4f" % min_stock)
@@ -409,7 +409,7 @@ func _check_input_purchases_on_credit() -> void:
 	var bloomery: HEBusiness = in_debt.businesses[HEScenarioSeeds.BLOOMERY_BUSINESS_ID]
 	var settlement_id: int = in_debt.get_settlement_ids()[0]
 	var employed := in_debt._business_employed_worker_count(bloomery.id)
-	var wage_floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * in_debt._reference_wage_per_worker(settlement_id) * employed
+	var wage_floor: float = -HESimulation.WAGE_NEGATIVE_BALANCE_FLOOR_DAYS * in_debt.wages.reference_wage_per_worker(settlement_id) * employed
 	in_debt.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 5000.0}
 	in_debt.businesses[HEScenarioSeeds.IRON_MINE_BUSINESS_ID].inventory = {Commodity.Type.IRON_ORE: 5000.0}
 	bloomery.inventory = {}
@@ -1025,7 +1025,7 @@ func _check_staffing_outcomes() -> void:
 			continue
 		var profit: float = workshop.ledger_average("cash_profit", 100)
 		var workers := intended._business_employed_worker_count(id)
-		var wage := intended._reference_wage_per_worker(workshop.settlement_id)
+		var wage := intended.wages.reference_wage_per_worker(workshop.settlement_id)
 		var books := intended._staffing_decision(workshop, wage)
 		print("  %s at intended prices: crew %d, cash profit %.2f/day over 100 days, return/worker %.2f vs wage %.2f" % [workshop.name, workers, profit, books["return_per_worker"], wage])
 		_assert(profit > 0.0, "%s at intended prices should make a cash profit, got %.2f/day" % [workshop.name, profit])
@@ -1631,7 +1631,7 @@ func _check_field_model_dynamics() -> void:
 ## per_worker, not rolling_average_wage, is the profitability signal now
 ## that wages are always paid at the going reference rate out of cash on
 ## hand (see he_business.gd's rolling_average_revenue_per_worker doc
-## comment and he_simulation.gd's _pay_wages/_evaluate_business_capacity) --
+## comment and he_simulation.gd's HEWages.pay_wages/_evaluate_business_capacity) --
 ## a solvent business's OWN wage is nearly always just the reference wage
 ## by construction, so comparing wage-to-reference the old way would show
 ## nothing moving even while real profitability clearly diverges.
@@ -2082,11 +2082,11 @@ func _check_hardship_butchery_makes_local_meat() -> void:
 	if worker == null:
 		return
 	worker.employer_business_id = ranch.id
-	var wage_bill: float = sim._reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
+	var wage_bill: float = sim.wages.reference_wage_per_worker(ranch.settlement_id) * float(sim._business_employed_worker_count(ranch.id))
 	# Just past what the ranch can borrow against its herd (not 60 days of wages).
 	# Each head slaughtered also lowers that limit by its collateral, so a small
 	# margin is what one slaughter's meat can recover.
-	ranch.balance = -sim._wage_overdraft_limit(ranch, wage_bill) - 1.0
+	ranch.balance = -sim.wages.overdraft_limit(ranch, wage_bill) - 1.0
 	var herd_before := ranch.herd_size
 	sim.advance_ticks(1)
 
@@ -2332,10 +2332,10 @@ func _seed_ranches_near_cull_target(sim: HESimulation, share_of_target: float = 
 func _check_butcher_credit(sim: HESimulation) -> void:
 	var butcher: HEBusiness = sim.businesses[HEScenarioSeeds.BUTCHER_BUSINESS_ID]
 	var wage_bill := 2.0 * 0.8
-	var empty_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var empty_limit := sim.wages.overdraft_limit(butcher, wage_bill)
 	var start_cash := butcher.balance
 	butcher.add_stock(Commodity.Type.CATTLE, 20.0)
-	var held_limit := sim._wage_overdraft_limit(butcher, wage_bill)
+	var held_limit := sim.wages.overdraft_limit(butcher, wage_bill)
 	var collateral := 20.0 * HESimulation.livestock_quote(HEBusiness.Species.CATTLE, HESimulation.LivestockQuote.TRADER_BID) * HESimulation.HERD_COLLATERAL_FRACTION
 	butcher.consume(Commodity.Type.CATTLE, 20.0)
 	print("  Butcher: start cash %.0f | overdraft limit %.1f empty, %.1f holding 20 cattle (collateral %.1f)" % [start_cash, empty_limit, held_limit, collateral])
