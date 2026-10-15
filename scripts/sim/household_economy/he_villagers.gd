@@ -12,11 +12,15 @@ extends Node3D
 ## leaves, later members of that household shift down a number; their node is
 ## kept by key and simply re-dressed if its model kind changes.
 ##
-## Behaviour (this slice): everyone mills about in the yard in front of their
-## house -- the strip between its front wall and the road it faces. Homeless
-## households, and towns that do not model housing, mill about at the edge of
-## the civic plaza. No commuting yet. Movement is seeded per villager, in real
-## time, and stops while the dashboard is paused.
+## Behaviour: each villager follows HEVillagerSchedule -- indoors (hidden) at
+## night, walking the roads to work in the morning and home in the evening,
+## working (field, pasture and woodlot workers visible on their site, town
+## workers hidden inside), loitering on the plaza, or playing in the yard. The
+## schedule is a pure function of (villager, sim day, time of day), so this
+## layer only evaluates it each frame (set_time / set_day come from the Town
+## view's clock); it does not stop at a pause because time itself stops. Plans
+## are rebuilt only when the roster, a house or a job changes, or the sim day
+## ticks.
 ##
 ## Looks: male or female body (Casual_Male / Casual_Female) seeded per
 ## villager; skin tone seeded per household so a family resembles itself;
@@ -33,6 +37,8 @@ extends Node3D
 ## material.
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
+const HETownPaths = preload("res://scripts/sim/household_economy/he_town_paths.gd")
+const HEVillagerSchedule = preload("res://scripts/sim/household_economy/he_villager_schedule.gd")
 
 const MALE_MODEL := "res://assets/models/people/Casual_Male.fbx"
 ## Optional: used when present, otherwise everyone uses MALE_MODEL.
@@ -43,20 +49,15 @@ const WALK_CLIP := "CharacterArmature|Walk"
 ## Adult height in world units (a house is 4.5 wide).
 const ADULT_HEIGHT := 1.8
 const CHILD_SCALE := 0.6
-const WALK_SPEED := 1.1
-const CHILD_WALK_SPEED := 1.4
 const TURN_RATE := 8.0
-## Seconds a villager stands before picking a new spot.
-const IDLE_TIME := Vector2(1.5, 6.0)
-## Yard: from this far in front of the house's front wall, this deep, and this
-## far past each side wall.
-const YARD_GAP := 0.4
-const YARD_DEPTH := 1.8
-const YARD_SIDE_OVERHANG := 1.0
-## Plaza ring for the homeless, as distances from the civic anchor.
-const PLAZA_RING := Vector2(8.5, 11.5)
-## Candidate spots tried when picking where to stand next (see _free_spot).
-const SPOT_TRIES := 4
+## Below this ground speed (units per second) a villager stands (idle clip);
+## above the second, walks. Two thresholds so a wander's slow turns do not flicker.
+const IDLE_BELOW_SPEED := 0.12
+const WALK_ABOVE_SPEED := 0.22
+## Plans rebuilt per frame after the sim day ticks (the rest keep yesterday's
+## indoor pose, which is when everyone is inside anyway).
+const REPLANS_PER_FRAME := 96
+
 ## Screen-space pick radius in pixels, around the villager's chest.
 const PICK_RADIUS_PX := 14.0
 ## Animation budget: AnimationPlayers advanced per frame (round robin over the
@@ -79,6 +80,11 @@ var _anim_cursor := 0
 var _roster: Dictionary = {} # household_id -> villager report
 
 var _shadows_on := false
+var _layout: HETownLayout
+var _paths: HETownPaths
+var _day := 0
+var _time := 0.25 ## time of day, 0..1
+var _hour := 6.0 ## on the schedule's hour line (HEVillagerSchedule.hour_of)
 
 func _ready() -> void:
 	_shadows_on = GameState.villager_shadows
@@ -95,31 +101,72 @@ func _shadow_mode() -> GeometryInstance3D.ShadowCastingSetting:
 	return GeometryInstance3D.SHADOW_CASTING_SETTING_ON if _shadows_on else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## Rebuilds the roster from `reports` (get_villager_reports) and `layout`.
-## Existing villagers keep their node and position; only new ones are added
-## and departed ones removed.
+## Existing villagers keep their node; only new ones are added and departed
+## ones removed, and a villager's plan is rebuilt only if its role, house or
+## workplace changed.
 func sync(layout: HETownLayout, reports: Array) -> void:
+	if layout != _layout:
+		_layout = layout
+		_paths = HETownPaths.new(layout)
 	_roster.clear()
 	var wanted: Dictionary = {}
+	var work_sites: Dictionary = {} # employer business id -> site, or {}
 	for report in reports:
 		var household_id := int(report["household_id"])
 		_roster[household_id] = report
 		var workers: PackedInt32Array = report["worker_ages"]
 		var dependents: PackedInt32Array = report["dependent_ages"]
-		var yard := _yard_for(layout, report)
+		var home := _home_site(layout, report)
+		var employer := int(report["employer_business_id"])
+		if not work_sites.has(employer):
+			work_sites[employer] = _work_site(layout, employer)
 		for i in workers.size() + dependents.size():
 			var member_number := i + 1
 			var is_worker := i < workers.size()
 			var age: int = workers[i] if is_worker else dependents[i - workers.size()]
 			var child := not is_worker and age < HEHousehold.AGING_THRESHOLD_DAYS
+			var role := HEVillagerSchedule.ROLE_CHILD if child else HEVillagerSchedule.ROLE_ADULT
+			var work: Dictionary = {}
+			if is_worker and employer != -1 and not (work_sites[employer] as Dictionary).is_empty():
+				role = HEVillagerSchedule.ROLE_EMPLOYED
+				work = work_sites[employer]
 			var key := Vector2i(household_id, member_number)
 			wanted[key] = true
-			_place(key, yard, child)
+			_place(key, role, child, home, work)
 	for key in _villagers.keys():
 		if not wanted.has(key):
 			(_villagers[key]["node"] as Node3D).queue_free()
 			_villagers.erase(key)
 	_anim_order = _villagers.keys()
 	_anim_cursor = 0
+
+## The sim day (the schedule's per-day jitter and rosters follow it). Plans
+## for the new day are built over the next frames.
+func set_day(day: int) -> void:
+	if day == _day:
+		return
+	_day = day
+	if _is_idle():
+		update_now()
+
+## The Town view's clock (0 = midnight, 0.5 = noon).
+func set_time(time_of_day: float) -> void:
+	_time = fposmod(time_of_day, 1.0)
+	_hour = HEVillagerSchedule.hour_of(_time)
+	if _is_idle():
+		update_now()
+
+## Puts every villager where the schedule says it is now (used while the layer
+## is not processing, and by checks).
+func update_now() -> void:
+	for key in _villagers:
+		var entry: Dictionary = _villagers[key]
+		if entry["plan_day"] != _day:
+			_replan(entry)
+		_update_entry(entry, 0.0)
+
+func _is_idle() -> bool:
+	return paused or process_mode == Node.PROCESS_MODE_DISABLED or not is_inside_tree()
 
 func villager_count() -> int:
 	return _villagers.size()
@@ -132,20 +179,41 @@ func villager_keys() -> Array:
 func household_report(household_id: int) -> Dictionary:
 	return _roster.get(household_id, {})
 
-## Ground position of a villager, or Vector3.INF.
+## Ground position of a villager (the door while inside), or Vector3.INF.
 func villager_position(key: Vector2i) -> Vector3:
 	if not _villagers.has(key):
 		return Vector3.INF
 	return (_villagers[key]["node"] as Node3D).position
 
+## Whether the villager is drawn (false while indoors).
+func villager_visible(key: Vector2i) -> bool:
+	return _villagers.has(key) and (_villagers[key]["node"] as Node3D).visible
+
+## What the villager is doing now: {"visible", "activity", "site_id"} (see
+## HEVillagerSchedule), or {} for an unknown villager.
+func villager_activity(key: Vector2i) -> Dictionary:
+	if not _villagers.has(key):
+		return {}
+	var seg: Dictionary = _villagers[key]["seg"]
+	if seg.is_empty():
+		return {}
+	return {"visible": seg["type"] != "inside", "activity": seg["act"], "site_id": seg["site_id"]}
+
+## The role a villager is playing today (HEVillagerSchedule.ROLE_*), or "".
+func villager_role(key: Vector2i) -> String:
+	return str(_villagers[key]["role"]) if _villagers.has(key) else ""
+
 ## The villager drawn nearest `screen_position` within PICK_RADIUS_PX, as
-## Vector2i(household_id, member_number), or Vector2i(-1, -1).
+## Vector2i(household_id, member_number), or Vector2i(-1, -1). Villagers
+## indoors are not drawn and cannot be picked.
 func pick(camera: Camera3D, screen_position: Vector2) -> Vector2i:
 	var best := Vector2i(-1, -1)
 	var best_dist := PICK_RADIUS_PX
 	for key in _villagers:
 		var entry: Dictionary = _villagers[key]
 		var node := entry["node"] as Node3D
+		if not node.visible:
+			continue
 		var chest := node.position + Vector3.UP * ADULT_HEIGHT * (CHILD_SCALE if entry["child"] else 1.0) * 0.55
 		if camera.is_position_behind(chest):
 			continue
@@ -157,34 +225,30 @@ func pick(camera: Camera3D, screen_position: Vector2) -> Vector2i:
 
 # ---------------------------------------------------------------------------
 
-## Where a household's members mill about: {"center", "front", "side",
-## "half_width", "depth"} for a house yard, or {"plaza": true} for the plaza.
-func _yard_for(layout: HETownLayout, report: Dictionary) -> Dictionary:
+## The household's house site, or {} when homeless (or the house is not built).
+func _home_site(layout: HETownLayout, report: Dictionary) -> Dictionary:
 	var dwelling_id := int(report["dwelling_id"])
 	var site := layout.site_of_dwelling(dwelling_id) if dwelling_id != -1 else {}
 	if site.is_empty() or not bool(site.get("built", false)):
-		return {"plaza": true}
-	var position: Vector2 = site["position"]
-	var half: Vector2 = (site["footprint"] as Vector2) * 0.5
-	var access: Vector2 = site["access"]
-	var front := Vector2.from_angle(float(site["rotation"])).orthogonal()
-	if access.is_finite() and access.distance_to(position) > 0.01:
-		front = (access - position).normalized()
-	var side := front.orthogonal()
-	return {
-		"center": position + front * (half.y + YARD_GAP + YARD_DEPTH * 0.5),
-		"front": front,
-		"side": side,
-		"half_width": half.x + YARD_SIDE_OVERHANG,
-		"depth": YARD_DEPTH,
-	}
+		return {}
+	return site
 
-func _place(key: Vector2i, yard: Dictionary, child: bool) -> void:
+## The employer's site once it is open for work, else {}.
+func _work_site(layout: HETownLayout, business_id: int) -> Dictionary:
+	if business_id == -1:
+		return {}
+	var site := layout.site_of_business(business_id)
+	if site.is_empty() or not bool(site.get("built", false)) or bool(site.get("under_construction", false)):
+		return {}
+	return site
+
+func _place(key: Vector2i, role: String, child: bool, home: Dictionary, work: Dictionary) -> void:
 	var entry: Dictionary = _villagers.get(key, {})
 	var female := _is_female(key)
 	if not entry.is_empty() and (entry["child"] != child or entry["female"] != female):
 		(entry["node"] as Node3D).queue_free()
 		entry = {}
+	var sig := Vector3i(HEVillagerSchedule.ROLES.find(role), int(home.get("site_id", -1)), int(work.get("site_id", -1)))
 	if entry.is_empty():
 		var rng := RandomNumberGenerator.new()
 		rng.seed = hash("villager|%d|%d" % [key.x, key.y])
@@ -196,13 +260,17 @@ func _place(key: Vector2i, yard: Dictionary, child: bool) -> void:
 			"child": child,
 			"female": female,
 			"key": key,
-			"rng": rng,
-			"yard": yard,
-			"target": Vector3.INF,
-			"wait": rng.randf_range(0.0, IDLE_TIME.y),
+			"role": role,
+			"home": home,
+			"work": work,
+			"sig": sig,
+			"plan": {},
+			"plan_day": -1,
+			"seg": {},
+			"seg_applied": {},
+			"moving": false,
 			"anim_debt": 0.0, # seconds of animation not yet advanced
 		}
-		node.position = _free_spot(key, yard, rng)
 		_villagers[key] = entry
 		node.rotation.y = rng.randf() * TAU
 		_play(entry, IDLE_CLIP)
@@ -210,23 +278,78 @@ func _place(key: Vector2i, yard: Dictionary, child: bool) -> void:
 		# zoomed out), at a random point of the clip so idles are not in step.
 		if entry["anim"] != null:
 			(entry["anim"] as AnimationPlayer).advance(rng.randf_range(0.0, 2.0))
+		_replan(entry)
+		_update_entry(entry, 0.0)
 		return
-	if entry["yard"] != yard:
-		# Moved house (or became homeless): walk over from wherever they are.
-		entry["yard"] = yard
-		entry["target"] = _free_spot(key, yard, entry["rng"])
-		entry["wait"] = 0.0
+	if entry["sig"] != sig:
+		entry["role"] = role
+		entry["home"] = home
+		entry["work"] = work
+		entry["sig"] = sig
+		_replan(entry)
+		_update_entry(entry, 0.0)
+
+func _replan(entry: Dictionary) -> void:
+	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths)
+	entry["plan_day"] = _day
+	entry["seg"] = {}
 
 ## HETownView disables this node's processing while hidden or paused.
 func _process(delta: float) -> void:
 	if paused:
 		return
 	var step := minf(delta, 0.25)
+	var replans := REPLANS_PER_FRAME
 	for key in _villagers:
 		var entry: Dictionary = _villagers[key]
-		_step(entry, step)
-		entry["anim_debt"] = minf(float(entry["anim_debt"]) + step, ANIM_MAX_CATCH_UP)
+		if entry["plan_day"] != _day and replans > 0:
+			replans -= 1
+			_replan(entry)
+		_update_entry(entry, step)
+		if (entry["node"] as Node3D).visible:
+			entry["anim_debt"] = minf(float(entry["anim_debt"]) + step, ANIM_MAX_CATCH_UP)
 	_advance_animations()
+
+## Moves one villager to where its plan puts it at the layer's current time.
+## `delta` (seconds of real time since the last update, 0 for a jump) drives
+## the facing and the walk/idle clip.
+func _update_entry(entry: Dictionary, delta: float) -> void:
+	var node := entry["node"] as Node3D
+	var villager_plan: Dictionary = entry["plan"]
+	var seg: Dictionary = entry["seg"]
+	if seg.is_empty() or _hour >= float(seg["t1"]) or _hour < float(seg["t0"]):
+		seg = HEVillagerSchedule.segment_at(villager_plan, _hour)
+		entry["seg"] = seg
+	if seg["type"] == "inside":
+		if node.visible:
+			node.visible = false
+		if not is_same(entry["seg_applied"], seg):
+			entry["seg_applied"] = seg
+			var door: Vector2 = seg["pos"]
+			node.position = Vector3(door.x, 0.0, door.y)
+		return
+	var pos := HEVillagerSchedule.position_of(seg, _hour)
+	var next := Vector3(pos.x, 0.0, pos.y)
+	var moved := next - node.position
+	entry["seg_applied"] = seg
+	if not node.visible:
+		node.visible = true
+		node.position = next
+		return
+	node.position = next
+	if delta <= 0.0:
+		return
+	var distance := moved.length()
+	if distance > 0.0001 and distance < 2.0:
+		var yaw := atan2(moved.x, moved.z)
+		node.rotation.y = lerp_angle(node.rotation.y, yaw, minf(1.0, TURN_RATE * delta))
+	var speed := distance / delta
+	if entry["moving"] and speed < IDLE_BELOW_SPEED:
+		entry["moving"] = false
+		_play(entry, IDLE_CLIP)
+	elif not entry["moving"] and speed > WALK_ABOVE_SPEED and distance < 2.0:
+		entry["moving"] = true
+		_play(entry, WALK_CLIP)
 
 ## Advances up to ANIM_UPDATES_PER_FRAME on-screen villagers' animations by the
 ## time each has missed, continuing round robin from where the last frame
@@ -247,77 +370,12 @@ func _advance_animations() -> void:
 		if entry.is_empty() or entry["anim"] == null:
 			continue
 		var node := entry["node"] as Node3D
-		if not camera.is_position_in_frustum(node.position + Vector3.UP):
+		if not node.visible or not camera.is_position_in_frustum(node.position + Vector3.UP):
 			continue
 		(entry["anim"] as AnimationPlayer).advance(float(entry["anim_debt"]))
 		entry["anim_debt"] = 0.0
 		updated += 1
 	_anim_cursor = (_anim_cursor + scanned) % count
-
-func _step(entry: Dictionary, delta: float) -> void:
-	var node := entry["node"] as Node3D
-	var target: Vector3 = entry["target"]
-	if not target.is_finite():
-		entry["wait"] = float(entry["wait"]) - delta
-		if float(entry["wait"]) <= 0.0:
-			entry["target"] = _free_spot(entry["key"], entry["yard"], entry["rng"])
-			_play(entry, WALK_CLIP)
-		return
-	var to_target := target - node.position
-	to_target.y = 0.0
-	var speed := CHILD_WALK_SPEED if entry["child"] else WALK_SPEED
-	var step := speed * delta
-	if to_target.length() <= step:
-		node.position = target
-		entry["target"] = Vector3.INF
-		entry["wait"] = (entry["rng"] as RandomNumberGenerator).randf_range(IDLE_TIME.x, IDLE_TIME.y)
-		_play(entry, IDLE_CLIP)
-		return
-	var direction := to_target.normalized()
-	node.position += direction * step
-	var yaw := atan2(direction.x, direction.z)
-	node.rotation.y = lerp_angle(node.rotation.y, yaw, minf(1.0, TURN_RATE * delta))
-	if entry["anim"] != null and (entry["anim"] as AnimationPlayer).current_animation != WALK_CLIP:
-		_play(entry, WALK_CLIP)
-
-## A spot in `yard` for villager `key`: the best of SPOT_TRIES random spots,
-## the one farthest from where its housemates stand or are heading, so a family
-## spreads over the yard instead of piling up.
-func _free_spot(key: Vector2i, yard: Dictionary, rng: RandomNumberGenerator) -> Vector3:
-	var others: Array[Vector3] = []
-	for other_key in _villagers:
-		if other_key.x != key.x or other_key == key:
-			continue
-		var other: Dictionary = _villagers[other_key]
-		var target: Vector3 = other["target"]
-		others.append(target if target.is_finite() else (other["node"] as Node3D).position)
-	var best := _random_spot(yard, rng)
-	if others.is_empty():
-		return best
-	var best_gap := _nearest(best, others)
-	for i in SPOT_TRIES - 1:
-		var spot := _random_spot(yard, rng)
-		var gap := _nearest(spot, others)
-		if gap > best_gap:
-			best = spot
-			best_gap = gap
-	return best
-
-static func _nearest(spot: Vector3, others: Array[Vector3]) -> float:
-	var nearest := INF
-	for other in others:
-		nearest = minf(nearest, spot.distance_squared_to(other))
-	return nearest
-
-func _random_spot(yard: Dictionary, rng: RandomNumberGenerator) -> Vector3:
-	var spot: Vector2
-	if yard.get("plaza", false):
-		spot = Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(PLAZA_RING.x, PLAZA_RING.y)
-	else:
-		spot = (yard["center"] as Vector2) \
-			+ (yard["side"] as Vector2) * rng.randf_range(-float(yard["half_width"]), float(yard["half_width"])) \
-			+ (yard["front"] as Vector2) * rng.randf_range(-float(yard["depth"]) * 0.5, float(yard["depth"]) * 0.5)
-	return Vector3(spot.x, 0.0, spot.y)
 
 func _play(entry: Dictionary, clip: String) -> void:
 	var anim := entry["anim"] as AnimationPlayer

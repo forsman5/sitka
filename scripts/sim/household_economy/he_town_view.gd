@@ -122,6 +122,7 @@ var _villager_layer: HEVillagers
 ## a villager are never selected at once.
 var _selected_villager := Vector2i(-1, -1)
 var _villager_marker: MeshInstance3D
+var _shown_activity: Dictionary = {}
 var _unplaced_label: Label
 var _housing_label: Label
 var _housing: Dictionary = {}
@@ -200,11 +201,18 @@ static func occupants_text(dwelling: Dictionary) -> String:
 ## the shared RTS day/night keyframes, plus the HH:MM readout.
 func set_time_of_day(t: float) -> void:
 	_time_of_day = fposmod(t, 1.0)
+	if _villager_layer != null:
+		_villager_layer.set_time(_time_of_day)
 	if _clock_label == null or _sun == null:
 		return
 	DayNightCycle.apply_time(_time_of_day, _sun, _environment, 0.15)
 	var minutes := int(_time_of_day * 24.0 * 60.0)
 	_clock_label.text = "%02d:%02d" % [minutes / 60, minutes % 60]
+
+## The simulation's day, which seeds each villager's daily timetable.
+func set_sim_day(day: int) -> void:
+	if _villager_layer != null:
+		_villager_layer.set_day(day)
 
 func time_of_day() -> float:
 	return _time_of_day
@@ -722,7 +730,7 @@ func _refresh_info() -> void:
 		return
 	_home_button.visible = false
 	_person_button.visible = false
-	_villager_marker.visible = _selected_villager.x != -1
+	_villager_marker.visible = _selected_villager.x != -1 and _villager_layer.villager_visible(_selected_villager)
 	if _selected_villager.x != -1:
 		_selection_marker.visible = false
 		_info_panel.visible = true
@@ -778,7 +786,10 @@ func _refresh_villager_info() -> void:
 	if report.is_empty():
 		_info_body.text = ""
 		return
-	_info_body.text = person_text(report, member_number, _business_name(int(report["employer_business_id"])))
+	var employer_name := _business_name(int(report["employer_business_id"]))
+	var activity := _villager_layer.villager_activity(_selected_villager)
+	_shown_activity = activity
+	_info_body.text = person_text(report, member_number, employer_name, activity_text(activity, employer_name))
 	var dwelling_id := int(report["dwelling_id"])
 	_home_button.visible = true
 	_home_button.disabled = _layout == null or dwelling_id == -1 or _layout.site_of_dwelling(dwelling_id).is_empty()
@@ -786,7 +797,7 @@ func _refresh_villager_info() -> void:
 
 ## Lines of the person window for member `member_number` of a villager report
 ## (get_villager_reports entry); `employer_name` is "" when unknown.
-static func person_text(report: Dictionary, member_number: int, employer_name: String) -> String:
+static func person_text(report: Dictionary, member_number: int, employer_name: String, activity: String = "") -> String:
 	var workers: PackedInt32Array = report["worker_ages"]
 	var dependents: PackedInt32Array = report["dependent_ages"]
 	var index := member_number - 1
@@ -805,6 +816,8 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 			lines.append("Unemployed")
 		else:
 			lines.append("Works at %s" % (employer_name if employer_name != "" else "business %d" % employer_id))
+	if activity != "":
+		lines.append("Now: %s" % activity)
 	lines.append("Household: %d worker%s, %d dependent%s" % [workers.size(), "" if workers.size() == 1 else "s", dependents.size(), "" if dependents.size() == 1 else "s"])
 	match str(report["housing_status"]):
 		"housed":
@@ -812,6 +825,33 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 		"homeless":
 			lines.append("Homeless: sleeps by the town square")
 	return "\n".join(lines)
+
+## What a villager is doing, from HEVillagers.villager_activity() ({"visible",
+## "activity", "site_id"}); "" when unknown.
+static func activity_text(activity: Dictionary, employer_name: String) -> String:
+	if activity.is_empty():
+		return ""
+	var workplace := employer_name if employer_name != "" else "work"
+	match str(activity["activity"]):
+		"indoors":
+			return "Indoors at home"
+		"yard":
+			return "Outside the house"
+		"walk_work":
+			return "Walking to %s" % workplace
+		"walk_plaza":
+			return "Walking to the town square"
+		"walk_home":
+			return "Walking home"
+		"work":
+			return "Working at %s" % workplace
+		"work_inside":
+			return "Working inside %s" % workplace
+		"work_door":
+			return "Taking a break outside %s" % workplace
+		"plaza":
+			return "At the town square"
+	return ""
 
 func _business_name(business_id: int) -> String:
 	var report: Dictionary = _reports.get(business_id, {})
@@ -834,9 +874,15 @@ func _on_person_pressed() -> void:
 func _process(_delta: float) -> void:
 	if _selected_villager.x == -1 or _villager_marker == null:
 		return
+	var drawn := _villager_layer.villager_visible(_selected_villager)
+	_villager_marker.visible = drawn
 	var position := _villager_layer.villager_position(_selected_villager)
-	if position.is_finite():
+	if drawn and position.is_finite():
 		_villager_marker.position = position + Vector3.UP * 0.08
+	# The window follows what the villager is doing.
+	var activity := _villager_layer.villager_activity(_selected_villager)
+	if activity != _shown_activity:
+		_refresh_info()
 
 static func _state_text(report: Dictionary) -> String:
 	if report.is_empty():

@@ -235,7 +235,12 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 	game_state.villager_shadows = saved_shadows
 	game_state.settings_changed.emit()
 
-	# Each housed villager stands in its own yard.
+	# Schedule: at midnight nobody housed is drawn, at noon workers are at work.
+	# Everything after this runs at an at-home hour (see below).
+	_check_day_cycle(view, layout, reports)
+
+	# Each housed villager stands in its own yard (evening, before bedtime).
+	view.set_time_of_day(20.2 / 24.0)
 	var housed_key := Vector2i(-1, -1)
 	var far := 0
 	for report in reports:
@@ -252,10 +257,11 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 	check(housed_key.x != -1, "Some villager has a house")
 	check(far == 0, "Villagers mill in front of their own house (%d too far)" % far)
 
-	# Milling: they move while the town runs and freeze while paused.
+	# Milling: they move while the town clock runs and freeze while paused.
 	var start: Vector3 = view.villagers().villager_position(housed_key)
 	view.set_villagers_paused(false)
 	for i in 120:
+		view.set_time_of_day((20.2 + 0.004 * i) / 24.0)
 		view.villagers()._process(0.1)
 	var moved := false
 	for key in view.villagers().villager_keys():
@@ -294,6 +300,59 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 	check(not view.visible and dashboard._selected_person_household_id == picked.x and dashboard._selected_person_number == picked.y, "Person details opens the dashboard person page")
 	dashboard._set_town_mode(true)
 	await process_frame
+
+## Night and day: housed villagers are all indoors (hidden) at midnight, and
+## employed workers are at their job at noon. Leaves the view at noon.
+func _check_day_cycle(view, layout: HETownLayout, reports: Array) -> void:
+	var layer = view.villagers()
+	view.set_time_of_day(0.0)
+	var visible_housed := 0
+	var homeless_visible := 0
+	var homeless := 0
+	for report in reports:
+		var housed := int(report["dwelling_id"]) != -1
+		var count: int = (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
+		for n in range(1, count + 1):
+			var drawn: bool = layer.villager_visible(Vector2i(int(report["household_id"]), n))
+			if housed and drawn:
+				visible_housed += 1
+			if not housed:
+				homeless += 1
+				homeless_visible += 1 if drawn else 0
+	check(visible_housed == 0, "Nobody housed is visible at midnight (%d are)" % visible_housed)
+	check(homeless_visible == homeless, "Homeless villagers stay visible at midnight")
+	view.set_time_of_day(0.5)
+	var at_work := 0
+	var workers := 0
+	for report in reports:
+		var employer := int(report["employer_business_id"])
+		var work := layout.site_of_business(employer) if employer != -1 else {}
+		if work.is_empty():
+			continue
+		var worker_count: int = (report["worker_ages"] as PackedInt32Array).size()
+		for n in range(1, worker_count + 1):
+			var key := Vector2i(int(report["household_id"]), n)
+			workers += 1
+			var position: Vector3 = layer.villager_position(key)
+			var near := layout.site_contains(work, Vector2(position.x, position.z)) or Vector2(position.x, position.z).distance_to(work["position"]) < 4.0 + maxf((work["footprint"] as Vector2).x, (work["footprint"] as Vector2).y)
+			if near:
+				at_work += 1
+	check(workers > 0, "The seeded town has employed workers")
+	check(at_work == workers, "Workers are at work at noon (%d of %d)" % [at_work, workers])
+	# A hidden selected villager keeps the person window open, with the ring hidden.
+	var hidden_key := Vector2i(-1, -1)
+	for report in reports:
+		if int(report["dwelling_id"]) != -1:
+			hidden_key = Vector2i(int(report["household_id"]), 1)
+			break
+	if hidden_key.x != -1:
+		view.set_time_of_day(0.0)
+		view.select_villager(hidden_key.x, hidden_key.y)
+		check(view.selected_villager() == hidden_key and view._info_panel.visible, "A hidden villager can still be selected from the dashboard")
+		check(view._info_body.text.contains("Indoors"), "The person window says they are indoors (got '%s')" % view._info_body.text)
+		check(not view._villager_marker.visible, "The selection ring hides while the villager is indoors")
+		check(layer.pick(view.camera(), view.camera().unproject_position(layer.villager_position(hidden_key) + Vector3.UP)) != hidden_key, "Hidden villagers cannot be picked")
+		view.clear_selection()
 
 ## Screen position (view-local) of a town-coordinate point, via the camera.
 func _screen_of(view, town_point: Vector2) -> Vector2:
