@@ -204,7 +204,7 @@ var herd_events: Array[Dictionary] = []
 ## labor_applied.
 var care_worker_days: float = 0.0
 ## Kind.HERD only: the herd size this ranch culls back down to each review.
-## Seeded from he_simulation.gd's HERD_CULL_TARGET species default and then
+## Seeded from he_simulation.gd's default_cull_target (from the ranch's land) and then
 ## player-configurable through HESimulation.set_herd_cull_target(), which
 ## also re-derives max_capacity from it. 0.0 = "not set, use the species
 ## default" (any builder that doesn't seed one still works).
