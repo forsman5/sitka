@@ -157,15 +157,19 @@ func _dispatch_shipments() -> void:
 			var destination: HESimulation = towns[destination_id]
 			for commodity in HESimulation.EXPORT_PRIORITY:
 				var offer := source.get_valley_trade_offer(commodity)
-				if offer <= 0.0001:
+				if offer["quantity"] <= 0.0001:
 					continue
 				var source_price := source.get_valley_trade_price(commodity)
 				var destination_price := destination.get_valley_trade_price(commodity)
-				var gap: float = destination_price - source_price - edge.toll - edge.risk * 2.0
+				var seller_price: float = maxf(source_price, offer["min_price"])
+				var gap: float = destination_price - seller_price - edge.toll - edge.risk * 2.0
 				if gap < MIN_PRICE_GAP:
 					continue
+				# Split the price room between the origin and destination Traders.
+				# Transport cost is a hurdle in the route decision, as elsewhere here.
+				var unit_price: float = seller_price + gap * 0.5
 				opportunities.append({"source": source_id, "destination": destination_id, "edge": edge_id,
-					"commodity": commodity, "gap": gap, "price": source_price})
+					"commodity": commodity, "gap": gap, "price": unit_price, "seller_price": seller_price})
 	opportunities.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["commodity"] == Commodity.Type.GRAIN and b["commodity"] != Commodity.Type.GRAIN:
 			return true
@@ -186,13 +190,14 @@ func _dispatch_shipments() -> void:
 		var commodity: Commodity.Type = opportunity["commodity"]
 		var source: HESimulation = towns[source_id]
 		var destination: HESimulation = towns[destination_id]
-		var quantity: float = minf(source.get_valley_trade_offer(commodity),
+		var current_offer := source.get_valley_trade_offer(commodity)
+		var quantity: float = minf(current_offer["quantity"],
 			minf(remaining_edges[edge_id], minf(remaining_traders[source_id], remaining_traders[destination_id])))
 		quantity = minf(quantity, destination.get_valley_trader_purchase_capacity(opportunity["price"]))
 		if quantity <= 0.0001:
 			continue
 		var unit_price: float = opportunity["price"]
-		quantity = source.dispatch_valley_shipment(commodity, quantity, unit_price)
+		quantity = source.dispatch_valley_shipment(commodity, quantity, unit_price, opportunity["seller_price"])
 		if quantity <= 0.0001:
 			continue
 		towns[destination_id].pay_for_valley_shipment(commodity, quantity, unit_price)

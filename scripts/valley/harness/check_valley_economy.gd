@@ -34,7 +34,19 @@ func _run() -> void:
 		push_error("The valley is missing Oakmere's Charcoal Burner or Staithe's Toolsmith")
 		quit(1)
 		return
-	for _i in 360:
+	# Aldford's standalone excess-clearing bid is below its Farm's floor early
+	# on. Valley trade must still buy that reserved surplus at a viable price.
+	for _i in 30:
+		valley.advance_ticks(1)
+	var early_grain_exports := 0
+	for transaction in aldford.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30):
+		if transaction.get("direction") == "export" and transaction.get("commodity") == "Grain" and transaction.get("route") == "High Fell":
+			early_grain_exports += 1
+	if early_grain_exports == 0:
+		push_error("No early Aldford grain exports to High Fell; valley trade may be using the standalone Trader bid")
+		quit(1)
+		return
+	for _i in 330:
 		valley.advance_ticks(1)
 	if valley.day != 360 or aldford.day != 360:
 		push_error("Town clock diverged from valley clock")

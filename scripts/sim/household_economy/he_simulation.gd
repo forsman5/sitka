@@ -189,17 +189,11 @@ static func _default_export_enabled() -> Dictionary:
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
 
-## Trade: a third workplace kind (see he_business.gd's HEBusiness.Kind.
-## TRADER) standing in for the pooled model's Workplace.Kind.TRADE_CENTER
-## (see simulation.gd's _run_trade), adapted to a single settlement with no
-## neighbor to ship to. It buys only what SELLERS offer after local buyers have
-## had their turn (each seller decides what it can spare; see _seller_trade_offer)
-## and pays a bid below the reference price (see _run_trade), so it takes
-## leftovers and cannot outbid a household. The gap between what it pays and the
-## reference value is its own margin, which funds
-## its wages and, like Farm/Woodlot, drives its own weekly capacity
-## self-tuning (_evaluate_business_capacity/_reconcile_employment) --
-## nothing trade-specific there.
+## Standalone mode: _run_trade clears a single town's excess into an outside
+## market. Its low bid protects local buyers; the reference-price spread pays
+## the Trader. Valley mode skips that routine (external_trade_enabled = false).
+## ValleyEconomy instead matches two real towns and pays the seller from the
+## destination's price opportunity. Its seller floor still protects local use.
 const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
 ## Export bids, as a fraction of a good's reference price (_export_reference_price).
 ## A Trader starts every good at the old fixed half and moves it by TRADER_BID_STEP
@@ -4310,19 +4304,20 @@ func _apply_price_signals() -> void:
 			}
 	_price_signal_today = {}
 
-## The valley coordinator uses the local seller's export offer and staffed
-## Trader capacity. The destination Trader pays on dispatch; goods arrive later.
-func get_valley_trade_offer(commodity: Commodity.Type) -> float:
+## Valley mode: the seller's reserve and minimum price are the constraints.
+## The standalone Trader's low excess-clearing bid is deliberately not used.
+## The coordinator compares this floor with the destination's market price.
+func get_valley_trade_offer(commodity: Commodity.Type) -> Dictionary:
 	var settlement_id := _resolve_settlement_id(-1)
 	var trader := _settlement_trader(settlement_id)
 	var seller := _business_selling(settlement_id, commodity)
 	if trader == null or seller == null:
-		return 0.0
+		return {"quantity": 0.0, "min_price": 0.0}
 	if not _trader_export_enabled.get(trader.id, {}).get(commodity, false):
-		return 0.0
+		return {"quantity": 0.0, "min_price": 0.0}
 	var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
-	var view := _trader_offer_view(trader, seller, commodity)
-	return minf(capacity, view["eligible"])
+	var offer := _seller_trade_offer(seller, commodity)
+	return {"quantity": minf(capacity, offer["quantity"]), "min_price": offer["min_price"]}
 
 func get_valley_trader_capacity() -> float:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
@@ -4352,20 +4347,29 @@ func get_valley_market_prices() -> Dictionary:
 		prices[Commodity.name_of(commodity)] = (markets[settlement_id] as HEMarket).price[commodity]
 	return prices
 
-func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_price: float) -> float:
-	var quantity: float = minf(requested, get_valley_trade_offer(commodity))
+## The origin Trader buys at the negotiated seller price and sells to the
+## destination Trader at the intertown price. Both values come from the matched
+## valley opportunity, never from the standalone excess-clearing bid.
+func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_price: float, seller_price: float) -> float:
+	var offer := get_valley_trade_offer(commodity)
+	if seller_price + 0.00001 < offer["min_price"] or sale_price + 0.00001 < seller_price:
+		return 0.0
+	var quantity: float = minf(requested, offer["quantity"])
 	if quantity <= 0.0001:
 		return 0.0
 	var settlement_id := _resolve_settlement_id(-1)
 	var trader := _settlement_trader(settlement_id)
 	var seller := _business_selling(settlement_id, commodity)
-	var view := _trader_offer_view(trader, seller, commodity)
-	var pay_price: float = view["bid"]
 	seller.consume(commodity, quantity)
-	seller.balance += quantity * pay_price
-	seller.last_revenue += quantity * pay_price
-	trader.balance += quantity * (sale_price - pay_price)
-	trader.last_revenue += quantity * (sale_price - pay_price)
+	seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
+	seller.balance += quantity * seller_price
+	seller.ledger_add("sales_export", quantity * seller_price)
+	seller.ledger_add_good("export", commodity, quantity)
+	seller.last_revenue += quantity * seller_price
+	var margin := quantity * (sale_price - seller_price)
+	trader.balance += margin
+	trader.ledger_add("trade_margin", margin)
+	trader.last_revenue += margin
 	trader.last_exported[commodity] = trader.last_exported.get(commodity, 0.0) + quantity
 	_export_revenue_total += quantity * sale_price
 	return quantity
@@ -4400,7 +4404,7 @@ func record_valley_transaction(direction: String, commodity: Commodity.Type, qua
 	else:
 		(_history.back() as Dictionary)["trader_transactions"].append(transaction)
 
-## Export, in three steps that each belong to someone:
+## Standalone outside-market export, in three steps that each belong to someone:
 ##   1. Every enabled good with a local seller gets a SELLER's offer: how much
 ##      stock it can spare after its own forecast of local use, and the least it
 ##      will take (_seller_trade_offer).
