@@ -58,6 +58,21 @@ func _run() -> void:
 	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
 	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
 
+	# Herds: every ranch/sheep farm shows animals, and they stay in the pasture.
+	var herds = view.livestock()
+	var expected_herds := 0
+	for report in dashboard._simulation.get_business_reports():
+		if report.has("herd_size") and float(report["herd_size"]) >= 1.0:
+			expected_herds += 1
+	check(expected_herds > 0 and herds.herd_count() == expected_herds, "Each herd business gets a drawn herd (%d drawn, %d expected)" % [herds.herd_count(), expected_herds])
+	check(herds.total_animals() > 0, "Herds draw animals")
+	for i in 120:
+		herds._process(0.1)
+	for site in layout.get_sites():
+		var rect: Rect2 = herds.graze_rect(site["footprint"])
+		for p in herds.animal_positions(int(site["site_id"])):
+			check(rect.grow(0.01).has_point(p), "Animal stays inside its pasture (%s outside %s)" % [p, rect])
+
 	var before := _positions(layout)
 	dashboard._set_town_mode(true)
 	await process_frame
