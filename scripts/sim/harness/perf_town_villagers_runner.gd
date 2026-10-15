@@ -3,7 +3,7 @@ extends Node
 ## Frame-time measurement of the Town view's villagers, as a node so it runs
 ## both from the desktop harness (perf_town_villagers.gd) and as a scene in a
 ## web export (scenes/sim/perf_town_villagers.tscn; pass the scene path and
-## `-- --households=120 --zoom=100,30` as the web shell's engine args).
+## `-- --households=120 --zoom=100,30 [--hour=7]` as the web shell's engine args).
 ##
 ## Builds the large village with `households` households (tenements so they
 ## are housed), opens the Town view and, for each zoom, times FRAMES frames in
@@ -26,9 +26,12 @@ func _ready() -> void:
 func _run() -> void:
 	var households := 120
 	var zooms: Array[float] = [100.0]
+	var hour := -1.0
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--households="):
 			households = argument.trim_prefix("--households=").to_int()
+		elif argument.begins_with("--hour="):
+			hour = argument.trim_prefix("--hour=").to_float()
 		elif argument.begins_with("--zoom="):
 			zooms.clear()
 			for part in argument.trim_prefix("--zoom=").split(","):
@@ -52,6 +55,8 @@ func _run() -> void:
 	await get_tree().process_frame
 	_dashboard._set_town_mode(true)
 	_view = _dashboard._town_view
+	if hour >= 0.0:
+		_dashboard._town_phase = hour / 24.0 # town clock start, e.g. --hour=7 for the morning commute
 	_layer = _view.villagers()
 	_log("town mode on, %d villagers, static memory %.0f MB" % [_view.villager_count(), OS.get_static_memory_usage() / 1048576.0])
 	await get_tree().process_frame

@@ -22,6 +22,7 @@ signal person_details_requested(household_id: int, member_number: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HEVillagers = preload("res://scripts/sim/household_economy/he_villagers.gd")
+const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
 const MODEL_DIR := "res://assets/models/buildings/"
@@ -91,6 +92,16 @@ const STAKE_COLOR := Color(0.4, 0.28, 0.16)
 const STAKE_SIZE := Vector3(0.3, 1.4, 0.3)
 const SELECTION_COLOR := Color(1.0, 0.9, 0.2, 0.45)
 
+## Winter snow: one shared shader material (shaders/town_snow.gdshader) whose
+## `cover` is driven by the season. Building meshes carry it as an overlay
+## (up-facing faces only, so roofs get a cap); a flat plane SNOW_LAYER_HEIGHT
+## above the ground carries it across roads, plazas and fields. The plane sits
+## above the road/plaza/path tops (0.08-0.10) and below building floors.
+const SNOW_SHADER := preload("res://shaders/town_snow.gdshader")
+const SNOW_LAYER_HEIGHT := 0.12
+## Days over which snow settles before winter starts and melts after it ends.
+const SNOW_RAMP_DAYS := 12
+
 static var _scene_cache: Dictionary = {}
 
 var _layout: HETownLayout
@@ -103,6 +114,11 @@ var _sun: DirectionalLight3D
 var _environment: Environment
 var _clock_label: Label
 var _time_of_day := 0.25
+var _snow_material: ShaderMaterial
+var _snow_ground_material: ShaderMaterial
+var _snow_tree_material: ShaderMaterial
+var _snow_layer: MeshInstance3D
+var _snow_cover := 0.0
 
 var _viewport: SubViewport
 var _camera: Camera3D
@@ -122,6 +138,7 @@ var _villager_layer: HEVillagers
 ## a villager are never selected at once.
 var _selected_villager := Vector2i(-1, -1)
 var _villager_marker: MeshInstance3D
+var _shown_activity: Dictionary = {}
 var _unplaced_label: Label
 var _housing_label: Label
 var _housing: Dictionary = {}
@@ -200,14 +217,47 @@ static func occupants_text(dwelling: Dictionary) -> String:
 ## the shared RTS day/night keyframes, plus the HH:MM readout.
 func set_time_of_day(t: float) -> void:
 	_time_of_day = fposmod(t, 1.0)
+	if _villager_layer != null:
+		_villager_layer.set_time(_time_of_day)
 	if _clock_label == null or _sun == null:
 		return
 	DayNightCycle.apply_time(_time_of_day, _sun, _environment, 0.15)
 	var minutes := int(_time_of_day * 24.0 * 60.0)
 	_clock_label.text = "%02d:%02d" % [minutes / 60, minutes % 60]
 
+## The simulation's day, which seeds each villager's daily timetable.
+func set_sim_day(day: int) -> void:
+	if _villager_layer != null:
+		_villager_layer.set_day(day)
+
 func time_of_day() -> float:
 	return _time_of_day
+
+## 0..1 snow cover for a simulation day: full through winter, settling over
+## the last SNOW_RAMP_DAYS of autumn and melting over the first of spring.
+static func snow_cover_for_day(day: int) -> float:
+	var winter_start := 3 * HESimulation.DAYS_PER_SEASON
+	var day_of_year := posmod(day, HESimulation.DAYS_PER_YEAR)
+	if day_of_year >= winter_start:
+		return 1.0
+	if day_of_year >= winter_start - SNOW_RAMP_DAYS:
+		return float(day_of_year - (winter_start - SNOW_RAMP_DAYS) + 1) / float(SNOW_RAMP_DAYS + 1)
+	if day_of_year < SNOW_RAMP_DAYS:
+		return 1.0 - float(day_of_year + 1) / float(SNOW_RAMP_DAYS + 1)
+	return 0.0
+
+## Sets how much of the town is under snow (0 bare .. 1 full).
+func set_snow_cover(amount: float) -> void:
+	_snow_cover = clampf(amount, 0.0, 1.0)
+	if _snow_material == null:
+		return
+	_snow_material.set_shader_parameter("cover", _snow_cover)
+	_snow_ground_material.set_shader_parameter("cover", _snow_cover)
+	_snow_tree_material.set_shader_parameter("cover", _snow_cover)
+	_snow_layer.visible = _snow_cover > 0.001
+
+func snow_cover() -> float:
+	return _snow_cover
 
 ## Selects the site holding `business_id` (no-op if it has none).
 func select_business(business_id: int) -> void:
@@ -325,6 +375,30 @@ func _build_world() -> void:
 	ground.material_override = _flat_material(GROUND_COLOR)
 	ground.name = "Ground"
 	_viewport.add_child(ground)
+
+	_snow_material = ShaderMaterial.new()
+	_snow_material.shader = SNOW_SHADER
+	# Conifer cones are steep (side normals point only ~17 degrees above the
+	# horizon), so trees let snow settle on much steeper faces than roofs do.
+	_snow_tree_material = ShaderMaterial.new()
+	_snow_tree_material.shader = SNOW_SHADER
+	_snow_tree_material.set_shader_parameter("settle_min", 0.05)
+	_snow_tree_material.set_shader_parameter("settle_range", 0.2)
+	_snow_tree_material.set_shader_parameter("opacity", 0.9)
+	# The ground layer is cooler and part see-through, so roads and fields
+	# read beneath it and the brighter roofs stand out against it.
+	_snow_ground_material = ShaderMaterial.new()
+	_snow_ground_material.shader = SNOW_SHADER
+	_snow_ground_material.set_shader_parameter("snow_color", Vector3(0.78, 0.84, 0.92))
+	_snow_ground_material.set_shader_parameter("opacity", 0.78)
+	_snow_layer = MeshInstance3D.new()
+	_snow_layer.mesh = plane
+	_snow_layer.material_override = _snow_ground_material
+	_snow_layer.position.y = SNOW_LAYER_HEIGHT
+	_snow_layer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_snow_layer.name = "Snow"
+	_viewport.add_child(_snow_layer)
+	set_snow_cover(_snow_cover)
 
 	_sites_root = Node3D.new()
 	_sites_root.name = "Sites"
@@ -596,6 +670,7 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 		mesh.size = BARN_SIZE
 		barn.mesh = mesh
 		barn.material_override = _flat_material(BARN_COLOR if occupied else BARN_COLOR.lerp(Color(0.5, 0.5, 0.5), 0.6))
+		barn.material_overlay = _snow_material
 		var holder := Node3D.new()
 		barn.position = Vector3(0.0, BARN_SIZE.y * 0.5, 0.0)
 		holder.add_child(barn)
@@ -604,11 +679,14 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	if not _scene_cache.has(path):
 		_scene_cache[path] = load(path)
 	var model := (_scene_cache[path] as PackedScene).instantiate() as Node3D
+	var overlay: Material = _snow_material
 	if not occupied:
-		var overlay := _flat_material(VACANT_OVERLAY)
-		overlay.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		for node in model.find_children("*", "MeshInstance3D", true, false):
-			(node as MeshInstance3D).material_overlay = overlay
+		var vacant := _flat_material(VACANT_OVERLAY)
+		vacant.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		vacant.next_pass = _snow_material
+		overlay = vacant
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_overlay = overlay
 	return model
 
 ## Scales a freshly built model to the art's width and sits it on the ground.
@@ -690,6 +768,7 @@ func _add_stand(body: Node3D, footprint: Vector2, seed_value: int) -> void:
 		cone.height = 4.0
 		tree.mesh = cone
 		tree.material_override = _flat_material(Color(0.12, 0.3, 0.14))
+		tree.material_overlay = _snow_tree_material
 		tree.position = Vector3(
 			rng.randf_range(-footprint.x * 0.5 + 8.0, footprint.x * 0.5 - 2.0),
 			2.0,
@@ -722,7 +801,7 @@ func _refresh_info() -> void:
 		return
 	_home_button.visible = false
 	_person_button.visible = false
-	_villager_marker.visible = _selected_villager.x != -1
+	_villager_marker.visible = _selected_villager.x != -1 and _villager_layer.villager_visible(_selected_villager)
 	if _selected_villager.x != -1:
 		_selection_marker.visible = false
 		_info_panel.visible = true
@@ -778,7 +857,10 @@ func _refresh_villager_info() -> void:
 	if report.is_empty():
 		_info_body.text = ""
 		return
-	_info_body.text = person_text(report, member_number, _business_name(int(report["employer_business_id"])))
+	var employer_name := _business_name(int(report["employer_business_id"]))
+	var activity := _villager_layer.villager_activity(_selected_villager)
+	_shown_activity = activity
+	_info_body.text = person_text(report, member_number, employer_name, activity_text(activity, employer_name))
 	var dwelling_id := int(report["dwelling_id"])
 	_home_button.visible = true
 	_home_button.disabled = _layout == null or dwelling_id == -1 or _layout.site_of_dwelling(dwelling_id).is_empty()
@@ -786,7 +868,7 @@ func _refresh_villager_info() -> void:
 
 ## Lines of the person window for member `member_number` of a villager report
 ## (get_villager_reports entry); `employer_name` is "" when unknown.
-static func person_text(report: Dictionary, member_number: int, employer_name: String) -> String:
+static func person_text(report: Dictionary, member_number: int, employer_name: String, activity: String = "") -> String:
 	var workers: PackedInt32Array = report["worker_ages"]
 	var dependents: PackedInt32Array = report["dependent_ages"]
 	var index := member_number - 1
@@ -805,6 +887,8 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 			lines.append("Unemployed")
 		else:
 			lines.append("Works at %s" % (employer_name if employer_name != "" else "business %d" % employer_id))
+	if activity != "":
+		lines.append("Now: %s" % activity)
 	lines.append("Household: %d worker%s, %d dependent%s" % [workers.size(), "" if workers.size() == 1 else "s", dependents.size(), "" if dependents.size() == 1 else "s"])
 	match str(report["housing_status"]):
 		"housed":
@@ -812,6 +896,33 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 		"homeless":
 			lines.append("Homeless: sleeps by the town square")
 	return "\n".join(lines)
+
+## What a villager is doing, from HEVillagers.villager_activity() ({"visible",
+## "activity", "site_id"}); "" when unknown.
+static func activity_text(activity: Dictionary, employer_name: String) -> String:
+	if activity.is_empty():
+		return ""
+	var workplace := employer_name if employer_name != "" else "work"
+	match str(activity["activity"]):
+		"indoors":
+			return "Indoors at home"
+		"yard":
+			return "Outside the house"
+		"walk_work":
+			return "Walking to %s" % workplace
+		"walk_plaza":
+			return "Walking to the town square"
+		"walk_home":
+			return "Walking home"
+		"work":
+			return "Working at %s" % workplace
+		"work_inside":
+			return "Working inside %s" % workplace
+		"work_door":
+			return "Taking a break outside %s" % workplace
+		"plaza":
+			return "At the town square"
+	return ""
 
 func _business_name(business_id: int) -> String:
 	var report: Dictionary = _reports.get(business_id, {})
@@ -834,9 +945,15 @@ func _on_person_pressed() -> void:
 func _process(_delta: float) -> void:
 	if _selected_villager.x == -1 or _villager_marker == null:
 		return
+	var drawn := _villager_layer.villager_visible(_selected_villager)
+	_villager_marker.visible = drawn
 	var position := _villager_layer.villager_position(_selected_villager)
-	if position.is_finite():
+	if drawn and position.is_finite():
 		_villager_marker.position = position + Vector3.UP * 0.08
+	# The window follows what the villager is doing.
+	var activity := _villager_layer.villager_activity(_selected_villager)
+	if activity != _shown_activity:
+		_refresh_info()
 
 static func _state_text(report: Dictionary) -> String:
 	if report.is_empty():

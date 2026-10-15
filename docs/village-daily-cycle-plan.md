@@ -71,35 +71,23 @@ Rule kept from the town view plan: the simulation owns economic truth, the layou
 - `check_town_view.gd`: villagers, picking, person window, Show home, Person details, both models.
 - `capture_town_view.gd` takes `--villager`, `--zoom` and `--tilt`.
 
+### Done (this PR)
+
+Phases 1-3 of the daily cycle:
+- `he_villager_schedule.gd`: a pure function of (villager key, sim day, time of day, home and work site, `HETownPaths`), with seeded +-30 minute jitter per villager and day and no stored state. `he_villagers.gd` only evaluates it each frame.
+- Night: housed villagers are hidden indoors about 21:00-05:30. Homeless villagers stay at the plaza all night.
+- Commute: 06:00-08:00 out and 17:00-19:30 home along road routes; speed is length / window, capped, so long commutes leave earlier. Unemployed adults go to the plaza, children stay near home.
+- Work: farm, pasture and woodlot workers wander inside their footprint; town-business workers are hidden inside with two short stints at the door.
+- The person window shows what the villager is doing; it stays open when they go indoors and the ring hides.
+- Checks: `check_villager_schedule.gd`, plus night and noon checks in `check_town_view.gd`.
+
 ### Remaining
 
-**1. Indoors at night.**
-- New `he_villager_schedule.gd`. A villager's state comes straight from `(key, sim day, time of day, roster)`, with no stored state, so pause, speed changes and fast-forward cannot drift it.
-- Housed villagers go inside between about 21:00 and 05:30, each with seeded jitter, and reappear at their door in the morning.
-- Homeless villagers stay visible at the plaza overnight, so homelessness shows on the map.
-- Uses the existing clock. No routing yet.
+**1. Zoomed-out detail (#93).** Drawing 480 full skinned models is most of what's left (about 7 ms in the browser). Past a zoom threshold, swap to a low-detail mesh or a batched stand-in.
 
-**2. Commuting.** Morning and evening walks along `HETownPaths`:
+**2. Split-off households near their parents.** See *Questions to settle*.
 
-| Time | Employed adult | Unemployed adult | Child |
-|------|----------------|------------------|-------|
-| 06:00–08:00 | Door → workplace | Door → plaza | Plays near home |
-| 17:00–19:30 | Workplace → home (some via the trader/plaza) | Plaza → home | Heads home |
-
-- Each leg's duration fits its window. Speed is path length ÷ duration, capped, so a long commute leaves earlier instead of sprinting.
-- `town_day_seconds` only changes real-time speed, never the route.
-
-**3. Work.**
-- Field, pasture and woodlot workers wander slowly inside the footprint from a seeded spot.
-- Town-business workers go inside (hidden) with brief trips to the door.
-- Unemployed adults loiter at the plaza.
-- Check: at noon, every employed worker is inside their employer's footprint.
-
-**4. Zoomed-out detail (#93).** Drawing 480 full skinned models is most of what's left (about 7 ms in the browser). Past a zoom threshold, swap to a low-detail mesh or a batched stand-in.
-
-**5. Split-off households near their parents.** See *Questions to settle*.
-
-**6. Polish.**
+**3. Polish.**
 - Evening market stop.
 - A visible homeless camp at the plaza.
 - Persistent member ids, replacing the `last_promoted_member_numbers` placeholder, so a villager keeps its identity when a housemate leaves.
