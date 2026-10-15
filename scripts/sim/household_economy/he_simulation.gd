@@ -785,6 +785,12 @@ var _emigrations_total := 0
 ## rather than lumping every population loss under one number.
 var _old_age_deaths_total := 0
 var _money_written_off_total := 0.0
+## The same total split by cause ("emigration", "old_age", "business_failure"),
+## so the money audit can say which sink is draining the town.
+var _money_written_off_by_cause: Dictionary = {}
+## Cash handed to a business at creation (startup_cash + tools): a source of
+## new money alongside export revenue.
+var _startup_injection_total := 0.0
 var _goods_written_off_total: Dictionary[Commodity.Type, float] = {}
 var _births_total := 0
 var _worker_promotions_total := 0
@@ -929,6 +935,7 @@ func add_new_business(b: HEBusiness) -> void:
 	if b.uses_tools() and _tools_in_play(b.settlement_id):
 		startup_allowance += float(crew) * b.tools_per_worker * (markets[b.settlement_id] as HEMarket).price[Commodity.Type.TOOLS]
 	b.balance += startup_allowance
+	_startup_injection_total += startup_allowance
 	b.ledger_add("injection", startup_allowance)
 	var startup_cycle := maxi(b.growth_days, b.startup_cycle_days)
 	b.startup_grace_until_day = day + (startup_cycle if startup_cycle > 0 else int(CASH_RUNWAY_DANGER_DAYS))
@@ -2337,6 +2344,8 @@ func get_settlement_summary(settlement_id: int) -> Dictionary:
 		"emigrations_total": _emigrations_total,
 		"old_age_deaths_total": _old_age_deaths_total,
 		"money_written_off_total": _money_written_off_total,
+		"money_written_off_by_cause": _money_written_off_by_cause.duplicate(),
+		"startup_injection_total": _startup_injection_total,
 		"births_total": _births_total,
 		"worker_promotions_total": _worker_promotions_total,
 		"export_revenue_total": _export_revenue_total,
@@ -2676,6 +2685,7 @@ func _fail_business(business_id: int, record: Dictionary) -> void:
 			goods_written_off[c] = amount
 			_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + amount
 	_money_written_off_total += b.balance
+	_money_written_off_by_cause["business_failure"] = float(_money_written_off_by_cause.get("business_failure", 0.0)) + b.balance
 	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + b.balance
 	_merge_goods_written_off(record, goods_written_off)
 	_log_event("business_failed", {
@@ -3401,7 +3411,7 @@ func _evaluate_emigration(record: Dictionary) -> void:
 			if homeless_household_ended:
 				to_remove.append(household_id)
 
-	var written_off := _write_off_and_remove_households(to_remove)
+	var written_off := _write_off_and_remove_households(to_remove, "emigration")
 	_emigrations_total += emigrations
 	record["emigrations"] = emigrations
 	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + float(written_off["money"])
@@ -3444,7 +3454,7 @@ func _evaluate_old_age(record: Dictionary) -> void:
 		if not _adopt_orphaned_dependents(household_id):
 			to_remove.append(household_id)
 
-	var written_off := _write_off_and_remove_households(to_remove)
+	var written_off := _write_off_and_remove_households(to_remove, "old_age")
 	_old_age_deaths_total += deaths
 	record["old_age_deaths"] = deaths
 	record["money_written_off"] = float(record.get("money_written_off", 0.0)) + float(written_off["money"])
@@ -3514,7 +3524,7 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 ## Returns {"money": float, "goods": Dictionary[Commodity.Type, float]} so
 ## each caller can fold the totals into ITS OWN daily-record fields under
 ## its own cause, rather than this helper guessing which one it's for.
-func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
+func _write_off_and_remove_households(household_ids: Array[int], cause: String = "") -> Dictionary:
 	var money_written_off := 0.0
 	var goods_written_off: Dictionary[Commodity.Type, float] = {}
 	for household_id in household_ids:
@@ -3529,6 +3539,7 @@ func _write_off_and_remove_households(household_ids: Array[int]) -> Dictionary:
 	_invalidate_employment()
 
 	_money_written_off_total += money_written_off
+	_money_written_off_by_cause[cause] = float(_money_written_off_by_cause.get(cause, 0.0)) + money_written_off
 	for c in goods_written_off.keys():
 		_goods_written_off_total[c] = _goods_written_off_total.get(c, 0.0) + goods_written_off[c]
 	return {"money": money_written_off, "goods": goods_written_off}
