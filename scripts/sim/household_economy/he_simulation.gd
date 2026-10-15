@@ -288,7 +288,7 @@ const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
 ## linear between (underfed herds lose more).
 const FODDER_PER_HEAD_PER_WINTER: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 3.0,
-	HEBusiness.Species.SHEEP: 0.6, # 3.0 * SHEEP_LAND_PER_HEAD (0.4) / CATTLE_LAND_PER_HEAD (2.0)
+	HEBusiness.Species.SHEEP: 0.6, # 3.0 * SHEEP_LAND_PER_HEAD (0.6) / CATTLE_LAND_PER_HEAD (3.0)
 }
 
 static func season_of_day(p_day: int) -> int:
@@ -344,26 +344,29 @@ static func seasonal_yield_scale(commodity: Commodity.Type, p_day: int) -> float
 ## with calf is one animal unit (AU), which a temperate, unimproved pasture
 ## carries on roughly 1.2-3 acres a year (Penn State: 1.2 ac/AU on good
 ## orchardgrass-clover; semi-arid rangeland needs far more); a mature sheep
-## is ~0.2 AU (0.27 with a lamb at foot). So cattle take 2.0 acres a head
-## here (no fertilizer or improved forage) and sheep 0.4, a 1:5 ratio.
+## is ~0.2 AU (0.27 with a lamb at foot). So cattle take 3.0 acres a head
+## here, the thin end of that range: unimproved pasture with no fertilizer,
+## and the ranch's own hay meadow, rest rotation and yards counted in -- and
+## sheep 0.6, a 1:5 ratio.
 ## Grazing-only: a rancher buying grain to cover a shortfall is a possible
 ## future mechanic, not implemented. A herd past its land stops growing at
 ## that ceiling and takes the harsher "neglected" mortality rate below.
-const CATTLE_LAND_PER_HEAD := 2.0
-const SHEEP_LAND_PER_HEAD := 0.4
+const CATTLE_LAND_PER_HEAD := 3.0
+const SHEEP_LAND_PER_HEAD := 0.6
 
 ## Share of a ranch's carrying capacity its cull target sits at: culling back
 ## to this, rather than to the ceiling itself, leaves room to grow between
 ## reviews and a margin for a bad year (range advice is to stock well below
 ## capacity; tame pasture can run higher).
-const HERD_STOCKING_UTILIZATION := 0.8
+const HERD_STOCKING_UTILIZATION := 0.75
 
-## Acreage a new ranch starts with: 375 acres of cattle pasture carries 187
-## head and culls at 150; 100 acres of sheep pasture carries 250 and culls
-## at 200 (the targets the pooled model used before ranches had land).
+## Acreage a new ranch starts with: 600 acres of cattle pasture carries 200
+## head and culls at 150; 160 acres of sheep pasture carries 266 and culls
+## at 200 (the targets the pooled model used before ranches had land). Big
+## enough that the town view's plot holds a full default herd.
 const DEFAULT_RANCH_LAND_ACRES: Dictionary[HEBusiness.Species, float] = {
-	HEBusiness.Species.CATTLE: 375.0,
-	HEBusiness.Species.SHEEP: 100.0,
+	HEBusiness.Species.CATTLE: 600.0,
+	HEBusiness.Species.SHEEP: 160.0,
 }
 
 static func land_per_head(species: HEBusiness.Species) -> float:
@@ -374,9 +377,9 @@ static func herd_land_capacity(species: HEBusiness.Species, land_acres: float) -
 	return land_acres / land_per_head(species)
 
 ## Default cull target for a ranch of `land_acres`: the stocking utilization
-## share of its carrying capacity, rounded down to whole head.
+## share of its carrying capacity, rounded to whole head.
 static func default_cull_target(species: HEBusiness.Species, land_acres: float) -> float:
-	return floorf(herd_land_capacity(species, land_acres) * HERD_STOCKING_UTILIZATION)
+	return roundf(herd_land_capacity(species, land_acres) * HERD_STOCKING_UTILIZATION)
 
 ## Reproduction, per HERD_EVAL_INTERVAL_DAYS: cattle bear a single calf on
 ## a roughly annual cycle; sheep both lamb more prolifically per ewe (often
