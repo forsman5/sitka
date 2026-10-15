@@ -5769,6 +5769,11 @@ func _average_price_history(settlement_id: int, c: Commodity.Type) -> float:
 ## (profitable, should grow); below it, it structurally can't sustain the
 ## households working there (unprofitable, should shrink), regardless of
 ## what its production recipe's rate happens to be.
+## Fraction paid above the subsistence-derived wage (0 = exactly subsistence).
+## An experiment lever for measure_household_slack / measure_wage_margin; the
+## capacity loop and every wage-linked floor read it through the reference wage.
+var reference_wage_margin: float = 0.0
+
 func _reference_wage_per_worker(settlement_id: int) -> float:
 	var total_workers := 0
 	var total_population := 0
@@ -5787,7 +5792,7 @@ func _reference_wage_per_worker(settlement_id: int) -> float:
 		for c in _household_cascade(settlement_id, need):
 			cheapest_unit_cost = minf(cheapest_unit_cost, _average_price_history(settlement_id, c) / need.value_of(c))
 		per_person_cost += cheapest_unit_cost * need.per_person_daily
-	return dependency_ratio * per_person_cost
+	return dependency_ratio * per_person_cost * (1.0 + reference_wage_margin)
 
 ## inventory_goods(), not just SUBSISTENCE_COMMODITIES -- every commodity that
 ## can actually sit in SOMEONE's inventory: household goods (grain/timber/wool),
