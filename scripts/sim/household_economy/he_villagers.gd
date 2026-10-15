@@ -57,6 +57,11 @@ const WALK_ABOVE_SPEED := 0.22
 ## Plans rebuilt per frame after the sim day ticks (the rest keep yesterday's
 ## indoor pose, which is when everyone is inside anyway).
 const REPLANS_PER_FRAME := 96
+## Update cadence (frames) off screen; zoomed out, one frame per FAR_STRIDE_ZOOM
+## of orthographic size, at most FAR_MAX_STRIDE.
+const OFFSCREEN_STRIDE := 8
+const FAR_STRIDE_ZOOM := 25.0
+const FAR_MAX_STRIDE := 4
 
 ## Screen-space pick radius in pixels, around the villager's chest.
 const PICK_RADIUS_PX := 14.0
@@ -72,7 +77,13 @@ const ANIM_MAX_CATCH_UP := 0.5
 static var _scene_cache: Dictionary = {}
 static var _skin_materials: Dictionary = {} # Color -> StandardMaterial3D
 
-var paused := false
+## While paused the layer does not process; it still jumps to where the
+## schedule puts everyone when the time changes (or when it becomes paused).
+var paused := false:
+	set(value):
+		paused = value
+		if value and is_inside_tree():
+			update_now()
 
 var _villagers: Dictionary = {} # Vector2i(household_id, member_number) -> entry
 var _anim_order: Array = [] # villager keys, the round-robin order
@@ -83,6 +94,7 @@ var _shadows_on := false
 var _layout: HETownLayout
 var _paths: HETownPaths
 var _day := 0
+var _frame := 0
 var _time := 0.25 ## time of day, 0..1
 var _hour := 6.0 ## on the schedule's hour line (HEVillagerSchedule.hour_of)
 
@@ -269,6 +281,10 @@ func _place(key: Vector2i, role: String, child: bool, home: Dictionary, work: Di
 			"seg": {},
 			"seg_applied": {},
 			"moving": false,
+			"hide_t0": 0.0, # plan hours the villager is known to stay indoors (hide_t0 >= hide_t1: unknown)
+			"hide_t1": 0.0,
+			"dt": 0.0, # real seconds since the last update
+			"phase": hash(key) & 7,
 			"anim_debt": 0.0, # seconds of animation not yet advanced
 		}
 		_villagers[key] = entry
@@ -293,21 +309,46 @@ func _replan(entry: Dictionary) -> void:
 	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths)
 	entry["plan_day"] = _day
 	entry["seg"] = {}
+	entry["hide_t0"] = 0.0
+	entry["hide_t1"] = 0.0
 
 ## HETownView disables this node's processing while hidden or paused.
+##
+## Cost control (the schedule is cheap, 480 of them each frame is not): villagers
+## indoors are skipped until their segment ends; the rest are updated every
+## frame while on screen and zoomed in, every few frames when zoomed far out
+## (they are a few pixels tall), and every OFFSCREEN_STRIDE frames off screen.
+## Updates are staggered by a per-villager phase and catch up on the time
+## they skipped.
 func _process(delta: float) -> void:
 	if paused:
 		return
 	var step := minf(delta, 0.25)
+	_frame += 1
+	var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+	var stride := 1
+	if camera != null and camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		stride = clampi(int(camera.size / FAR_STRIDE_ZOOM), 1, FAR_MAX_STRIDE)
 	var replans := REPLANS_PER_FRAME
 	for key in _villagers:
 		var entry: Dictionary = _villagers[key]
 		if entry["plan_day"] != _day and replans > 0:
 			replans -= 1
 			_replan(entry)
-		_update_entry(entry, step)
-		if (entry["node"] as Node3D).visible:
-			entry["anim_debt"] = minf(float(entry["anim_debt"]) + step, ANIM_MAX_CATCH_UP)
+		if entry["plan_day"] == _day and _hour >= float(entry["hide_t0"]) and _hour < float(entry["hide_t1"]):
+			continue # indoors until the segment ends
+		var owed := float(entry["dt"]) + step
+		var node := entry["node"] as Node3D
+		var cadence := OFFSCREEN_STRIDE
+		if camera == null or camera.is_position_in_frustum(node.position + Vector3.UP):
+			cadence = stride
+		if cadence > 1 and (_frame + int(entry["phase"])) % cadence != 0:
+			entry["dt"] = owed
+			continue
+		entry["dt"] = 0.0
+		_update_entry(entry, owed)
+		if node.visible:
+			entry["anim_debt"] = minf(float(entry["anim_debt"]) + owed, ANIM_MAX_CATCH_UP)
 	_advance_animations()
 
 ## Moves one villager to where its plan puts it at the layer's current time.
@@ -327,7 +368,11 @@ func _update_entry(entry: Dictionary, delta: float) -> void:
 			entry["seg_applied"] = seg
 			var door: Vector2 = seg["pos"]
 			node.position = Vector3(door.x, 0.0, door.y)
+		entry["hide_t0"] = float(seg["t0"])
+		entry["hide_t1"] = float(seg["t1"])
 		return
+	entry["hide_t0"] = 0.0
+	entry["hide_t1"] = 0.0
 	var pos := HEVillagerSchedule.position_of(seg, _hour)
 	var next := Vector3(pos.x, 0.0, pos.y)
 	var moved := next - node.position
