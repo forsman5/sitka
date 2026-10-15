@@ -345,7 +345,7 @@ func _process(delta: float) -> void:
 	if days_to_advance <= 0:
 		return
 	for i in range(days_to_advance):
-		_simulation.advance_ticks(1)
+		_advance_sim_day()
 		_day_accumulator -= 1.0
 	_presenter.note_simulated(days_to_advance)
 	if _presenter.due(delta):
@@ -361,10 +361,24 @@ func _advance_town_time(delta: float) -> void:
 	_town_phase = fposmod(after, 1.0)
 	_town_view.set_time_of_day(_town_phase)
 	if ticked:
-		_simulation.advance_ticks(1)
+		_advance_sim_day()
 		_town_view.set_sim_day(_simulation.day)
 		_presenter.note_simulated(1)
 		_refresh()
+
+## One sim day. The layout is brought up to date first so the sim's hiring
+## order (position_lookup) sees every finished building at the same point
+## whichever tab is open; the Town view's own reconcile is then a no-op.
+func _advance_sim_day() -> void:
+	if _town_layout != null:
+		_town_layout.reconcile(_simulation.get_business_reports(-1, false), _simulation.get_dwelling_reports(), _simulation.get_construction_reports())
+	_simulation.advance_ticks(1)
+
+## Where the town layout seats a business or house, for the sim's hiring order
+## (HESimulation.position_lookup); Vector2.INF when it has no site yet.
+func _town_site_position(kind: String, id: int) -> Vector2:
+	var site := _town_layout.site_of_dwelling(id) if kind == "dwelling" else _town_layout.site_of_business(id)
+	return site.get("position", Vector2.INF)
 
 func _load_scenario() -> void:
 	var builder := pending_builder
@@ -373,6 +387,7 @@ func _load_scenario() -> void:
 	_simulation = HESimulation.new(SEED, builder)
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
+	_simulation.position_lookup = _town_site_position
 	if _town_view != null:
 		_town_view.set_sim_day(_simulation.day)
 		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))

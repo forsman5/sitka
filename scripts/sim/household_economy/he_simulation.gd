@@ -754,6 +754,14 @@ var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_i
 var rng: RandomNumberGenerator
 var day: int = 0
 
+## Optional map positions, used only to order hiring (see _reconcile_employment).
+## `(kind: String, id: int) -> Vector2` where kind is "business" or "dwelling"
+## and the result is a position in one shared coordinate space, or Vector2.INF
+## when unknown. Unset (the default, and every headless run) keeps hiring in
+## plain household-id order. The sim has no geography of its own: the town
+## layout supplies this.
+var position_lookup: Callable = Callable()
+
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
@@ -3938,8 +3946,10 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 ## Weekly self-tuning step 2: lay off whole households (highest household ID
 ## first, an arbitrary but deterministic tie-break) from any business now
 ## over its (possibly just-reduced) capacity, then let every under-capacity
-## business hire from the resulting pool of unemployed households (lowest
-## household ID first). Businesses are processed in a fixed ID order for
+## business hire from the resulting pool of unemployed households: the one
+## living nearest the business first when `position_lookup` is set (household
+## ID breaks ties and a home with no known position ranks last), otherwise
+## lowest household ID first. Businesses are processed in a fixed ID order for
 ## hiring, so a lower-ID business gets first pick of the pool when two are
 ## expanding into the same freed labor at once -- a deterministic but real
 ## bias, same spirit as the pooled model's documented edge-order bias in
@@ -3990,13 +4000,13 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			if (households[household_id] as HEHousehold).employer_business_id == -1:
 				available.append(household_id)
 		available.sort()
-		var pool_index := 0
 		var local_business_ids := (settlements[settlement_id] as HESettlement).business_ids.duplicate()
 		local_business_ids.sort()
 		# Hires only move unemployed households into the business being
 		# filled, so one snapshot gives every business its starting count
 		# without a rebuild after each hire.
 		var hiring_snapshot := _employment_index()
+		var dwelling_positions: Dictionary = {} # dwelling_id -> position, looked up once
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
@@ -4011,15 +4021,43 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			# culling), and release its crew when none is expected. Until then the
 			# Butcher checks in run_household_economy.gd seed ranches near their cull
 			# target (_seed_ranches_near_cull_target) so the Butcher has input in year 1.
-			while employed_workers < b.capacity and pool_index < available.size():
-				var household_id: int = available[pool_index]
-				pool_index += 1
+			var business_position := _lookup_position("business", business_id)
+			while employed_workers < b.capacity and not available.is_empty():
+				var household_id: int = available.pop_at(_nearest_available_index(available, business_position, dwelling_positions))
 				var h: HEHousehold = households[household_id]
 				if h.worker_capacity() <= 0:
 					continue
 				h.employer_business_id = business_id
 				employed_workers += h.worker_capacity()
 				_log_event("job", {"household_id": household_id, "business_id": business_id, "settlement_id": settlement_id, "workers": h.worker_capacity()})
+
+## Position of a business or house from `position_lookup`, or Vector2.INF.
+func _lookup_position(kind: String, id: int) -> Vector2:
+	if not position_lookup.is_valid() or id == -1:
+		return Vector2.INF
+	return position_lookup.call(kind, id)
+
+## Index in `available` (ascending household ids) of the household that lives
+## nearest `business_position`; the lowest id wins a tie. Households with an
+## unknown home, or any pick when the business position is unknown, rank last,
+## so with no position data this is index 0: plain ascending id order.
+func _nearest_available_index(available: Array[int], business_position: Vector2, dwelling_positions: Dictionary) -> int:
+	if not business_position.is_finite():
+		return 0
+	var best := 0
+	var best_distance := INF
+	for i in available.size():
+		var dwelling_id: int = (households[available[i]] as HEHousehold).dwelling_id
+		if not dwelling_positions.has(dwelling_id):
+			dwelling_positions[dwelling_id] = _lookup_position("dwelling", dwelling_id)
+		var home: Vector2 = dwelling_positions[dwelling_id]
+		if not home.is_finite():
+			continue
+		var distance := home.distance_squared_to(business_position)
+		if distance < best_distance:
+			best_distance = distance
+			best = i
+	return best
 
 ## Step: prepare and clear local offers/requests, one commodity at a time.
 ## Snapshots every household's balance ONCE before either commodity clears
