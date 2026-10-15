@@ -22,6 +22,7 @@ signal person_details_requested(household_id: int, member_number: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HEVillagers = preload("res://scripts/sim/household_economy/he_villagers.gd")
+const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
 const MODEL_DIR := "res://assets/models/buildings/"
@@ -91,6 +92,16 @@ const STAKE_COLOR := Color(0.4, 0.28, 0.16)
 const STAKE_SIZE := Vector3(0.3, 1.4, 0.3)
 const SELECTION_COLOR := Color(1.0, 0.9, 0.2, 0.45)
 
+## Winter snow: one shared shader material (shaders/town_snow.gdshader) whose
+## `cover` is driven by the season. Building meshes carry it as an overlay
+## (up-facing faces only, so roofs get a cap); a flat plane SNOW_LAYER_HEIGHT
+## above the ground carries it across roads, plazas and fields. The plane sits
+## above the road/plaza/path tops (0.08-0.10) and below building floors.
+const SNOW_SHADER := preload("res://shaders/town_snow.gdshader")
+const SNOW_LAYER_HEIGHT := 0.12
+## Days over which snow settles before winter starts and melts after it ends.
+const SNOW_RAMP_DAYS := 12
+
 static var _scene_cache: Dictionary = {}
 
 var _layout: HETownLayout
@@ -103,6 +114,10 @@ var _sun: DirectionalLight3D
 var _environment: Environment
 var _clock_label: Label
 var _time_of_day := 0.25
+var _snow_material: ShaderMaterial
+var _snow_ground_material: ShaderMaterial
+var _snow_layer: MeshInstance3D
+var _snow_cover := 0.0
 
 var _viewport: SubViewport
 var _camera: Camera3D
@@ -208,6 +223,31 @@ func set_time_of_day(t: float) -> void:
 
 func time_of_day() -> float:
 	return _time_of_day
+
+## 0..1 snow cover for a simulation day: full through winter, settling over
+## the last SNOW_RAMP_DAYS of autumn and melting over the first of spring.
+static func snow_cover_for_day(day: int) -> float:
+	var winter_start := 3 * HESimulation.DAYS_PER_SEASON
+	var day_of_year := posmod(day, HESimulation.DAYS_PER_YEAR)
+	if day_of_year >= winter_start:
+		return 1.0
+	if day_of_year >= winter_start - SNOW_RAMP_DAYS:
+		return float(day_of_year - (winter_start - SNOW_RAMP_DAYS) + 1) / float(SNOW_RAMP_DAYS + 1)
+	if day_of_year < SNOW_RAMP_DAYS:
+		return 1.0 - float(day_of_year + 1) / float(SNOW_RAMP_DAYS + 1)
+	return 0.0
+
+## Sets how much of the town is under snow (0 bare .. 1 full).
+func set_snow_cover(amount: float) -> void:
+	_snow_cover = clampf(amount, 0.0, 1.0)
+	if _snow_material == null:
+		return
+	_snow_material.set_shader_parameter("cover", _snow_cover)
+	_snow_ground_material.set_shader_parameter("cover", _snow_cover)
+	_snow_layer.visible = _snow_cover > 0.001
+
+func snow_cover() -> float:
+	return _snow_cover
 
 ## Selects the site holding `business_id` (no-op if it has none).
 func select_business(business_id: int) -> void:
@@ -325,6 +365,23 @@ func _build_world() -> void:
 	ground.material_override = _flat_material(GROUND_COLOR)
 	ground.name = "Ground"
 	_viewport.add_child(ground)
+
+	_snow_material = ShaderMaterial.new()
+	_snow_material.shader = SNOW_SHADER
+	# The ground layer is cooler and part see-through, so roads and fields
+	# read beneath it and the brighter roofs stand out against it.
+	_snow_ground_material = ShaderMaterial.new()
+	_snow_ground_material.shader = SNOW_SHADER
+	_snow_ground_material.set_shader_parameter("snow_color", Vector3(0.78, 0.84, 0.92))
+	_snow_ground_material.set_shader_parameter("opacity", 0.78)
+	_snow_layer = MeshInstance3D.new()
+	_snow_layer.mesh = plane
+	_snow_layer.material_override = _snow_ground_material
+	_snow_layer.position.y = SNOW_LAYER_HEIGHT
+	_snow_layer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_snow_layer.name = "Snow"
+	_viewport.add_child(_snow_layer)
+	set_snow_cover(_snow_cover)
 
 	_sites_root = Node3D.new()
 	_sites_root.name = "Sites"
@@ -596,6 +653,7 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 		mesh.size = BARN_SIZE
 		barn.mesh = mesh
 		barn.material_override = _flat_material(BARN_COLOR if occupied else BARN_COLOR.lerp(Color(0.5, 0.5, 0.5), 0.6))
+		barn.material_overlay = _snow_material
 		var holder := Node3D.new()
 		barn.position = Vector3(0.0, BARN_SIZE.y * 0.5, 0.0)
 		holder.add_child(barn)
@@ -604,11 +662,14 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	if not _scene_cache.has(path):
 		_scene_cache[path] = load(path)
 	var model := (_scene_cache[path] as PackedScene).instantiate() as Node3D
+	var overlay: Material = _snow_material
 	if not occupied:
-		var overlay := _flat_material(VACANT_OVERLAY)
-		overlay.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		for node in model.find_children("*", "MeshInstance3D", true, false):
-			(node as MeshInstance3D).material_overlay = overlay
+		var vacant := _flat_material(VACANT_OVERLAY)
+		vacant.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		vacant.next_pass = _snow_material
+		overlay = vacant
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_overlay = overlay
 	return model
 
 ## Scales a freshly built model to the art's width and sits it on the ground.

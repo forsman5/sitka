@@ -60,3 +60,9 @@ Measured (`build_three_business_economy`, seed 4242, grain households could not 
 ## Not in this change
 
 Town specialization and inter-town shipment tuning are untouched; the pooled valley (`simulation.gd`) is unchanged. Both can build on this model.
+
+## Town view snow
+
+The Town view shows winter. `HETownView.snow_cover_for_day(day)` gives 0..1: full through winter, settling over the last 12 days of autumn and melting over the first 12 of spring. The dashboard sets it every header refresh (`set_snow_cover`).
+
+`shaders/town_snow.gdshader` does both layers from one shader: a cool, part see-through plane just above the ground (over roads, plazas, fields) and a shared overlay on every building mesh that whitens only up-facing faces, so roofs get a cap and walls stay clear. Rendering only; no simulation state is read or changed.
