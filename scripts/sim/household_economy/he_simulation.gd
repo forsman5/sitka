@@ -1003,6 +1003,7 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 			"name": house.name,
 			"type_key": house.type_key,
 			"capacity": house.capacity_households,
+			"stone": house.is_stone,
 			"occupant_household_ids": occupants.get(house.id, [] as Array[int]),
 		})
 	return out
@@ -1060,6 +1061,12 @@ func _reconcile_all_housing() -> void:
 ## are always the newest households -- the rule housing used before houses were
 ## assigned -- and homeless counts are unchanged by assignment.
 func _reconcile_housing(settlement_id: int) -> void:
+	_assign_dwellings(settlement_id)
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+		var h: HEHousehold = households[household_id]
+		h.home_morale_bonus = (dwellings[h.dwelling_id] as HEHouse).morale_bonus() if dwellings.has(h.dwelling_id) else 0.0
+
+func _assign_dwellings(settlement_id: int) -> void:
 	var s: HESettlement = settlements[settlement_id]
 	var ids: Array[int] = []
 	ids.assign(s.household_ids)
@@ -1119,7 +1126,7 @@ func _innermost_plain_house(settlement_id: int) -> HEHouse:
 	var best: HEHouse = null
 	for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
 		var house: HEHouse = dwellings[dwelling_id]
-		if not house.is_dense() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
+		if house.is_plain() and not _upgrade_pending(house.id) and (best == null or house.id < best.id):
 			best = house
 	return best
 
@@ -1133,7 +1140,7 @@ func _upgrade_pending(dwelling_id: int) -> bool:
 func _count_plain_houses(s: HESettlement) -> int:
 	var count := 0
 	for dwelling_id in s.dwelling_ids:
-		if not (dwellings[dwelling_id] as HEHouse).is_dense():
+		if (dwellings[dwelling_id] as HEHouse).is_plain():
 			count += 1
 	return count
 
@@ -1205,6 +1212,8 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 		return "already built"
 	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
 		return "under construction"
+	if option.get("upgrade_only", false) and _innermost_plain_house(settlement_id) == null:
+		return "no plain house to upgrade"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1255,7 +1264,7 @@ func build_government_building(settlement_id: int, type_key: String) -> bool:
 			"upgrade_dwelling_id": -1, "complete_day": day + construction_days}
 		if option.get("category", "") == "housing":
 			var house: HEHouse = option["make"].call(next_dwelling_id(), settlement_id)
-			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() else null
+			var upgradable := _innermost_plain_house(settlement_id) if house.is_dense() or house.is_stone else null
 			if upgradable != null:
 				entry["upgrade_dwelling_id"] = upgradable.id
 			entry["record"] = house
@@ -1284,10 +1293,13 @@ func _finish_due_constructions() -> void:
 		var record = entry["record"]
 		if record is HEHouse:
 			var target: int = entry["upgrade_dwelling_id"]
-			if target != -1 and dwellings.has(target) and not (dwellings[target] as HEHouse).is_dense():
-				(dwellings[target] as HEHouse).upgrade_to_dense()
+			if target != -1 and dwellings.has(target) and (dwellings[target] as HEHouse).is_plain():
+				if (record as HEHouse).is_stone:
+					(dwellings[target] as HEHouse).upgrade_to_stone()
+				else:
+					(dwellings[target] as HEHouse).upgrade_to_dense()
 				_reconcile_housing(int(entry["settlement_id"]))
-			else:
+			elif not (record as HEHouse).is_stone:
 				add_dwelling(record)
 		elif entry["startup"]:
 			add_new_business(record)
