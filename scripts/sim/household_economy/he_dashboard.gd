@@ -345,7 +345,7 @@ func _process(delta: float) -> void:
 	if days_to_advance <= 0:
 		return
 	for i in range(days_to_advance):
-		_simulation.advance_ticks(1)
+		_advance_sim_day()
 		_day_accumulator -= 1.0
 	_presenter.note_simulated(days_to_advance)
 	if _presenter.due(delta):
@@ -361,10 +361,24 @@ func _advance_town_time(delta: float) -> void:
 	_town_phase = fposmod(after, 1.0)
 	_town_view.set_time_of_day(_town_phase)
 	if ticked:
-		_simulation.advance_ticks(1)
+		_advance_sim_day()
 		_town_view.set_sim_day(_simulation.day)
 		_presenter.note_simulated(1)
 		_refresh()
+
+## One sim day. The layout is brought up to date first so the sim's hiring
+## order (position_lookup) sees every finished building at the same point
+## whichever tab is open; the Town view's own reconcile is then a no-op.
+func _advance_sim_day() -> void:
+	if _town_layout != null:
+		_town_layout.reconcile(_simulation.get_business_reports(-1, false), _simulation.get_dwelling_reports(), _simulation.get_construction_reports())
+	_simulation.advance_ticks(1)
+
+## Where the town layout seats a business or house, for the sim's hiring order
+## (HESimulation.position_lookup); Vector2.INF when it has no site yet.
+func _town_site_position(kind: String, id: int) -> Vector2:
+	var site := _town_layout.site_of_dwelling(id) if kind == "dwelling" else _town_layout.site_of_business(id)
+	return site.get("position", Vector2.INF)
 
 func _load_scenario() -> void:
 	var builder := pending_builder
@@ -373,6 +387,7 @@ func _load_scenario() -> void:
 	_simulation = HESimulation.new(SEED, builder)
 	_last_town_chart_day = -1
 	_town_layout = HETownLayout.new(HETownLayout.scenario_key_for(builder), _town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
+	_simulation.position_lookup = _town_site_position
 	if _town_view != null:
 		_town_view.set_sim_day(_simulation.day)
 		_town_view.sync(_town_layout, _simulation.get_business_reports(), _simulation.get_housing_report(_town_settlement_id()), _simulation.get_dwelling_reports(), _simulation.get_villager_reports(_town_settlement_id()))
@@ -1678,11 +1693,13 @@ func _refresh_household_detail() -> void:
 	# TODO: pull names -- members are just numbered by index for now.
 	_add_household_detail_heading("Members (%d)" % h["headcount"])
 	var member_index := 1
-	for age in h["worker_ages"]:
-		_add_member_link(member_index, "worker", age)
+	var worker_sexes: Array = h["worker_sexes"]
+	var dependent_sexes: Array = h["dependent_sexes"]
+	for i in (h["worker_ages"] as Array).size():
+		_add_member_link(member_index, "worker", h["worker_ages"][i], worker_sexes[i])
 		member_index += 1
-	for age in h["dependent_ages"]:
-		_add_member_link(member_index, "dependent", age)
+	for i in (h["dependent_ages"] as Array).size():
+		_add_member_link(member_index, "dependent", h["dependent_ages"][i], dependent_sexes[i])
 		member_index += 1
 
 	_add_household_detail_heading("Health and morale")
@@ -1733,9 +1750,9 @@ func _refresh_household_detail() -> void:
 			effect.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3))
 			_household_detail_content.add_child(effect)
 
-func _add_member_link(member_number: int, role: String, age: int) -> void:
+func _add_member_link(member_number: int, role: String, age: int, sex: int) -> void:
 	var link := Button.new()
-	link.text = "Member %d: %s, age %s" % [member_number, role, _format_age(age)]
+	link.text = "Member %d: %s, %s, age %s" % [member_number, HEHousehold.sex_label(sex).to_lower(), role, _format_age(age)]
 	link.flat = true
 	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	link.tooltip_text = "Open person detail"
@@ -1821,7 +1838,7 @@ func _refresh_person_detail() -> void:
 	household_row.add_child(household_link)
 	_person_detail_content.add_child(household_row)
 
-	_add_person_line("%s, %s, age %s" % [p["role"], p["life_stage"].to_lower(), _format_age(p["age_days"])])
+	_add_person_line("%s, %s, %s, age %s" % [HEHousehold.sex_label(p["sex"]), p["role"].to_lower(), p["life_stage"].to_lower(), _format_age(p["age_days"])])
 	_add_person_line(p["note"])
 	if p["role"] == "Worker":
 		var employer_id: int = p["employer_business_id"]
