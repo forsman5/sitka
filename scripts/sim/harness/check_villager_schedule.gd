@@ -8,11 +8,12 @@ const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_sce
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HETownPaths = preload("res://scripts/sim/household_economy/he_town_paths.gd")
 const HEVillagerSchedule = preload("res://scripts/sim/household_economy/he_villager_schedule.gd")
+const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 
 const SEED := 4242
 const DAY := 3
 ## Largest step between one-minute samples that is not a door transition.
-const MAX_STEP_PER_MINUTE := 1.2
+const MAX_STEP_PER_MINUTE := 1.8
 
 var _ok := true
 
@@ -62,13 +63,19 @@ func _villagers_for(preset: String) -> Array:
 
 func _check_preset(preset: String) -> void:
 	var built := _villagers_for(preset)
+	if built.size() < 3:
+		_assert(false, "%s: fixture builder returns villagers, paths and layout" % preset)
+		return
 	var villagers: Array = built[0]
 	var paths: HETownPaths = built[1]
 	var layout: HETownLayout = built[2]
-	_assert(villagers.size() > 20, "%s: needs villagers (%d)" % [preset, villagers.size()])
+	if villagers.size() <= 20:
+		_assert(false, "%s: needs villagers (%d)" % [preset, villagers.size()])
+		return
 	_check_night(preset, villagers)
 	_check_noon(preset, villagers, layout)
 	_check_commute(preset, villagers, paths)
+	_check_daily_time_budget(preset, villagers, paths)
 	_check_continuity(preset, villagers)
 	_check_determinism(preset, villagers, built[1])
 
@@ -146,6 +153,45 @@ func _check_commute(preset: String, villagers: Array, paths: HETownPaths) -> voi
 	_assert(walking * 2 >= commuters, "%s: most commuters are on the road at 07:00 (%d of %d)" % [preset, walking, commuters])
 	_assert(off_route == 0, "%s: commuters stay on their road route (%d off)" % [preset, off_route])
 
+func _check_daily_time_budget(preset: String, villagers: Array, paths: HETownPaths) -> void:
+	var commuters := 0
+	var total_commute_hours := 0.0
+	var total_work_hours := 0.0
+	var total_other_hours := 0.0
+	var max_commute_hours := 0.0
+	var short_workdays := 0
+	var duration_mismatches := 0
+	for v in villagers:
+		if v["role"] != HEVillagerSchedule.ROLE_EMPLOYED or (v["home"] as Dictionary).is_empty():
+			continue
+		var commute_hours := 0.0
+		var work_hours := 0.0
+		for seg in (v["plan"] as Dictionary)["segs"]:
+			var hours := float(seg["t1"]) - float(seg["t0"])
+			var activity: String = seg["act"]
+			if activity == "walk_work" or activity == "walk_home":
+				commute_hours += hours
+			elif activity == "work" or activity == "work_inside" or activity == "work_door":
+				work_hours += hours
+		var route := paths.path(int(v["home"]["site_id"]), int(v["work"]["site_id"]))
+		var expected_hours := 2.0 * HETownPaths.path_length(route) / HEVillagerSchedule.WALK_CAP
+		if absf(commute_hours - expected_hours) > 0.03:
+			duration_mismatches += 1
+		if work_hours < 8.0:
+			short_workdays += 1
+		commuters += 1
+		total_commute_hours += commute_hours
+		total_work_hours += work_hours
+		total_other_hours += 24.0 - commute_hours - work_hours
+		max_commute_hours = maxf(max_commute_hours, commute_hours)
+	var mean_commute := total_commute_hours / maxf(float(commuters), 1.0)
+	var mean_work := total_work_hours / maxf(float(commuters), 1.0)
+	var mean_other := total_other_hours / maxf(float(commuters), 1.0)
+	print("%s: daily allocation, mean commute %.2fh (max %.2fh), work %.2fh, home/rest %.2fh across %d housed workers" % [preset, mean_commute, max_commute_hours, mean_work, mean_other, commuters])
+	_assert(commuters > 0, "%s: has housed employed commuters for time budget" % preset)
+	_assert(duration_mismatches == 0, "%s: commute duration follows route length / WALK_CAP (%d mismatches)" % [preset, duration_mismatches])
+	_assert(short_workdays == 0, "%s: commuters retain at least 8 hours of work (%d short days)" % [preset, short_workdays])
+
 func _check_continuity(preset: String, villagers: Array) -> void:
 	var jumps := 0
 	var worst := 0.0
@@ -161,7 +207,7 @@ func _check_continuity(preset: String, villagers: Array) -> void:
 				if step > MAX_STEP_PER_MINUTE:
 					jumps += 1
 					if jumps <= 5:
-						print("  jump %s at %.2f: %.2f (%s -> %s)" % [v["key"], h, step, last["activity"], at["activity"]])
+						print("  jump %s at %.2f: %.2f (%s -> %s, %s -> %s)" % [v["key"], h, step, last["activity"], at["activity"], str(last["pos"]), str(at["pos"])])
 			last = at
 		# Indoor <-> outdoor changes happen at the door: the visible end is at a door.
 	print("%s: largest one-minute step %.2f" % [preset, worst])

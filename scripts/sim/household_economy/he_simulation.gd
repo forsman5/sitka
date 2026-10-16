@@ -1465,8 +1465,8 @@ func get_clock_summary() -> Dictionary:
 ## one pass, with no need arrays, explanations, or per-person detail. Use
 ## get_household_summary() for the one household a detail panel shows. Rows are
 ## in household-ID order. Presentation data: treat as immutable.
-##   id, employer_business_id, housing_status, workers, oldest_worker,
-##   dependents, oldest_dependent, stock {commodity -> float} for every
+##   id, employer_business_id, housing_status, dwelling_id (-1 if none),
+##   workers, oldest_worker, dependents, oldest_dependent, stock {commodity -> float} for every
 ##   SUBSISTENCE_COMMODITIES entry, balance, stress, scarcity (total unmet
 ##   for scarcity today), unaffordable (total unmet for lack of funds today).
 func get_household_table_snapshot(settlement_id: int = -1) -> Array[Dictionary]:
@@ -1486,6 +1486,7 @@ func get_household_table_snapshot(settlement_id: int = -1) -> Array[Dictionary]:
 			"id": household_id,
 			"employer_business_id": h.employer_business_id,
 			"housing_status": _housing_status_of(h),
+			"dwelling_id": h.dwelling_id,
 			"workers": worker_ages.size(),
 			"oldest_worker": worker_ages.max() if not worker_ages.is_empty() else 0,
 			"dependents": dependent_ages.size(),
