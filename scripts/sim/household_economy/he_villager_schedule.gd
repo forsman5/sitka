@@ -18,7 +18,7 @@ extends RefCounted
 ## Timeline (housed villager):
 ##   indoors until wake (~06:00), then
 ##   - employed:  walk to the workplace (arrive ~08:00); work 08:00-17:00;
-##                walk home (arrive ~19:30)
+##                walk home (arrival depends on route length)
 ##   - unemployed adult: walk to the plaza; loiter; walk home
 ##   - child: plays in the home yard
 ##   then in the yard by the door until bed (~21:00), then indoors.
@@ -28,10 +28,10 @@ extends RefCounted
 ## Homeless villagers have no door: they are at the plaza all night, and
 ## commute from and back to it.
 ##
-## Walking legs follow HETownPaths routes at constant speed. A leg's length
-## divided by its window is the speed; if that exceeds WALK_CAP the villager
-## leaves earlier (or, for the morning, as early as DAY_START allows, arriving
-## late if even that is not enough).
+## Walking legs follow HETownPaths routes at WALK_CAP. Morning departures are
+## timed to arrive around ARRIVE_WORK, leaving at DAY_START and arriving late
+## when a route is too long for that window. Evening commuters leave at
+## LEAVE_WORK and arrive home after the route's travel time.
 ##
 ## Mill segments (yard, plaza, a field) put the villager on a slow Lissajous
 ## wander inside an area, a pure function of absolute time (day * 24 + hour), blended in and out of the
@@ -52,12 +52,11 @@ const DAY_END := 29.5
 const WAKE := 6.0
 const ARRIVE_WORK := 8.0
 const LEAVE_WORK := 17.0
-const ARRIVE_HOME := 19.5
 const BEDTIME := 21.0
 const JITTER_HOURS := 0.5
 
-## Fastest commute, world units per game hour.
-const WALK_CAP := 30.0
+## Commuting speed, world units per game hour.
+const WALK_CAP := 90.0
 ## Wander pace inside an area, world units per game hour, and blend pace.
 const WANDER_SPEED := 3.0
 const BLEND_SPEED := 14.0
@@ -186,7 +185,6 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 	var wake := WAKE + JITTER_HOURS * _jit(key, day, 0)
 	var arrive_work := ARRIVE_WORK + JITTER_HOURS * _jit(key, day, 1)
 	var leave_work := LEAVE_WORK + JITTER_HOURS * _jit(key, day, 2)
-	var arrive_home := ARRIVE_HOME + JITTER_HOURS * _jit(key, day, 3)
 	var bed := BEDTIME + JITTER_HOURS * _jit(key, day, 4)
 
 	var plaza := plaza_area(key)
@@ -220,23 +218,24 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 	var back_pts := PackedVector2Array(route)
 	back_pts.reverse()
 	var length := HETownPaths.path_length(route)
-	var s1 := wake
 	if homeless:
 		length += wander(plaza, phase, base + wake).distance_to(route[0])
-	s1 = maxf(DAY_START, minf(wake, arrive_work - length / WALK_CAP))
+	var walk_duration := length / WALK_CAP
+	var s1 := maxf(DAY_START, arrive_work - walk_duration)
 	if homeless:
 		out_pts = PackedVector2Array([wander(plaza, phase, base + s1)]) + route
+	var walk_arrival := s1 + walk_duration
+	arrive_work = walk_arrival
+	var s2 := leave_work
+	var arrive_home := s2 + walk_duration
+	if homeless:
 		back_pts = back_pts + PackedVector2Array([wander(plaza, phase, base + arrive_home)])
-	# A commute too long for the window arrives late rather than sprinting
-	# (by 11:00 at the latest, which sprints a little).
-	arrive_work = minf(maxf(arrive_work, s1 + length / WALK_CAP), 11.0)
-	var s2 := clampf(minf(leave_work, arrive_home - length / WALK_CAP), arrive_work + 1.5, leave_work)
 
 	if homeless:
 		_push(segs, _mill(base, plaza, phase, Vector2.INF, Vector2.INF, "plaza", -1), s1)
 	else:
 		_push(segs, _inside(door, "indoors", -1), s1)
-	_push(segs, _walk(out_pts, "walk_plaza" if kind == "plaza" else "walk_work", dest_id), arrive_work)
+	_push(segs, _walk(out_pts, "walk_plaza" if kind == "plaza" else "walk_work", dest_id), walk_arrival)
 	var end := route[route.size() - 1]
 	match kind:
 		"plaza":
