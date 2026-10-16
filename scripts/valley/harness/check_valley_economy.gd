@@ -4,6 +4,7 @@ const ValleyEconomy = preload("res://scripts/valley/valley_economy.gd")
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -30,6 +31,11 @@ func _run() -> void:
 				quit(1)
 				return
 	var aldford = valley.towns[ValleySeed.ALDFORD]
+	var staithe = valley.towns[ValleySeed.STAITHE]
+	if not staithe.businesses.has(HEScenarioSeeds.PORT_BUSINESS_ID):
+		push_error("Staithe has no outside-market Port business")
+		quit(1)
+		return
 	if not valley.towns[ValleySeed.OAKMERE].businesses.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) or not valley.towns[ValleySeed.STAITHE].businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID):
 		push_error("The valley is missing Oakmere's Charcoal Burner or Staithe's Toolsmith")
 		quit(1)
@@ -56,6 +62,11 @@ func _run() -> void:
 		push_error("No intertown shipment was dispatched")
 		quit(1)
 		return
+	var port = staithe.businesses.get(HEScenarioSeeds.PORT_BUSINESS_ID)
+	if port == null or port.ledger_good_average("export", Commodity.Type.IRON, 360) * 360.0 < 100.0:
+		push_error("The Port did not buy a meaningful quantity of iron for the outside market")
+		quit(1)
+		return
 	var recorded_trades := 0
 	for town_id in valley.towns:
 		var town: HESimulation = valley.towns[town_id]
@@ -67,8 +78,8 @@ func _run() -> void:
 			quit(1)
 			return
 		recorded_trades += town.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360).size()
-	if not valley.towns[ValleySeed.OAKMERE].businesses.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) or not valley.towns[ValleySeed.STAITHE].businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID):
-		push_error("A valley Charcoal Burner or Toolsmith closed within the first year")
+	if not valley.towns[ValleySeed.OAKMERE].businesses.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) or not staithe.businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID) or not staithe.businesses.has(HEScenarioSeeds.BLOOMERY_BUSINESS_ID):
+		push_error("A valley Charcoal Burner, Toolsmith, or Staithe Bloomery closed within the first year")
 		quit(1)
 		return
 	if recorded_trades < valley.delivered_total * 2:
@@ -76,13 +87,19 @@ func _run() -> void:
 		quit(1)
 		return
 	var ironbank = valley.towns[ValleySeed.IRONBANK]
-	var timber_imports := 0
-	for transaction in ironbank.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360):
-		if transaction.get("direction") == "import" and transaction.get("commodity") == "Timber":
-			timber_imports += 1
-	if timber_imports == 0 or not ironbank.businesses.has(HEScenarioSeeds.IRON_MINE_BUSINESS_ID) or not ironbank.businesses.has(HEScenarioSeeds.BLOOMERY_BUSINESS_ID):
-		push_error("Ironbank must import timber without losing its mine or Bloomery")
+	var ore_imports := 0
+	for transaction in staithe.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360):
+		if transaction.get("direction") == "import" and transaction.get("commodity") == "Iron Ore":
+			ore_imports += 1
+	if ore_imports == 0 or not ironbank.businesses.has(HEScenarioSeeds.IRON_MINE_BUSINESS_ID) or ironbank.businesses.has(HEScenarioSeeds.BLOOMERY_BUSINESS_ID):
+		push_error("Ironbank must keep its mine and ship ore to Staithe without a local Bloomery")
 		quit(1)
 		return
+	for town_id in [ValleySeed.ALDFORD, ValleySeed.IRONBANK]:
+		for transaction in valley.towns[town_id].get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360):
+			if transaction.get("direction") == "import" and transaction.get("commodity") == "Iron":
+				push_error("Town %d imported iron without a workshop or Port buyer" % town_id)
+				quit(1)
+				return
 	print("Valley economy OK: %d delivered, %d in transit, %d Trader transactions" % [valley.delivered_total, valley.shipments.size(), recorded_trades])
 	quit()

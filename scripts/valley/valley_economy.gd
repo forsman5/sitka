@@ -100,6 +100,8 @@ func _init() -> void:
 		economy.external_trade_enabled = false
 		if town_id == ValleySeed.STAITHE:
 			economy.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.TOOLS, true)
+		if town_id == ValleySeed.IRONBANK:
+			economy.set_trader_export_enabled(HEScenarioSeeds.TRADER_BUSINESS_ID, Commodity.Type.IRON_ORE, true)
 		towns[town_id] = economy
 	edges = ValleySeed._build_transport_edges()
 
@@ -161,7 +163,14 @@ func _dispatch_shipments() -> void:
 					continue
 				var source_price := source.get_valley_trade_price(commodity)
 				var destination_price := destination.get_valley_trade_price(commodity)
-				var seller_price: float = maxf(source_price, offer["min_price"])
+				var port_bid := destination.get_valley_port_buy_price(commodity)
+				if port_bid > 0.0:
+					destination_price = port_bid
+				# The Port pays half its outside quote. Use the
+				# producer's floor or half its own market quote, whichever is
+				# higher, rather than requiring the origin's full retail quote
+				# on top of the destination Trader's margin.
+				var seller_price: float = maxf(source_price * 0.5, offer["min_price"]) if port_bid > 0.0 else maxf(source_price, offer["min_price"])
 				var gap: float = destination_price - seller_price - edge.toll - edge.risk * 2.0
 				if gap < MIN_PRICE_GAP:
 					continue
@@ -193,6 +202,12 @@ func _dispatch_shipments() -> void:
 		var current_offer := source.get_valley_trade_offer(commodity)
 		var quantity: float = minf(current_offer["quantity"],
 			minf(remaining_edges[edge_id], minf(remaining_traders[source_id], remaining_traders[destination_id])))
+		if commodity in [Commodity.Type.IRON, Commodity.Type.IRON_ORE] and destination.get_valley_port_buy_price(commodity) <= 0.0:
+			var inbound := 0.0
+			for shipment in shipments.values():
+				if shipment.destination_settlement_id == destination_id and shipment.commodity == commodity:
+					inbound += shipment.quantity
+			quantity = minf(quantity, destination.get_valley_workshop_import_need(commodity, inbound))
 		quantity = minf(quantity, destination.get_valley_trader_purchase_capacity(opportunity["price"]))
 		if quantity <= 0.0001:
 			continue

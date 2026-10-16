@@ -1,6 +1,7 @@
 extends SceneTree
 
 const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
+const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const VALLEY_SCENE_PATH := "res://scenes/valley/river_valley.tscn"
 
 func _initialize() -> void:
@@ -102,6 +103,12 @@ func _run() -> void:
 			push_error("Town %d layout left businesses or houses unplaced" % town_id)
 			quit(1)
 			return
+		if town_id == ValleySeed.STAITHE:
+			detail._on_business_row_selected(HEScenarioSeeds.PORT_BUSINESS_ID)
+			if detail._business_detail_title.text != "Port":
+				push_error("Staithe Port business detail did not open")
+				quit(1)
+				return
 		valley.call("_close_detail_view")
 		await process_frame
 	print("Valley town detail OK")

@@ -26,6 +26,7 @@ const HOUSEHOLD_SIZE := WORKER_CAPACITY + DEPENDENTS
 const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
+const PORT_BUSINESS_ID := 12
 const BLOOMERY_BUSINESS_ID := 4
 const IRON_MINE_BUSINESS_ID := 5
 ## Shifted to 6/7 to leave room for the opt-in Bloomery (4) and Iron Mine (5)
@@ -873,7 +874,7 @@ static func build_preset(_rng: RandomNumberGenerator, key: String) -> Dictionary
 static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dictionary:
 	var household_count: int = ValleySeed.HOUSEHOLDS_PER_SETTLEMENT[town_id]
 	var trader := 8
-	var bloomery := 8 if town_id == ValleySeed.IRONBANK or town_id == ValleySeed.STAITHE else 0
+	var bloomery := 8 if town_id == ValleySeed.STAITHE else 0
 	var iron_mine := 8 if town_id == ValleySeed.IRONBANK else 0
 	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW * household_count / HOUSEHOLD_COUNT if town_id == ValleySeed.OAKMERE else 0
 	var toolsmith := TOOLSMITH_STARTING_CAPACITY if town_id == ValleySeed.STAITHE else 0
@@ -888,6 +889,16 @@ static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dict
 		"tenements": tenement_count,
 	}
 	var world := build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	if town_id == ValleySeed.STAITHE:
+		var port := HEBusiness.new(PORT_BUSINESS_ID, "Port", null, 2, 2, HEBusiness.Kind.PORT, SETTLEMENT_ID)
+		port.type_key = "port"
+		port.balance = STARTING_CASH_RESERVE_DAYS * _estimated_starting_reference_wage() * 2.0
+		world["businesses"][PORT_BUSINESS_ID] = port
+		world["settlements"][SETTLEMENT_ID].business_ids.append(PORT_BUSINESS_ID)
+		for household in world["households"].values():
+			if household.employer_business_id == WOODLOT_BUSINESS_ID and household.worker_capacity() >= 2:
+				household.employer_business_id = PORT_BUSINESS_ID
+				break
 	if town_id == ValleySeed.IRONBANK or town_id == ValleySeed.STAITHE:
 		# Industrial towns retain Woodlot jobs but grow only a fraction of the
 		# timber their households and workshops need. Imports fill the gap.

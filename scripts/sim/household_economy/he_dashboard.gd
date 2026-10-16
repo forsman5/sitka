@@ -2451,7 +2451,7 @@ func _refresh_business_detail_header(report: Dictionary) -> void:
 		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
 		rows.append(["Last review culled", [[report["output_commodity"], "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]]]])
 	else:
-		rows.append(["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]])
+		rows.append(["Activity" if report["kind"] in ["trader", "port"] else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] in ["trader", "port"]]]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
 
@@ -2521,7 +2521,7 @@ func _refresh_business_detail_stocks(report: Dictionary) -> void:
 			stock_rows.append(["Inventory", "empty"])
 		else:
 			stock_rows.append(["Inventory", held_parts])
-	elif report["kind"] != "trader":
+	elif not (report["kind"] in ["trader", "port"]):
 		stock_rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
 		var input_parts: Array = []
@@ -3664,7 +3664,7 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var warehouse_text := "Holding %.1f units · wages and purchases paid by the treasury" % report["stock"]
 			status_label.text = warehouse_text
 			status_label.tooltip_text = "%s\n\nOpen the warehouse to set buy/sell orders against the local market and the Trader." % warehouse_text
-		elif report["kind"] == "trader":
+		elif report["kind"] in ["trader", "port"]:
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
 		else:

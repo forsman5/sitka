@@ -18,15 +18,17 @@ func _run() -> void:
 		var before := valley.delivered_total + valley.shipments.size()
 		valley.advance_ticks(30)
 		var counts := {}
+		var quantities := {}
 		for town_id in valley.towns:
 			for trade in valley.towns[town_id].get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 30):
 				if trade.get("direction") != "export" or int(trade.get("day", 0)) <= block * 30:
 					continue
 				var key := "%s %s>%s" % [trade["commodity"], valley.TOWN_NAMES[town_id], trade["route"]]
 				counts[key] = counts.get(key, 0) + 1
+				quantities[key] = quantities.get(key, 0.0) + float(trade["quantity"])
 		var details := []
 		for key in counts:
-			details.append("%s:%d" % [key, counts[key]])
+			details.append("%s:%d (%.1f units)" % [key, counts[key], quantities[key]])
 		details.sort()
 		print("DAYS %d-%d: dispatched %d, %s" % [block * 30 + 1, valley.day, valley.delivered_total + valley.shipments.size() - before, ", ".join(details)])
 		if block in [1, 5, 9, 11]:
@@ -42,6 +44,12 @@ func _run() -> void:
 		var town = valley.towns[town_id]
 		var trader = town.businesses.get(HEScenarioSeeds.TRADER_BUSINESS_ID)
 		print("TOWN %s trader_balance=%.1f trader_workers=%d" % [valley.TOWN_NAMES[town_id], trader.balance if trader else -1.0, town.get_valley_trader_capacity() / 16.0])
+		var port = town.businesses.get(HEScenarioSeeds.PORT_BUSINESS_ID)
+		if port != null:
+			print("  PORT balance=%.1f iron_exported=%.1f" % [port.balance, port.ledger_good_average("export", Commodity.Type.IRON, 360) * 360.0])
+		var bloomery = town.businesses.get(HEScenarioSeeds.BLOOMERY_BUSINESS_ID)
+		if bloomery != null:
+			print("  BLOOMERY balance=%.1f iron_stock=%.1f" % [bloomery.balance, bloomery.stock(Commodity.Type.IRON)])
 		for event in town.get_event_log_days(360):
 			if event.get("type") == "business_failed":
 				print("  FAIL %s" % event)
