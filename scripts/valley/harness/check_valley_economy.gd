@@ -75,5 +75,14 @@ func _run() -> void:
 		push_error("Shipment dispatches and arrivals are missing from Trader history")
 		quit(1)
 		return
+	var ironbank = valley.towns[ValleySeed.IRONBANK]
+	var timber_imports := 0
+	for transaction in ironbank.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360):
+		if transaction.get("direction") == "import" and transaction.get("commodity") == "Timber":
+			timber_imports += 1
+	if timber_imports == 0 or not ironbank.businesses.has(HEScenarioSeeds.IRON_MINE_BUSINESS_ID) or not ironbank.businesses.has(HEScenarioSeeds.BLOOMERY_BUSINESS_ID):
+		push_error("Ironbank must import timber without losing its mine or Bloomery")
+		quit(1)
+		return
 	print("Valley economy OK: %d delivered, %d in transit, %d Trader transactions" % [valley.delivered_total, valley.shipments.size(), recorded_trades])
 	quit()

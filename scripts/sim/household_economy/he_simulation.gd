@@ -224,6 +224,9 @@ const SELLER_COST_RATIO_CAP := 2.0
 ## goods should scale per worker far better than a farmhand growing food by
 ## hand, hence the large jump from the first authored guess of 2.0.
 const TRADER_CAPACITY_PER_WORKER := 8.0
+## Valley shipments are booked every two days, so a Trader can handle two
+## days of freight per dispatch without changing the standalone daily market.
+const VALLEY_TRADER_CAPACITY_PER_WORKER := TRADER_CAPACITY_PER_WORKER * 2.0
 
 ## Herds: two more workplace kinds (he_business.gd's HEBusiness.Kind.HERD),
 ## a Cattle Ranch and a Sheep Farm, whose live herd_size grows/thins on its
@@ -4315,13 +4318,13 @@ func get_valley_trade_offer(commodity: Commodity.Type) -> Dictionary:
 		return {"quantity": 0.0, "min_price": 0.0}
 	if not _trader_export_enabled.get(trader.id, {}).get(commodity, false):
 		return {"quantity": 0.0, "min_price": 0.0}
-	var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+	var capacity: float = float(_business_employed_worker_count(trader.id)) * VALLEY_TRADER_CAPACITY_PER_WORKER
 	var offer := _seller_trade_offer(seller, commodity)
 	return {"quantity": minf(capacity, offer["quantity"]), "min_price": offer["min_price"]}
 
 func get_valley_trader_capacity() -> float:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
-	return float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER if trader != null else 0.0
+	return float(_business_employed_worker_count(trader.id)) * VALLEY_TRADER_CAPACITY_PER_WORKER if trader != null else 0.0
 
 func get_valley_trader_purchase_capacity(unit_price: float) -> float:
 	var settlement_id := _resolve_settlement_id(-1)

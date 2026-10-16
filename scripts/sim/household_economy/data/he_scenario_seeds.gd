@@ -878,7 +878,14 @@ static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dict
 		"houses": tenement_count,
 		"tenements": tenement_count,
 	}
-	return build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	var world := build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	if town_id == ValleySeed.IRONBANK or town_id == ValleySeed.STAITHE:
+		# Industrial towns retain Woodlot jobs but grow only a fraction of the
+		# timber their households and workshops need. Imports fill the gap.
+		var woodlot: HEBusiness = world["businesses"][WOODLOT_BUSINESS_ID]
+		var acres := woodlot.land_area_acres * 0.25
+		woodlot.configure_land(acres, _make_fields(WOODLOT_FIELD_COUNT, acres, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
+	return world
 
 static func _commodity_by_key(key: String) -> int:
 	match key:

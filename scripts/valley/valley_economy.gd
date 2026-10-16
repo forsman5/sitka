@@ -9,7 +9,7 @@ const TransportEdge = preload("res://scripts/sim/records/transport_edge.gd")
 const Shipment = preload("res://scripts/sim/records/shipment.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
-const TRADE_INTERVAL_DAYS := 3
+const TRADE_INTERVAL_DAYS := 2
 const MIN_PRICE_GAP := 0.5
 const TOWN_NAMES := {
 	ValleySeed.ALDFORD: "Aldford",
