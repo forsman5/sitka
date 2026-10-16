@@ -880,6 +880,20 @@ const WATER_SOURCE_NAMES := ["Well", "River Intake"]
 ## Today's drinks supplied per source kind, by settlement id: {name: people}.
 var _water_met_by: Dictionary = {}
 
+## House upkeep (HEHouse.neglect_years): government staff deliver it in slices
+## of HOUSE_VISIT_YEARS of a year's upkeep, at most HOUSE_VISITS_PER_STAFF
+## houses a day per government worker household, visiting houses round robin.
+## A house is only visited once a slice is owed, so a healthy town carries no
+## morale penalty (HEHousehold.home_overdue_years counts only the excess).
+const HOUSE_VISIT_YEARS := 0.25
+const HOUSE_VISITS_PER_STAFF := 4
+
+## Per settlement: the last dwelling id visited (the round-robin cursor) and
+## the dwellings that received a delivery on the latest day (read by the town
+## view, which walks government workers to them).
+var _house_cursor: Dictionary = {}
+var _house_deliveries: Dictionary = {}
+
 ## Treasury money spent on constructing government buildings
 ## (build_government_building) -- it leaves circulation like _import_cost_total
 ## does, and is tracked for the same reason. Goods the warehouse BUYS are not
@@ -1048,6 +1062,7 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 			"type_key": house.type_key,
 			"capacity": house.capacity_households,
 			"stone": house.is_stone,
+			"neglect_years": maxf(house.neglect_years, 0.0),
 			"occupant_household_ids": occupants.get(house.id, [] as Array[int]),
 		})
 	return out
@@ -1162,6 +1177,7 @@ func get_housing_report(settlement_id: int) -> Dictionary:
 		"households": household_count,
 		"homeless_households": maxi(0, household_count - capacity) if s.housing_modeled else 0,
 		"saturated": s.housing_modeled and household_count >= capacity,
+		"maintenance_deliveries": get_house_deliveries(settlement_id).duplicate(),
 	}
 
 ## The lowest-id plain house of the settlement, or null. Ids are handed out in
@@ -1347,6 +1363,87 @@ func _run_water_maintenance() -> void:
 			b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
 		else:
 			b.in_disrepair = true
+
+## Accrues a day of upkeep on every house, then lets government staff deliver
+## timber (and stone for tenements) from the Government Warehouse to the houses
+## that are owed a slice, round robin from just after the last house visited.
+## Without staff, a warehouse or enough stock nothing is paid and the backlog
+## (and the households' "Home in disrepair" morale penalty) keeps growing.
+func _run_house_maintenance() -> void:
+	var settlement_ids := settlements.keys()
+	settlement_ids.sort()
+	for settlement_id in settlement_ids:
+		var ids: Array = []
+		for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
+			if dwellings.has(dwelling_id):
+				ids.append(dwelling_id)
+		ids.sort()
+		var deliveries: Array[int] = []
+		_house_deliveries[settlement_id] = deliveries
+		if ids.is_empty():
+			continue
+		for dwelling_id in ids:
+			var house: HEHouse = dwellings[dwelling_id]
+			if house.neglect_years < 0.0:
+				# Stagger the first visits so they do not all fall on one day.
+				house.neglect_years = fposmod(dwelling_id * 0.37, 1.0) * HOUSE_VISIT_YEARS
+			house.neglect_years += 1.0 / 365.0
+		var warehouse := _government_warehouse(settlement_id)
+		var budget := _government_staff_count(settlement_id) * HOUSE_VISITS_PER_STAFF if warehouse != null else 0
+		if budget > 0:
+			var start := ids.bsearch(_house_cursor.get(settlement_id, -1), false)
+			for step in ids.size():
+				if budget <= 0:
+					break
+				var dwelling_id: int = ids[(start + step) % ids.size()]
+				var house: HEHouse = dwellings[dwelling_id]
+				if house.neglect_years < HOUSE_VISIT_YEARS:
+					continue
+				var timber := HOUSE_VISIT_YEARS * house.upkeep_timber()
+				var stone := HOUSE_VISIT_YEARS * house.upkeep_stone()
+				if warehouse.stock(Commodity.Type.TIMBER) < timber or warehouse.stock(Commodity.Type.STONE) < stone:
+					continue
+				warehouse.consume(Commodity.Type.TIMBER, timber)
+				if stone > 0.0:
+					warehouse.consume(Commodity.Type.STONE, stone)
+				house.neglect_years -= HOUSE_VISIT_YEARS
+				deliveries.append(dwelling_id)
+				_house_cursor[settlement_id] = dwelling_id
+				budget -= 1
+	for household in households.values():
+		var h: HEHousehold = household
+		var home: HEHouse = dwellings.get(h.dwelling_id)
+		h.home_overdue_years = maxf(home.neglect_years - HOUSE_VISIT_YEARS, 0.0) if home != null else 0.0
+
+## The dwelling ids that received a maintenance delivery on the latest day.
+func get_house_deliveries(settlement_id: int) -> Array:
+	return _house_deliveries.get(settlement_id, [])
+
+## House upkeep at a glance: {houses, owed_years (total), overdue (houses past
+## one visit interval), worst_years, upkeep_timber, upkeep_stone (a year's bill
+## for every house), delivered_today}.
+func get_house_maintenance_summary(settlement_id: int) -> Dictionary:
+	var houses := 0
+	var owed := 0.0
+	var overdue := 0
+	var worst := 0.0
+	var timber := 0.0
+	var stone := 0.0
+	if settlements.has(settlement_id):
+		for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
+			var house: HEHouse = dwellings.get(dwelling_id)
+			if house == null:
+				continue
+			houses += 1
+			owed += maxf(house.neglect_years, 0.0)
+			worst = maxf(worst, house.neglect_years)
+			timber += house.upkeep_timber()
+			stone += house.upkeep_stone()
+			if house.neglect_years > HOUSE_VISIT_YEARS:
+				overdue += 1
+	return {"houses": houses, "owed_years": owed, "overdue": overdue, "worst_years": worst,
+		"upkeep_timber": timber, "upkeep_stone": stone,
+		"delivered_today": get_house_deliveries(settlement_id).size()}
 
 ## Households working for the settlement's Government or its Warehouse.
 func _government_staff_count(settlement_id: int) -> int:
@@ -2648,6 +2745,7 @@ func _daily_tick() -> void:
 		_run_trade(record)
 	_run_warehouse_orders(record)
 	_run_water_maintenance()
+	_run_house_maintenance()
 	_apply_price_signals()
 	for market in markets.values():
 		(market as HEMarket).record_supply_demand_history()
