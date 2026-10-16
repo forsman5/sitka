@@ -1,27 +1,24 @@
 extends SceneTree
 
-## A/B for the wage model: subsistence (the original derived wage) against the
-## productivity model at a few labour shares. Per preset, over DAYS:
+## Compare productivity pay at a few labour shares. Per preset, over DAYS:
 ## business failures, employment, population, household income against
 ## subsistence cost, and how much of the town's money households hold.
-## Gate for phase 1 of docs/household-wage-model-plan.md: failures must not
-## rise and employment must hold, while household wealth improves.
+## Historical A/B results from before the reference-only path was removed are
+## recorded in docs/household-wage-model-plan.md.
 ## Run: Godot --headless --path . --script res://scripts/sim/harness/measure_wage_model.gd
 
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
-const HEWages = preload("res://scripts/sim/household_economy/he_wages.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
 const SEEDS := [20260901, 7, 424242]
 const PRESETS := ["small_village", "mining_village", "large_village"]
-## [label, wage_model, labour_share]
+## [label, labour_share]
 const VARIANTS := [
-	["subsistence", HEWages.MODEL_SUBSISTENCE, 0.0],
-	["productivity 0.4", HEWages.MODEL_PRODUCTIVITY, 0.4],
-	["productivity 0.6", HEWages.MODEL_PRODUCTIVITY, 0.6],
-	["productivity 0.8", HEWages.MODEL_PRODUCTIVITY, 0.8],
+	["productivity 0.4", 0.4],
+	["productivity 0.6", 0.6],
+	["productivity 0.8", 0.8],
 ]
 const DAYS := 720
 const SAMPLE_EVERY := 30
@@ -57,9 +54,7 @@ func _run(preset: String, variant: Array) -> void:
 func _run_one(preset: String, variant: Array, seed_value: int) -> Dictionary:
 	var builder := Callable(HEScenarioSeeds, "build_preset").bind(preset)
 	var sim := HESimulation.new(seed_value, builder)
-	sim.wages.model = variant[1]
-	if variant[2] > 0.0:
-		sim.wages.labour_share = variant[2]
+	sim.wages.labour_share = variant[1]
 	var settlement_id := HEScenarioSeeds.SETTLEMENT_ID
 	var seen: Dictionary = {}
 	for id in sim.businesses.keys():

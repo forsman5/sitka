@@ -6,8 +6,8 @@ extends RefCounted
 ## and this class reads it through `_sim`. See docs/household-wage-model-plan.md.
 ##
 ## The "reference wage" plays three roles, kept in separate functions so each
-## can change alone. Under WAGE_MODEL_SUBSISTENCE all three return the same
-## derived value:
+## can change alone. Business pay uses it as a floor; the other two roles use
+## the derived value directly:
 ##   A. wage_paid_per_worker(b)         what `b` actually pays each worker
 ##   B. capacity_benchmark_wage(s)      what a business's return per worker is
 ##                                      judged against when capacity is tuned
@@ -21,17 +21,10 @@ const HEMarket = preload("res://scripts/sim/household_economy/records/he_market.
 const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
-## How a business's wage is set (see wage_paid_per_worker).
-const MODEL_SUBSISTENCE := 0 ## every business pays the derived reference wage
-const MODEL_PRODUCTIVITY := 1 ## a share of the business's own return per worker, never below the reference
-
-## Productivity model: the share of a business's net return per worker (sales
+## The share of a business's net return per worker (sales
 ## less inputs and taxes, over the staffing window) paid out as the wage.
 const LABOUR_SHARE := 0.6
 
-## Which model wage_paid_per_worker uses. Subsistence is the original rule and
-## the default; productivity is switched on by harnesses and (later) settings.
-var model: int = MODEL_SUBSISTENCE
 var labour_share: float = LABOUR_SHARE
 ## Fraction paid above the subsistence-derived wage (0 = exactly subsistence).
 ## An experiment lever for measure_household_slack / measure_wage_margin; the
@@ -57,8 +50,6 @@ func _init(sim) -> void:
 func wage_paid_per_worker(b: HEBusiness) -> float:
 	var s = _sim
 	var reservation := reference_wage_per_worker(b.settlement_id)
-	if model != MODEL_PRODUCTIVITY:
-		return reservation
 	# A treasury-paid crew has no revenue of its own to share.
 	if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
 		return reservation
