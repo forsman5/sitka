@@ -82,6 +82,14 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 ## it. Likely to matter once there can be more than one (see the unique-
 ## building TODO on HESimulation.build_government_building).
 
+## Kind.WATER (a "Well" or "River Intake") is a sixth odd one out, built by the
+## town government like the Warehouse: no recipe, no workers, no sales, no cash
+## and no self-tuning. It serves `water_capacity` people with safe drinking
+## water and costs only upkeep: once a year the government's own staff service it
+## with timber from the Government Warehouse (he_simulation.gd's
+## _run_water_maintenance). A source that goes unserviced falls into disrepair
+## and serves nobody until the timber is found.
+
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
@@ -114,7 +122,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE, PORT }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE, PORT, WATER }
 enum Species { CATTLE, SHEEP }
 
 ## id, settlement_id, name and type_key come from HEBuilding.
@@ -309,6 +317,14 @@ var tax_collected_total: float = 0.0
 ## spend labor on player-ordered construction (new businesses). Kept as a
 ## plain variable now so the UI and player actions have a stable name to bind.
 var builder_slots: int = 0
+
+## Kind.WATER only: people this source can supply, the timber its yearly
+## servicing takes, the sim day it is next due (-1 = set when it opens), and
+## whether it has missed a servicing (then it supplies nobody).
+var water_capacity: int = 0
+var water_upkeep_timber: float = 0.0
+var next_service_day: int = -1
+var in_disrepair: bool = false
 
 ## Kind.WAREHOUSE only: the player's standing orders, {Commodity.Type:
 ## {"buy_up_to": float, "sell": bool, "keep": float}}. `buy_up_to` > 0 buys the

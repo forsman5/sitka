@@ -80,6 +80,21 @@ const STONE_HOUSE_BUILD_TIMBER := HOUSE_BUILD_TIMBER + STONE_HOUSE_TIMBER
 ## player builds more.
 const HOUSING_STARTING_HEADROOM := 0.35
 const WAREHOUSE_WORKERS := 2
+
+## Water sources (HEBusiness.Kind.WATER). Sized for a Large Village of about
+## 150-200 people: a well supplies WELL_PEOPLE (so 4-5 wells), a river intake
+## RIVER_PEOPLE (so 1-2). Both employ no one; the only running cost is the
+## yearly servicing timber, drawn from the Government Warehouse.
+const WELL_PEOPLE := 40
+const RIVER_INTAKE_PEOPLE := 100
+const WELL_BUILD_GOLD := 10.0
+const WELL_BUILD_TIMBER := 20.0
+const WELL_UPKEEP_TIMBER := 4.0
+const RIVER_INTAKE_BUILD_GOLD := 25.0
+const RIVER_INTAKE_BUILD_TIMBER := 40.0
+const RIVER_INTAKE_UPKEEP_TIMBER := 6.0
+## Seeded sources take ids from here (business_types() ids stay below it).
+const WATER_BUSINESS_ID_BASE := 20
 ## Days of administrator wages a new government's treasury starts with.
 const STARTING_TREASURY_DAYS := 10.0
 
@@ -356,6 +371,31 @@ static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
 	warehouse.type_key = "warehouse"
 	return warehouse
 
+static func make_well(business_id: int, settlement_id: int) -> HEBusiness:
+	return _make_water_source(business_id, settlement_id, "well", "Well", WELL_PEOPLE, WELL_UPKEEP_TIMBER)
+
+static func make_river_intake(business_id: int, settlement_id: int) -> HEBusiness:
+	return _make_water_source(business_id, settlement_id, "river_intake", "River Intake", RIVER_INTAKE_PEOPLE, RIVER_INTAKE_UPKEEP_TIMBER)
+
+static func _make_water_source(business_id: int, settlement_id: int, type_key: String, label: String, people: int, upkeep_timber: float) -> HEBusiness:
+	var source := HEBusiness.new(business_id, label, null, 0, 0, HEBusiness.Kind.WATER, settlement_id)
+	source.type_key = type_key
+	source.water_capacity = people
+	source.water_upkeep_timber = upkeep_timber
+	return source
+
+## Seeds `wells` wells and `river_intakes` river intakes into a starting world.
+## Their first servicing falls at staggered days so a town's sources are not
+## all due together.
+static func seed_water_sources(settlement: HESettlement, businesses: Dictionary, wells: int, river_intakes: int) -> void:
+	var next_id := WATER_BUSINESS_ID_BASE
+	for i in wells + river_intakes:
+		var source := make_well(next_id, SETTLEMENT_ID) if i < wells else make_river_intake(next_id, SETTLEMENT_ID)
+		source.next_service_day = 60 + (i * 73) % 300
+		businesses[next_id] = source
+		settlement.business_ids.append(next_id)
+		next_id += 1
+
 ## A construction cost: `gold` comes out of the treasury, `goods`
 ## ({Commodity.Type: units}) out of the town's Government Warehouse stock.
 static func build_cost(gold: float = 0.0, goods: Dictionary = {}) -> Dictionary:
@@ -431,6 +471,16 @@ static func government_buildings() -> Array[Dictionary]:
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
+		{"type_key": "well", "label": "Well", "repeatable": true,
+			"cost": build_cost(WELL_BUILD_GOLD, {Commodity.Type.TIMBER: WELL_BUILD_TIMBER}),
+			"hint": "Safe drinking water for %d people. No workers; the government services it with %.0f timber a year. Needs a Government Warehouse." % [WELL_PEOPLE, WELL_UPKEEP_TIMBER],
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEBusiness: return make_well(id, sid)},
+		{"type_key": "river_intake", "label": "River Intake", "repeatable": true,
+			"cost": build_cost(RIVER_INTAKE_BUILD_GOLD, {Commodity.Type.TIMBER: RIVER_INTAKE_BUILD_TIMBER}),
+			"hint": "Draws safe drinking water for %d people. No workers; the government services it with %.0f timber a year. Needs a Government Warehouse." % [RIVER_INTAKE_PEOPLE, RIVER_INTAKE_UPKEEP_TIMBER],
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEBusiness: return make_river_intake(id, sid)},
 	]
 	var costs := government_business_costs()
 	for business_type in business_types():
@@ -808,6 +858,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 			warehouse.add_stock(commodity, float(warehouse_stock[commodity]))
 		businesses[WAREHOUSE_BUSINESS_ID] = warehouse
 		settlement.business_ids.append(WAREHOUSE_BUSINESS_ID)
+	seed_water_sources(settlement, businesses, int(options.get("wells", 0)), int(options.get("river_intakes", 0)))
 
 	return {"settlements": {SETTLEMENT_ID: settlement}, "households": households, "businesses": businesses, "dwellings": dwellings}
 
@@ -897,6 +948,8 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
 		"quarry_capacity": quarry,
+		"wells": int(spec.get("water", {}).get("wells", 0)),
+		"river_intakes": int(spec.get("water", {}).get("river_intakes", 0)),
 	}
 	var warehouse: Dictionary = spec.get("warehouse", {})
 	if not warehouse.is_empty():

@@ -871,6 +871,11 @@ var _export_revenue_total := 0.0
 ## explicitly for the same "stays honest about where money went" reason.
 var _import_cost_total := 0.0
 
+## Days between a water source's servicings (HEBusiness.Kind.WATER). Each one
+## costs the source's water_upkeep_timber from the Government Warehouse and
+## needs government staff to do the work.
+const WATER_SERVICE_INTERVAL_DAYS := 365
+
 ## Treasury money spent on constructing government buildings
 ## (build_government_building) -- it leaves circulation like _import_cost_total
 ## does, and is tracked for the same reason. Goods the warehouse BUYS are not
@@ -974,6 +979,8 @@ func add_business(b: HEBusiness) -> void:
 	(settlements[b.settlement_id] as HESettlement).business_ids.append(b.id)
 	if b.kind == HEBusiness.Kind.TRADER:
 		_trader_export_enabled[b.id] = _default_export_enabled()
+	if b.kind == HEBusiness.Kind.WATER and b.next_service_day < 0:
+		b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
 
 ## Adds a business the player created mid-run, with a startup allowance so it
 ## can actually get going (see HEScenarioSeeds.startup_cash): a starting crew,
@@ -1314,6 +1321,71 @@ func _construction_pending(settlement_id: int, type_key: String) -> bool:
 		if entry["settlement_id"] == settlement_id and entry["record"].type_key == type_key:
 			return true
 	return false
+
+## Services every water source whose yearly servicing is due: the government's
+## own staff (administrator or warehouse crew) do the work, with timber from the
+## Government Warehouse. If either is missing the source falls into disrepair
+## (it supplies nobody) and is retried every day until it can be paid for.
+## Nothing here touches wages, markets or the treasury, so a town with no water
+## source behaves exactly as before.
+func _run_water_maintenance() -> void:
+	var ids := businesses.keys()
+	ids.sort()
+	for business_id in ids:
+		var b: HEBusiness = businesses[business_id]
+		if b.kind != HEBusiness.Kind.WATER or day < b.next_service_day:
+			continue
+		var warehouse := _government_warehouse(b.settlement_id)
+		if warehouse != null and _government_staff_count(b.settlement_id) > 0 and warehouse.stock(Commodity.Type.TIMBER) >= b.water_upkeep_timber:
+			warehouse.consume(Commodity.Type.TIMBER, b.water_upkeep_timber)
+			b.in_disrepair = false
+			b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
+		else:
+			b.in_disrepair = true
+
+## Households working for the settlement's Government or its Warehouse.
+func _government_staff_count(settlement_id: int) -> int:
+	var count := 0
+	for business_id in (settlements[settlement_id] as HESettlement).business_ids:
+		var b: HEBusiness = businesses[business_id]
+		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
+			count += _business_employed_household_count(business_id)
+	return count
+
+## The town's drinking water at a glance: {sources, serving, in_disrepair,
+## capacity (people the working sources supply), population, coverage (0..1,
+## 1 when nobody lives there), upkeep_timber (a year's servicing for all),
+## next_service_days (soonest, -1 with no sources)}. Water is reporting only for
+## now: it does not change health, morale or any economic rule.
+func get_water_summary(settlement_id: int) -> Dictionary:
+	var sources := 0
+	var serving := 0
+	var capacity := 0
+	var upkeep := 0.0
+	var soonest := -1
+	if settlements.has(settlement_id):
+		for business_id in (settlements[settlement_id] as HESettlement).business_ids:
+			var b: HEBusiness = businesses[business_id]
+			if b.kind != HEBusiness.Kind.WATER:
+				continue
+			sources += 1
+			upkeep += b.water_upkeep_timber
+			if not b.in_disrepair:
+				serving += 1
+				capacity += b.water_capacity
+			var due := maxi(0, b.next_service_day - day)
+			soonest = due if soonest == -1 else mini(soonest, due)
+	var population := _total_population(settlement_id)
+	return {
+		"sources": sources,
+		"serving": serving,
+		"in_disrepair": sources - serving,
+		"capacity": capacity,
+		"population": population,
+		"coverage": 1.0 if population <= 0 else minf(1.0, float(capacity) / float(population)),
+		"upkeep_timber": upkeep,
+		"next_service_days": soonest,
+	}
 
 ## Opens every construction whose days are up: the building joins the town
 ## exactly as an instant build used to.
@@ -1812,6 +1884,10 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			report["tax_collected_total"] = b.tax_collected_total
 			report["sales_tax_rate"] = sales_tax_rate
 			report["builder_slots"] = b.builder_slots
+		elif b.kind == HEBusiness.Kind.WATER:
+			report["recipe_id"] = "water"
+			report["output_commodity"] = "Safe drinking water"
+			report["stock"] = 0.0
 		elif b.kind == HEBusiness.Kind.WAREHOUSE:
 			report["recipe_id"] = "warehouse"
 			report["output_commodity"] = "Construction inventory"
@@ -1893,6 +1969,14 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			}
 		if include_detail and (b.kind == HEBusiness.Kind.PRODUCTION or b.kind == HEBusiness.Kind.HERD):
 			report["crew_morale"] = _business_crew_morale(b.id)
+		if b.kind == HEBusiness.Kind.WATER:
+			report["water"] = {
+				"people": b.water_capacity,
+				"serving": 0 if b.in_disrepair else b.water_capacity,
+				"in_disrepair": b.in_disrepair,
+				"upkeep_timber": b.water_upkeep_timber,
+				"days_to_service": maxi(0, b.next_service_day - day),
+			}
 		out.append(report)
 	return out
 
@@ -1927,6 +2011,7 @@ func _kind_name(kind: HEBusiness.Kind) -> String:
 		HEBusiness.Kind.HERD: return "herd"
 		HEBusiness.Kind.GOVERNMENT: return "government"
 		HEBusiness.Kind.WAREHOUSE: return "warehouse"
+		HEBusiness.Kind.WATER: return "water"
 		_: return "production"
 
 ## "Export (Grain, Timber) / Import (Iron Ore)" -- whichever commodities the
@@ -2549,6 +2634,7 @@ func _daily_tick() -> void:
 	if external_trade_enabled:
 		_run_trade(record)
 	_run_warehouse_orders(record)
+	_run_water_maintenance()
 	_apply_price_signals()
 	for market in markets.values():
 		(market as HEMarket).record_supply_demand_history()
@@ -3679,8 +3765,9 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 		var b: HEBusiness = businesses[business_id]
 		var reference_wage := wages.capacity_benchmark_wage(b.settlement_id)
 		reference_wages[b.settlement_id] = reference_wage
-		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
-			# Staffed by the seed / _ensure_administrator, not by revenue
+		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE or b.kind == HEBusiness.Kind.WATER:
+			# Staffed by the seed / _ensure_administrator (a water source has
+			# no crew at all), not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
 		if b.processes_livestock:
@@ -3960,7 +4047,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 	var layoff_snapshot := _employment_index()
 	for business_id in business_ids:
 		var b: HEBusiness = businesses[business_id]
-		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
+		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE or b.kind == HEBusiness.Kind.WATER:
 			continue # never laid off by the capacity loop; see _ensure_administrator
 		var employed_ids: Array[int] = []
 		employed_ids.assign(layoff_snapshot.get(business_id, []))
@@ -4006,7 +4093,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 		var dwelling_positions: Dictionary = {} # dwelling_id -> position, looked up once
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
-			if b.kind == HEBusiness.Kind.GOVERNMENT:
+			if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WATER:
 				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
 			# A Butcher's capacity is its work (_livestock_crew_target), set above.

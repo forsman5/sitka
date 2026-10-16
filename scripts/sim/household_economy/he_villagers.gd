@@ -100,6 +100,8 @@ var _paths: HETownPaths
 var _day := 0
 var _frame := 0
 var _time := 0.25 ## time of day, 0..1
+var _water_sites: Array = [] ## working water sources (site dictionaries), see sync()
+var _water_sig := 0
 var _hour := 6.0 ## on the schedule's hour line (HEVillagerSchedule.hour_of)
 
 func _ready() -> void:
@@ -120,10 +122,16 @@ func _shadow_mode() -> GeometryInstance3D.ShadowCastingSetting:
 ## Existing villagers keep their node; only new ones are added and departed
 ## ones removed, and a villager's plan is rebuilt only if its role, house or
 ## workplace changed.
-func sync(layout: HETownLayout, reports: Array) -> void:
+func sync(layout: HETownLayout, reports: Array, water_sites: Array = []) -> void:
 	if layout != _layout:
 		_layout = layout
 		_paths = HETownPaths.new(layout)
+	var water_sig := 0
+	for water in water_sites:
+		water_sig = hash([water_sig, int(water["site_id"])]) & 0x7FFFFFFF
+	if water_sig != _water_sig:
+		_water_sig = water_sig
+		_water_sites = water_sites
 	_roster.clear()
 	var wanted: Dictionary = {}
 	var work_sites: Dictionary = {} # employer business id -> site, or {}
@@ -267,7 +275,7 @@ func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictio
 	if not entry.is_empty() and (entry["child"] != child or entry["female"] != female):
 		(entry["node"] as Node3D).queue_free()
 		entry = {}
-	var sig := Vector3i(HEVillagerSchedule.ROLES.find(role), int(home.get("site_id", -1)), int(work.get("site_id", -1)))
+	var sig := Vector4i(HEVillagerSchedule.ROLES.find(role), int(home.get("site_id", -1)), int(work.get("site_id", -1)), _water_sig)
 	if entry.is_empty():
 		var rng := RandomNumberGenerator.new()
 		rng.seed = hash("villager|%d|%d" % [key.x, key.y])
@@ -313,7 +321,7 @@ func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictio
 		_update_entry(entry, 0.0)
 
 func _replan(entry: Dictionary) -> void:
-	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths)
+	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths, _water_sites)
 	entry["plan_day"] = _day
 	entry["seg"] = {}
 	entry["hide_t0"] = 0.0
