@@ -281,6 +281,12 @@ func _copy_spec() -> void:
 
 func _save_spec() -> void:
 	var file_name := "%s_%d.json" % [_spec.landscape, _spec.seed]
+	if OS.has_feature("web"):
+		# The browser's user:// is private storage, so hand the file to the user.
+		JavaScriptBridge.download_buffer((_spec.to_json() + "
+").to_utf8_buffer(), file_name, "application/json")
+		_status.text = "Downloading %s (check your browser's downloads)." % file_name
+		return
 	for dir in [SPEC_DIR, USER_SPEC_DIR]:
 		DirAccess.make_dir_recursive_absolute(dir)
 		var file := FileAccess.open("%s/%s" % [dir, file_name], FileAccess.WRITE)
