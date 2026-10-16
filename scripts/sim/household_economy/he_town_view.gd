@@ -22,6 +22,7 @@ signal person_details_requested(household_id: int, member_number: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HEVillagers = preload("res://scripts/sim/household_economy/he_villagers.gd")
+const HELivestock = preload("res://scripts/sim/household_economy/he_livestock.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
@@ -134,6 +135,7 @@ var _details_button: Button
 var _home_button: Button
 var _person_button: Button
 var _villager_layer: HEVillagers
+var _livestock_layer: HELivestock
 ## Selected villager as (household_id, member_number), or (-1, -1). A site and
 ## a villager are never selected at once.
 var _selected_villager := Vector2i(-1, -1)
@@ -176,6 +178,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 			continue
 		_sync_site(site)
 	_villager_layer.sync(layout, villagers)
+	_livestock_layer.sync(layout, reports)
 	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
 		_selected_villager = Vector2i(-1, -1)
 	var unplaced := layout.unplaced_business_ids().size() + layout.unplaced_dwelling_ids().size()
@@ -291,10 +294,14 @@ func villager_count() -> int:
 func villagers() -> HEVillagers:
 	return _villager_layer
 
+func livestock() -> HELivestock:
+	return _livestock_layer
+
 ## Freezes or resumes the villagers (the dashboard's pause), animations too.
 func set_villagers_paused(value: bool) -> void:
 	if _villager_layer != null and _villager_layer.paused != value:
 		_villager_layer.paused = value
+		_livestock_layer.paused = value
 		_update_villager_processing()
 
 ## The villager layer (and the AnimationPlayers under it) only runs while this
@@ -302,7 +309,9 @@ func set_villagers_paused(value: bool) -> void:
 ## follow this Control's, so it would otherwise animate behind the dashboard.
 func _update_villager_processing() -> void:
 	var active := is_visible_in_tree() and not _villager_layer.paused
-	_villager_layer.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+	var mode := Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+	_villager_layer.process_mode = mode
+	_livestock_layer.process_mode = mode
 
 ## Pans the camera so `point` (town coordinates) is centred.
 func focus_on(point: Vector2) -> void:
@@ -415,6 +424,10 @@ func _build_world() -> void:
 	_selection_marker.name = "Selection"
 	_viewport.add_child(_selection_marker)
 
+	_livestock_layer = HELivestock.new()
+	_livestock_layer.name = "Livestock"
+	_livestock_layer.set_camera(_camera)
+	_viewport.add_child(_livestock_layer)
 	_villager_layer = HEVillagers.new()
 	_villager_layer.name = "Villagers"
 	_viewport.add_child(_villager_layer)
