@@ -1,7 +1,7 @@
 extends Control
 
 ## Valley generator experiment: pick a landscape and spec, browse seeds as shaded
-## relief, an orbitable 3D mesh, or a contact sheet of eight seeds, and copy or
+## relief, a 3D mesh viewed through the RTS camera, or a contact sheet of eight seeds, and copy or
 ## save the spec of a seed you like.
 
 const Generator = preload("res://scripts/valley/gen/valley_generator.gd")
