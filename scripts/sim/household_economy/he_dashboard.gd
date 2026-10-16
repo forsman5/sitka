@@ -543,6 +543,7 @@ func _build_ui() -> void:
 	_town_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_town_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_town_view.visible = false
+	_town_view.household_summary_provider = _town_household_summary
 	_town_view.details_requested.connect(_on_town_details_requested)
 	_town_view.person_details_requested.connect(_on_town_person_details_requested)
 	_town_view.visibility_changed.connect(_on_view_changed)
@@ -3193,6 +3194,12 @@ func _set_town_mode(enabled: bool) -> void:
 func _on_town_details_requested(business_id: int) -> void:
 	_set_town_mode(false)
 	_on_business_row_selected(business_id)
+
+## The town view's household window source; {} once the household is gone.
+func _town_household_summary(household_id: int) -> Dictionary:
+	if _simulation == null or not _simulation.get_household_ids().has(household_id):
+		return {}
+	return _simulation.get_household_summary(household_id)
 
 func _on_town_person_details_requested(household_id: int, member_number: int) -> void:
 	_set_town_mode(false)
