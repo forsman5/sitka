@@ -91,6 +91,10 @@ func _check_reachability_and_shape(preset: String) -> void:
 			_assert(_ribbon_gap(from_house[i], roads) <= RIBBON_EPSILON, "%s: path vertex %s to site %d is off the roads" % [preset, from_house[i], id])
 		var leg := from_house[from_house.size() - 1].distance_to(from_house[from_house.size() - 2])
 		if (site["access"] as Vector2).is_finite():
+			# The access node can be collinear with the door (a straight farm
+			# track), so path simplification drops it: measure to the access
+			# point itself rather than to the previous vertex.
+			leg = from_house[from_house.size() - 1].distance_to(site["access"])
 			_assert(leg <= MAX_DOOR_LEG, "%s: door leg of site %d is %.1f long" % [preset, id, leg])
 		elif id != HETownLayout.CIVIC_SITE_ID:
 			longest_offroad = maxf(longest_offroad, leg)

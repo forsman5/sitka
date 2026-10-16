@@ -58,6 +58,21 @@ func _run() -> void:
 	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
 	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
 
+	# Herds: every ranch/sheep farm shows animals, and they stay in the pasture.
+	var herds = view.livestock()
+	var expected_herds := 0
+	for report in dashboard._simulation.get_business_reports():
+		if report.has("herd_size") and float(report["herd_size"]) >= 1.0:
+			expected_herds += 1
+	check(expected_herds > 0 and herds.herd_count() == expected_herds, "Each herd business gets a drawn herd (%d drawn, %d expected)" % [herds.herd_count(), expected_herds])
+	check(herds.total_animals() > 0, "Herds draw animals")
+	for i in 120:
+		herds._process(0.1)
+	for site in layout.get_sites():
+		var rect: Rect2 = herds.graze_rect(site["footprint"])
+		for p in herds.animal_positions(int(site["site_id"])):
+			check(rect.grow(0.01).has_point(p), "Animal stays inside its pasture (%s outside %s)" % [p, rect])
+
 	var before := _positions(layout)
 	dashboard._set_town_mode(true)
 	await process_frame
@@ -251,6 +266,15 @@ func _run() -> void:
 	dashboard._refresh_header()
 	check(view.snow_cover() == 0.0 and not snow_layer.visible, "Snow is gone by summer (cover %.2f)" % view.snow_cover())
 
+	# Hiring positions must not depend on the Town view having refreshed: a
+	# house added while it is hidden is seated by the next sim day.
+	var hiring_sim: HESimulation = dashboard._simulation
+	var new_house_id := hiring_sim.next_dwelling_id()
+	hiring_sim.add_dwelling(HEHouse.new(new_house_id, dashboard._town_settlement_id()))
+	check(not hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "A house the layout has not seen has no position yet")
+	dashboard._advance_sim_day()
+	check(hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "The next sim day seats a new house for hiring without a Town view refresh")
+
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
 
@@ -269,6 +293,23 @@ func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 		if view.villagers()._villagers[key]["female"]:
 			females += 1
 	check(females > population / 5 and females < population * 4 / 5, "Both body models are in use (%d of %d female)" % [females, population])
+	var sex_mismatches := 0
+	for report in reports:
+		var sexes: Array = Array(report["worker_sexes"]) + Array(report["dependent_sexes"])
+		for i in sexes.size():
+			var entry: Dictionary = view.villagers()._villagers[Vector2i(int(report["household_id"]), i + 1)]
+			if bool(entry["female"]) != (sexes[i] == HEHousehold.SEX_FEMALE):
+				sex_mismatches += 1
+	var same_sex_couples := 0
+	var couples := 0
+	for report in reports:
+		var worker_sexes: PackedInt32Array = report["worker_sexes"]
+		if worker_sexes.size() == 2:
+			couples += 1
+			if worker_sexes[0] == worker_sexes[1]:
+				same_sex_couples += 1
+	check(couples > 0 and same_sex_couples == 0, "Two-worker households are male-female (%d of %d same-sex)" % [same_sex_couples, couples])
+	check(sex_mismatches == 0,"Each villager's body follows the member's sex (%d mismatches)" % sex_mismatches)
 
 	# Shadows follow the GameState setting (off by default). Set directly and
 	# signalled by hand, so the check does not rewrite the user's settings file.

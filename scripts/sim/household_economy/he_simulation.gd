@@ -277,7 +277,7 @@ const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
 ## Winter fodder: grain each head of a herd needs over a winter. Cattle carry
 ## the pooled valley's FODDER_PER_HEAD_PER_SEASON (3.0); sheep scale it by the
 ## forage ratio H1 already uses for grazing land (SHEEP_LAND_PER_HEAD over
-## CATTLE_LAND_PER_HEAD), since a sheep is worth ~1/20 of a cow here and a
+## CATTLE_LAND_PER_HEAD), since a sheep is worth ~1/5 of a cow here and a
 ## flat 3.0 would cost more than the animal. Ranches buy it ahead of winter
 ## (_run_fodder_purchasing) and eat it from their own inventory at the winter
 ## review. The share of the need actually covered sets that winter's
@@ -285,7 +285,7 @@ const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
 ## linear between (underfed herds lose more).
 const FODDER_PER_HEAD_PER_WINTER: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 3.0,
-	HEBusiness.Species.SHEEP: 0.45, # 3.0 * SHEEP_LAND_PER_HEAD (0.15) / CATTLE_LAND_PER_HEAD (1.0)
+	HEBusiness.Species.SHEEP: 0.6, # 3.0 * SHEEP_LAND_PER_HEAD (0.6) / CATTLE_LAND_PER_HEAD (3.0)
 }
 
 static func season_of_day(p_day: int) -> int:
@@ -335,25 +335,48 @@ static func seasonal_yield_scale(commodity: Commodity.Type, p_day: int) -> float
 		total += float(modifier)
 	return seasonal_output_modifier(commodity, p_day) * float(curve.size()) / total
 
-## Both ranches graze the SAME finite pasture, shared per settlement --
-## cattle need far more of it per head than sheep (~6-7x, per husbandry
-## research: a mature cow's forage need scales with its much larger body
-## mass), so the same acreage supports far fewer cattle than sheep. This is
-## a deliberately early abstraction: a flat number, not yet tied to
-## authored terrain/acreage per settlement, and grazing-only -- a rancher
-## buying grain to make up for a shortfall in grazing land is a plausible
-## future mechanic (configurable land-vs-fodder tradeoff, priced against
-## the grain market) but explicitly not implemented here. For now a herd
-## that outgrows its share of the land simply stops growing at that land's
-## ceiling and takes the harsher "neglected" mortality rate below. Sized
-## with real headroom above both species' HERD_CULL_TARGET at once, now
-## that culled stock/wool actually sell for real money (Trader export,
-## local wool market) -- see HERD_EXPORT_PRICE's doc comment for why
-## cattle's herd was originally kept small (nothing consumed it yet) and
-## no longer needs to be.
-const SETTLEMENT_GRAZING_LAND := 300.0
-const CATTLE_LAND_PER_HEAD := 1.0
-const SHEEP_LAND_PER_HEAD := 0.15
+## Grazing land. Each ranch owns its own acreage (HEBusiness.land_area_acres,
+## like a farm's land) and its herd is bounded by it: land / acres-per-head.
+## Acres per head are from extension-service stocking rates: a 1,000 lb cow
+## with calf is one animal unit (AU), which a temperate, unimproved pasture
+## carries on roughly 1.2-3 acres a year (Penn State: 1.2 ac/AU on good
+## orchardgrass-clover; semi-arid rangeland needs far more); a mature sheep
+## is ~0.2 AU (0.27 with a lamb at foot). So cattle take 3.0 acres a head
+## here, the thin end of that range: unimproved pasture with no fertilizer,
+## and the ranch's own hay meadow, rest rotation and yards counted in -- and
+## sheep 0.6, a 1:5 ratio.
+## Grazing-only: a rancher buying grain to cover a shortfall is a possible
+## future mechanic, not implemented. A herd past its land stops growing at
+## that ceiling and takes the harsher "neglected" mortality rate below.
+const CATTLE_LAND_PER_HEAD := 3.0
+const SHEEP_LAND_PER_HEAD := 0.6
+
+## Share of a ranch's carrying capacity its cull target sits at: culling back
+## to this, rather than to the ceiling itself, leaves room to grow between
+## reviews and a margin for a bad year (range advice is to stock well below
+## capacity; tame pasture can run higher).
+const HERD_STOCKING_UTILIZATION := 0.75
+
+## Acreage a new ranch starts with: 600 acres of cattle pasture carries 200
+## head and culls at 150; 160 acres of sheep pasture carries 266 and culls
+## at 200 (the targets the pooled model used before ranches had land). Big
+## enough that the town view's plot holds a full default herd.
+const DEFAULT_RANCH_LAND_ACRES: Dictionary[HEBusiness.Species, float] = {
+	HEBusiness.Species.CATTLE: 600.0,
+	HEBusiness.Species.SHEEP: 160.0,
+}
+
+static func land_per_head(species: HEBusiness.Species) -> float:
+	return CATTLE_LAND_PER_HEAD if species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
+
+## Most head `land_acres` of pasture can carry (the herd's hard ceiling).
+static func herd_land_capacity(species: HEBusiness.Species, land_acres: float) -> float:
+	return land_acres / land_per_head(species)
+
+## Default cull target for a ranch of `land_acres`: the stocking utilization
+## share of its carrying capacity, rounded to whole head.
+static func default_cull_target(species: HEBusiness.Species, land_acres: float) -> float:
+	return roundf(herd_land_capacity(species, land_acres) * HERD_STOCKING_UTILIZATION)
 
 ## Reproduction, per HERD_EVAL_INTERVAL_DAYS: cattle bear a single calf on
 ## a roughly annual cycle; sheep both lamb more prolifically per ewe (often
@@ -370,7 +393,7 @@ const HERD_GROWTH_RATE: Dictionary[HEBusiness.Species, float] = {
 ## Single knob for how fast herds grow overall, independent of the
 ## realistic per-species rates above. At 1.0 (HERD_GROWTH_RATE as
 ## authored), a ranch takes on the order of 2000+ days to reach its first
-## HERD_CULL_TARGET from its seeded starting size -- too slow to feel like
+## the default cull target from its seeded starting size -- too slow to feel like
 ## a lever the player is pulling in a short early-preview session. 1.6
 ## instead lands both ranches' first cull around ~900 days, without
 ## touching HERD_LOSS_RATE_FED/NEGLECTED (mortality stays at the
@@ -379,7 +402,7 @@ const HERD_GROWTH_RATE: Dictionary[HEBusiness.Species, float] = {
 const HERD_GROWTH_RATE_MULTIPLIER := 1.6
 
 ## Mortality, per HERD_EVAL_INTERVAL_DAYS. FED applies while herd_size fits
-## within this ranch's current share of SETTLEMENT_GRAZING_LAND; NEGLECTED
+## within what this ranch's own land can carry; NEGLECTED
 ## applies once it's grown past what the land can support (see
 ## _run_herds). Sheep run a higher baseline AND a harsher neglected rate
 ## than cattle -- flocks are individually more fragile despite working
@@ -401,7 +424,7 @@ const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
 ## gives a herd's labor a real marginal product -- without it a herd earned
 ## the same with 0 or 4 workers and the capacity tuner (which compares
 ## revenue per worker to the reference wage) had no stable staffing level to
-## find. Also sets each ranch's max_capacity (ceil(HERD_CULL_TARGET *
+## find. Also sets each ranch's max_capacity (ceil(cull target *
 ## labor_per_head)), the way a field business derives it from acreage.
 ## Sheep need more hands per head than cattle (lambing, dipping, shearing,
 ## predator watch) even though a sheep is far smaller.
@@ -427,18 +450,13 @@ const HERD_STAFFED_WOOL_BONUS := 1.0
 
 ## Once herd_size crosses this, the ranch culls straight back down to it
 ## every eval interval, moving the excess into its own inventory as
-## herd_commodity() units. Cattle's target keeps the SAME ratio to
-## HEScenarioSeeds.CATTLE_STARTING_HERD as before (1.5x) so the time to
-## first cull is unchanged (~900 days at HERD_GROWTH_RATE_MULTIPLIER) --
-## only the absolute scale moved up, now that a bigger herd has somewhere
-## real to go (HERD_EXPORT_PRICE, SETTLEMENT_GRAZING_LAND). Both targets
-## stay well under either species' solo claim on SETTLEMENT_GRAZING_LAND
-## so the two ranches have real headroom to grow between culls even while
-## sharing the same pasture.
-const HERD_CULL_TARGET: Dictionary[HEBusiness.Species, float] = {
-	HEBusiness.Species.CATTLE: 150.0,
-	HEBusiness.Species.SHEEP: 200.0,
-}
+## herd_commodity() units. The target is derived from the ranch's land (see
+## default_cull_target); the default ranches land on 150 cattle / 200 sheep,
+## 1.5x / 2x their starting herd, so the time to first cull is unchanged
+## (~900 days at HERD_GROWTH_RATE_MULTIPLIER). A player-set cull_target
+## overrides it.
+## (Per-species default cull targets come from a ranch's land: see
+## default_cull_target.)
 
 ## Sheep only: a renewable trickle straight into inventory from live
 ## herd_size every eval interval, independent of culling -- wool doesn't
@@ -588,7 +606,7 @@ const BUTCHERY_CREDIT_LIMIT := 2000.0
 ## never prefers this over patiently waiting for a normal sale -- it's a last
 ## resort, not a revenue strategy. Never slaughters below this floor, so
 ## there's always enough left to regrow from. Cattle's floor scales with its
-## bigger HERD_CULL_TARGET (still ~20% of target, same proportion as before)
+## bigger default cull target (still ~20% of target, same proportion as before)
 ## so a hardship slaughter can't gut just as large a fraction of the
 ## now-bigger herd.
 const HOME_BUTCHER_MEAT_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
@@ -735,6 +753,14 @@ var _trader_export_enabled: Dictionary[int, Dictionary] = {} # trader business_i
 
 var rng: RandomNumberGenerator
 var day: int = 0
+
+## Optional map positions, used only to order hiring (see _reconcile_employment).
+## `(kind: String, id: int) -> Vector2` where kind is "business" or "dwelling"
+## and the result is a position in one shared coordinate space, or Vector2.INF
+## when unknown. Unset (the default, and every headless run) keeps hiring in
+## plain household-id order. The sim has no geography of its own: the town
+## layout supplies this.
+var position_lookup: Callable = Callable()
 
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
@@ -980,7 +1006,8 @@ func get_dwelling_reports(settlement_id: int = -1) -> Array:
 ## One entry per household of the settlement, ascending id -- the cheap roster
 ## a town renderer reads every tick (get_household_summary is far heavier):
 ## {household_id, dwelling_id, employer_business_id, housing_status,
-## worker_ages, dependent_ages}. Ages are in days, one entry per member.
+## worker_ages, dependent_ages, worker_sexes, dependent_sexes}. Ages are in
+## days and sexes are HEHousehold.SEX_*, one entry per member.
 func get_villager_reports(settlement_id: int) -> Array:
 	var out: Array = []
 	for household_id in get_household_ids(settlement_id):
@@ -992,6 +1019,8 @@ func get_villager_reports(settlement_id: int) -> Array:
 			"housing_status": _housing_status_of(h),
 			"worker_ages": PackedInt32Array(h.worker_ages()),
 			"dependent_ages": PackedInt32Array(h.dependent_ages()),
+			"worker_sexes": PackedInt32Array(h.worker_sexes()),
+			"dependent_sexes": PackedInt32Array(h.dependent_sexes()),
 		})
 	return out
 
@@ -1528,6 +1557,8 @@ func get_household_summary(household_id: int) -> Dictionary:
 		"is_starvation_candidate": h.demographics.is_starvation_candidate(),
 		"dependent_ages": h.dependent_ages(),
 		"worker_ages": h.worker_ages(),
+		"dependent_sexes": h.dependent_sexes(),
+		"worker_sexes": h.worker_sexes(),
 		"needs": needs,
 		"unmet_scarcity_today": unmet_scarcity,
 		"unmet_unaffordable_today": unmet_unaffordable,
@@ -1611,6 +1642,8 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		return {}
 	var is_worker := index < workers.size()
 	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var sexes := h.worker_sexes() if is_worker else h.dependent_sexes()
+	var sex: int = sexes[index if is_worker else index - workers.size()]
 	var vulnerability := HEHousehold.vulnerability_of(is_worker, age)
 	var role := "Worker"
 	var life_stage := "Adult"
@@ -1647,6 +1680,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		"role": role,
 		"life_stage": life_stage,
 		"age_days": age,
+		"sex": sex,
 		"note": note,
 		"vulnerability": vulnerability,
 		"health": h.health(vulnerability),
@@ -3495,8 +3529,10 @@ func _adopt_orphaned_dependents(household_id: int) -> bool:
 		return false
 
 	var adopter: HEHousehold = households[adopter_id]
-	for age in orphan.dependent_ages():
-		adopter.add_dependent(age)
+	var orphan_ages := orphan.dependent_ages()
+	var orphan_sexes := orphan.dependent_sexes()
+	for i in orphan_ages.size():
+		adopter.add_dependent(orphan_ages[i], orphan_sexes[i])
 	adopter.balance += orphan.balance
 	for c in SUBSISTENCE_COMMODITIES:
 		var amount := orphan.stock(c)
@@ -3572,7 +3608,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 		var promoted := h.evaluate_aging(rng)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
-			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i]))
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i], h.last_promoted_sexes[i]))
 		promotions += promoted
 		var birth_scale := HOUSING_SATURATED_BIRTH_SCALE if saturated.get(h.settlement_id, false) else 1.0
 		if h.evaluate_birth(rng, birth_scale):
@@ -3598,7 +3634,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 ## left, since evaluate_aging() may have promoted several at once this same
 ## period) -- a plain transfer, not a gift from nowhere, so total city
 ## money/goods are unaffected by a household splitting.
-func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int) -> HEHousehold:
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int, sex: int) -> HEHousehold:
 	var new_id := _next_household_id
 	_next_household_id += 1
 	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
@@ -3606,6 +3642,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 	var starting_balance: float = parent.balance * share
 	parent.balance -= starting_balance
 	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance, parent.settlement_id)
+	new_household.seed_worker_sexes([sex] as Array[int])
 
 	for c in SUBSISTENCE_COMMODITIES:
 		var amount: float = parent.stock(c) * share
@@ -3928,8 +3965,10 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 ## Weekly self-tuning step 2: lay off whole households (highest household ID
 ## first, an arbitrary but deterministic tie-break) from any business now
 ## over its (possibly just-reduced) capacity, then let every under-capacity
-## business hire from the resulting pool of unemployed households (lowest
-## household ID first). Businesses are processed in a fixed ID order for
+## business hire from the resulting pool of unemployed households: the one
+## living nearest the business first when `position_lookup` is set (household
+## ID breaks ties and a home with no known position ranks last), otherwise
+## lowest household ID first. Businesses are processed in a fixed ID order for
 ## hiring, so a lower-ID business gets first pick of the pool when two are
 ## expanding into the same freed labor at once -- a deterministic but real
 ## bias, same spirit as the pooled model's documented edge-order bias in
@@ -3980,13 +4019,13 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			if (households[household_id] as HEHousehold).employer_business_id == -1:
 				available.append(household_id)
 		available.sort()
-		var pool_index := 0
 		var local_business_ids := (settlements[settlement_id] as HESettlement).business_ids.duplicate()
 		local_business_ids.sort()
 		# Hires only move unemployed households into the business being
 		# filled, so one snapshot gives every business its starting count
 		# without a rebuild after each hire.
 		var hiring_snapshot := _employment_index()
+		var dwelling_positions: Dictionary = {} # dwelling_id -> position, looked up once
 		for business_id in local_business_ids:
 			var b: HEBusiness = businesses[business_id]
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
@@ -4001,15 +4040,43 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			# culling), and release its crew when none is expected. Until then the
 			# Butcher checks in run_household_economy.gd seed ranches near their cull
 			# target (_seed_ranches_near_cull_target) so the Butcher has input in year 1.
-			while employed_workers < b.capacity and pool_index < available.size():
-				var household_id: int = available[pool_index]
-				pool_index += 1
+			var business_position := _lookup_position("business", business_id)
+			while employed_workers < b.capacity and not available.is_empty():
+				var household_id: int = available.pop_at(_nearest_available_index(available, business_position, dwelling_positions))
 				var h: HEHousehold = households[household_id]
 				if h.worker_capacity() <= 0:
 					continue
 				h.employer_business_id = business_id
 				employed_workers += h.worker_capacity()
 				_log_event("job", {"household_id": household_id, "business_id": business_id, "settlement_id": settlement_id, "workers": h.worker_capacity()})
+
+## Position of a business or house from `position_lookup`, or Vector2.INF.
+func _lookup_position(kind: String, id: int) -> Vector2:
+	if not position_lookup.is_valid() or id == -1:
+		return Vector2.INF
+	return position_lookup.call(kind, id)
+
+## Index in `available` (ascending household ids) of the household that lives
+## nearest `business_position`; the lowest id wins a tie. Households with an
+## unknown home, or any pick when the business position is unknown, rank last,
+## so with no position data this is index 0: plain ascending id order.
+func _nearest_available_index(available: Array[int], business_position: Vector2, dwelling_positions: Dictionary) -> int:
+	if not business_position.is_finite():
+		return 0
+	var best := 0
+	var best_distance := INF
+	for i in available.size():
+		var dwelling_id: int = (households[available[i]] as HEHousehold).dwelling_id
+		if not dwelling_positions.has(dwelling_id):
+			dwelling_positions[dwelling_id] = _lookup_position("dwelling", dwelling_id)
+		var home: Vector2 = dwelling_positions[dwelling_id]
+		if not home.is_finite():
+			continue
+		var distance := home.distance_squared_to(business_position)
+		if distance < best_distance:
+			best_distance = distance
+			best = i
+	return best
 
 ## Step: prepare and clear local offers/requests, one commodity at a time.
 ## Snapshots every household's balance ONCE before either commodity clears
@@ -4708,15 +4775,19 @@ func _export_reference_price(settlement_id: int, commodity: Commodity.Type) -> f
 ## The herd size `b` culls back down to each review: its own player-set
 ## cull_target, or the species default if none was ever set.
 func herd_cull_target(b: HEBusiness) -> float:
-	return b.cull_target if b.cull_target > 0.0 else HERD_CULL_TARGET[b.species]
+	return b.cull_target if b.cull_target > 0.0 else default_cull_target(b.species, ranch_land(b))
+
+## A ranch's acreage: its own land_area_acres, or the species default for a
+## builder that never set one.
+func ranch_land(b: HEBusiness) -> float:
+	return b.land_area_acres if b.land_area_acres > 0.0 else DEFAULT_RANCH_LAND_ACRES[b.species]
 
 ## The range a ranch's cull target may be set to: never below the hardship
 ## butchering floor (selling down to it would otherwise fight the cull), and
-## never above what the whole shared pasture could hold for this species.
+## never above what the ranch's own land can carry.
 func herd_cull_target_range(b: HEBusiness) -> Vector2:
-	var land_per_head: float = CATTLE_LAND_PER_HEAD if b.species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
 	var lowest: float = HARDSHIP_BUTCHER_MIN_HERD[b.species]
-	var highest: float = maxf(lowest, floorf(SETTLEMENT_GRAZING_LAND / land_per_head))
+	var highest: float = maxf(lowest, floorf(herd_land_capacity(b.species, ranch_land(b))))
 	return Vector2(lowest, highest)
 
 ## How many sheep it takes to cover this settlement's current household wool
@@ -4763,11 +4834,8 @@ func set_herd_cull_target(business_id: int, value: float) -> float:
 ## on its own -- no employment, no wages, no market clearing (see
 ## he_business.gd's Kind.HERD doc comment for why). Ranches within the same
 ## settlement are processed in a fixed id order (same deterministic-bias
-## convention as _run_trade's edge order) so each one's land claim is
-## resolved against what settlements earlier in the order already took,
-## rather than all racing for the same pasture at once.
+## convention as _run_trade's edge order). Each ranch grazes its own land.
 func _run_herds(record: Dictionary) -> void:
-	var land_claimed: Dictionary = {} # settlement_id -> float
 	var herd_ids: Array[int] = []
 	for business_id in businesses.keys():
 		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.HERD:
@@ -4776,14 +4844,11 @@ func _run_herds(record: Dictionary) -> void:
 
 	for business_id in herd_ids:
 		var b: HEBusiness = businesses[business_id]
-		var land_per_head: float = CATTLE_LAND_PER_HEAD if b.species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
-		var claimed_by_others: float = land_claimed.get(b.settlement_id, 0.0)
-		var available_land: float = max(0.0, SETTLEMENT_GRAZING_LAND - claimed_by_others)
-		var max_herd_by_land: float = (available_land / land_per_head) if land_per_head > 0.0 else b.herd_size
+		var max_herd_by_land: float = herd_land_capacity(b.species, ranch_land(b))
 
-		# Fed if the herd already fits the land available to it; a herd that
-		# has outgrown its share is neglected -- no grain is bought to make
-		# up the gap (see SETTLEMENT_GRAZING_LAND's doc comment).
+		# Fed if the herd already fits its land; a herd that has outgrown it
+		# is neglected -- no grain is bought to make up the gap (see
+		# CATTLE_LAND_PER_HEAD's doc comment).
 		var fed := b.herd_size <= max_herd_by_land
 		var herd_before: float = b.herd_size
 
@@ -4850,7 +4915,6 @@ func _run_herds(record: Dictionary) -> void:
 			if not _livestock_has_outlet(b.settlement_id, commodity):
 				_butcher_stock_at_home(b, excess, record)
 
-		land_claimed[b.settlement_id] = claimed_by_others + b.herd_size * land_per_head
 		b.collateral_herd = b.herd_size
 
 func _accumulate(dict: Dictionary, key, amount: float) -> void:
