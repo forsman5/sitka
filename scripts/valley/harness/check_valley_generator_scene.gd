@@ -28,5 +28,20 @@ func _init() -> void:
 	if view._result["seed"] != 7:
 		print("FAIL: seed change did not regenerate")
 		failures += 1
+	# Editing the spec box and applying it switches landscape.
+	var edited: Dictionary = JSON.parse_string(view._spec_text.text)
+	edited["landscape"] = "coast"
+	edited["seed"] = 3
+	view._spec_text.text = JSON.stringify(edited)
+	view._apply_spec_text()
+	await process_frame
+	if view._result["spec"].landscape != "coast" or view._result["seed"] != 3 or not view._result["terrain"].has_sea:
+		print("FAIL: applying an edited spec did not regenerate as a coast")
+		failures += 1
+	view._spec_text.text = "{not json"
+	view._apply_spec_text()
+	if view._result["spec"].landscape != "coast" or not view._status.text.begins_with("Spec not applied"):
+		print("FAIL: an invalid spec was not rejected cleanly")
+		failures += 1
 	print("check_valley_generator_scene: %s" % ("FAILED" if failures > 0 else "OK"))
 	quit(1 if failures > 0 else 0)

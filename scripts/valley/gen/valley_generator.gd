@@ -4,29 +4,39 @@ extends RefCounted
 ## vegetation -> ValleyMapDefinition -> validation. One deterministic function of
 ## the seed. See docs/valley-generation-sketch.md.
 
+const Spec = preload("res://scripts/valley/gen/valley_spec.gd")
 const Terrain = preload("res://scripts/valley/gen/valley_gen_terrain.gd")
 const Sites = preload("res://scripts/valley/gen/valley_gen_sites.gd")
 const Roads = preload("res://scripts/valley/gen/valley_gen_roads.gd")
 const Validator = preload("res://scripts/valley/gen/valley_gen_validator.gd")
 
-const ARCHETYPE := "river_valley_port"
 const MAX_TREES := 700
 
-## Result: {seed, archetype, terrain, sites, roads, map, trees, report, ms}.
-static func generate(world_seed: int) -> Dictionary:
+## Generate from a landscape preset and a seed.
+static func generate_seed(world_seed: int, landscape := "river_valley") -> Dictionary:
+	return generate(Spec.preset(landscape, world_seed))
+
+## Result: {seed, spec, terrain, sites, roads, map, trees, report, ms}.
+static func generate(spec: Spec) -> Dictionary:
 	var started := Time.get_ticks_msec()
+	var world_seed: int = spec.seed
+	var spec_errors := spec.validate()
+	if not spec_errors.is_empty():
+		return {"seed": world_seed, "spec": spec, "spec_errors": spec_errors}
 	var rng := RandomNumberGenerator.new()
 
 	var terrain := Terrain.new()
 	terrain.world_seed = world_seed
 	rng.seed = world_seed * 7919 + 1
-	terrain.build(rng)
+	terrain.build(rng, spec)
 
 	rng.seed = world_seed * 7919 + 2
-	var picked := Sites.pick(terrain, rng)
+	var picked := Sites.pick(terrain, rng, spec)
 	var sites: Array[Dictionary] = picked["sites"]
 	for site in sites:
 		terrain.apply_pad(site["pos"], site["pad"], site["height"])
+	for site in sites:
+		terrain.stamp_pad(site["pos"], site["pad"], site["height"])
 	terrain.finalize()
 
 	var roads := Roads.build(terrain, sites)
@@ -34,7 +44,7 @@ static func generate(world_seed: int) -> Dictionary:
 	Roads.add_crossings(map)
 
 	var result := {
-		"seed": world_seed, "archetype": ARCHETYPE, "terrain": terrain, "sites": sites,
+		"seed": world_seed, "spec": spec, "terrain": terrain, "sites": sites,
 		"roads": roads, "map": map, "failures": picked["failures"],
 	}
 	rng.seed = world_seed * 7919 + 3
@@ -56,7 +66,8 @@ static func _emit_map(terrain: Terrain, sites: Array[Dictionary], roads: Array[D
 		if site["waterfront"] != null:
 			record["waterfront"] = site["waterfront"]
 		map.settlements[site["id"]] = record
-	map.junctions = {"confluence": {"position": terrain.junction, "inner_radius": 14.0, "outer_radius": 30.0}}
+	for id in terrain.junctions:
+		map.junctions[id] = {"position": terrain.junctions[id], "inner_radius": 14.0, "outer_radius": 30.0}
 	for id in terrain.rivers:
 		var river: Dictionary = terrain.rivers[id]
 		map.rivers[id] = {"node_name": river["node_name"], "width": river["width"], "points": river["map_points"]}
@@ -85,7 +96,7 @@ static func _add_vegetation(result: Dictionary, rng: RandomNumberGenerator) -> v
 			"ore":
 				radii = Vector2(28.0, 18.0)
 				count = 30
-		map.vegetation["%s_veg" % role] = {
+		map.vegetation["%s_%d_veg" % [role, site["id"]]] = {
 			"center": {"settlement": site["id"], "offset": Vector3(rng.randf_range(-6.0, 6.0), 0.0, rng.randf_range(-6.0, 6.0))},
 			"radii": radii, "count": count, "seed": seed_base + site["id"], "clearance": site["pad"] * 0.6 + 4.0,
 		}

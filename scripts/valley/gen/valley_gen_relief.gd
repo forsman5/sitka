@@ -9,6 +9,8 @@ const Generator = preload("res://scripts/valley/gen/valley_generator.gd")
 const WATER := Color(0.2, 0.4, 0.68)
 const WET_BANK := Color(0.2, 0.3, 0.2)
 const ROAD := Color(0.93, 0.87, 0.66)
+const SEA := Color(0.1, 0.27, 0.5)
+const SAND := Color(0.78, 0.72, 0.5)
 const LIGHT := Vector3(-0.55, 0.75, -0.35)
 
 static func _ground_color(t: float) -> Color:
@@ -24,14 +26,20 @@ static func _ground_color(t: float) -> Color:
 static func tint_grid(result: Dictionary, bake_roads: bool) -> Image:
 	var terrain: Terrain = result["terrain"]
 	var range_h := terrain.height_range()
+	if terrain.has_sea:
+		range_h.x = terrain.sea_level
 	var image := Image.create(Terrain.W, Terrain.H, false, Image.FORMAT_RGB8)
 	for gz in Terrain.H:
 		for gx in Terrain.W:
 			var i := gz * Terrain.W + gx
 			var color := _ground_color((terrain.heights[i] - range_h.x) / maxf(range_h.y - range_h.x, 0.001))
 			var bank := terrain.bank_dist[i]
-			if bank < -0.5:
+			if terrain.has_sea and terrain.shore[i] < 0.0:
+				color = WATER.lerp(SEA, clampf(-terrain.heights[i] / 4.0, 0.0, 1.0))
+			elif bank < -0.5:
 				color = WATER.lerp(WATER.darkened(0.25), clampf(-bank / 8.0, 0.0, 1.0))
+			elif terrain.has_sea and terrain.shore[i] < 4.0:
+				color = color.lerp(SAND, 0.75)
 			elif bank < 3.0:
 				color = color.lerp(WET_BANK, 0.6)
 			image.set_pixel(gx, gz, color)

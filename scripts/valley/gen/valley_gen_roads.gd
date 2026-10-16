@@ -29,7 +29,9 @@ static func build(terrain: Terrain, sites: Array[Dictionary]) -> Array[Dictionar
 			var p := _world(Vector2i(gx, gz))
 			var slope := terrain.slope_at(p.x, p.y)
 			var w := 1.0 + 120.0 * slope * slope
-			if terrain.bank_at(p.x, p.y) < 1.0:
+			if terrain.is_sea(p.x, p.y):
+				grid.set_point_solid(Vector2i(gx, gz), true)
+			elif terrain.bank_at(p.x, p.y) < 1.0:
 				w += WATER_WEIGHT
 			weights[gz * gw + gx] = w
 			grid.set_point_weight_scale(Vector2i(gx, gz), w)

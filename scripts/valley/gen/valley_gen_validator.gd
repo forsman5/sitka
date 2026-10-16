@@ -8,18 +8,20 @@ extends RefCounted
 const Terrain = preload("res://scripts/valley/gen/valley_gen_terrain.gd")
 
 const MAX_PAD_SLOPE := 0.14
-const MAX_ROAD_GRADE := 0.6
+const MAX_ROAD_GRADE := 0.65
 const MAX_DETOUR := 3.5
 const MAX_SUPPLY_DISTANCE := 800.0
 
 ## role -> {makes, needs}
 const TRADE := {
 	"town": {"makes": ["grain", "cloth"], "needs": ["iron", "timber"]},
-	"port": {"makes": ["trade"], "needs": ["grain"]},
+	## A port stands in for outside trade, so it can supply any import.
+	"port": {"makes": ["*"], "needs": ["grain"]},
 	"pasture": {"makes": ["wool", "meat"], "needs": ["grain", "iron"]},
 	"woodland": {"makes": ["timber", "charcoal"], "needs": ["grain"]},
 	"ore": {"makes": ["iron"], "needs": ["charcoal", "grain"]},
 	"farm": {"makes": ["grain"], "needs": ["iron"]},
+	"fishing": {"makes": ["fish"], "needs": ["grain", "timber"]},
 }
 
 ## Returns {ok, checks: [{name, ok, detail}]}.
@@ -33,6 +35,12 @@ static func run(result: Dictionary) -> Dictionary:
 	var failures: PackedStringArray = result["failures"]
 	checks.append(_check("roster", failures.is_empty(), "%d sites" % sites.size() if failures.is_empty() else ", ".join(failures)))
 
+	if terrain.has_sea:
+		var sea := terrain.sea_fraction()
+		var lo := 0.1
+		var hi := 0.6 if terrain.landscape == "coast" else 0.7
+		checks.append(_check("sea share", sea >= lo and sea <= hi, "%d%% of the map is sea (want %d-%d%%)" % [roundi(sea * 100.0), roundi(lo * 100.0), roundi(hi * 100.0)]))
+
 	var errors := map.validate_geometry()
 	checks.append(_check("map geometry", errors.is_empty(), "valid; %d fords" % map.crossings.size() if errors.is_empty() else "%d errors, e.g. %s" % [errors.size(), errors[0]]))
 
@@ -45,12 +53,14 @@ static func run(result: Dictionary) -> Dictionary:
 		var worst := 0.0
 		for k in 8:
 			var a := float(k) * TAU / 8.0
-			var r: float = s["pad"] * 0.8
+			var r: float = s["pad"] * 0.7
 			var q := p + Vector2(cos(a), sin(a)) * r
-			if terrain.bank_at(q.x, q.y) > Terrain.BANK:
+			# Banks and beaches are not buildable, so they are not judged.
+			var margin := 10.0 if terrain.has_sea else Terrain.BANK
+			if terrain.bank_at(q.x, q.y) > margin:
 				worst = maxf(worst, terrain.slope_at(q.x, q.y))
 		if worst > MAX_PAD_SLOPE:
-			steep.append("%s %.2f" % [s["name"], worst])
+			steep.append("%s(%s) %.2f" % [s["name"], s["role"], worst])
 	checks.append(_check("sites dry", wet.is_empty(), "ok" if wet.is_empty() else ", ".join(wet)))
 	checks.append(_check("pad slope", steep.is_empty(), "all <= %.2f" % MAX_PAD_SLOPE if steep.is_empty() else ", ".join(steep)))
 
@@ -85,12 +95,18 @@ static func run(result: Dictionary) -> Dictionary:
 			for other in sites:
 				if other["id"] == s["id"]:
 					continue
-				if (TRADE[other["role"]]["makes"] as Array).has(need):
+				var makes: Array = TRADE[other["role"]]["makes"]
+				if makes.has(need) or makes.has("*"):
 					best = minf(best, distance.get(Vector2i(s["id"], other["id"]), INF))
 			if best == INF:
 				unsupplied.append("%s:%s" % [s["name"], need])
 			elif best > MAX_SUPPLY_DISTANCE:
 				isolated.append("%s:%s %d" % [s["name"], need, best])
+	var cut_off := PackedStringArray()
+	for s in sites:
+		if sites.size() > 1 and distance.get(Vector2i(sites[0]["id"], s["id"]), INF) == INF:
+			cut_off.append(s["name"])
+	checks.append(_check("connected", cut_off.is_empty(), "all settlements linked by road" if cut_off.is_empty() else "no road to %s" % ", ".join(cut_off)))
 	var supply_ok := unsupplied.is_empty() and isolated.is_empty()
 	var detail := "every input within %d units of a producer" % int(MAX_SUPPLY_DISTANCE)
 	if not supply_ok:

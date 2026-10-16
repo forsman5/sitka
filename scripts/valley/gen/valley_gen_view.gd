@@ -1,24 +1,36 @@
 extends Control
 
-## Valley generator experiment: browse generated valleys by seed as shaded
-## relief, an orbitable 3D mesh, or a contact sheet of eight seeds.
+## Valley generator experiment: pick a landscape and spec, browse seeds as shaded
+## relief, an orbitable 3D mesh, or a contact sheet of eight seeds, and copy or
+## save the spec of a seed you like.
 
 const Generator = preload("res://scripts/valley/gen/valley_generator.gd")
 const Relief = preload("res://scripts/valley/gen/valley_gen_relief.gd")
 const Terrain = preload("res://scripts/valley/gen/valley_gen_terrain.gd")
+const Spec = preload("res://scripts/valley/gen/valley_spec.gd")
 
 const MAP_SCALE := 4
 const SHEET_COUNT := 8
 const MAIN_MENU := "res://scenes/ui/main_menu.tscn"
+## Saved specs go here from the editor / a desktop run from the project folder;
+## exported builds fall back to user://.
+const SPEC_DIR := "res://data/valley_specs"
+const USER_SPEC_DIR := "user://valley_specs"
 
 enum Mode { MAP, VIEW_3D, SHEET }
 
-var _seed := 1
+var _spec: Spec = Spec.preset("river_valley", 1)
 var _mode := Mode.MAP
 var _result: Dictionary = {}
 var _sheet_serial := 0
 
+var _landscape_box: OptionButton
 var _seed_box: SpinBox
+var _river_check: CheckBox
+var _tribs_box: SpinBox
+var _relief_slider: HSlider
+var _relief_label: Label
+var _spec_text: TextEdit
 var _report: RichTextLabel
 var _status: Label
 var _map: TextureRect
@@ -36,7 +48,7 @@ var _distance := 340.0
 func _ready() -> void:
 	_build_ui()
 	_build_3d_stage()
-	_generate(_seed)
+	_generate()
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -50,27 +62,70 @@ func _build_ui() -> void:
 	add_child(root)
 
 	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(330, 0)
-	side.add_theme_constant_override("separation", 6)
+	side.custom_minimum_size = Vector2(350, 0)
+	side.add_theme_constant_override("separation", 5)
 	root.add_child(side)
 	var title := Label.new()
 	title.text = "Valley generator (sketch)"
 	title.add_theme_font_size_override("font_size", 18)
 	side.add_child(title)
 
+	_landscape_box = OptionButton.new()
+	for name in Spec.LANDSCAPES:
+		_landscape_box.add_item(name.replace("_", " ").capitalize())
+	_landscape_box.item_selected.connect(_on_landscape_selected)
+	side.add_child(_landscape_box)
+
 	var seed_row := HBoxContainer.new()
 	side.add_child(seed_row)
-	seed_row.add_child(_button("<", func() -> void: _set_seed(_seed - 1)))
+	seed_row.add_child(_button("<", func() -> void: _set_seed(_spec.seed - 1)))
 	_seed_box = SpinBox.new()
 	_seed_box.min_value = 0
 	_seed_box.max_value = 999999
-	_seed_box.value = _seed
+	_seed_box.value = _spec.seed
 	_seed_box.prefix = "seed"
 	_seed_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_seed_box.value_changed.connect(func(v: float) -> void: _set_seed(int(v)))
 	seed_row.add_child(_seed_box)
-	seed_row.add_child(_button(">", func() -> void: _set_seed(_seed + 1)))
+	seed_row.add_child(_button(">", func() -> void: _set_seed(_spec.seed + 1)))
 	seed_row.add_child(_button("Random", func() -> void: _set_seed(randi() % 100000)))
+
+	var shape_row := HBoxContainer.new()
+	side.add_child(shape_row)
+	_river_check = CheckBox.new()
+	_river_check.text = "Main river"
+	_river_check.toggled.connect(func(on: bool) -> void:
+		_spec.main_river = on
+		if not on:
+			_spec.tributaries = 0
+		_generate())
+	shape_row.add_child(_river_check)
+	_tribs_box = SpinBox.new()
+	_tribs_box.min_value = 0
+	_tribs_box.max_value = Spec.MAX_TRIBUTARIES
+	_tribs_box.prefix = "rivers+"
+	_tribs_box.value_changed.connect(func(v: float) -> void:
+		_spec.tributaries = int(v)
+		if _spec.tributaries > 0:
+			_spec.main_river = true
+		_generate())
+	shape_row.add_child(_tribs_box)
+
+	var relief_row := HBoxContainer.new()
+	side.add_child(relief_row)
+	_relief_label = Label.new()
+	relief_row.add_child(_relief_label)
+	_relief_slider = HSlider.new()
+	_relief_slider.min_value = 0.4
+	_relief_slider.max_value = 1.8
+	_relief_slider.step = 0.1
+	_relief_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_relief_slider.value_changed.connect(func(v: float) -> void: _relief_label.text = "relief %.1f" % v)
+	_relief_slider.drag_ended.connect(func(changed: bool) -> void:
+		if changed:
+			_spec.relief = _relief_slider.value
+			_generate())
+	relief_row.add_child(_relief_slider)
 
 	var mode_row := HBoxContainer.new()
 	side.add_child(mode_row)
@@ -84,13 +139,20 @@ func _build_ui() -> void:
 	_report = RichTextLabel.new()
 	_report.bbcode_enabled = true
 	_report.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_report.fit_content = false
 	side.add_child(_report)
-	var hint := Label.new()
-	hint.text = "Left/Right: seed. 3D: drag to orbit, wheel to zoom."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.modulate = Color(0.7, 0.7, 0.78)
-	side.add_child(hint)
+
+	var spec_title := Label.new()
+	spec_title.text = "Spec (edit, then Apply; Copy/Save to keep it)"
+	side.add_child(spec_title)
+	_spec_text = TextEdit.new()
+	_spec_text.custom_minimum_size = Vector2(0, 170)
+	_spec_text.add_theme_font_size_override("font_size", 11)
+	side.add_child(_spec_text)
+	var spec_row := HBoxContainer.new()
+	side.add_child(spec_row)
+	spec_row.add_child(_button("Apply", _apply_spec_text))
+	spec_row.add_child(_button("Copy spec", _copy_spec))
+	spec_row.add_child(_button("Save spec", _save_spec))
 	side.add_child(_button("Back to main menu", func() -> void: get_tree().change_scene_to_file(MAIN_MENU)))
 
 	var stage := Control.new()
@@ -176,23 +238,68 @@ func _on_3d_input(event: InputEvent) -> void:
 		_update_camera()
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed:
+	if event is InputEventKey and event.pressed and not _spec_text.has_focus():
 		if event.keycode == KEY_RIGHT:
-			_set_seed(_seed + 1)
+			_set_seed(_spec.seed + 1)
 		elif event.keycode == KEY_LEFT:
-			_set_seed(maxi(_seed - 1, 0))
+			_set_seed(maxi(_spec.seed - 1, 0))
+
+# -- spec controls -------------------------------------------------------------
+
+func _on_landscape_selected(index: int) -> void:
+	_spec = Spec.preset(Spec.LANDSCAPES[index], _spec.seed)
+	_generate()
 
 func _set_seed(value: int) -> void:
 	value = maxi(value, 0)
-	if value == _seed and not _result.is_empty():
+	if value == _spec.seed and not _result.is_empty():
 		return
-	_seed = value
-	_seed_box.set_value_no_signal(value)
-	_generate(value)
+	_spec.seed = value
+	_generate()
 
-func _generate(value: int) -> void:
-	_status.text = "Generating seed %d..." % value
-	_result = Generator.generate(value)
+## Mirrors the spec into the controls and the JSON box without re-triggering them.
+func _sync_controls() -> void:
+	_landscape_box.select(maxi(Spec.LANDSCAPES.find(_spec.landscape), 0))
+	_seed_box.set_value_no_signal(_spec.seed)
+	_river_check.set_pressed_no_signal(_spec.main_river)
+	_tribs_box.set_value_no_signal(_spec.tributaries)
+	_relief_slider.set_value_no_signal(_spec.relief)
+	_relief_label.text = "relief %.1f" % _spec.relief
+	_spec_text.text = _spec.to_json()
+
+func _apply_spec_text() -> void:
+	var parsed := Spec.from_json(_spec_text.text)
+	if parsed["spec"] == null:
+		_status.text = "Spec not applied: %s" % ", ".join(parsed["errors"])
+		return
+	_spec = parsed["spec"]
+	_generate()
+
+func _copy_spec() -> void:
+	DisplayServer.clipboard_set(_spec.to_json())
+	_status.text = "Copied the %s spec (seed %d) to the clipboard." % [_spec.landscape, _spec.seed]
+
+func _save_spec() -> void:
+	var file_name := "%s_%d.json" % [_spec.landscape, _spec.seed]
+	for dir in [SPEC_DIR, USER_SPEC_DIR]:
+		DirAccess.make_dir_recursive_absolute(dir)
+		var file := FileAccess.open("%s/%s" % [dir, file_name], FileAccess.WRITE)
+		if file != null:
+			file.store_string(_spec.to_json() + "\n")
+			file.close()
+			_status.text = "Saved %s" % ProjectSettings.globalize_path("%s/%s" % [dir, file_name])
+			return
+	_status.text = "Could not save the spec; use Copy spec instead."
+
+# -- generating and showing ----------------------------------------------------
+
+func _generate() -> void:
+	var result := Generator.generate(_spec)
+	if result.has("spec_errors"):
+		_status.text = "Invalid spec: %s" % ", ".join(result["spec_errors"])
+		return
+	_result = result
+	_sync_controls()
 	_map.texture = ImageTexture.create_from_image(Relief.relief_image(_result, MAP_SCALE))
 	_build_3d_world()
 	_refresh_report()
@@ -210,14 +317,14 @@ func _show(mode: Mode) -> void:
 
 func _refresh_report() -> void:
 	var report: Dictionary = _result["report"]
-	_status.text = "Seed %d: %s (%d ms)" % [_seed, "passes validation" if report["ok"] else "REJECTED by validation", _result["ms"]]
+	_status.text = "Seed %d: %s (%d ms)" % [_spec.seed, "passes validation" if report["ok"] else "REJECTED by validation", _result["ms"]]
 	var text := ""
 	for c in report["checks"]:
 		var mark := "[color=#6fd07a]pass[/color]" if c["ok"] else "[color=#e56b6b]FAIL[/color]"
 		text += "%s [b]%s[/b]\n   %s\n" % [mark, c["name"], c["detail"]]
 	text += "\n[b]Settlements[/b]\n"
 	for site in _result["sites"] as Array[Dictionary]:
-		text += "%s - %s (%s)\n" % [site["name"], site["role"], site["district"]]
+		text += "%s - %s\n" % [site["name"], site["role"]]
 	text += "\n%d roads, %d fords, %d trees" % [_result["roads"].size(), _result["map"].crossings.size(), _result["trees"].size()]
 	_report.text = text
 
@@ -252,7 +359,8 @@ func _build_3d_world() -> void:
 			var x := gx * Terrain.STEP - Terrain.SIZE.x * 0.5
 			var z := gz * Terrain.STEP - Terrain.SIZE.y * 0.5
 			var i := gz * Terrain.W + gx
-			vertices.append(Vector3(x, terrain.heights[i], z))
+			# Sea floor is drawn as a flat surface; the tint carries the depth.
+			vertices.append(Vector3(x, maxf(terrain.heights[i], -0.3) if terrain.has_sea else terrain.heights[i], z))
 			var dx := terrain.get_height(x + Terrain.STEP, z) - terrain.get_height(x - Terrain.STEP, z)
 			var dz := terrain.get_height(x, z + Terrain.STEP) - terrain.get_height(x, z - Terrain.STEP)
 			normals.append(Vector3(-dx, 2.0 * Terrain.STEP, -dz).normalized())
@@ -327,7 +435,7 @@ func _build_sheet() -> void:
 	var serial := _sheet_serial
 	for child in _sheet_grid.get_children():
 		child.queue_free()
-	var first := _seed - _seed % SHEET_COUNT
+	var first := _spec.seed - _spec.seed % SHEET_COUNT
 	var passed := 0
 	for i in SHEET_COUNT:
 		_status.text = "Generating contact sheet %d/%d..." % [i + 1, SHEET_COUNT]
@@ -335,7 +443,9 @@ func _build_sheet() -> void:
 		if serial != _sheet_serial or not is_inside_tree():
 			return
 		var value := first + i
-		var result: Dictionary = _result if value == _seed else Generator.generate(value)
+		var variant: Spec = Spec.from_dict(_spec.to_dict())
+		variant.seed = value
+		var result: Dictionary = _result if value == _spec.seed else Generator.generate(variant)
 		var ok: bool = result["report"]["ok"]
 		passed += 1 if ok else 0
 		var button := Button.new()
@@ -344,10 +454,9 @@ func _build_sheet() -> void:
 		button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 		button.pressed.connect(func() -> void:
-			_seed = value
-			_seed_box.set_value_no_signal(value)
+			_spec.seed = value
 			_mode = Mode.MAP
-			_generate(value))
+			_generate())
 		_sheet_grid.add_child(button)
 	_status.text = "Seeds %d-%d: %d/%d pass validation." % [first, first + SHEET_COUNT - 1, passed, SHEET_COUNT]
 
