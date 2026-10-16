@@ -72,7 +72,7 @@ const GROUND_HALF_EXTENT := 200.0
 
 const GROUND_COLOR := Color(0.36, 0.52, 0.27)
 const FIELD_COLOR := Color(0.58, 0.44, 0.24)
-const FIELD_BLOCK_COLOR := Color(0.64, 0.5, 0.28)
+const FIELD_BLOCK_COLOR := Color(0.44, 0.32, 0.17)
 ## Farm plot layout: farmhouse strip on the left, the fields in a grid beside
 ## it. Furrows every FURROW_PITCH; trees one per STAND_AREA_PER_TREE of woodlot.
 const FIELD_BLOCKS_DEFAULT := 4
@@ -81,7 +81,7 @@ const FIELD_MARGIN := 1.5
 const FIELD_GAP := 1.5
 const FURROW_PITCH := 2.5
 const STAND_AREA_PER_TREE := 70.0
-const FURROW_COLOR := Color(0.42, 0.31, 0.16)
+const FURROW_COLOR := Color(0.33, 0.23, 0.11)
 const PASTURE_COLOR := Color(0.5, 0.72, 0.34)
 const PASTURE_EDGE_COLOR := Color(0.36, 0.58, 0.25)
 const STAND_COLOR := Color(0.2, 0.38, 0.2)
@@ -776,9 +776,19 @@ func _add_field(body: Node3D, footprint: Vector2, field_count: int = FIELD_BLOCK
 	var origin_x := -footprint.x * 0.5 + FIELD_HOUSE_STRIP
 	var area_w := footprint.x - FIELD_HOUSE_STRIP - FIELD_MARGIN
 	var area_d := footprint.y - FIELD_MARGIN * 2.0
-	var columns := ceili(sqrt(float(field_count) * area_w / maxf(area_d, 1.0)))
-	columns = clampi(columns, 1, field_count)
-	var rows := ceili(float(field_count) / float(columns))
+	# A grid that tiles exactly (columns x rows == field_count), picking the
+	# split whose blocks are closest to square; a prime count becomes strips.
+	var columns := 1
+	var best_aspect := INF
+	for candidate in range(1, field_count + 1):
+		if field_count % candidate != 0:
+			continue
+		var cell := Vector2(area_w / float(candidate), area_d / float(field_count / candidate))
+		var aspect := absf(log(cell.x / maxf(cell.y, 0.001)))
+		if aspect < best_aspect:
+			best_aspect = aspect
+			columns = candidate
+	var rows := field_count / columns
 	var block := Vector2(area_w / float(columns), area_d / float(rows))
 	for index in field_count:
 		var column := index % columns
