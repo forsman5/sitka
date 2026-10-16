@@ -101,7 +101,8 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 	var iron_mine: int = 8 if included.has(HEScenarioSeeds.IRON_MINE_BUSINESS_ID) else 0
 	var charcoal_burner: int = HEScenarioSeeds.CHARCOAL_BURNER_STARTING_CREW if included.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) else 0
 	var toolsmith: int = HEScenarioSeeds.TOOLSMITH_STARTING_CAPACITY if included.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID) else 0
-	var remainder := HEScenarioSeeds.HOUSEHOLD_COUNT * HEScenarioSeeds.WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
+	var quarry: int = 8 if included.has(HEScenarioSeeds.QUARRY_BUSINESS_ID) else 0
+	var remainder := HEScenarioSeeds.HOUSEHOLD_COUNT * HEScenarioSeeds.WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith - quarry
 	var has_farm := included.has(HEScenarioSeeds.FARM_BUSINESS_ID)
 	var has_woodlot := included.has(HEScenarioSeeds.WOODLOT_BUSINESS_ID)
 	var farm := 0
@@ -113,7 +114,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 		farm = remainder
 	elif has_woodlot:
 		woodlot = remainder
-	var world := HEScenarioSeeds.build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith)
+	var world := HEScenarioSeeds.build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith, {"quarry_capacity": quarry})
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][HEScenarioSeeds.SETTLEMENT_ID]
 	for business_id in businesses.keys():

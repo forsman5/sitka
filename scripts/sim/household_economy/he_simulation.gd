@@ -85,6 +85,10 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.CHARCOAL: 3.8,
 	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
+	## Heavy and low-value: one unit per worker-day exported at the Trader's
+	## half-price bid still clears the reference wage (~1.0). Its buyers are the
+	## Government Warehouse (construction) and the Trader's export.
+	Commodity.Type.STONE: 4.0, # authored placeholder, not yet tuned
 	## Priced high enough that the Bloomery clears the reference wage even
 	## though EVERY unit it sells goes through the Trader's discounted
 	## export channel (TRADER_BUY_PRICE_FRACTION) -- unlike Farm/Woodlot,
@@ -141,7 +145,7 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## exactly that early window, well before its own weekly capacity
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
-const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.STONE, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
 ## Goods that jump the queue for shared Trader capacity, in order. Everything
 ## else exportable follows in Commodity.ALL order, then EXPORT_PINNED_LAST. Only
 ## goods whose place matters belong here: iron first (see above), and culled
@@ -229,7 +233,7 @@ const TRADER_CAPACITY_PER_WORKER := 8.0
 const VALLEY_TRADER_CAPACITY_PER_WORKER := TRADER_CAPACITY_PER_WORKER * 2.0
 ## The port clears finished and industrial goods to an off-map market. Food
 ## and fuel still follow household demand in the connected valley.
-const PORT_GOODS: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.TOOLS, Commodity.Type.CHARCOAL, Commodity.Type.WOOL, Commodity.Type.LEATHER]
+const PORT_GOODS: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.TOOLS, Commodity.Type.CHARCOAL, Commodity.Type.WOOL, Commodity.Type.LEATHER, Commodity.Type.STONE]
 
 ## Herds: two more workplace kinds (he_business.gd's HEBusiness.Kind.HERD),
 ## a Cattle Ranch and a Sheep Farm, whose live herd_size grows/thins on its

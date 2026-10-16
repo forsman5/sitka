@@ -32,7 +32,7 @@ func _run() -> void:
 		details.sort()
 		print("DAYS %d-%d: dispatched %d, %s" % [block * 30 + 1, valley.day, valley.delivered_total + valley.shipments.size() - before, ", ".join(details)])
 		if block in [1, 5, 9, 11]:
-			for good in [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.IRON]:
+			for good in [Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.IRON, Commodity.Type.STONE]:
 				var rows := []
 				for town_id in valley.towns:
 					var town = valley.towns[town_id]
@@ -50,6 +50,9 @@ func _run() -> void:
 		var bloomery = town.businesses.get(HEScenarioSeeds.BLOOMERY_BUSINESS_ID)
 		if bloomery != null:
 			print("  BLOOMERY balance=%.1f iron_stock=%.1f" % [bloomery.balance, bloomery.stock(Commodity.Type.IRON)])
+		var quarry = town.businesses.get(HEScenarioSeeds.QUARRY_BUSINESS_ID)
+		if quarry != null:
+			print("  QUARRY balance=%.1f stone_stock=%.1f offer=%s" % [quarry.balance, quarry.stock(Commodity.Type.STONE), town.get_valley_trade_offer(Commodity.Type.STONE)])
 		for event in town.get_event_log_days(360):
 			if event.get("type") == "business_failed":
 				print("  FAIL %s" % event)

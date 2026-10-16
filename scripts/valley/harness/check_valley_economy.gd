@@ -36,6 +36,12 @@ func _run() -> void:
 		push_error("Staithe has no outside-market Port business")
 		quit(1)
 		return
+	for town_id in valley.towns:
+		var has_quarry: bool = valley.towns[town_id].businesses.has(HEScenarioSeeds.QUARRY_BUSINESS_ID)
+		if has_quarry != (town_id == ValleySeed.IRONBANK):
+			push_error("Ironbank should be the valley's only Quarry town")
+			quit(1)
+			return
 	if not valley.towns[ValleySeed.OAKMERE].businesses.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) or not valley.towns[ValleySeed.STAITHE].businesses.has(HEScenarioSeeds.TOOLSMITH_BUSINESS_ID):
 		push_error("The valley is missing Oakmere's Charcoal Burner or Staithe's Toolsmith")
 		quit(1)
@@ -87,6 +93,11 @@ func _run() -> void:
 		quit(1)
 		return
 	var ironbank = valley.towns[ValleySeed.IRONBANK]
+	var quarry = ironbank.businesses.get(HEScenarioSeeds.QUARRY_BUSINESS_ID)
+	if quarry == null or port.ledger_good_average("export", Commodity.Type.STONE, 360) * 360.0 < 1000.0:
+		push_error("Ironbank's Quarry must survive and ship substantial stone to Staithe's Port")
+		quit(1)
+		return
 	var ore_imports := 0
 	for transaction in staithe.get_trader_transactions(HEScenarioSeeds.TRADER_BUSINESS_ID, 360):
 		if transaction.get("direction") == "import" and transaction.get("commodity") == "Iron Ore":

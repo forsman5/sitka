@@ -166,11 +166,10 @@ func _dispatch_shipments() -> void:
 				var port_bid := destination.get_valley_port_buy_price(commodity)
 				if port_bid > 0.0:
 					destination_price = port_bid
-				# The Port pays half its outside quote. Use the
-				# producer's floor or half its own market quote, whichever is
-				# higher, rather than requiring the origin's full retail quote
-				# on top of the destination Trader's margin.
-				var seller_price: float = maxf(source_price * 0.5, offer["min_price"]) if port_bid > 0.0 else maxf(source_price, offer["min_price"])
+				# The Port is a standing outside buyer. An origin's local retail
+				# quote can stay high when nobody there uses the good (stone is
+				# one case), so negotiate from the producer's floor instead.
+				var seller_price: float = offer["min_price"] if port_bid > 0.0 else maxf(source_price, offer["min_price"])
 				var gap: float = destination_price - seller_price - edge.toll - edge.risk * 2.0
 				if gap < MIN_PRICE_GAP:
 					continue
