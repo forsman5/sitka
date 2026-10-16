@@ -12,6 +12,7 @@ const Spec = preload("res://scripts/valley/gen/valley_spec.gd")
 const MAP_SCALE := 4
 const SHEET_COUNT := 8
 const MAIN_MENU := "res://scenes/ui/main_menu.tscn"
+const CAMERA_SCENE := preload("res://scenes/camera/rts_camera.tscn")
 ## Saved specs go here from the editor / a desktop run from the project folder;
 ## exported builds fall back to user://.
 const SPEC_DIR := "res://data/valley_specs"
@@ -38,12 +39,9 @@ var _labels: Control
 var _container: SubViewportContainer
 var _viewport: SubViewport
 var _world: Node3D
-var _camera: Camera3D
+var _rig: Node3D
 var _sheet_scroll: ScrollContainer
 var _sheet_grid: GridContainer
-var _yaw := 0.6
-var _pitch := -0.85
-var _distance := 340.0
 
 func _ready() -> void:
 	_build_ui()
@@ -141,6 +139,11 @@ func _build_ui() -> void:
 	_report.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	side.add_child(_report)
 
+	var camera_hint := Label.new()
+	camera_hint.text = "3D (RTS camera): WASD/arrows pan, Q/E rotate, wheel zoom, Alt+mouse tilt, middle-drag pan."
+	camera_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	camera_hint.modulate = Color(0.7, 0.7, 0.78)
+	side.add_child(camera_hint)
 	var spec_title := Label.new()
 	spec_title.text = "Spec (edit, then Apply; Copy/Save to keep it)"
 	side.add_child(spec_title)
@@ -175,7 +178,6 @@ func _build_ui() -> void:
 	_container = SubViewportContainer.new()
 	_container.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_container.stretch = true
-	_container.gui_input.connect(_on_3d_input)
 	stage.add_child(_container)
 	_viewport = SubViewport.new()
 	_viewport.own_world_3d = true
@@ -213,32 +215,30 @@ func _build_3d_stage() -> void:
 	sun.rotation_degrees = Vector3(-50, -35, 0)
 	sun.light_energy = 1.3
 	_viewport.add_child(sun)
-	_camera = Camera3D.new()
-	_camera.far = 2000.0
-	_camera.fov = 45.0
-	_viewport.add_child(_camera)
-	_update_camera()
+	# The same rig the RTS and valley scenes use, bounded to the generated map.
+	_rig = CAMERA_SCENE.instantiate()
+	_rig.zoom_min = 28.0
+	_rig.zoom_max = 420.0
+	_rig.pivot_height = 140.0
+	_rig.pan_limit = Terrain.SIZE * 0.5
+	_rig.max_ground_height = 60.0
+	_viewport.add_child(_rig)
+	var camera: Camera3D = _rig.get_node("Camera3D")
+	camera.far = 2000.0
+	camera.size = 260.0
+	_rig._current_tilt = 50.0
+	_rig._apply_tilt()
+	_rig.center_on(Vector3.ZERO)
 
-func _update_camera() -> void:
-	var target := Vector3(0, 12, 0)
-	var offset := Vector3(0, 0, _distance).rotated(Vector3.RIGHT, _pitch).rotated(Vector3.UP, _yaw)
-	_camera.position = target + offset
-	_camera.look_at(target)
-
-func _on_3d_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-		_yaw -= event.relative.x * 0.006
-		_pitch = clampf(_pitch - event.relative.y * 0.006, -1.45, -0.15)
-		_update_camera()
-	elif event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_distance = maxf(_distance * 0.9, 60.0)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_distance = minf(_distance * 1.1, 900.0)
-		_update_camera()
+## The rig polls keys itself and cannot see focus in the main viewport, so stop
+## it reacting to WASD/Q/E typed into the spec box, or while hidden.
+func _process(_delta: float) -> void:
+	var focus := get_viewport().gui_get_focus_owner()
+	_rig.set_process(_mode == Mode.VIEW_3D and not (focus is LineEdit or focus is TextEdit))
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not _spec_text.has_focus():
+	# Arrow keys pan the 3D camera, so they only step seeds in the other views.
+	if event is InputEventKey and event.pressed and _mode != Mode.VIEW_3D and not _spec_text.has_focus():
 		if event.keycode == KEY_RIGHT:
 			_set_seed(_spec.seed + 1)
 		elif event.keycode == KEY_LEFT:
@@ -411,7 +411,7 @@ func _build_3d_world() -> void:
 		label.text = "%s (%s)" % [site["name"], site["role"]]
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
-		label.pixel_size = 0.11
+		label.pixel_size = 0.16
 		label.font_size = 40
 		label.outline_size = 12
 		label.position = Vector3(pos.x, site["height"] + cylinder.height + 5.0, pos.y)

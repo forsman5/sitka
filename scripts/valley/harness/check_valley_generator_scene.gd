@@ -28,6 +28,31 @@ func _init() -> void:
 	if view._result["seed"] != 7:
 		print("FAIL: seed change did not regenerate")
 		failures += 1
+	# The RTS camera rig in the 3D view receives wheel zoom through the container.
+	view._show(view.Mode.VIEW_3D)
+	for i in 3:
+		await process_frame
+	var camera: Camera3D = view._rig.get_node("Camera3D")
+	var before := camera.size
+	# A real mouse moves over the container first, which is what makes it forward input.
+	var hover := InputEventMouseMotion.new()
+	hover.position = view._container.get_global_rect().get_center()
+	hover.global_position = hover.position
+	Input.parse_input_event(hover)
+	await process_frame
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = view._container.get_global_rect().get_center()
+	wheel.global_position = wheel.position
+	Input.parse_input_event(wheel)
+	for i in 3:
+		await process_frame
+	# The headless display server has no mouse to route to the container, so only
+	# a real window can check this.
+	if DisplayServer.get_name() != "headless" and not camera.size < before:
+		print("FAIL: wheel input did not reach the RTS camera (size %.0f -> %.0f)" % [before, camera.size])
+		failures += 1
 	# Editing the spec box and applying it switches landscape.
 	var edited: Dictionary = JSON.parse_string(view._spec_text.text)
 	edited["landscape"] = "coast"
