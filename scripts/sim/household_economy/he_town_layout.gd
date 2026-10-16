@@ -71,6 +71,9 @@ const COORD_SNAP := 0.5
 ## is a much bigger spread than a 40-acre farm. LAND_PLOT_ASPECT is
 ## width / depth. Businesses without land keep their zone's footprint.
 const UNITS2_PER_ACRE := 12.0
+## Valley towns scale land from populations up to 170 households; compress
+## their plots further so all businesses fit within the existing town ground.
+const VALLEY_UNITS2_PER_ACRE := 6.0
 const LAND_PLOT_ASPECT := 1.4
 ## A land plot whose edge is farther than this from every road gets a track:
 ## a lane grown from the nearest road to the plot, stopping this short of its
@@ -410,10 +413,11 @@ static func _type_key_of(report: Dictionary) -> String:
 
 ## Plot a business of `acres` land needs: zero (use the zone's footprint) for
 ## a business without land.
-static func land_footprint(acres: float) -> Vector2:
+func land_footprint(acres: float) -> Vector2:
 	if acres <= 0.0:
 		return Vector2.ZERO
-	var area := acres * UNITS2_PER_ACRE
+	var scale := VALLEY_UNITS2_PER_ACRE if scenario_key.begins_with("valley:") else UNITS2_PER_ACRE
+	var area := acres * scale
 	var width := snappedf(sqrt(area * LAND_PLOT_ASPECT), COORD_SNAP)
 	var depth := snappedf(sqrt(area / LAND_PLOT_ASPECT), COORD_SNAP)
 	return Vector2(width, depth)

@@ -44,7 +44,7 @@ func _run() -> void:
 		quit(1)
 		return
 	if detail._town_layout.unplaced_business_ids().size() > 0 or detail._town_layout.unplaced_dwelling_ids().size() > 0:
-		print("Aldford unplaced: businesses %d, houses %d" % [detail._town_layout.unplaced_business_ids().size(), detail._town_layout.unplaced_dwelling_ids().size()])
+		print("Aldford unplaced: businesses %s, houses %s" % [str(detail._town_layout.unplaced_business_ids()), str(detail._town_layout.unplaced_dwelling_ids())])
 		push_error("Embedded town view could not place the town's businesses or houses")
 		quit(1)
 		return
@@ -86,6 +86,7 @@ func _run() -> void:
 			quit(1)
 			return
 		if detail._town_layout.unplaced_business_ids().size() > 0 or detail._town_layout.unplaced_dwelling_ids().size() > 0:
+			print("Town %d unplaced: businesses %s, houses %s" % [town_id, str(detail._town_layout.unplaced_business_ids()), str(detail._town_layout.unplaced_dwelling_ids())])
 			push_error("Town %d layout left businesses or houses unplaced" % town_id)
 			quit(1)
 			return
