@@ -854,8 +854,15 @@ func _refresh_info() -> void:
 	_refresh_household_panel()
 	# Content just changed; a panel hidden or resized earlier keeps its old
 	# size (and sits too low, anchored to the bottom) until a layout pass.
-	_info_panel.reset_size.call_deferred()
-	_household_panel.reset_size.call_deferred()
+	_dock_panel.call_deferred(_info_panel)
+	_dock_panel.call_deferred(_household_panel)
+
+## Pins a bottom-left panel's bottom edge 10px above the view and derives its
+## top from its content height, so it is the same place however often it is
+## refreshed (reset_size drifted it up the screen).
+func _dock_panel(panel: Control) -> void:
+	panel.offset_bottom = -10.0
+	panel.offset_top = -10.0 - panel.get_combined_minimum_size().y
 
 func _refresh_info_panel() -> void:
 	_home_button.visible = false
