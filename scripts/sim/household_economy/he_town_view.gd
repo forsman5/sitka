@@ -133,6 +133,7 @@ var _info_body: Label
 var _details_button: Button
 var _home_button: Button
 var _person_button: Button
+var _household_button: Button
 var _villager_layer: HEVillagers
 ## Selected villager as (household_id, member_number), or (-1, -1). A site and
 ## a villager are never selected at once.
@@ -521,6 +522,10 @@ func _build_overlay() -> void:
 	_person_button.text = "Person details"
 	_person_button.pressed.connect(_on_person_pressed)
 	box.add_child(_person_button)
+	_household_button = Button.new()
+	_household_button.text = "View household"
+	_household_button.pressed.connect(_on_view_household_pressed)
+	box.add_child(_household_button)
 	add_child(_info_panel)
 
 	# The household window shares the info panel's bottom-left slot; the info
@@ -851,6 +856,7 @@ func _refresh_info() -> void:
 func _refresh_info_panel() -> void:
 	_home_button.visible = false
 	_person_button.visible = false
+	_household_button.visible = false
 	_villager_marker.visible = _selected_villager.x != -1 and _villager_layer.villager_visible(_selected_villager)
 	if _selected_villager.x != -1:
 		_selection_marker.visible = false
@@ -909,6 +915,7 @@ func _refresh_villager_info() -> void:
 	var report := _villager_layer.household_report(household_id)
 	_details_button.visible = false
 	_person_button.visible = true
+	_household_button.visible = true
 	_info_title.text = "Household %d - Member %d" % [household_id, member_number]
 	if report.is_empty():
 		_info_body.text = ""
@@ -993,6 +1000,15 @@ func _on_home_pressed() -> void:
 		return
 	focus_on(site["position"])
 	_select_site(site["site_id"])
+
+func _on_view_household_pressed() -> void:
+	if _selected_villager.x != -1:
+		open_household(_selected_villager.x)
+
+## Household window member link: the person window for that villager.
+func _on_member_link_pressed(household_id: int, member_number: int) -> void:
+	select_villager(household_id, member_number)
+	business_selected.emit(-1)
 
 func _on_person_pressed() -> void:
 	if _selected_villager.x != -1:
@@ -1113,8 +1129,9 @@ func _add_household_member(member_number: int, role: String, age: int) -> void:
 	link.flat = true
 	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	link.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	link.tooltip_text = "Open person detail"
-	link.pressed.connect(person_details_requested.emit.bind(_selected_household, member_number))
+	link.tooltip_text = "Open the person window"
+	link.disabled = _villager_layer == null or not _villager_layer.villager_position(Vector2i(_selected_household, member_number)).is_finite()
+	link.pressed.connect(_on_member_link_pressed.bind(_selected_household, member_number))
 	row.add_child(link)
 	var locate := Button.new()
 	locate.text = "Locate"
