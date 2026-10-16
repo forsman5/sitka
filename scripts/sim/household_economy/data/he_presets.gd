@@ -12,7 +12,7 @@ extends RefCounted
 ##   settlement_name String
 ##   households    int     starting households (4 people each)
 ##   crews         {type_key: int}  starting workers: trader, bloomery,
-##                 iron_mine, charcoal_burner, toolsmith. Farm and Woodlot take
+##                 iron_mine, quarry, charcoal_burner, toolsmith. Farm and Woodlot take
 ##                 the rest, split by farm_share. Ranches and the Butcher always
 ##                 exist and staff themselves.
 ##   herds         [type_key]  optional extra herds beyond the always-present
@@ -23,7 +23,7 @@ extends RefCounted
 ##   include       [type_key]  optional: keep only these businesses (plus the
 ##                 Government and Warehouse); absent keeps every default one
 ##   treasury_bonus float  gold added to the government's starting float
-##   warehouse     {stock: {grain|timber|wool: units}}  present = a Government
+##   warehouse     {stock: {grain|timber|wool|stone: units}}  present = a Government
 ##                 Warehouse already stands, holding this stock (what a
 ##                 house/tenement build draws on); empty/absent = none
 ##
@@ -44,20 +44,20 @@ const PRESETS := {
 		"farm_share": 0.55,
 		"housing": {"houses": 24, "tenements": 0},
 		"treasury_bonus": 250.0,
-		"warehouse": {"stock": {"timber": 150}},
+		"warehouse": {"stock": {"timber": 150, "stone": 100}},
 	},
 	"mining_village": {
 		"format": FORMAT,
 		"key": "mining_village",
 		"label": "Mining village",
-		"blurb": "30 households around an iron mine, bloomery and charcoal burner; ore leaves through the trader.",
+		"blurb": "30 households around an iron mine, quarry, bloomery and charcoal burner; ore leaves through the trader.",
 		"settlement_name": "Mining Village",
 		"households": 30,
-		"crews": {"trader": 8, "bloomery": 8, "iron_mine": 10, "charcoal_burner": 2},
+		"crews": {"trader": 8, "bloomery": 8, "iron_mine": 10, "charcoal_burner": 2, "quarry": 4},
 		"farm_share": 0.5,
 		"housing": {"houses": 36, "tenements": 0},
 		"treasury_bonus": 150.0,
-		"warehouse": {"stock": {"timber": 300}},
+		"warehouse": {"stock": {"timber": 300, "stone": 200}},
 	},
 	"large_village": {
 		"format": FORMAT,
@@ -66,11 +66,11 @@ const PRESETS := {
 		"blurb": "48 households and a full set of trades, with housing already at what the street grid fits.",
 		"settlement_name": "Large Village",
 		"households": 48,
-		"crews": {"trader": 10, "bloomery": 6, "iron_mine": 6, "charcoal_burner": 2, "toolsmith": 8},
+		"crews": {"trader": 10, "bloomery": 6, "iron_mine": 6, "charcoal_burner": 2, "toolsmith": 8, "quarry": 6},
 		"farm_share": 0.6,
 		"housing": {"houses": 56, "tenements": 0},
 		"treasury_bonus": 400.0,
-		"warehouse": {"stock": {"timber": 600}},
+		"warehouse": {"stock": {"timber": 600, "stone": 400}},
 	},
 }
 
@@ -79,7 +79,7 @@ const ORDER := ["small_village", "mining_village", "large_village"]
 const DEFAULT_KEY := "small_village"
 
 ## Starting crews a Custom roster gives each trade it includes.
-const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_burner": 2, "toolsmith": 12}
+const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_burner": 2, "toolsmith": 12, "quarry": 6}
 ## Farm and Woodlot are the only food and fuel makers; a roster needs one.
 const CUSTOM_REQUIRED_ANY := ["farm", "woodlot"]
 const CUSTOM_MIN_HOUSEHOLDS := 10
@@ -135,7 +135,7 @@ static func custom_spec(included: Array, households: int, options: Dictionary = 
 		"include": sorted_include,
 		"housing": {"houses": plain_houses + tenements, "tenements": tenements},
 		"treasury_bonus": float(options.get("treasury_bonus", 5.0 * households)),
-		"warehouse": {"stock": {"timber": 7.5 * households}},
+		"warehouse": {"stock": {"timber": 7.5 * households, "stone": 5.0 * households}},
 	}
 
 ## Whether a roster can be started: it needs a Farm or a Woodlot.

@@ -2917,6 +2917,7 @@ func _check_housing() -> void:
 	var before: Dictionary = sim.get_housing_report(1)
 	var innermost: int = (sim.settlements[1] as HESettlement).dwelling_ids.min()
 	warehouse.add_stock(Commodity.Type.TIMBER, 400.0)
+	warehouse.add_stock(Commodity.Type.STONE, 400.0)
 	var tenement_option: Dictionary = {}
 	for option in HEScenarioSeeds.government_buildings():
 		if option["type_key"] == "tenement":
@@ -2936,6 +2937,7 @@ func _check_housing() -> void:
 		sim.dwellings[dwelling_id].upgrade_to_dense()
 	var dense_houses: int = sim.get_housing_report(1)["houses"]
 	warehouse.add_stock(Commodity.Type.TIMBER, 400.0)
+	warehouse.add_stock(Commodity.Type.STONE, 400.0)
 	_assert(is_equal_approx(float(sim.build_cost_for(1, tenement_option)["gold"]), HEScenarioSeeds.TENEMENT_BUILD_GOLD), "With nothing to upgrade the new-build price applies")
 	_assert(sim.build_government_building(1, "tenement"), "With no plain house left a tenement is built new")
 	_assert(sim.get_housing_report(1)["houses"] == dense_houses + 1, "...as an added lot")
@@ -2996,6 +2998,7 @@ func _check_government_construction() -> void:
 	# upgrades never target the same house.
 	var warehouse := sim._government_warehouse(1)
 	warehouse.add_stock(Commodity.Type.TIMBER, 1000.0)
+	warehouse.add_stock(Commodity.Type.STONE, 1000.0)
 	gov.balance = 5000.0
 	var houses_before: int = sim.get_housing_report(1)["houses"]
 	_assert(sim.build_government_building(1, "house"), "House construction starts")

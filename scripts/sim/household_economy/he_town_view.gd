@@ -34,6 +34,9 @@ const ART := {
 	"farm": {"model": "building_home_A_blue.gltf", "width": 6.0},
 	"woodlot": {"model": "building_home_B_blue.gltf", "width": 5.0},
 	"trader": {"model": "building_tavern_blue.gltf", "width": 7.0},
+	# Extractors share the mine model (hillside shaft and cart).
+	"iron_mine": {"model": "building_mine_blue.gltf", "width": 6.0},
+	"quarry": {"model": "building_mine_blue.gltf", "width": 6.0},
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
 	"goat_farm": {"model": "barn", "width": 6.0},
