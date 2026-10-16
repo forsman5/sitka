@@ -15,6 +15,8 @@ extends RefCounted
 ##                 iron_mine, charcoal_burner, toolsmith. Farm and Woodlot take
 ##                 the rest, split by farm_share. Ranches and the Butcher always
 ##                 exist and staff themselves.
+##   herds         [type_key]  optional extra herds beyond the always-present
+##                 cattle ranch and sheep farm: "goat_farm". Self-staffing.
 ##   farm_share    float   share of the remaining workers on the Farm (0..1)
 ##   housing       {houses, tenements}  seeded dwellings; `tenements` of the
 ##                 houses start already densified (HEHouse.DENSE_CAPACITY)
@@ -90,6 +92,9 @@ const CUSTOM_MAX_GOLD := 5000
 ## ones every town gets (Farm, Woodlot, Trader, ranches, Butcher).
 static func included_trades(spec: Dictionary) -> Array:
 	var trades := ["farm", "woodlot", "trader", "cattle_ranch", "sheep_farm", "butcher"]
+	for herd_key in spec.get("herds", []):
+		if not trades.has(herd_key):
+			trades.append(herd_key)
 	for crew_key in spec.get("crews", {}):
 		if int(spec["crews"][crew_key]) > 0 and not trades.has(crew_key):
 			trades.append(crew_key)
@@ -110,6 +115,9 @@ static func custom_spec(included: Array, households: int, options: Dictionary = 
 		share = 1.0
 	elif included.has("woodlot") and not included.has("farm"):
 		share = 0.0
+	var herds: Array = []
+	if included.has("goat_farm"):
+		herds.append("goat_farm")
 	var sorted_include := included.duplicate()
 	sorted_include.sort()
 	var plain_houses := int(options.get("houses", ceili(households * 1.2)))
@@ -122,6 +130,7 @@ static func custom_spec(included: Array, households: int, options: Dictionary = 
 		"settlement_name": "Custom Village",
 		"households": households,
 		"crews": crews,
+		"herds": herds,
 		"farm_share": share,
 		"include": sorted_include,
 		"housing": {"houses": plain_houses + tenements, "tenements": tenements},

@@ -1,7 +1,7 @@
 extends Node3D
 
 ## The town's herds, drawn as visual-only animal models: one per head of each
-## Cattle Ranch / Sheep Farm (capped), grazing in that business's pasture.
+## Cattle Ranch / Sheep Farm / Goat Farm (capped), grazing in that business's pasture.
 ## Owned by HETownView and fed through sync(); it owns no economy state. The
 ## head count shown comes from the business report's herd_size, so the view
 ## follows the simulation but never changes it.
@@ -21,6 +21,9 @@ const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout
 
 const SPECIES := {
 	"Sheep": {"model": "res://assets/models/animals/Sheep.fbx", "length": 1.3, "speed": 1.2, "cap": 200, "rep": 1.5},
+	# No goat model in the Quaternius Farm Animals pack; the llama is the nearest
+	# small browser, sized down to goat length.
+	"Goat": {"model": "res://assets/models/animals/Llama.fbx", "length": 1.0, "speed": 1.1, "cap": 200, "rep": 1.2},
 	"Cattle": {"model": "res://assets/models/animals/Cow.fbx", "length": 2.4, "speed": 0.9, "cap": 150, "rep": 5.5},
 }
 ## Same weights as OnFootSheep's Flocking group.

@@ -43,6 +43,9 @@ const CHARCOAL_BURNER_BUSINESS_ID := 10
 const TOOLSMITH_BUSINESS_ID := 11
 ## Only seeded by presets that start with a Government Warehouse.
 const WAREHOUSE_BUSINESS_ID := 12
+## Opt-in herd like the Sheep Farm, but not part of every town (see
+## build_world's `goat_farm` option).
+const GOAT_FARM_BUSINESS_ID := 14
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
 const WAREHOUSE_BUILD_COST := 100.0
@@ -159,6 +162,7 @@ const CHARCOAL_BURNER_STARTING_CREW := 2
 ## ~900-day time-to-first-cull.
 const CATTLE_STARTING_HERD := 100.0
 const SHEEP_STARTING_HERD := 100.0
+const GOAT_STARTING_HERD := 100.0
 
 ## A ranch's staff ceiling is derived from its herd, the way a field
 ## business derives its from acreage: the workers a herd at its cull target
@@ -263,10 +267,16 @@ static func make_trader(business_id: int, settlement_id: int, initial_capacity: 
 ## HESimulation.HERD_EVAL_INTERVAL_DAYS purely so
 ## rolling_average_revenue_per_worker() smooths over the ranch's own cycle
 ## length instead of a flat week (see HEBusiness.has_long_cycle()).
+const HERD_KINDS := {
+	HEBusiness.Species.CATTLE: {"label": "Cattle Ranch", "type_key": "cattle_ranch", "starting_herd": CATTLE_STARTING_HERD},
+	HEBusiness.Species.SHEEP: {"label": "Sheep Farm", "type_key": "sheep_farm", "starting_herd": SHEEP_STARTING_HERD},
+	HEBusiness.Species.GOAT: {"label": "Goat Farm", "type_key": "goat_farm", "starting_herd": GOAT_STARTING_HERD},
+}
+
 static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.Species) -> HEBusiness:
-	var is_cattle := species == HEBusiness.Species.CATTLE
-	var herd := HEBusiness.new(business_id, "Cattle Ranch" if is_cattle else "Sheep Farm", null, herd_max_capacity(species), RANCH_STARTING_CAPACITY, HEBusiness.Kind.HERD, settlement_id, species, CATTLE_STARTING_HERD if is_cattle else SHEEP_STARTING_HERD)
-	herd.type_key = "cattle_ranch" if is_cattle else "sheep_farm"
+	var kind: Dictionary = HERD_KINDS[species]
+	var herd := HEBusiness.new(business_id, kind["label"], null, herd_max_capacity(species), RANCH_STARTING_CAPACITY, HEBusiness.Kind.HERD, settlement_id, species, kind["starting_herd"])
+	herd.type_key = kind["type_key"]
 	herd.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
 	herd.land_area_acres = HESimulation.DEFAULT_RANCH_LAND_ACRES[species]
 	return herd
@@ -405,6 +415,8 @@ static func business_types() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEBusiness: return make_herd(id, sid, HEBusiness.Species.SHEEP)},
 		{"type_key": "butcher", "id": BUTCHER_BUSINESS_ID, "label": "Butcher", "hint": "Turns ranch livestock into meat and leather.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_butcher(id, sid)},
+		{"type_key": "goat_farm", "id": GOAT_FARM_BUSINESS_ID, "label": "Goat Farm", "hint": "Herd on rough pasture; starts with no staff.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_herd(id, sid, HEBusiness.Species.GOAT)},
 		{"type_key": "bloomery", "id": BLOOMERY_BUSINESS_ID, "label": "Bloomery", "hint": "Smelts iron from timber and ore.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_bloomery(id, sid)},
 		{"type_key": "iron_mine", "id": IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery.",
@@ -624,6 +636,12 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	settlement.business_ids.append(SHEEP_FARM_BUSINESS_ID)
 	settlement.business_ids.append(BUTCHER_BUSINESS_ID)
 
+	if options.get("goat_farm", false):
+		var goat_farm := make_herd(GOAT_FARM_BUSINESS_ID, SETTLEMENT_ID, HEBusiness.Species.GOAT)
+		goat_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
+		businesses[GOAT_FARM_BUSINESS_ID] = goat_farm
+		settlement.business_ids.append(GOAT_FARM_BUSINESS_ID)
+
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
 		bloomery = make_bloomery(BLOOMERY_BUSINESS_ID, SETTLEMENT_ID, bloomery_capacity)
@@ -814,6 +832,7 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"houses": int(spec.get("housing", {}).get("houses", -1)),
 		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
+		"goat_farm": (spec.get("herds", []) as Array).has("goat_farm"),
 	}
 	var warehouse: Dictionary = spec.get("warehouse", {})
 	if not warehouse.is_empty():

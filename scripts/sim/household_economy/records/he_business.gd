@@ -20,7 +20,7 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 ## It uses the same hiring and wage rules, but its capacity decision uses a
 ## longer revenue window and review interval to span supplier harvests.
 ##
-## Kind.HERD (a "Cattle Ranch" or "Sheep Farm") is a second odd one out, in
+## Kind.HERD (a "Cattle Ranch", "Sheep Farm" or "Goat Farm") is a second odd one out, in
 ## the opposite direction from Kind.TRADER: it has no recipe and no fields.
 ## It instead carries a live `herd_size` that grows and thins on its own
 ## each HERD_EVAL_INTERVAL_DAYS, grazing a shared, settlement-wide land pool
@@ -115,7 +115,7 @@ const LEVEL_STOCK := "stock"
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
 enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
-enum Species { CATTLE, SHEEP }
+enum Species { CATTLE, SHEEP, GOAT }
 
 ## id, settlement_id, name and type_key come from HEBuilding.
 var kind: Kind
@@ -376,7 +376,12 @@ func sells(commodity: Commodity.Type) -> bool:
 
 ## The commodity a live animal of `p_species` is held and traded as.
 static func livestock_commodity(p_species: Species) -> Commodity.Type:
-	return Commodity.Type.CATTLE if p_species == Species.CATTLE else Commodity.Type.SHEEP
+	match p_species:
+		Species.CATTLE:
+			return Commodity.Type.CATTLE
+		Species.SHEEP:
+			return Commodity.Type.SHEEP
+	return Commodity.Type.GOAT
 
 ## Kind.HERD only: which commodity this ranch's live herd converts into when
 ## culled (see he_simulation.gd's _run_herds). Sheep also produce WOOL, but

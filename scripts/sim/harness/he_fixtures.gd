@@ -113,7 +113,7 @@ static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictio
 		farm = remainder
 	elif has_woodlot:
 		woodlot = remainder
-	var world := HEScenarioSeeds.build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith)
+	var world := HEScenarioSeeds.build_world(farm, woodlot, trader, bloomery, iron_mine, charcoal_burner, toolsmith, {"goat_farm": included.has(HEScenarioSeeds.GOAT_FARM_BUSINESS_ID)})
 	var businesses: Dictionary = world["businesses"]
 	var settlement: HESettlement = world["settlements"][HEScenarioSeeds.SETTLEMENT_ID]
 	for business_id in businesses.keys():
