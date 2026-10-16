@@ -10,6 +10,18 @@ func _run() -> void:
 	var valley = load(VALLEY_SCENE_PATH).instantiate()
 	root.add_child(valley)
 	await process_frame
+	valley._process(0.0)
+	if not valley.get("_day_label").text.contains("Spring"):
+		push_error("Valley clock does not display the current season")
+		quit(1)
+		return
+	valley.get("_economy").day = 90
+	valley._process(0.0)
+	if not valley.get("_day_label").text.contains("Summer"):
+		push_error("Valley clock did not update at the season boundary")
+		quit(1)
+		return
+	valley.get("_economy").day = 0
 	valley.call("_select_settlement", ValleySeed.ALDFORD)
 	valley.call("_open_detail_view")
 	await process_frame

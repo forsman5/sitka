@@ -87,7 +87,8 @@ func _process(delta: float) -> void:
 		if _detail_view != null:
 			_detail_view.set_external_town_phase(_day_accumulator)
 	if _day_label != null:
-		_day_label.text = "Day %d   |   %d shipments en route   |   %d delivered" % [_economy.day, _economy.shipments.size(), _economy.delivered_total]
+		var clock := _economy.get_clock_summary()
+		_day_label.text = "Day %d   |   Year %d, %s   |   %d shipments en route   |   %d delivered" % [clock["day"], clock["year"], clock["season_name"], _economy.shipments.size(), _economy.delivered_total]
 	# At valley scale labels and route geometry dominate. At settlement scale
 	# the physical clusters are still present and become the visual focus.
 	var valley_lens := _camera.size >= 78.0
