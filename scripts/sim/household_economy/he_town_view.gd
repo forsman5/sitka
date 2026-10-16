@@ -852,6 +852,10 @@ func _refresh_info() -> void:
 	_refresh_info_panel()
 	_set_occupants(_house_occupants() if _selected_villager.x == -1 else [])
 	_refresh_household_panel()
+	# Content just changed; a panel hidden or resized earlier keeps its old
+	# size (and sits too low, anchored to the bottom) until a layout pass.
+	_info_panel.reset_size.call_deferred()
+	_household_panel.reset_size.call_deferred()
 
 func _refresh_info_panel() -> void:
 	_home_button.visible = false
