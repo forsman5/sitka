@@ -323,6 +323,8 @@ var builder_slots: int = 0
 ## whether it has missed a servicing (then it supplies nobody).
 var water_capacity: int = 0
 var water_upkeep_timber: float = 0.0
+## Stone taken with the timber at each servicing (one for one).
+var water_upkeep_stone: float = 0.0
 var next_service_day: int = -1
 var in_disrepair: bool = false
 

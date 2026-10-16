@@ -82,15 +82,15 @@ func _check_neglect() -> void:
 	var sim := _sim("small_village")
 	var warehouse := _warehouse(sim)
 	_assert(warehouse != null, "small village has a warehouse")
-	# Start with the warehouse empty and keep it empty for a year.
+	# Keep the warehouse out of stone (timber is plentiful) for a year.
 	for day in HESimulation.WATER_SERVICE_INTERVAL_DAYS:
-		warehouse.consume(Commodity.Type.TIMBER, warehouse.stock(Commodity.Type.TIMBER))
+		warehouse.consume(Commodity.Type.STONE, warehouse.stock(Commodity.Type.STONE))
 		sim.advance_ticks(1)
 	var water := sim.get_water_summary(SID)
-	_assert(int(water["in_disrepair"]) == int(water["sources"]), "with no timber every source falls into disrepair")
+	_assert(int(water["in_disrepair"]) == int(water["sources"]), "with timber but no stone every source falls into disrepair")
 	_assert(float(water["coverage"]) == 0.0 and int(water["capacity"]) == 0, "neglected sources supply nobody")
 	# Timber arrives: the next day they are serviced again.
-	warehouse.add_stock(Commodity.Type.TIMBER, 100.0)
+	warehouse.add_stock(Commodity.Type.STONE, 100.0)
 	sim.advance_ticks(1)
 	_assert(int(sim.get_water_summary(SID)["in_disrepair"]) == 0, "restocking the warehouse restores the sources")
 

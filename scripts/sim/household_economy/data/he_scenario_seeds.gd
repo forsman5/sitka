@@ -84,7 +84,8 @@ const WAREHOUSE_WORKERS := 2
 ## Water sources (HEBusiness.Kind.WATER). Sized for a Large Village of about
 ## 150-200 people: a well supplies WELL_PEOPLE (so 4-5 wells), a river intake
 ## RIVER_PEOPLE (so 1-2). Both employ no one; the only running cost is the
-## yearly servicing timber, drawn from the Government Warehouse.
+## yearly servicing, drawn from the Government Warehouse: timber and an equal
+## amount of stone.
 const WELL_PEOPLE := 40
 const RIVER_INTAKE_PEOPLE := 100
 const WELL_BUILD_GOLD := 10.0
@@ -382,6 +383,7 @@ static func _make_water_source(business_id: int, settlement_id: int, type_key: S
 	source.type_key = type_key
 	source.water_capacity = people
 	source.water_upkeep_timber = upkeep_timber
+	source.water_upkeep_stone = upkeep_timber # stone and timber one for one
 	return source
 
 ## Seeds `wells` wells and `river_intakes` river intakes into a starting world.
@@ -473,12 +475,12 @@ static func government_buildings() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEBusiness: return make_warehouse(id, sid)},
 		{"type_key": "well", "label": "Well", "repeatable": true,
 			"cost": build_cost(WELL_BUILD_GOLD, {Commodity.Type.TIMBER: WELL_BUILD_TIMBER}),
-			"hint": "Safe drinking water for %d people. No workers; the government services it with %.0f timber a year. Needs a Government Warehouse." % [WELL_PEOPLE, WELL_UPKEEP_TIMBER],
+			"hint": "Safe drinking water for %d people. No workers; the government services it with %.0f timber and %.0f stone a year. Needs a Government Warehouse." % [WELL_PEOPLE, WELL_UPKEEP_TIMBER, WELL_UPKEEP_TIMBER],
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEBusiness: return make_well(id, sid)},
 		{"type_key": "river_intake", "label": "River Intake", "repeatable": true,
 			"cost": build_cost(RIVER_INTAKE_BUILD_GOLD, {Commodity.Type.TIMBER: RIVER_INTAKE_BUILD_TIMBER}),
-			"hint": "Draws safe drinking water for %d people. No workers; the government services it with %.0f timber a year. Needs a Government Warehouse." % [RIVER_INTAKE_PEOPLE, RIVER_INTAKE_UPKEEP_TIMBER],
+			"hint": "Draws safe drinking water for %d people. No workers; the government services it with %.0f timber and %.0f stone a year. Needs a Government Warehouse." % [RIVER_INTAKE_PEOPLE, RIVER_INTAKE_UPKEEP_TIMBER, RIVER_INTAKE_UPKEEP_TIMBER],
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEBusiness: return make_river_intake(id, sid)},
 	]

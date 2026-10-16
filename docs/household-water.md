@@ -12,9 +12,9 @@ Water is **reporting only** for now: it changes no health, morale, price or wage
   - Scope: 150-200 people want 4-5 wells or 2 river intakes. The Large village preset (48 households, 192 people) seeds 5 wells; the Small and Mining presets seed 2 and 3.
 - **Building.** Both are in `government_buildings()` (so they show in the Government build menu), repeatable, paid in treasury gold plus Government Warehouse timber, like a house. A well is 10 g + 20 timber, a river intake 25 g + 40 timber.
 - **No workers.** `capacity` and `max_capacity` are 0; the capacity tuner, wage pass and hiring skip the kind.
-- **Servicing.** Every `WATER_SERVICE_INTERVAL_DAYS` (365) each source costs `water_upkeep_timber` (well 4, intake 6) from the warehouse, done by existing government staff (the administrator or the warehouse crew). `_run_water_maintenance` runs daily after the warehouse orders. Seeded sources are first due at staggered days in the first year; a source built mid-run is due a year after it opens.
+- **Servicing.** Every `WATER_SERVICE_INTERVAL_DAYS` (365) each source costs `water_upkeep_timber` and the same of `water_upkeep_stone` (well 4 + 4, intake 6 + 6) from the warehouse, done by existing government staff (the administrator or the warehouse crew). `_run_water_maintenance` runs daily after the warehouse orders. Seeded sources are first due at staggered days in the first year; a source built mid-run is due a year after it opens.
 - **Neglect.** If the timber or the staff is missing the source is `in_disrepair` and supplies nobody until the next day it can be paid for.
-- **Reports.** `get_business_reports()` adds `report["water"]` (people, serving, in_disrepair, upkeep_timber, days_to_service). `get_water_summary(settlement_id)` gives sources, serving, capacity, population, coverage, upkeep and the soonest servicing.
+- **Reports.** `get_business_reports()` adds `report["water"]` (people, serving, in_disrepair, upkeep_timber, upkeep_stone, days_to_service). `get_water_summary(settlement_id)` gives sources, serving, capacity, population, coverage, upkeep and the soonest servicing.
 - **Spec.** A preset spec takes `"water": {"wells": n, "river_intakes": n}` (absent = none). Custom rosters get enough wells for 4-person households.
 
 ## Town view

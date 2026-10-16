@@ -872,7 +872,7 @@ var _export_revenue_total := 0.0
 var _import_cost_total := 0.0
 
 ## Days between a water source's servicings (HEBusiness.Kind.WATER). Each one
-## costs the source's water_upkeep_timber from the Government Warehouse and
+## costs the source's water_upkeep_timber and water_upkeep_stone from the Government Warehouse and
 ## needs government staff to do the work.
 const WATER_SERVICE_INTERVAL_DAYS := 365
 
@@ -1336,8 +1336,9 @@ func _run_water_maintenance() -> void:
 		if b.kind != HEBusiness.Kind.WATER or day < b.next_service_day:
 			continue
 		var warehouse := _government_warehouse(b.settlement_id)
-		if warehouse != null and _government_staff_count(b.settlement_id) > 0 and warehouse.stock(Commodity.Type.TIMBER) >= b.water_upkeep_timber:
+		if warehouse != null and _government_staff_count(b.settlement_id) > 0 and warehouse.stock(Commodity.Type.TIMBER) >= b.water_upkeep_timber and warehouse.stock(Commodity.Type.STONE) >= b.water_upkeep_stone:
 			warehouse.consume(Commodity.Type.TIMBER, b.water_upkeep_timber)
+			warehouse.consume(Commodity.Type.STONE, b.water_upkeep_stone)
 			b.in_disrepair = false
 			b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
 		else:
@@ -1362,6 +1363,7 @@ func get_water_summary(settlement_id: int) -> Dictionary:
 	var serving := 0
 	var capacity := 0
 	var upkeep := 0.0
+	var upkeep_stone := 0.0
 	var soonest := -1
 	if settlements.has(settlement_id):
 		for business_id in (settlements[settlement_id] as HESettlement).business_ids:
@@ -1370,6 +1372,7 @@ func get_water_summary(settlement_id: int) -> Dictionary:
 				continue
 			sources += 1
 			upkeep += b.water_upkeep_timber
+			upkeep_stone += b.water_upkeep_stone
 			if not b.in_disrepair:
 				serving += 1
 				capacity += b.water_capacity
@@ -1384,6 +1387,7 @@ func get_water_summary(settlement_id: int) -> Dictionary:
 		"population": population,
 		"coverage": 1.0 if population <= 0 else minf(1.0, float(capacity) / float(population)),
 		"upkeep_timber": upkeep,
+		"upkeep_stone": upkeep_stone,
 		"next_service_days": soonest,
 	}
 
@@ -1975,6 +1979,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				"serving": 0 if b.in_disrepair else b.water_capacity,
 				"in_disrepair": b.in_disrepair,
 				"upkeep_timber": b.water_upkeep_timber,
+				"upkeep_stone": b.water_upkeep_stone,
 				"days_to_service": maxi(0, b.next_service_day - day),
 			}
 		out.append(report)
