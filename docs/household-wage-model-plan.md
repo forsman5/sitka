@@ -1,16 +1,22 @@
-# Household economy: moving off the derived reference wage
+# Household economy wage model
+
+## Current state (PR 106)
+
+`HEWages` (`scripts/sim/household_economy/he_wages.gd`) owns payroll, the derived reference wage, its three roles, and the business wage model. The original subsistence model remains the default. Setting `sim.wages.model = HEWages.MODEL_PRODUCTIVITY` enables a wage of `max(reference wage, labour_share x trailing net return per worker)` for ordinary businesses; government and warehouse crews still receive the reference wage. The default labour share is 0.6. There is no game setting for this flag yet.
+
+Phase 0 and the experimental phase 1 are implemented. The tables below record the runs that informed them; they are measurements of these presets and seeds, not proof that the productivity model is ready to become the default. Reservation-based migration, wage-aware hiring, and a broader basket of needs remain design work.
 
 ## Problem
 
-`HESimulation._reference_wage_per_worker` is `(people / workers) x per-person subsistence cost`. It is meant as a benchmark, but it is also the wage every business pays, so:
+Before this change, the derived reference wage was `(people / workers) x per-person subsistence cost` and served as the wage every business paid. It remains the default wage, so the original problems still apply unless the productivity model is enabled:
 
 - Income tracks cost of living by construction. Households sit at income ~ cost; productivity gains make goods cheaper and wages fall with them, so no real slack appears (see `measure_household_slack.gd`: zero two-worker households sustain one wage).
-- One number does three jobs: the wage paid (`_pay_wages`), the benchmark the capacity loop compares revenue-per-worker against (`_evaluate_business_capacity`), and the scale for liquidity floors and reserves (`WAGE_NEGATIVE_BALANCE_FLOOR_DAYS`, warehouse reserve, trader spread floor, input-purchasing floors).
+- One number did three jobs: the wage paid, the benchmark used by the capacity loop, and the scale for liquidity floors and reserves. `HEWages` now gives those roles separate entry points while preserving their original values under the default model.
 - It is only as stable as the price history it reads: per-head cost swings 10-17x between snapshots.
 
 ## What a margin tells us (experiment, not a design)
 
-`reference_wage_margin` (default 0) multiplies the derived wage. `measure_wage_margin.gd`, 2 presets, 720 days, one seed:
+`HEWages.reference_wage_margin` (default 0) multiplies the derived wage. `measure_wage_margin.gd`, 2 presets, 720 days, one seed:
 
 | Margin | Small village: failed / employed / income:cost | Large village: failed / employed / income:cost |
 |---|---|---|
@@ -19,30 +25,30 @@
 | +25% | 0 / 79% / 1.05 | 1 / 91% / 1.21 |
 | +50% | 1 / 69% / 1.06 | 3 / 82% / 1.35 |
 
-Businesses can carry roughly +10-25% before failures start; +50% costs jobs (capacity shrinks) and the gain in income:cost flattens. A fixed markup is a stopgap: it raises wages without raising what a worker produces, so it spends the same pool of value differently.
+Even +10% produces a failure in the large preset; higher margins reduce employment, and at +50% the small village's gain in income:cost flattens. A fixed markup is a stopgap: it raises wages without raising what a worker produces, so it spends the same pool of value differently.
 
 ## Target
 
-Wages as an outcome, not a formula:
+The longer-term design goal is for wages to reflect what workers produce and what households need:
 
-1. **Business wage** = a share of what a worker actually earns it (rolling revenue per worker x labour share), never below the household reservation wage, capped by what the business can fund.
-2. **Reservation wage** per household = its subsistence cost (the current derived number, demoted to a floor). Below it a household emigrates or looks elsewhere.
-3. **Competition**: the weekly hiring pool already moves households between employers; let it follow wages so productive businesses pull labour and the rest tune capacity.
-4. **Real surplus**: value-adding steps (cooking), tools/morale, trade margin. Only these make the wealth real.
+1. **Business wage:** a share of trailing net return per worker, with the current settlement-wide reference wage as a floor. Payroll is limited by cash plus the existing wage overdraft; a private business fails if it cannot meet its full wage bill. A separate funded cap on the productivity premium has not been built.
+2. **Household reservation:** eventually account for each household's own subsistence cost. The current floor is settlement-wide and does not change migration decisions.
+3. **Competition:** eventually let households respond to wages when seeking jobs. Weekly hiring currently fills vacancies from the unemployed pool; it does not compare offers.
+4. **Real surplus:** add useful goods and services, such as cooking and housing needs, so additional income can buy more than the current basket.
 
 ## Phases
 
-0. **Split the three roles** of the reference wage into separate functions (wage paid, capacity benchmark, liquidity scale) with identical values. No behaviour change; harness outputs byte-identical. **Done**: `_wage_paid_per_worker(b)`, `_capacity_benchmark_wage(settlement)`, `_wage_liquidity_scale(settlement)` in `he_simulation.gd`; `run_household_economy.gd` and `measure_money_flows.gd` output is byte-identical.
-1. **Pay from productivity**: business wage = clamp(labour share x revenue per worker, reservation, funded cap). Keep the old formula behind a flag for A/B. Gate on `measure_wage_margin` style runs: no rise in failures, employment held. **Built, off by default**: `wage_model = WAGE_MODEL_PRODUCTIVITY` pays `max(reference, labour_share x net return per worker)`; see "Phase 1 results".
-2. **Reservation and migration**: unemployed or sub-reservation households leave or shrink the town; check against population and `run_household_economy.gd`.
-3. **Grow the basket**: housing/cooking/market services as real needs and jobs, so spendable income has somewhere to go.
-4. **Money pools in businesses**: see "Money audit" below. Profit above the wage never reaches households, so phase 1 is also the distribution fix.
+0. **Done: split the three roles.** `HEWages.wage_paid_per_worker`, `capacity_benchmark_wage`, and `liquidity_scale` return the same derived value under the default model. `HEWages` also owns payroll and its collateral-backed overdraft helpers. The recorded `run_household_economy.gd` and `measure_money_flows.gd` output remained byte-identical after this extraction.
+1. **Built, off by default: productivity pay.** `HEWages.MODEL_PRODUCTIVITY` pays `max(reference, labour_share x trailing net return per worker)`. `measure_wage_model.gd` compares it with the default model; the results below support 0.6 in the measured presets but do not switch the game to it. Before enabling it for play, check the full household harness with the flag on, longer and varied scenarios, and the dashboard and town view.
+2. **Remaining: household reservation and migration.** Decide how to calculate a household-specific floor and how unemployment or pay below that floor affects migration. Existing emigration responds to starvation and homelessness, not to a reservation-wage comparison.
+3. **Remaining: wage-aware hiring.** Decide how households compare offers and change employers without destabilizing staffing. Geographic hiring order, where available, is separate from wage competition.
+4. **Remaining: useful surplus.** Expand needs and jobs, then measure whether higher pay creates lasting improvements rather than only larger balances. The money audit below explains why moving some business returns into wages is useful, but phase 1 is only one distribution mechanism.
 
 ## Phase 1 results (measure_wage_model.gd)
 
-Net return per worker is sales less inputs and taxes over the staffing window (the quantity `_staffing_decision` already judges), not gross revenue: a trader's gross revenue is mostly goods it resells at cost. The reference wage is the floor, so a business with no history, a government and a warehouse pay exactly what they did. The cap is the business's cash (`_pay_wages` already clamps to available) and the share being below 1.
+Net return per worker is sales less consumed inputs and taxes over the staffing window (the quantity `_staffing_decision` already judges), not gross revenue: a trader's gross revenue is mostly goods it resells at cost. The reference wage is the floor, so a business with no qualifying history, a government, and a warehouse pay the default rate. `HEWages.pay_wages` limits actual payroll to available cash plus the existing overdraft and fails a private business that cannot pay its full bill.
 
-720 days, mean of 3 seeds, margin 0. "Hold" is the share of all money in households.
+720 days, mean of 3 seeds, margin 0. Values other than failures and final business count are averages of samples from day 120 through day 720. "Hold" is the sampled share of all money in households.
 
 | Preset / model | Failed | Employed | Income:cost | Households covered | Hold | Wage vs ref |
 |---|---|---|---|---|---|---|
@@ -56,14 +62,14 @@ Net return per worker is sales less inputs and taxes over the staffing window (t
 | Large, share 0.6 | 0 | 94% | 4.08 | 77% | 44% | 3.9x |
 | Large, share 0.8 | 0 | 81% | 6.11 | 66% | 68% | 7.3x |
 
-- **Gate met at 0.4 and 0.6**: no business failures in any run, employment within 4 points in the worst case, and households end with 3-5x the cash.
-- **0.8 over-pays**: employment drops 8-12 points in the small and large villages (businesses shrink crews). 0.6 is the proposed default when the model is switched on.
-- **Inequality**: average income:cost is 4x in the mining village but only 80% of households are covered. Wages now differ by employer, so households at high-return businesses (trader, bloomery) are rich and those at farms and woodlots stay near the reference. That is the intended effect of competing on productivity, and what phase 2 and wage-chasing hiring have to address.
-- **Not tested yet**: `run_household_economy.gd`'s assertions were tuned for the subsistence model, so it has not been run with the flag on, and the new model has not been looked at in the town view or dashboard.
+- **Measured gate met at 0.4 and 0.6**: no business failures in these runs, employment within 4 points in the worst case, and a larger average share of town money in households. These samples do not establish end-of-run balances or behavior in other scenarios.
+- **0.8 over-pays in two presets**: employment drops 12-13 points in the small and large villages (businesses shrink crews). 0.6 is the proposed starting value if the model is switched on.
+- **Inequality**: average income:cost is 4x in the mining village but only 80% of households are covered. Wages differ by employer in this experiment, so households at high-return businesses (trader, bloomery) are rich and those at farms and woodlots stay near the reference. Household-specific reservation and wage-aware job choice remain open.
+- **Remaining validation**: `run_household_economy.gd`'s assertions were tuned for the subsistence model; this plan does not record a run with the flag on or an inspection in the town view and dashboard.
 
 ## Money audit (measure_money_flows.gd)
 
-Seeded presets, 720 days, margin 0. The identity `change = exports + startup cash - imports - construction - written off` closes to 0, so every flow is accounted for.
+Seeded presets, 720 days, margin 0, default subsistence wage. The identity `change = exports + startup cash - imports - construction - written off` closes to 0 in these runs, so the measured money flows reconcile.
 
 | Preset | Money day 0 -> 720 | Exports in | Written off | Held by households at 720 |
 |---|---|---|---|---|
@@ -74,7 +80,7 @@ Seeded presets, 720 days, margin 0. The identity `change = exports + startup cas
 - **Not a leak, and not the trade gap.** Trade is a net *source*: export revenue is new money (no imports in these presets). The 9.6k "written off" is the savings of households that vanish: 8.2k emigration, 1.4k old age, 0 business failures at margin 0. It is under 3% of what exports bring in.
 - **The real issue is pooling.** Money supply grows ~17x, but ~95% of it sits in businesses: in the large village the trader holds 170k (48%), the bloomery 99k, farms and woodlots 44k. Households hold 16k (~280 each). The same wage formula that pegs pay to subsistence means revenue above the wage is retained as business profit, with no owners, dividends, profit share or tax recirculation.
 - That is why a margin only partly works: the cash is concentrated in exporters (trader, bloomery) while the businesses that fail at +50% (e.g. ranches, which sit negative) are not the ones holding it.
-- **Implication**: a productivity/revenue-share wage (phase 1) would move money from where it is earned to the households working there, and reaching a genuine "wealthy town" is a distribution problem more than a supply one.
+- **Implication**: the experimental productivity wage moves part of the return from businesses to their workers in the measured runs. Whether that produces broadly shared wealth over longer play remains to be checked.
 
 ## Open questions
 
@@ -82,3 +88,4 @@ Seeded presets, 720 days, margin 0. The identity `change = exports + startup cas
 - Does the reservation wage include dependents' cost fully, or only a floor to survive?
 - Should the government (treasury) set a minimum wage, as a player lever?
 - Price smoothing: how much before it hides real shocks?
+- When should the productivity model become a player option or the default, and what acceptance runs should gate that change?
