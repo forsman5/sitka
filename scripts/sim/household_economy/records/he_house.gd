@@ -26,6 +26,23 @@ var is_stone: bool = false
 ## How many households one house shelters.
 var capacity_households: int = 1
 
+## Yearly upkeep from the Government Warehouse (HESimulation._run_house_maintenance).
+## A plain house takes timber; a tenement takes timber and stone.
+const UPKEEP_TIMBER := 0.2
+const DENSE_UPKEEP_TIMBER := 0.8
+const DENSE_UPKEEP_STONE := 0.8
+
+## Years of upkeep not yet delivered. Grows 1/365 a day and is paid down in
+## slices of a year, round robin, so the whole town's backlog falls together.
+## Starts below zero: the sim staggers the first visits on the first day.
+var neglect_years: float = -1.0
+
+func upkeep_timber() -> float:
+	return DENSE_UPKEEP_TIMBER if is_dense() else UPKEEP_TIMBER
+
+func upkeep_stone() -> float:
+	return DENSE_UPKEEP_STONE if is_dense() else 0.0
+
 func _init(p_id: int, p_settlement_id: int, p_name: String = "House") -> void:
 	id = p_id
 	settlement_id = p_settlement_id

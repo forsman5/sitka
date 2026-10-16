@@ -128,6 +128,10 @@ var dwelling_id: int = -1
 ## in a plain house. Only HESimulation._reconcile_housing writes it.
 var home_morale_bonus: float = 0.0
 
+## Years the home's upkeep is overdue beyond the normal visit interval; set
+## daily by HESimulation._run_house_maintenance. Drives the disrepair penalty.
+var home_overdue_years: float = 0.0
+
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
 var inventory: Dictionary[Commodity.Type, float] = {}
@@ -219,6 +223,10 @@ const FRAIL_LIFESPAN_FRACTION := 0.8
 const MORALE_NEED_PENALTY := 0.6
 const MORALE_UNEMPLOYED_PENALTY := 0.15
 const MORALE_UNAFFORDABLE_PENALTY := 0.1
+## A home whose upkeep is overdue by more than the town's visit interval costs
+## this much morale per year of delay, up to the cap (4 points a year, max 20).
+const MORALE_DISREPAIR_PER_YEAR := 0.04
+const MORALE_DISREPAIR_MAX := 0.2
 ## Bonuses can carry morale past 100% (up to this ceiling). Morale above 100%
 ## is the only part that feeds production: a worker's output is multiplied by
 ## 1 + (morale - 1) * MORALE_PRODUCTIVITY_PER_POINT, so +10% morale is +10%
@@ -576,6 +584,8 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 			out.append({"label": need.shortfall_label, "penalty": own_penalty})
 	if works and not is_employed():
 		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
+	if home_overdue_years > 0.001:
+		out.append({"label": "Home in disrepair", "penalty": minf(home_overdue_years * MORALE_DISREPAIR_PER_YEAR, MORALE_DISREPAIR_MAX)})
 	for amount in last_unmet_unaffordable.values():
 		if amount > 0.001:
 			out.append({"label": "Could not afford goods today", "penalty": MORALE_UNAFFORDABLE_PENALTY})

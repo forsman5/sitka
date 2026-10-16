@@ -82,6 +82,10 @@ const DOOR_STINT := 0.3
 const FILL_HOURS := 0.15
 const WELL_MAX_DETOUR := 90.0
 
+## House upkeep: government workers walk out from their workplace to each house
+## they were given today, spending DELIVER_HOURS at every door.
+const DELIVER_HOURS := 0.25
+
 const OPEN_ZONES := ["field", "pasture"]
 
 # --- Public queries -------------------------------------------------------------
@@ -184,7 +188,7 @@ static func is_open_site(site: Dictionary) -> bool:
 ## sources' site dictionaries. Segment types: "inside" (hidden),
 ## "door" (standing at the door), "walk", "mill". Every segment has "t0", "t1"
 ## (plan hours), "act" and "site_id".
-static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: Dictionary, paths, water_sites: Array = []) -> Dictionary:
+static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: Dictionary, paths, water_sites: Array = [], errands: Array = []) -> Dictionary:
 	var segs: Array = []
 	## Hour count since sim day 0 started: wanders run on it so they stay
 	## continuous across the day boundary.
@@ -266,7 +270,9 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 			_push(segs, _mill(base, site_area(work), phase, end, end, "work", dest_id), s2)
 		"town":
 			var cursor := arrive_work
-			for slot in 2:
+			if not errands.is_empty():
+				_push_errands(segs, paths, dest_id, end, errands, cursor + 0.3, leave_work - 0.2)
+			for slot in (2 if errands.is_empty() else 0):
 				var start := lerpf(9.5, 14.0, float(slot) / 1.0) + 1.5 * _jit(key, day, 5 + slot)
 				start = maxf(start, cursor + 0.2)
 				if start + DOOR_STINT > s2 - 0.2:
@@ -282,6 +288,32 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 		_push(segs, _mill(base, yard, phase, door, door, "yard", -1), bed)
 		_push(segs, _inside(door, "indoors", -1), DAY_END)
 	return {"segs": segs, "day": day}
+
+## Appends a worker's house-upkeep round: inside until `start`, then workplace
+## -> each house in turn (stand DELIVER_HOURS at its door) -> workplace, leaving
+## out any house the round has no time left for before `limit`. The last
+## segment ends at the workplace door.
+static func _push_errands(segs: Array, paths, work_id: int, work_door: Vector2, errands: Array, start: float, limit: float) -> void:
+	_push(segs, _inside(work_door, "work_inside", work_id), start)
+	var at_id := work_id
+	var t := start
+	for house in errands:
+		var house_id := int(house["site_id"])
+		var out: PackedVector2Array = paths.path(at_id, house_id)
+		var back: PackedVector2Array = paths.path(house_id, work_id)
+		if out.is_empty() or back.is_empty():
+			continue
+		var arrive := t + HETownPaths.path_length(out) / WALK_CAP
+		var done := arrive + DELIVER_HOURS
+		if done + HETownPaths.path_length(back) / WALK_CAP > limit:
+			continue
+		_push(segs, _walk(out, "walk_errand", house_id), arrive)
+		_push(segs, {"type": "door", "pos": out[out.size() - 1], "act": "deliver_upkeep", "site_id": house_id}, done)
+		t = done
+		at_id = house_id
+	if at_id != work_id:
+		var home_route: PackedVector2Array = paths.path(at_id, work_id)
+		_push(segs, _walk(home_route, "walk_errand", work_id), t + HETownPaths.path_length(home_route) / WALK_CAP)
 
 ## The water source that costs the least extra walking between home and
 ## destination: {"site_id", "to_well", "from_well", "length"} (total walked), or
