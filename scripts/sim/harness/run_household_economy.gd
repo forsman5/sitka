@@ -2132,7 +2132,7 @@ func _check_herd_collateral_finances_wages() -> void:
 			ranch.capacity = 0
 		var slaughtered := 0.0
 		var lowest_balance := 0.0
-		var collateral_at_start: float = sim._herd_collateral(ranch)
+		var collateral_at_start: float = sim.wages._herd_collateral(ranch)
 		for day in 360:
 			sim.advance_ticks(1)
 			slaughtered += ranch.last_hardship_butchered

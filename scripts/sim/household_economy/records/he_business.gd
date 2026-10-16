@@ -181,7 +181,7 @@ var herd_size: float = 0.0
 var last_culled: Dictionary[Commodity.Type, float] = {}
 
 ## Kind.HERD only: the herd as of its last review, which is what a ranch's wage
-## overdraft is secured against (he_simulation.gd's _herd_collateral). 0 until the
+## overdraft is secured against (HEWages._herd_collateral). 0 until the
 ## first review, when it is the starting herd.
 var collateral_herd: float = 0.0
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the

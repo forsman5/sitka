@@ -2568,27 +2568,6 @@ func _finalize_daily_record(record: Dictionary) -> void:
 	if _history.size() > HISTORY_MAX_DAYS:
 		_history.pop_front()
 
-## What a Butcher can borrow against the animals it holds: HERD_COLLATERAL_FRACTION
-## of their value at the Trader's bid -- the same always-available exit price a
-## ranch's herd is valued at -- so a first cull bought on credit does not leave it
-## below a wage floor it cannot pay from.
-func _butchery_collateral(b: HEBusiness) -> float:
-	var value := 0.0
-	for species in BUTCHERY_SPECIES_ORDER:
-		value += b.stock(HEBusiness.livestock_commodity(species)) * livestock_quote(species, LivestockQuote.TRADER_BID)
-	return value * HERD_COLLATERAL_FRACTION
-
-## What a ranch can borrow against its living herd: HERD_COLLATERAL_FRACTION of
-## the herd valued at the Trader's bid, the exit price that is always on offer
-## (the Butcher pays more, but only when one is staffed). The herd counted is the
-## one at its last review (HEBusiness.collateral_herd), not today's: a head
-## slaughtered to make payroll must not also shrink the limit it is being
-## slaughtered under, or each day's slaughter raises the next day's need and the
-## ranch spirals into failing. The limit follows the herd at each review.
-func _herd_collateral(b: HEBusiness) -> float:
-	var herd: float = maxf(b.herd_size, b.collateral_herd)
-	return herd * livestock_quote(b.species, LivestockQuote.TRADER_BID) * HERD_COLLATERAL_FRACTION
-
 ## A business that has used up its whole credit line (the wage floor, see
 ## WAGE_NEGATIVE_BALANCE_FLOOR_DAYS) fails outright: it is deleted, its
 ## employees go back to the unemployed pool, and its debt and leftover stock
