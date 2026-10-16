@@ -72,7 +72,16 @@ const GROUND_HALF_EXTENT := 200.0
 
 const GROUND_COLOR := Color(0.36, 0.52, 0.27)
 const FIELD_COLOR := Color(0.58, 0.44, 0.24)
-const FURROW_COLOR := Color(0.42, 0.31, 0.16)
+const FIELD_BLOCK_COLOR := Color(0.44, 0.32, 0.17)
+## Farm plot layout: farmhouse strip on the left, the fields in a grid beside
+## it. Furrows every FURROW_PITCH; trees one per STAND_AREA_PER_TREE of woodlot.
+const FIELD_BLOCKS_DEFAULT := 4
+const FIELD_HOUSE_STRIP := 10.0
+const FIELD_MARGIN := 1.5
+const FIELD_GAP := 1.5
+const FURROW_PITCH := 2.5
+const STAND_AREA_PER_TREE := 70.0
+const FURROW_COLOR := Color(0.33, 0.23, 0.11)
 const PASTURE_COLOR := Color(0.5, 0.72, 0.34)
 const PASTURE_EDGE_COLOR := Color(0.36, 0.58, 0.25)
 const STAND_COLOR := Color(0.2, 0.38, 0.2)
@@ -614,7 +623,8 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		"construction":
 			_add_patch(body, footprint, CONSTRUCTION_GROUND_COLOR, 0.05)
 		"farm":
-			_add_field(body, footprint)
+			var field_reports: Array = (_reports.get(int(site["business_id"]), {}) as Dictionary).get("fields", [])
+			_add_field(body, footprint, field_reports.size() if not field_reports.is_empty() else FIELD_BLOCKS_DEFAULT)
 			building_offset = Vector3(-footprint.x * 0.5 + 4.5, 0.0, 0.0)
 		"woodlot":
 			_add_stand(body, footprint, int(site["site_id"]))
@@ -757,13 +767,42 @@ func _add_patch(parent: Node3D, size: Vector2, color: Color, y: float, offset :=
 	patch.position = offset + Vector3(0.0, y, 0.0)
 	parent.add_child(patch)
 
-func _add_field(body: Node3D, footprint: Vector2) -> void:
+## The farm's plot: one block per field in a grid to the right of the
+## farmhouse strip, each with its own furrows, so the drawn fields match the
+## business's fields (4 for the default farm).
+func _add_field(body: Node3D, footprint: Vector2, field_count: int = FIELD_BLOCKS_DEFAULT) -> void:
 	_add_patch(body, footprint, FIELD_COLOR, 0.05)
-	var rows := 7
-	var usable_x := footprint.x - 10.0
-	for i in rows:
-		var z := lerpf(-footprint.y * 0.5 + 1.5, footprint.y * 0.5 - 1.5, float(i) / float(rows - 1))
-		_add_patch(body, Vector2(usable_x, 0.7), FURROW_COLOR, 0.12, Vector3(5.0, 0.0, z))
+	field_count = maxi(field_count, 1)
+	var origin_x := -footprint.x * 0.5 + FIELD_HOUSE_STRIP
+	var area_w := footprint.x - FIELD_HOUSE_STRIP - FIELD_MARGIN
+	var area_d := footprint.y - FIELD_MARGIN * 2.0
+	# A grid that tiles exactly (columns x rows == field_count), picking the
+	# split whose blocks are closest to square; a prime count becomes strips.
+	var columns := 1
+	var best_aspect := INF
+	for candidate in range(1, field_count + 1):
+		if field_count % candidate != 0:
+			continue
+		var cell := Vector2(area_w / float(candidate), area_d / float(field_count / candidate))
+		var aspect := absf(log(cell.x / maxf(cell.y, 0.001)))
+		if aspect < best_aspect:
+			best_aspect = aspect
+			columns = candidate
+	var rows := field_count / columns
+	var block := Vector2(area_w / float(columns), area_d / float(rows))
+	for index in field_count:
+		var column := index % columns
+		var row := index / columns
+		var center := Vector3(
+			origin_x + (float(column) + 0.5) * block.x,
+			0.0,
+			-footprint.y * 0.5 + FIELD_MARGIN + (float(row) + 0.5) * block.y)
+		var inner := block - Vector2.ONE * FIELD_GAP
+		_add_patch(body, inner, FIELD_BLOCK_COLOR, 0.08, center)
+		var furrows := maxi(int(inner.y / FURROW_PITCH), 2)
+		for i in furrows:
+			var z := center.z - inner.y * 0.5 + (float(i) + 0.5) * inner.y / float(furrows)
+			_add_patch(body, Vector2(inner.x - 2.0, 0.6), FURROW_COLOR, 0.12, Vector3(center.x, 0.0, z))
 
 func _add_pasture(body: Node3D, footprint: Vector2) -> void:
 	_add_patch(body, footprint, PASTURE_EDGE_COLOR, 0.04)
@@ -773,14 +812,18 @@ func _add_stand(body: Node3D, footprint: Vector2, seed_value: int) -> void:
 	_add_patch(body, footprint, STAND_COLOR, 0.05)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 7919
-	for i in 9:
+	# Tree count follows the plot's area (so its acreage), at the density the
+	# original 30 x 22 stand had.
+	var tree_count := maxi(int(footprint.x * footprint.y / STAND_AREA_PER_TREE), 3)
+	var tree_material := _flat_material(Color(0.12, 0.3, 0.14))
+	for i in tree_count:
 		var tree := MeshInstance3D.new()
 		var cone := CylinderMesh.new()
 		cone.top_radius = 0.0
 		cone.bottom_radius = 1.2
 		cone.height = 4.0
 		tree.mesh = cone
-		tree.material_override = _flat_material(Color(0.12, 0.3, 0.14))
+		tree.material_override = tree_material
 		tree.material_overlay = _snow_tree_material
 		tree.position = Vector3(
 			rng.randf_range(-footprint.x * 0.5 + 8.0, footprint.x * 0.5 - 2.0),

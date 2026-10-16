@@ -66,11 +66,11 @@ const COORD_SNAP := 0.5
 
 ## Land plots. A business with land (farm, woodlot, ranch) is drawn on a plot
 ## sized from its acreage at a compressed scale (one acre = this many square
-## world units; true scale would be ~4,000, a 40-acre farm 400 m across, which
-## no building in the town view could stand beside), so a 375-acre ranch really
+## world units; true scale would be ~4,000, which no building in the town
+## view could stand beside; a 320-acre farm is about 73 x 52), so a 375-acre ranch really
 ## is a much bigger spread than a 40-acre farm. LAND_PLOT_ASPECT is
 ## width / depth. Businesses without land keep their zone's footprint.
-const UNITS2_PER_ACRE := 16.0
+const UNITS2_PER_ACRE := 12.0
 const LAND_PLOT_ASPECT := 1.4
 ## A land plot whose edge is farther than this from every road gets a track:
 ## a lane grown from the nearest road to the plot, stopping this short of its
@@ -88,8 +88,8 @@ const OUTWARD_ZONES := [ZONE_FIELD, ZONE_PASTURE]
 const ZONE_SPECS := {
 	ZONE_CIVIC: {"footprint": Vector2(14.0, 14.0), "radius": Vector2(0.0, 0.0)},
 	ZONE_TOWN: {"footprint": Vector2(10.0, 10.0), "radius": Vector2(13.0, 26.0)},
-	ZONE_FIELD: {"footprint": Vector2(30.0, 22.0), "radius": Vector2(55.0, 115.0)},
-	ZONE_PASTURE: {"footprint": Vector2(32.0, 24.0), "radius": Vector2(90.0, 150.0)},
+	ZONE_FIELD: {"footprint": Vector2(30.0, 22.0), "radius": Vector2(60.0, 135.0)},
+	ZONE_PASTURE: {"footprint": Vector2(32.0, 24.0), "radius": Vector2(100.0, 170.0)},
 	# Lots along the road frontage (see _make_frontage_candidates); no radius band.
 	ZONE_HOUSING: {"footprint": Vector2(6.0, 6.0)},
 }
