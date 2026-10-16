@@ -52,11 +52,17 @@ static func pick(terrain: Terrain, rng: RandomNumberGenerator, spec: RefCounted)
 		var pad: float = spec_role["pad"]
 		var best := Vector2.INF
 		var best_score := -INF
+		# With several islands, prefer one that has no settlement yet.
+		var occupied := {}
+		for s in sites:
+			occupied[terrain.island_at(s["pos"])] = true
 		for relaxed in [false, true]:
 			for c in candidates:
 				if not _clear_of(sites, c, pad):
 					continue
 				var score := _score(terrain, role, c, pad, elevation, focus, relaxed, rng)
+				if terrain.islands.size() > 1 and not occupied.has(terrain.island_at(c)):
+					score += 1.5
 				if score > best_score:
 					best_score = score
 					best = c
@@ -102,9 +108,14 @@ static func _score(terrain: Terrain, role: String, c: Vector2, pad: float, eleva
 	var elev := (terrain.land_height(c.x, c.y) - elevation.x) / maxf(elevation.y - elevation.x, 0.001)
 	var tx := terrain.downstream_t(c)
 	var valley := terrain.landscape == "river_valley"
+	# Small islands have no interior far from the water.
+	var inland := 12.0 if terrain.landscape == "island" else 32.0
+	var pasture_height := 0.12 if terrain.landscape == "island" else 0.4
 	var jitter := rng.randf() * 0.3
 	# Keep the whole pad out of the carved banks; waterside roles may sit on the water.
 	var min_bank := pad * 0.5 + 2.0 if role in WATERSIDE else pad * 0.8 + Terrain.BANK + 2.0
+	if terrain.landscape == "island" and role not in WATERSIDE:
+		min_bank = pad * 0.5 + 4.0
 	if bank < min_bank or trib_bank < min_bank:
 		return -INF
 	match role:
@@ -129,7 +140,7 @@ static func _score(terrain: Terrain, role: String, c: Vector2, pad: float, eleva
 				return -INF
 			return -slope * 5.0 - water / 20.0 + jitter
 		"pasture":
-			if elev < 0.4 / loose or bank < 30.0 / loose or slope > 0.3 * loose:
+			if elev < pasture_height / loose or bank < inland / loose or slope > 0.3 * loose:
 				return -INF
 			return elev * 3.0 - absf(slope - 0.1) * 5.0 + jitter
 		"woodland":
@@ -138,7 +149,7 @@ static func _score(terrain: Terrain, role: String, c: Vector2, pad: float, eleva
 				return -INF
 			return -absf(reference - 35.0) / 30.0 - slope * 3.0 + jitter
 		"ore":
-			if elev < 0.35 / loose or bank < 35.0 / loose or slope < 0.06 or slope > 0.32 * loose:
+			if elev < 0.35 / loose or bank < (inland + 3.0) / loose or slope < 0.06 or slope > 0.32 * loose:
 				return -INF
 			return elev * 2.0 + slope * 3.0 + jitter
 		"farm":

@@ -38,7 +38,7 @@ static func run(result: Dictionary) -> Dictionary:
 	if terrain.has_sea:
 		var sea := terrain.sea_fraction()
 		var lo := 0.1
-		var hi := 0.6 if terrain.landscape == "coast" else 0.7
+		var hi := 0.6 if terrain.landscape == "coast" else 0.88
 		checks.append(_check("sea share", sea >= lo and sea <= hi, "%d%% of the map is sea (want %d-%d%%)" % [roundi(sea * 100.0), roundi(lo * 100.0), roundi(hi * 100.0)]))
 
 	var errors := map.validate_geometry()
@@ -85,6 +85,20 @@ static func run(result: Dictionary) -> Dictionary:
 	checks.append(_check("road grade", worst_grade <= MAX_ROAD_GRADE, "worst %.2f (limit %.2f)" % [worst_grade, MAX_ROAD_GRADE]))
 	checks.append(_check("road detour", worst_detour <= MAX_DETOUR, "worst %.2fx (limit %.1fx)" % [worst_detour, MAX_DETOUR]))
 
+	var water_routes: Array[Dictionary] = result["water_routes"]
+	var stray := 0
+	var samples_total := 0
+	for route in water_routes:
+		lengths[Vector2i(route["a"], route["b"])] = route["length"]
+		var line := _route_line(map, route["id"])
+		for i in line.size():
+			# Away from the landings, a boat must be on open water.
+			if line[i].distance_to(line[0]) > 12.0 and line[i].distance_to(line[line.size() - 1]) > 12.0:
+				samples_total += 1
+				if not terrain.is_sea(line[i].x, line[i].y):
+					stray += 1
+	if terrain.has_sea and (not water_routes.is_empty() or terrain.islands.size() > 1):
+		checks.append(_check("sea routes", stray <= samples_total / 30, "%d routes, %d of %d samples off open water" % [water_routes.size(), stray, samples_total]))
 	var distance := _all_pairs(sites, lengths)
 	var isolated := PackedStringArray()
 	var unsupplied := PackedStringArray()
@@ -117,6 +131,12 @@ static func run(result: Dictionary) -> Dictionary:
 	for c in checks:
 		ok = ok and c["ok"]
 	return {"ok": ok, "checks": checks}
+
+static func _route_line(map: ValleyMapDefinition, route_id: String) -> PackedVector2Array:
+	var line := PackedVector2Array()
+	for p in Terrain.Ribbon._sample_catmull_rom(map.water_route_path(route_id), 3.0):
+		line.append(Vector2(p.x, p.z))
+	return line
 
 static func road_line(map: ValleyMapDefinition, road_id: String) -> PackedVector2Array:
 	var line := PackedVector2Array()

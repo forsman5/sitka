@@ -8,6 +8,7 @@ const Spec = preload("res://scripts/valley/gen/valley_spec.gd")
 const Terrain = preload("res://scripts/valley/gen/valley_gen_terrain.gd")
 const Sites = preload("res://scripts/valley/gen/valley_gen_sites.gd")
 const Roads = preload("res://scripts/valley/gen/valley_gen_roads.gd")
+const Sea = preload("res://scripts/valley/gen/valley_gen_sea.gd")
 const Validator = preload("res://scripts/valley/gen/valley_gen_validator.gd")
 
 const MAX_TREES := 700
@@ -40,12 +41,15 @@ static func generate(spec: Spec) -> Dictionary:
 	terrain.finalize()
 
 	var roads := Roads.build(terrain, sites)
-	var map := _emit_map(terrain, sites, roads, world_seed)
+	var water_routes: Array[Dictionary] = []
+	if spec.sea_routes:
+		water_routes = Sea.build(terrain, sites, roads)
+	var map := _emit_map(terrain, sites, roads, water_routes, world_seed)
 	Roads.add_crossings(map)
 
 	var result := {
 		"seed": world_seed, "spec": spec, "terrain": terrain, "sites": sites,
-		"roads": roads, "map": map, "failures": picked["failures"],
+		"roads": roads, "water_routes": water_routes, "map": map, "failures": picked["failures"],
 	}
 	rng.seed = world_seed * 7919 + 3
 	_add_vegetation(result, rng)
@@ -54,7 +58,7 @@ static func generate(spec: Spec) -> Dictionary:
 	result["ms"] = Time.get_ticks_msec() - started
 	return result
 
-static func _emit_map(terrain: Terrain, sites: Array[Dictionary], roads: Array[Dictionary], world_seed: int) -> ValleyMapDefinition:
+static func _emit_map(terrain: Terrain, sites: Array[Dictionary], roads: Array[Dictionary], water_routes: Array[Dictionary], world_seed: int) -> ValleyMapDefinition:
 	var map := ValleyMapDefinition.new()
 	for site in sites:
 		var pos: Vector2 = site["pos"]
@@ -74,6 +78,9 @@ static func _emit_map(terrain: Terrain, sites: Array[Dictionary], roads: Array[D
 	var edge := 0
 	for road in roads:
 		map.roads[road["id"]] = {"simulation_edge": edge, "width": Roads.ROAD_WIDTH, "seed": world_seed + edge * 17, "points": road["points"]}
+		edge += 1
+	for route in water_routes:
+		map.water_routes[route["id"]] = {"simulation_edge": edge, "width": Sea.ROUTE_WIDTH, "a": route["a"], "b": route["b"], "points": route["points"]}
 		edge += 1
 	return map
 
@@ -153,6 +160,13 @@ static func tree_points(result: Dictionary) -> PackedVector2Array:
 			if not blocked and points.size() < MAX_TREES:
 				points.append(p)
 	return points
+
+## Boat route samples (world xz) at `spacing`.
+static func water_route_samples(map: ValleyMapDefinition, route_id: String, spacing: float) -> PackedVector2Array:
+	var line := PackedVector2Array()
+	for p in Terrain.Ribbon._sample_catmull_rom(map.water_route_path(route_id), spacing):
+		line.append(Vector2(p.x, p.z))
+	return line
 
 ## Road centerline samples (world xz) at `spacing`, for drawing and grade checks.
 static func road_samples(map: ValleyMapDefinition, road_id: String, spacing: float) -> PackedVector2Array:

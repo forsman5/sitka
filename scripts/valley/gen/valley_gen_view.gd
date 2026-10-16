@@ -29,6 +29,8 @@ var _landscape_box: OptionButton
 var _seed_box: SpinBox
 var _river_check: CheckBox
 var _tribs_box: SpinBox
+var _islands_box: SpinBox
+var _routes_check: CheckBox
 var _relief_slider: HSlider
 var _relief_label: Label
 var _spec_text: TextEdit
@@ -108,6 +110,26 @@ func _build_ui() -> void:
 			_spec.main_river = true
 		_generate())
 	shape_row.add_child(_tribs_box)
+
+	var sea_row := HBoxContainer.new()
+	side.add_child(sea_row)
+	_islands_box = SpinBox.new()
+	_islands_box.min_value = 1
+	_islands_box.max_value = Spec.MAX_ISLANDS
+	_islands_box.prefix = "isles"
+	_islands_box.tooltip_text = "Island landscape only"
+	_islands_box.value_changed.connect(func(v: float) -> void:
+		_spec.islands = int(v)
+		if _spec.islands > 1:
+			_spec.landscape = "island"
+		_generate())
+	sea_row.add_child(_islands_box)
+	_routes_check = CheckBox.new()
+	_routes_check.text = "Sea routes"
+	_routes_check.toggled.connect(func(on: bool) -> void:
+		_spec.sea_routes = on
+		_generate())
+	sea_row.add_child(_routes_check)
 
 	var relief_row := HBoxContainer.new()
 	side.add_child(relief_row)
@@ -263,6 +285,8 @@ func _sync_controls() -> void:
 	_seed_box.set_value_no_signal(_spec.seed)
 	_river_check.set_pressed_no_signal(_spec.main_river)
 	_tribs_box.set_value_no_signal(_spec.tributaries)
+	_islands_box.set_value_no_signal(_spec.islands)
+	_routes_check.set_pressed_no_signal(_spec.sea_routes)
 	_relief_slider.set_value_no_signal(_spec.relief)
 	_relief_label.text = "relief %.1f" % _spec.relief
 	_spec_text.text = _spec.to_json()
@@ -331,7 +355,7 @@ func _refresh_report() -> void:
 	text += "\n[b]Settlements[/b]\n"
 	for site in _result["sites"] as Array[Dictionary]:
 		text += "%s - %s\n" % [site["name"], site["role"]]
-	text += "\n%d roads, %d fords, %d trees" % [_result["roads"].size(), _result["map"].crossings.size(), _result["trees"].size()]
+	text += "\n%d roads, %d sea routes, %d fords, %d trees" % [_result["roads"].size(), _result["water_routes"].size(), _result["map"].crossings.size(), _result["trees"].size()]
 	_report.text = text
 
 func _layout_labels() -> void:
@@ -416,6 +440,34 @@ func _build_3d_world() -> void:
 		label.outline_size = 12
 		label.position = Vector3(pos.x, site["height"] + cylinder.height + 5.0, pos.y)
 		_world.add_child(label)
+
+	# Boat lanes: dashes of white discs just above the sea.
+	var dashes: Array[Vector2] = []
+	var lane_map: ValleyMapDefinition = _result["map"]
+	for route_id in lane_map.water_routes:
+		var step := 0
+		for p in Generator.water_route_samples(lane_map, route_id, 2.0):
+			step += 1
+			if (step / 3) % 2 == 0:
+				dashes.append(p)
+	if not dashes.is_empty():
+		var disc := CylinderMesh.new()
+		disc.top_radius = 1.0
+		disc.bottom_radius = 1.0
+		disc.height = 0.2
+		var disc_material := StandardMaterial3D.new()
+		disc_material.albedo_color = Color(1, 1, 1)
+		disc_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		disc.material = disc_material
+		var lane := MultiMesh.new()
+		lane.transform_format = MultiMesh.TRANSFORM_3D
+		lane.mesh = disc
+		lane.instance_count = dashes.size()
+		for i in dashes.size():
+			lane.set_instance_transform(i, Transform3D(Basis.IDENTITY, Vector3(dashes[i].x, 0.4, dashes[i].y)))
+		var lane_instance := MultiMeshInstance3D.new()
+		lane_instance.multimesh = lane
+		_world.add_child(lane_instance)
 
 	var trees: PackedVector2Array = _result["trees"]
 	if not trees.is_empty():

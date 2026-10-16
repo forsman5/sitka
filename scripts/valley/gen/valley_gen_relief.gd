@@ -87,6 +87,12 @@ static func relief_image(result: Dictionary, scale: int = 4, overlays := true) -
 	for road_id in map.roads:
 		for p in Generator.road_samples(map, road_id, 1.0):
 			_dot(tint, to_pixel(p, scale), dot, ROAD)
+	var step := 0
+	for route_id in map.water_routes:
+		for p in Generator.water_route_samples(map, route_id, 1.0):
+			step += 1
+			if (step / 5) % 2 == 0:
+				_dot(tint, to_pixel(p, scale), dot, Color(0.95, 0.97, 1.0))
 	for id in map.crossings:
 		var pos: Vector3 = map.crossings[id]["position"]
 		_square(tint, to_pixel(Vector2(pos.x, pos.z), scale), scale, Color(1, 1, 1))

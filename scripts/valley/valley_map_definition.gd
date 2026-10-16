@@ -8,6 +8,9 @@ const Ribbon = preload("res://scripts/valley/terrain_ribbon_builder.gd")
 @export var settlements: Dictionary = {}
 @export var rivers: Dictionary = {}
 @export var roads: Dictionary = {}
+## Boat routes over open water between settlements: {points, width, a, b}. Endpoints
+## reference a settlement's waterfront anchor. Visual/geographic only, like roads.
+@export var water_routes: Dictionary = {}
 @export var crossings: Dictionary = {}
 @export var junctions: Dictionary = {}
 @export var vegetation: Dictionary = {}
@@ -35,6 +38,9 @@ func resolve_path(points: Array) -> PackedVector3Array:
 func road_path(id: String) -> PackedVector3Array:
 	return resolve_path(roads[id]["points"])
 
+func water_route_path(id: String) -> PackedVector3Array:
+	return resolve_path(water_routes[id]["points"])
+
 func river_path(id: String) -> PackedVector3Array:
 	return resolve_path(rivers[id]["points"])
 
@@ -53,7 +59,7 @@ func validate() -> PackedStringArray:
 		var junction: Dictionary = junctions[id]
 		if not junction.get("position") is Vector3 or junction.get("inner_radius", -1.0) < 0.0 or junction.get("outer_radius", 0.0) <= junction.get("inner_radius", 0.0):
 			errors.append("Junction %s needs a position and increasing blend radii" % id)
-	for collection in [rivers, roads]:
+	for collection in [rivers, roads, water_routes]:
 		for id in collection:
 			var spec: Dictionary = collection[id]
 			if spec.get("width", 0.0) <= 0.0:

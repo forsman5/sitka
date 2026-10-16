@@ -64,6 +64,21 @@ func _init() -> void:
 	if variant["terrain"].rivers.size() != (1 if changed.main_river else 0) or not grew:
 		print("FAIL: spec changes (no tributaries, extra fishing village) were not honoured")
 		failures += 1
+	if landscape == "island":
+		var archipelago: Spec = Spec.preset("island", first_seed)
+		archipelago.islands = 3
+		var three := Generator.generate(archipelago)
+		if three["terrain"].islands.size() != 3:
+			print("FAIL: asked for 3 islands, got %d" % three["terrain"].islands.size())
+			failures += 1
+		archipelago.sea_routes = false
+		if not Generator.generate(archipelago)["water_routes"].is_empty():
+			print("FAIL: sea_routes=false still produced water routes")
+			failures += 1
+		var routed := 0
+		for i in count:
+			routed += 1 if not Generator.generate_seed(first_seed + i, "island")["water_routes"].is_empty() else 0
+		print("island seeds with a sea route: %d/%d" % [routed, count])
 	var bad_spec: Spec = Spec.preset(landscape, first_seed)
 	bad_spec.landscape = "swamp"
 	bad_spec.tributaries = 5

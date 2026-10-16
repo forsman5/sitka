@@ -1,7 +1,9 @@
 {
+  "islands": 1,
   "landscape": "coast",
   "main_river": true,
   "relief": 1.0,
+  "sea_routes": true,
   "sea_side": "",
   "seed": 3,
   "settlements": [

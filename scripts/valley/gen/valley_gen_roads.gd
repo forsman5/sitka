@@ -49,21 +49,23 @@ static func build(terrain: Terrain, sites: Array[Dictionary]) -> Array[Dictionar
 			paths[Vector2i(i, j)] = path
 			costs[Vector2i(i, j)] = cost if not path.is_empty() else INF
 
+	# Kruskal: a spanning forest over reachable pairs, so separate islands each
+	# get their own road network (sea routes link them afterwards).
+	var edges: Array[Vector2i] = []
+	for edge in costs:
+		if costs[edge] < INF:
+			edges.append(edge)
+	edges.sort_custom(func(x: Vector2i, y: Vector2i) -> bool: return costs[x] < costs[y])
+	var parent: Array[int] = []
+	for i in n:
+		parent.append(i)
 	var chosen: Array[Vector2i] = []
-	var in_tree := {0: true}
-	while in_tree.size() < n:
-		var best := Vector2i(-1, -1)
-		var best_cost := INF
-		for edge in costs:
-			var e: Vector2i = edge
-			if in_tree.has(e.x) != in_tree.has(e.y) and costs[e] < best_cost:
-				best_cost = costs[e]
-				best = e
-		if best.x < 0:
-			break
-		chosen.append(best)
-		in_tree[best.x] = true
-		in_tree[best.y] = true
+	for e in edges:
+		var root_a := _find(parent, e.x)
+		var root_b := _find(parent, e.y)
+		if root_a != root_b:
+			parent[root_a] = root_b
+			chosen.append(e)
 	var town := _index_of(sites, "town")
 	var port := _index_of(sites, "port")
 	if town >= 0 and port >= 0:
@@ -117,6 +119,12 @@ static func add_crossings(map: ValleyMapDefinition) -> void:
 					"radius": hits[k].distance_to(hits[k + 1]) * 0.5 + 8.0,
 					"width": 3.8, "seed": 9000 + map.crossings.size(),
 				}
+
+static func _find(parent: Array[int], i: int) -> int:
+	while parent[i] != i:
+		parent[i] = parent[parent[i]]
+		i = parent[i]
+	return i
 
 static func _index_of(sites: Array[Dictionary], role: String) -> int:
 	for i in sites.size():

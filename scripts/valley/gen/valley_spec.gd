@@ -9,6 +9,7 @@ const LANDSCAPES := ["river_valley", "coast", "island"]
 const SIDES := ["", "north", "south", "east", "west"]
 const KNOWN_ROLES := ["town", "port", "ore", "woodland", "pasture", "farm", "fishing"]
 const MAX_TRIBUTARIES := 2
+const MAX_ISLANDS := 3
 
 var seed := 1
 var landscape := "river_valley"
@@ -16,6 +17,10 @@ var landscape := "river_valley"
 ## island (source in the hills, mouth on the shore).
 var main_river := true
 var tributaries := 1
+## Island landscape only: how many separate islands (1-3).
+var islands := 1
+## Boat routes between harbours (and between islands). Sea landscapes only.
+var sea_routes := true
 ## Scales hill and valley-wall height (1.0 = default).
 var relief := 1.0
 ## Coast only: which side the sea is on; "" lets the seed choose.
@@ -35,7 +40,8 @@ static func preset(landscape_name: String, seed_value: int) -> RefCounted:
 		"island":
 			spec.main_river = false
 			spec.tributaries = 0
-			spec.settlements = [_s("town"), _s("port"), _s("fishing", 1, true), _s("pasture"), _s("woodland"), _s("ore")]
+			spec.islands = 2
+			spec.settlements = [_s("town"), _s("port"), _s("fishing", 2, true), _s("pasture"), _s("woodland"), _s("ore", 1, true)]
 		_:
 			spec.landscape = "river_valley"
 			spec.main_river = true
@@ -64,6 +70,10 @@ func validate() -> PackedStringArray:
 		errors.append("tributaries need a main river")
 	if landscape == "river_valley" and not main_river:
 		errors.append("a river valley needs a main river")
+	if islands < 1 or islands > MAX_ISLANDS:
+		errors.append("islands must be 1-%d" % MAX_ISLANDS)
+	if islands > 1 and landscape != "island":
+		errors.append("islands above 1 need the island landscape")
 	if relief < 0.3 or relief > 2.0:
 		errors.append("relief must be 0.3-2.0")
 	if not SIDES.has(sea_side):
@@ -83,6 +93,7 @@ func validate() -> PackedStringArray:
 func to_dict() -> Dictionary:
 	return {
 		"seed": seed, "landscape": landscape, "main_river": main_river, "tributaries": tributaries,
+		"islands": islands, "sea_routes": sea_routes,
 		"relief": relief, "sea_side": sea_side, "settlements": settlements.duplicate(true),
 	}
 
@@ -104,6 +115,8 @@ static func from_dict(data: Dictionary) -> RefCounted:
 	var spec: RefCounted = preset(str(data.get("landscape", "river_valley")), int(data.get("seed", 1)))
 	spec.main_river = bool(data.get("main_river", spec.main_river))
 	spec.tributaries = int(data.get("tributaries", spec.tributaries))
+	spec.islands = int(data.get("islands", spec.islands))
+	spec.sea_routes = bool(data.get("sea_routes", spec.sea_routes))
 	spec.relief = float(data.get("relief", spec.relief))
 	spec.sea_side = str(data.get("sea_side", spec.sea_side))
 	if data.has("settlements") and data["settlements"] is Array:

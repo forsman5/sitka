@@ -38,8 +38,11 @@ var mouth_height := 5.0
 
 var sea_dir := Vector2.RIGHT
 var coast_pos := 0.0
+## The largest island (index 0): home of the main river and the focus point.
 var island_center := Vector2.ZERO
 var island_radius := 85.0
+## [{center: Vector2, radius: float}], largest first.
+var islands: Array[Dictionary] = []
 
 var _hills := FastNoiseLite.new()
 var _ridges := FastNoiseLite.new()
@@ -89,7 +92,7 @@ func build(rng: RandomNumberGenerator, spec: RefCounted) -> void:
 		"coast":
 			_setup_coast(rng, spec.sea_side)
 		"island":
-			_setup_island(rng)
+			_setup_island(rng, spec.islands)
 	valley_half = rng.randf_range(70.0, 120.0)
 	valley_rise = rng.randf_range(22.0, 38.0) * relief
 	_build_rivers(rng, spec)
@@ -106,9 +109,62 @@ func _setup_coast(rng: RandomNumberGenerator, side: String) -> void:
 	sea_dir = sides[side]
 	coast_pos = _axis_half(sea_dir) * rng.randf_range(-0.05, 0.4)
 
-func _setup_island(rng: RandomNumberGenerator) -> void:
-	island_center = Vector2(rng.randf_range(-20.0, 20.0), rng.randf_range(-12.0, 12.0))
-	island_radius = rng.randf_range(75.0, 92.0)
+func _setup_island(rng: RandomNumberGenerator, count: int) -> void:
+	islands.clear()
+	if count <= 1:
+		islands.append({"center": Vector2(rng.randf_range(-20.0, 20.0), rng.randf_range(-12.0, 12.0)), "radius": rng.randf_range(75.0, 92.0)})
+	else:
+		var range_r := Vector2(40.0, 50.0) if count == 2 else Vector2(30.0, 40.0)
+		var radii: Array[float] = []
+		for i in count:
+			radii.append(rng.randf_range(range_r.x, range_r.y))
+		radii.sort()
+		radii.reverse()
+		# Spread the islands around a ring so there is room for each; retry the
+		# whole arrangement until the channels between them are clear (or accept
+		# the last try, where islands may touch and merge into one landmass).
+		for attempt in 40:
+			islands.clear()
+			var start_angle := rng.randf() * TAU
+			for i in count:
+				var radius := radii[i]
+				var angle := start_angle + TAU * float(i) / float(count) + rng.randf_range(-0.35, 0.35)
+				var span := Vector2(SIZE.x * 0.5 - radius * ISLAND_STRETCH - 8.0, SIZE.y * 0.5 - radius - 8.0)
+				var reach := rng.randf_range(0.75, 1.0)
+				islands.append({"center": Vector2(cos(angle) * span.x * reach, sin(angle) * span.y * reach), "radius": radius})
+			var clear := true
+			for i in count:
+				for j in range(i + 1, count):
+					var o: Vector2 = islands[i]["center"] - islands[j]["center"]
+					if sqrt(o.x * o.x / (ISLAND_STRETCH * ISLAND_STRETCH) + o.y * o.y) < (float(islands[i]["radius"]) + float(islands[j]["radius"])) * 1.1 + 8.0:
+						clear = false
+			if clear:
+				break
+	island_center = islands[0]["center"]
+	island_radius = islands[0]["radius"]
+
+## Elliptical distance from an island's centre (the islands are stretched along x).
+func _island_distance(p: Vector2, island: Dictionary) -> float:
+	var q: Vector2 = p - island["center"]
+	return sqrt(q.x * q.x / (ISLAND_STRETCH * ISLAND_STRETCH) + q.y * q.y)
+
+## Which island's coast `p` is closest to being inside (index into `islands`).
+func island_at(p: Vector2) -> int:
+	var best := 0
+	var best_shore := -INF
+	for i in islands.size():
+		var shore_i := _island_shore(p, i)
+		if shore_i > best_shore:
+			best_shore = shore_i
+			best = i
+	return best
+
+func _island_shore(p: Vector2, index: int) -> float:
+	var island: Dictionary = islands[index]
+	var q: Vector2 = p - island["center"]
+	var dir := q.normalized() if q.length() > 0.001 else Vector2.RIGHT
+	var radius: float = float(island["radius"]) * (1.0 + 0.22 * _shore_noise.get_noise_2d(dir.x * 200.0 + index * 53.0, dir.y * 200.0 + index * 97.0))
+	return radius - _island_distance(p, island)
 
 static func _axis_half(dir: Vector2) -> float:
 	return absf(dir.x) * SIZE.x * 0.5 + absf(dir.y) * SIZE.y * 0.5
@@ -123,11 +179,10 @@ func _shore_at(p: Vector2) -> float:
 			var perp_dir := Vector2(-sea_dir.y, sea_dir.x)
 			return coast_pos + _coast_wobble(p.dot(perp_dir)) - p.dot(sea_dir)
 		"island":
-			var q := p - island_center
-			var d := sqrt(q.x * q.x / (ISLAND_STRETCH * ISLAND_STRETCH) + q.y * q.y)
-			var dir := q.normalized() if q.length() > 0.001 else Vector2.RIGHT
-			var radius := island_radius * (1.0 + 0.22 * _shore_noise.get_noise_2d(dir.x * 200.0, dir.y * 200.0))
-			return radius - d
+			var best := -INF
+			for i in islands.size():
+				best = maxf(best, _island_shore(p, i))
+			return best
 	return INF
 
 func _base_height(p: Vector2, shore_dist: float, noise_hills: float, noise_ridge: float) -> float:
@@ -138,9 +193,11 @@ func _base_height(p: Vector2, shore_dist: float, noise_hills: float, noise_ridge
 	if landscape == "island":
 		# Rise from the centre outward, not from the (angle-noised) shore, so the
 		# interior is a smooth dome rather than radial streaks.
-		var q := p - island_center
-		var d := sqrt(q.x * q.x / (ISLAND_STRETCH * ISLAND_STRETCH) + q.y * q.y)
-		inland = smoothstep(0.0, 1.0, clampf(1.0 - d / island_radius, 0.0, 1.0))
+		inland = 0.0
+		for island in islands:
+			# Smaller islands rise less, so their slopes stay comparable.
+			var dome := smoothstep(0.0, 1.0, clampf(1.0 - _island_distance(p, island) / float(island["radius"]), 0.0, 1.0))
+			inland = maxf(inland, dome * clampf(float(island["radius"]) / 80.0, 0.5, 1.0))
 		rise = 22.0 * relief
 	var near := smoothstep(0.0, 40.0, shore_dist)
 	inland *= near
