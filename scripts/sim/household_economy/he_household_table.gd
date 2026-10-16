@@ -8,7 +8,8 @@ extends VBoxContainer
 ##
 ## Row shape passed to set_snapshot (all keys required):
 ##   id: int, employer_business_id: int, housing_status: String
-##   ("housed" | "homeless" | other), workers: int, oldest_worker: int,
+##   ("housed" | "homeless" | other), dwelling_id: int (optional; shown as
+##   the house ID when housed), workers: int, oldest_worker: int,
 ##   dependents: int, oldest_dependent: int, stock: Dictionary[commodity ->
 ##   float] (one entry per HESimulation.SUBSISTENCE_COMMODITIES), balance:
 ##   float, stress: float, scarcity: float, unaffordable: float.
@@ -152,7 +153,8 @@ func _bind(data: Dictionary, business_names: Dictionary) -> void:
 			housing_status_label.text = "Homeless"
 			housing_status_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
 		"housed":
-			housing_status_label.text = "Housed"
+			var dwelling_id: int = data.get("dwelling_id", -1)
+			housing_status_label.text = "House %d" % dwelling_id if dwelling_id != -1 else "Housed"
 			housing_status_label.remove_theme_color_override("font_color")
 		_:
 			housing_status_label.text = ""

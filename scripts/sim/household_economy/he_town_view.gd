@@ -22,6 +22,7 @@ signal person_details_requested(household_id: int, member_number: int)
 
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 const HEVillagers = preload("res://scripts/sim/household_economy/he_villagers.gd")
+const HELivestock = preload("res://scripts/sim/household_economy/he_livestock.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const DayNightCycle = preload("res://scripts/world/day_night_cycle.gd")
 
@@ -71,7 +72,16 @@ const GROUND_HALF_EXTENT := 200.0
 
 const GROUND_COLOR := Color(0.36, 0.52, 0.27)
 const FIELD_COLOR := Color(0.58, 0.44, 0.24)
-const FURROW_COLOR := Color(0.42, 0.31, 0.16)
+const FIELD_BLOCK_COLOR := Color(0.44, 0.32, 0.17)
+## Farm plot layout: farmhouse strip on the left, the fields in a grid beside
+## it. Furrows every FURROW_PITCH; trees one per STAND_AREA_PER_TREE of woodlot.
+const FIELD_BLOCKS_DEFAULT := 4
+const FIELD_HOUSE_STRIP := 10.0
+const FIELD_MARGIN := 1.5
+const FIELD_GAP := 1.5
+const FURROW_PITCH := 2.5
+const STAND_AREA_PER_TREE := 70.0
+const FURROW_COLOR := Color(0.33, 0.23, 0.11)
 const PASTURE_COLOR := Color(0.5, 0.72, 0.34)
 const PASTURE_EDGE_COLOR := Color(0.36, 0.58, 0.25)
 const STAND_COLOR := Color(0.2, 0.38, 0.2)
@@ -133,7 +143,9 @@ var _info_body: Label
 var _details_button: Button
 var _home_button: Button
 var _person_button: Button
+var _household_button: Button
 var _villager_layer: HEVillagers
+var _livestock_layer: HELivestock
 ## Selected villager as (household_id, member_number), or (-1, -1). A site and
 ## a villager are never selected at once.
 var _selected_villager := Vector2i(-1, -1)
@@ -141,6 +153,18 @@ var _villager_marker: MeshInstance3D
 var _shown_activity: Dictionary = {}
 var _unplaced_label: Label
 var _housing_label: Label
+## Supplies a household summary (HESimulation.get_household_summary shape; {}
+## when the household is gone). Set by the host so this view never reads the
+## simulation itself.
+var household_summary_provider := Callable()
+## Household shown in the bottom-left household window, or -1.
+var _selected_household := -1
+var _household_panel: PanelContainer
+var _household_title: Label
+var _household_content: VBoxContainer
+var _household_signature := ""
+var _occupant_box: VBoxContainer
+var _occupants_shown: Array = []
 var _housing: Dictionary = {}
 var _dwellings: Dictionary = {} # dwelling_id -> get_dwelling_reports() entry
 
@@ -176,6 +200,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 			continue
 		_sync_site(site)
 	_villager_layer.sync(layout, villagers)
+	_livestock_layer.sync(layout, reports)
 	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
 		_selected_villager = Vector2i(-1, -1)
 	var unplaced := layout.unplaced_business_ids().size() + layout.unplaced_dwelling_ids().size()
@@ -268,6 +293,7 @@ func select_business(business_id: int) -> void:
 		_select_site(site["site_id"])
 
 func clear_selection() -> void:
+	_selected_household = -1
 	_selected_site_id = -1
 	_selected_villager = Vector2i(-1, -1)
 	_refresh_info()
@@ -277,6 +303,7 @@ func select_villager(household_id: int, member_number: int) -> void:
 	var key := Vector2i(household_id, member_number)
 	if not _villager_layer.villager_position(key).is_finite():
 		return
+	_selected_household = -1
 	_selected_site_id = -1
 	_selected_villager = key
 	_refresh_info()
@@ -291,10 +318,14 @@ func villager_count() -> int:
 func villagers() -> HEVillagers:
 	return _villager_layer
 
+func livestock() -> HELivestock:
+	return _livestock_layer
+
 ## Freezes or resumes the villagers (the dashboard's pause), animations too.
 func set_villagers_paused(value: bool) -> void:
 	if _villager_layer != null and _villager_layer.paused != value:
 		_villager_layer.paused = value
+		_livestock_layer.paused = value
 		_update_villager_processing()
 
 ## The villager layer (and the AnimationPlayers under it) only runs while this
@@ -302,7 +333,9 @@ func set_villagers_paused(value: bool) -> void:
 ## follow this Control's, so it would otherwise animate behind the dashboard.
 func _update_villager_processing() -> void:
 	var active := is_visible_in_tree() and not _villager_layer.paused
-	_villager_layer.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+	var mode := Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+	_villager_layer.process_mode = mode
+	_livestock_layer.process_mode = mode
 
 ## Pans the camera so `point` (town coordinates) is centred.
 func focus_on(point: Vector2) -> void:
@@ -415,6 +448,10 @@ func _build_world() -> void:
 	_selection_marker.name = "Selection"
 	_viewport.add_child(_selection_marker)
 
+	_livestock_layer = HELivestock.new()
+	_livestock_layer.name = "Livestock"
+	_livestock_layer.set_camera(_camera)
+	_viewport.add_child(_livestock_layer)
 	_villager_layer = HEVillagers.new()
 	_villager_layer.name = "Villagers"
 	_viewport.add_child(_villager_layer)
@@ -493,6 +530,8 @@ func _build_overlay() -> void:
 	_info_body = Label.new()
 	_info_body.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
 	box.add_child(_info_body)
+	_occupant_box = VBoxContainer.new()
+	box.add_child(_occupant_box)
 	_details_button = Button.new()
 	_details_button.text = "Open business details"
 	_details_button.pressed.connect(_on_details_pressed)
@@ -505,7 +544,39 @@ func _build_overlay() -> void:
 	_person_button.text = "Person details"
 	_person_button.pressed.connect(_on_person_pressed)
 	box.add_child(_person_button)
+	_household_button = Button.new()
+	_household_button.text = "View household"
+	_household_button.pressed.connect(_on_view_household_pressed)
+	box.add_child(_household_button)
 	add_child(_info_panel)
+
+	# The household window shares the info panel's bottom-left slot; the info
+	# panel hides while it is open.
+	_household_panel = PanelContainer.new()
+	_household_panel.anchor_top = 1.0
+	_household_panel.anchor_bottom = 1.0
+	_household_panel.offset_left = 10.0
+	_household_panel.offset_bottom = -10.0
+	_household_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_household_panel.custom_minimum_size = Vector2(320, 0)
+	_household_panel.visible = false
+	var household_box := VBoxContainer.new()
+	_household_panel.add_child(household_box)
+	var title_row := HBoxContainer.new()
+	household_box.add_child(title_row)
+	_household_title = Label.new()
+	_household_title.add_theme_font_size_override("font_size", 16)
+	_household_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(_household_title)
+	var close_button := Button.new()
+	close_button.text = "X"
+	close_button.flat = true
+	close_button.tooltip_text = "Close household window"
+	close_button.pressed.connect(close_household)
+	title_row.add_child(close_button)
+	_household_content = VBoxContainer.new()
+	household_box.add_child(_household_content)
+	add_child(_household_panel)
 
 static func _flat_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
@@ -601,7 +672,8 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		"construction":
 			_add_patch(body, footprint, CONSTRUCTION_GROUND_COLOR, 0.05)
 		"farm":
-			_add_field(body, footprint)
+			var field_reports: Array = (_reports.get(int(site["business_id"]), {}) as Dictionary).get("fields", [])
+			_add_field(body, footprint, field_reports.size() if not field_reports.is_empty() else FIELD_BLOCKS_DEFAULT)
 			building_offset = Vector3(-footprint.x * 0.5 + 4.5, 0.0, 0.0)
 		"woodlot":
 			_add_stand(body, footprint, int(site["site_id"]))
@@ -744,13 +816,42 @@ func _add_patch(parent: Node3D, size: Vector2, color: Color, y: float, offset :=
 	patch.position = offset + Vector3(0.0, y, 0.0)
 	parent.add_child(patch)
 
-func _add_field(body: Node3D, footprint: Vector2) -> void:
+## The farm's plot: one block per field in a grid to the right of the
+## farmhouse strip, each with its own furrows, so the drawn fields match the
+## business's fields (4 for the default farm).
+func _add_field(body: Node3D, footprint: Vector2, field_count: int = FIELD_BLOCKS_DEFAULT) -> void:
 	_add_patch(body, footprint, FIELD_COLOR, 0.05)
-	var rows := 7
-	var usable_x := footprint.x - 10.0
-	for i in rows:
-		var z := lerpf(-footprint.y * 0.5 + 1.5, footprint.y * 0.5 - 1.5, float(i) / float(rows - 1))
-		_add_patch(body, Vector2(usable_x, 0.7), FURROW_COLOR, 0.12, Vector3(5.0, 0.0, z))
+	field_count = maxi(field_count, 1)
+	var origin_x := -footprint.x * 0.5 + FIELD_HOUSE_STRIP
+	var area_w := footprint.x - FIELD_HOUSE_STRIP - FIELD_MARGIN
+	var area_d := footprint.y - FIELD_MARGIN * 2.0
+	# A grid that tiles exactly (columns x rows == field_count), picking the
+	# split whose blocks are closest to square; a prime count becomes strips.
+	var columns := 1
+	var best_aspect := INF
+	for candidate in range(1, field_count + 1):
+		if field_count % candidate != 0:
+			continue
+		var cell := Vector2(area_w / float(candidate), area_d / float(field_count / candidate))
+		var aspect := absf(log(cell.x / maxf(cell.y, 0.001)))
+		if aspect < best_aspect:
+			best_aspect = aspect
+			columns = candidate
+	var rows := field_count / columns
+	var block := Vector2(area_w / float(columns), area_d / float(rows))
+	for index in field_count:
+		var column := index % columns
+		var row := index / columns
+		var center := Vector3(
+			origin_x + (float(column) + 0.5) * block.x,
+			0.0,
+			-footprint.y * 0.5 + FIELD_MARGIN + (float(row) + 0.5) * block.y)
+		var inner := block - Vector2.ONE * FIELD_GAP
+		_add_patch(body, inner, FIELD_BLOCK_COLOR, 0.08, center)
+		var furrows := maxi(int(inner.y / FURROW_PITCH), 2)
+		for i in furrows:
+			var z := center.z - inner.y * 0.5 + (float(i) + 0.5) * inner.y / float(furrows)
+			_add_patch(body, Vector2(inner.x - 2.0, 0.6), FURROW_COLOR, 0.12, Vector3(center.x, 0.0, z))
 
 func _add_pasture(body: Node3D, footprint: Vector2) -> void:
 	_add_patch(body, footprint, PASTURE_EDGE_COLOR, 0.04)
@@ -760,14 +861,18 @@ func _add_stand(body: Node3D, footprint: Vector2, seed_value: int) -> void:
 	_add_patch(body, footprint, STAND_COLOR, 0.05)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value + 7919
-	for i in 9:
+	# Tree count follows the plot's area (so its acreage), at the density the
+	# original 30 x 22 stand had.
+	var tree_count := maxi(int(footprint.x * footprint.y / STAND_AREA_PER_TREE), 3)
+	var tree_material := _flat_material(Color(0.12, 0.3, 0.14))
+	for i in tree_count:
 		var tree := MeshInstance3D.new()
 		var cone := CylinderMesh.new()
 		cone.top_radius = 0.0
 		cone.bottom_radius = 1.2
 		cone.height = 4.0
 		tree.mesh = cone
-		tree.material_override = _flat_material(Color(0.12, 0.3, 0.14))
+		tree.material_override = tree_material
 		tree.material_overlay = _snow_tree_material
 		tree.position = Vector3(
 			rng.randf_range(-footprint.x * 0.5 + 8.0, footprint.x * 0.5 - 2.0),
@@ -783,6 +888,7 @@ func _add_plaza(body: Node3D, footprint: Vector2) -> void:
 # ---------------------------------------------------------------------------
 
 func _select_site(site_id: int) -> void:
+	_selected_household = -1
 	_selected_site_id = site_id
 	_selected_villager = Vector2i(-1, -1)
 	_refresh_info()
@@ -799,8 +905,25 @@ func _site_at(point: Vector2) -> int:
 func _refresh_info() -> void:
 	if _info_panel == null:
 		return
+	_refresh_info_panel()
+	_set_occupants(_house_occupants() if _selected_villager.x == -1 else [])
+	_refresh_household_panel()
+	# Content just changed; a panel hidden or resized earlier keeps its old
+	# size (and sits too low, anchored to the bottom) until a layout pass.
+	_dock_panel.call_deferred(_info_panel)
+	_dock_panel.call_deferred(_household_panel)
+
+## Pins a bottom-left panel's bottom edge 10px above the view and derives its
+## top from its content height, so it is the same place however often it is
+## refreshed (reset_size drifted it up the screen).
+func _dock_panel(panel: Control) -> void:
+	panel.offset_bottom = -10.0
+	panel.offset_top = -10.0 - panel.get_combined_minimum_size().y
+
+func _refresh_info_panel() -> void:
 	_home_button.visible = false
 	_person_button.visible = false
+	_household_button.visible = false
 	_villager_marker.visible = _selected_villager.x != -1 and _villager_layer.villager_visible(_selected_villager)
 	if _selected_villager.x != -1:
 		_selection_marker.visible = false
@@ -827,7 +950,13 @@ func _refresh_info() -> void:
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
 		_info_title.text = str(site["label"])
-		var shelter := occupants_text(_dwellings.get(int(site["dwelling_id"]), {}))
+		var dwelling: Dictionary = _dwellings.get(int(site["dwelling_id"]), {})
+		var shelter := occupants_text(dwelling)
+		if not dwelling.get("occupant_household_ids", []).is_empty():
+			# The households themselves are buttons under this line.
+			var capacity := int(dwelling.get("capacity", 1))
+			var count: int = dwelling["occupant_household_ids"].size()
+			shelter = "Home of household:" if capacity == 1 else "Home of households (%d of %d):" % [count, capacity]
 		if shelter == "":
 			shelter = "Shelters one household."
 			if site["type_key"] == HETownLayout.DENSE_HOUSE_TYPE_KEY:
@@ -853,6 +982,7 @@ func _refresh_villager_info() -> void:
 	var report := _villager_layer.household_report(household_id)
 	_details_button.visible = false
 	_person_button.visible = true
+	_household_button.visible = true
 	_info_title.text = "Household %d - Member %d" % [household_id, member_number]
 	if report.is_empty():
 		_info_body.text = ""
@@ -876,11 +1006,13 @@ static func person_text(report: Dictionary, member_number: int, employer_name: S
 		return ""
 	var is_worker := index < workers.size()
 	var age: int = workers[index] if is_worker else dependents[index - workers.size()]
+	var sexes: PackedInt32Array = report["worker_sexes"] if is_worker else report["dependent_sexes"]
+	var sex: int = sexes[index if is_worker else index - workers.size()]
 	var lines: Array[String] = []
 	var role := "Worker"
 	if not is_worker:
 		role = "Child" if age < HEHousehold.AGING_THRESHOLD_DAYS else "Adult living at home"
-	lines.append("%s, age %d years %d days" % [role, age / 365, age % 365])
+	lines.append("%s, %s, age %d years %d days" % [role, HEHousehold.sex_label(sex).to_lower(), age / 365, age % 365])
 	if is_worker:
 		var employer_id := int(report["employer_business_id"])
 		if employer_id == -1:
@@ -938,9 +1070,191 @@ func _on_home_pressed() -> void:
 	focus_on(site["position"])
 	_select_site(site["site_id"])
 
+func _on_view_household_pressed() -> void:
+	if _selected_villager.x != -1:
+		open_household(_selected_villager.x)
+
+## Household window member link: the person window for that villager.
+func _on_member_link_pressed(household_id: int, member_number: int) -> void:
+	select_villager(household_id, member_number)
+	business_selected.emit(-1)
+
 func _on_person_pressed() -> void:
 	if _selected_villager.x != -1:
 		person_details_requested.emit(_selected_villager.x, _selected_villager.y)
+
+# ---------------------------------------------------------------------------
+# Household window
+# ---------------------------------------------------------------------------
+
+## Household ids living in the selected house (empty unless a built house is
+## selected).
+func _house_occupants() -> Array:
+	if _layout == null or _selected_site_id == -1:
+		return []
+	var site := _layout.get_site(_selected_site_id)
+	if site.is_empty() or site["under_construction"] or site["dwelling_id"] == HETownLayout.NO_BUSINESS:
+		return []
+	return _dwellings.get(int(site["dwelling_id"]), {}).get("occupant_household_ids", [])
+
+## One "Household N" button per occupant under the house text; rebuilt only
+## when the occupant list changes so a click is not split across refreshes.
+func _set_occupants(ids: Array) -> void:
+	if ids == _occupants_shown:
+		return
+	_occupants_shown = ids.duplicate()
+	for child in _occupant_box.get_children():
+		_occupant_box.remove_child(child)
+		child.queue_free()
+	for household_id in ids:
+		var button := Button.new()
+		button.text = "Household %d" % int(household_id)
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.tooltip_text = "Open household window"
+		button.pressed.connect(open_household.bind(int(household_id)))
+		_occupant_box.add_child(button)
+
+## Shows the household window (bottom left) for `household_id`.
+func open_household(household_id: int) -> void:
+	_selected_household = household_id
+	_household_signature = ""
+	_refresh_info()
+
+func close_household() -> void:
+	_selected_household = -1
+	_refresh_info()
+
+func selected_household() -> int:
+	return _selected_household
+
+func _refresh_household_panel() -> void:
+	if _household_panel == null:
+		return
+	var summary: Dictionary = {}
+	if _selected_household != -1 and household_summary_provider.is_valid():
+		summary = household_summary_provider.call(_selected_household)
+	if summary.is_empty():
+		_selected_household = -1
+		_household_panel.visible = false
+		_household_signature = ""
+		return
+	_household_panel.visible = true
+	_info_panel.visible = false
+	_household_title.text = "Household %d" % _selected_household
+	var signature := "%d|%d|%s|%s|%s|%.2f|%.2f" % [_selected_household, int(summary["employer_business_id"]),
+		str(summary["dwelling_id"]), str(summary["worker_ages"]), str(summary["dependent_ages"]),
+		float(summary["health"]), float(summary["morale"])]
+	if signature == _household_signature:
+		return
+	_household_signature = signature
+	for child in _household_content.get_children():
+		_household_content.remove_child(child)
+		child.queue_free()
+
+	var employer_id := int(summary["employer_business_id"])
+	var employer_name := _business_name(employer_id)
+	var employer_line := Label.new()
+	employer_line.text = "Employer: %s" % (employer_name if employer_name != "" else "Unemployed")
+	_household_content.add_child(employer_line)
+	var housing_line := Label.new()
+	match str(summary["housing_status"]):
+		"housed":
+			housing_line.text = "Lives in house %d" % int(summary["dwelling_id"])
+		"homeless":
+			housing_line.text = "Homeless"
+	if housing_line.text != "":
+		_household_content.add_child(housing_line)
+	if str(summary["housing_status"]) == "housed" and _layout != null and not _layout.site_of_dwelling(int(summary["dwelling_id"])).is_empty():
+		var home_button := Button.new()
+		home_button.text = "Show home"
+		home_button.pressed.connect(_show_household_home.bind(int(summary["dwelling_id"])))
+		_household_content.add_child(home_button)
+
+	_add_household_heading("Members (%d)" % int(summary["headcount"]))
+	var member_number := 1
+	for age in summary["worker_ages"]:
+		_add_household_member(member_number, "Worker", int(age))
+		member_number += 1
+	for age in summary["dependent_ages"]:
+		_add_household_member(member_number, "Dependent", int(age))
+		member_number += 1
+
+	_add_household_heading("Health and morale")
+	_add_meter_row("Health", float(summary["health"]))
+	_add_meter_row("Morale", float(summary["morale"]))
+
+func _add_household_heading(text: String) -> void:
+	var heading := Label.new()
+	heading.text = text
+	heading.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	_household_content.add_child(heading)
+
+## "Member 2: worker, age 31y 40d" link to the dashboard person page plus a
+## Locate button that centres the camera on them.
+func _add_household_member(member_number: int, role: String, age: int) -> void:
+	var row := HBoxContainer.new()
+	var link := Button.new()
+	link.text = "Member %d: %s, age %dy %dd" % [member_number, role.to_lower(), age / 365, age % 365]
+	link.flat = true
+	link.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	link.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	link.tooltip_text = "Open the person window"
+	link.disabled = _villager_layer == null or not _villager_layer.villager_position(Vector2i(_selected_household, member_number)).is_finite()
+	link.pressed.connect(_on_member_link_pressed.bind(_selected_household, member_number))
+	row.add_child(link)
+	var locate := Button.new()
+	locate.text = "Locate"
+	locate.tooltip_text = "Centre the camera on this person"
+	locate.disabled = _villager_layer == null or not _villager_layer.villager_position(Vector2i(_selected_household, member_number)).is_finite()
+	locate.pressed.connect(_locate_villager.bind(_selected_household, member_number))
+	row.add_child(locate)
+	_household_content.add_child(row)
+
+## Rings the villager and centres the camera, keeping the household window open.
+func _locate_villager(household_id: int, member_number: int) -> void:
+	var key := Vector2i(household_id, member_number)
+	var position := _villager_layer.villager_position(key)
+	if not position.is_finite():
+		return
+	_selected_site_id = -1
+	_selected_villager = key
+	focus_on(Vector2(position.x, position.z))
+	_refresh_info()
+
+func _show_household_home(dwelling_id: int) -> void:
+	if _layout == null:
+		return
+	var site := _layout.site_of_dwelling(dwelling_id)
+	if site.is_empty():
+		return
+	focus_on(site["position"])
+	var household_id := _selected_household
+	_select_site(site["site_id"])
+	open_household(household_id)
+
+## "Health  [bar]  72%", colored red/amber/green like the dashboard's meters.
+func _add_meter_row(caption: String, value: float) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var name_label := Label.new()
+	name_label.text = caption
+	name_label.custom_minimum_size = Vector2(60, 0)
+	row.add_child(name_label)
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.value = value
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(150, 16)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.85, 0.35, 0.3) if value < 0.5 else (Color(0.9, 0.7, 0.3) if value <= 0.8 else Color(0.4, 0.75, 0.45))
+	bar.add_theme_stylebox_override("fill", fill)
+	row.add_child(bar)
+	var value_label := Label.new()
+	value_label.text = "%.0f%%" % (value * 100.0)
+	row.add_child(value_label)
+	_household_content.add_child(row)
 
 func _process(_delta: float) -> void:
 	if _selected_villager.x == -1 or _villager_marker == null:
@@ -1014,6 +1328,7 @@ func _click(position: Vector2) -> void:
 		return
 	var site_id := _site_at(Vector2(point.x, point.z))
 	if site_id == -1:
+		_selected_household = -1
 		_selected_site_id = -1
 		_refresh_info()
 		business_selected.emit(-1)

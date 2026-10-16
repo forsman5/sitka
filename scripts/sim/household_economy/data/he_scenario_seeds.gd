@@ -83,7 +83,7 @@ const BUTCHER_MAX_CAPACITY := 4
 
 const HOUSEHOLD_COUNT := 30
 
-## Farm: 4 fields of 10 acres, planted ~22 days apart on a 90-day growth
+## Farm: 4 fields of 80 acres, planted ~22 days apart on a 90-day growth
 ## cycle, so there's a harvest roughly every 22 days rather than one big one
 ## every 90. labor_per_area_per_day is chosen so a FULLY staffed farm (every
 ## field getting all the labor it can use) works out to exactly the same
@@ -91,13 +91,19 @@ const HOUSEHOLD_COUNT := 30
 ## yield_per_area is chosen so a fully-staffed field's harvest matches what
 ## the old 1.6 grain/worker/day rate would have produced over one growth
 ## cycle (12.5 workers/field * 90 days * 1.6 = 1800 grain per 10-acre field
-## = 180 grain/acre) -- so the farm grows about the same total grain as
-## before at full staffing, and the rest of the economy stays in balance.
-const FARM_LAND_AREA_ACRES := 40.0
+## = 180 grain/acre on a 40-acre farm) -- so the farm grows about the same
+## total grain as before at full staffing, and the rest of the economy stays
+## in balance. The farm is now drawn and counted at 320 acres (8x) so the
+## town view's plot looks like a real farm (about 1.5 acres of arable per
+## person for the large preset's ~190); labor and yield per acre are 1/8 of
+## the 40-acre values so every total (staffing ceiling 50, 1800 grain per
+## field-cycle) is unchanged. Real per-acre yields are far lower still; the
+## sim's acre is abstract on purpose (see docs/household-grazing-land.md).
+const FARM_LAND_AREA_ACRES := 320.0
 const FARM_FIELD_COUNT := 4
 const FARM_GROWTH_DAYS := 90
-const FARM_LABOR_PER_AREA_PER_DAY := 1.25
-const FARM_YIELD_PER_AREA := 180.0
+const FARM_LABOR_PER_AREA_PER_DAY := 0.15625
+const FARM_YIELD_PER_AREA := 22.5
 const FARM_FIELD_START_DAYS: Array[int] = [0, 22, 45, 67]
 
 ## Woodlot: same field/harvest model, its own (longer, coppice-like) cycle.
@@ -105,12 +111,14 @@ const FARM_FIELD_START_DAYS: Array[int] = [0, 22, 45, 67]
 ## max_capacity at the old flat 50 (50 * 1.0), and yield_per_area matches
 ## the old 1.0 timber/worker/day rate over one 180-day cycle (12.5
 ## workers/stand * 180 days * 1.0 = 2250 timber per 12.5-acre stand = 180
-## timber/acre).
-const WOODLOT_LAND_AREA_ACRES := 50.0
+## timber/acre on a 50-acre woodlot). Scaled 8x in acres (400, about 2 acres
+## of woodland per person for ~190) with labor and yield per acre / 8, like
+## the farm, so totals are unchanged.
+const WOODLOT_LAND_AREA_ACRES := 400.0
 const WOODLOT_FIELD_COUNT := 4
 const WOODLOT_GROWTH_DAYS := 180
-const WOODLOT_LABOR_PER_AREA_PER_DAY := 1.0
-const WOODLOT_YIELD_PER_AREA := 180.0
+const WOODLOT_LABOR_PER_AREA_PER_DAY := 0.125
+const WOODLOT_YIELD_PER_AREA := 22.5
 const WOODLOT_FIELD_START_DAYS: Array[int] = [0, 45, 90, 135]
 
 ## Smaller ceiling than the production businesses -- the Trader is meant to
@@ -145,11 +153,10 @@ const CHARCOAL_BURNER_GRACE_DAYS := 21
 const CHARCOAL_BURNER_STARTING_CREW := 2
 
 ## Starting herd sizes -- deliberately well under either species' cull
-## target (HESimulation.HERD_CULL_TARGET) so growth and the first cull are
-## both visible within a normal scenario run, not just an instant no-op.
-## Cattle's target/start ratio (1.5x) matches what it always was, just at
-## a bigger absolute scale (see HESimulation.HERD_CULL_TARGET's doc
-## comment) -- keeps the ~900-day time-to-first-cull unchanged.
+## target (HESimulation.default_cull_target of the ranch's land) so growth
+## and the first cull are both visible within a normal scenario run, not
+## just an instant no-op. Cattle's target/start ratio is 1.5x, keeping the
+## ~900-day time-to-first-cull.
 const CATTLE_STARTING_HERD := 100.0
 const SHEEP_STARTING_HERD := 100.0
 
@@ -161,7 +168,8 @@ const SHEEP_STARTING_HERD := 100.0
 ## labor produced nothing; with husbandry now driving wool, mortality and
 ## reproduction, the ceiling just states how many hands the herd can use.
 static func herd_max_capacity(species: HEBusiness.Species) -> int:
-	return ceili(HESimulation.HERD_CULL_TARGET[species] * HESimulation.HERD_LABOR_PER_HEAD_PER_DAY[species])
+	var target := HESimulation.default_cull_target(species, HESimulation.DEFAULT_RANCH_LAND_ACRES[species])
+	return ceili(target * HESimulation.HERD_LABOR_PER_HEAD_PER_DAY[species])
 
 ## Opt-in alongside the Bloomery. Like the workshop, this is a compact,
 ## legacy (daily-output) production site rather than a land/field business.
@@ -260,6 +268,7 @@ static func make_herd(business_id: int, settlement_id: int, species: HEBusiness.
 	var herd := HEBusiness.new(business_id, "Cattle Ranch" if is_cattle else "Sheep Farm", null, herd_max_capacity(species), RANCH_STARTING_CAPACITY, HEBusiness.Kind.HERD, settlement_id, species, CATTLE_STARTING_HERD if is_cattle else SHEEP_STARTING_HERD)
 	herd.type_key = "cattle_ranch" if is_cattle else "sheep_farm"
 	herd.growth_days = HESimulation.HERD_EVAL_INTERVAL_DAYS
+	herd.land_area_acres = HESimulation.DEFAULT_RANCH_LAND_ACRES[species]
 	return herd
 
 static func make_butcher(business_id: int, settlement_id: int) -> HEBusiness:
