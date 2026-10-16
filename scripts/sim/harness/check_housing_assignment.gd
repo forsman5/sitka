@@ -130,6 +130,7 @@ func _check_new_house_and_upgrade_fill_at_once() -> void:
 	gov.balance = HEScenarioSeeds.WAREHOUSE_BUILD_COST + 1000.0
 	_assert(sim.build_government_building(SID, "warehouse"), "Warehouse builds")
 	sim._government_warehouse(SID).add_stock(Commodity.Type.TIMBER, 500.0)
+	sim._government_warehouse(SID).add_stock(Commodity.Type.STONE, 500.0)
 	var innermost: int = s.dwelling_ids.min()
 	var homeless_mid: int = sim.get_housing_report(SID)["homeless_households"]
 	_assert(sim.build_government_building(SID, "tenement"), "A tenement upgrade builds")
