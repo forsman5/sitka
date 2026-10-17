@@ -49,6 +49,10 @@ func _capture() -> void:
 		dashboard._town_view.set_time_of_day(time_of_day)
 	if select_id != -1:
 		dashboard._town_view.select_business(select_id)
+		# Frame the selected site (handy for pastures).
+		var picked: Dictionary = dashboard._town_layout.site_of_business(select_id)
+		if not picked.is_empty():
+			dashboard._town_view.focus_on(picked["position"])
 	if pick_villager:
 		# The first housed villager: centred, selected, person window open.
 		var view = dashboard._town_view
