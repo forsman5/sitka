@@ -155,7 +155,9 @@ func _check_business_fails_at_credit_limit() -> void:
 			zombie.advance_ticks(1)
 			for id in zombie.businesses.keys():
 				var zb: HEBusiness = zombie.businesses[id]
-				if zb.kind != HEBusiness.Kind.GOVERNMENT and zb.max_capacity > 0 and zb.capacity < 1:
+				# A livestock processor's crew follows its work (_livestock_crew_target)
+				# and is legitimately zero while no ranch has anything to cull.
+				if zb.kind != HEBusiness.Kind.GOVERNMENT and not zb.processes_livestock and zb.max_capacity > 0 and zb.capacity < 1:
 					zero_days += 1
 		_assert(zero_days == 0, "%s: a surviving business sat at zero capacity on %d business-days" % [builder, zero_days])
 
@@ -2225,7 +2227,11 @@ func _check_livestock_goods() -> void:
 	ranch.add_stock(cattle, buffer_head + 20.0)
 	var stock_before := ranch.stock(cattle)
 	var expected_bought: float = sim._butchery_wanted_head(butcher, HEBusiness.Species.CATTLE)
-	_assert(is_equal_approx(expected_bought, buffer_head), "A freshly staffed Butcher with no livestock should want a full buffer of %.1f head, wants %.1f" % [buffer_head, expected_bought])
+	# The crew's full buffer, held back to the meat the Butcher expects to sell
+	# (HESimulation._butchery_meat_room): with little local meat demand that is
+	# a small lot, not the whole buffer.
+	var expected_head := minf(buffer_head, sim._butchery_meat_room(butcher) / HESimulation.BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE])
+	_assert(is_equal_approx(expected_bought, expected_head), "A freshly staffed Butcher with no livestock should want the lesser of a full buffer (%.1f head) and its meat cover (%.1f head), wants %.1f" % [buffer_head, expected_head, expected_bought])
 	sim.advance_ticks(1)
 	var bought: float = (butcher.todays_flows[HEBusiness.FLOW_BOUGHT] as Dictionary).get(cattle, 0.0)
 	var sold: float = (ranch.todays_flows[HEBusiness.FLOW_SOLD] as Dictionary).get(cattle, 0.0)
@@ -2385,7 +2391,10 @@ func _check_butcher_processes_livestock() -> void:
 	print("  worst stock gap %.4f, worst money gap %.4f" % [worst_stock_gap, worst_money_gap])
 	_assert(butchered > 0.0, "The Butcher should have processed some livestock in four years")
 	_assert(produced.get("Meat", 0.0) > 0.0 and produced.get("Leather", 0.0) > 0.0, "The Butcher should have made both meat and leather")
-	_assert(butchered > exported_raw, "Most of the cull should go to the Butcher rather than leave raw (%.0f butchered vs %.0f exported)" % [butchered, exported_raw])
+	# The Butcher is sized to what households buy (HESimulation._butchery_meat_room),
+	# so the rest of a cull leaves raw through the Trader instead of becoming a
+	# meat glut: what it makes must be eaten.
+	_assert(consumed.get("Meat", 0.0) >= 0.8 * produced.get("Meat", 0.0), "Households should eat most of the meat made, not leave a glut (%.0f eaten of %.0f made)" % [consumed.get("Meat", 0.0), produced.get("Meat", 0.0)])
 	_assert(consumed.get("Meat", 0.0) > 0.0, "Households should have eaten some of the meat")
 	# Meat sits near price parity with grain. Households judge that price a
 	# little differently, so demand shifts gradually across it; if they all

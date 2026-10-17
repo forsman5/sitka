@@ -590,6 +590,21 @@ const BUTCHERY_INPUT_BUFFER_DAYS := 30.0
 ## capital for its first cull (HEScenarioSeeds seeds it) and the livestock it
 ## holds secures that overdraft (_butchery_collateral).
 const BUTCHERY_CREDIT_LIMIT := 2000.0
+## The Butcher buys livestock only as far as it expects to sell the meat: its
+## finished meat plus the meat in the animals it holds may not exceed this many
+## days of what it has been selling locally (never less than the floor below).
+## Without it the Butcher worked through every cull whatever households would
+## buy, sat on thousands of unsold meat while the price fell to its floor, and
+## ran out of cash. The floor keeps it producing a little while no one is buying
+## so demand (affluent households, a Trader bid) can show up and scale it.
+## The Butcher's crew follows its work (see _livestock_crew_target): it is hired
+## once a ranch holds culled livestock or its herd is within this share of its
+## cull target (a cull is a review away), and released when there is none. Hired
+## from day one it paid wages for a year or more before the first head arrived
+## and failed before the work it was hired for.
+const BUTCHERY_HIRE_NEAR_TARGET := 0.9
+const BUTCHERY_FINISHED_COVER_DAYS := 45.0
+const BUTCHERY_MIN_FINISHED_MEAT := 150.0
 
 ## Home butchery: a ranch's culled animals go to a staffed Butcher or Trader
 ## when one exists. Otherwise the ranch butchers them itself (see
@@ -1416,6 +1431,8 @@ func set_warehouse_order(business_id: int, commodity: Commodity.Type, buy_up_to:
 ## Lowest crew the tuner may set: one worker (or the business's own
 ## min_capacity if higher), unless max_capacity itself is 0.
 func _capacity_floor(b: HEBusiness) -> int:
+	if b.processes_livestock:
+		return 0 # follows its work, see _livestock_crew_target
 	return mini(maxi(b.min_capacity, 1), b.max_capacity)
 
 func next_business_id() -> int:
@@ -3047,7 +3064,7 @@ func _business_offer(settlement_id: int, commodity: Commodity.Type, trader_impor
 ## settlement with no real alternative behaves exactly as if the baseline
 ## were the only option. This is the single seam for how buyers choose
 ## between substitutes.
-func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> Array[Commodity.Type]:
+func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable, comfort_first: bool = false) -> Array[Commodity.Type]:
 	var cascade: Array[Commodity.Type] = []
 	for c in need.satisfiers():
 		if c == need.baseline or offers.call(c) > 0.0001:
@@ -3055,6 +3072,10 @@ func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> A
 	if cascade.size() > 1:
 		var local_market: HEMarket = markets[settlement_id]
 		cascade.sort_custom(func(a: Commodity.Type, b: Commodity.Type) -> bool:
+			# Households clear comfort goods first: a household that prefers one
+			# asks it first and falls back to the staples for what it could not get.
+			if comfort_first and (need.comfort_of(a) > 0.0) != (need.comfort_of(b) > 0.0):
+				return need.comfort_of(a) > 0.0
 			var cost_a: float = local_market.price[a] / need.value_of(a)
 			var cost_b: float = local_market.price[b] / need.value_of(b)
 			if absf(cost_a - cost_b) > 0.0001:
@@ -3065,7 +3086,7 @@ func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> A
 	return cascade
 
 func _household_cascade(settlement_id: int, need: HENeed) -> Array[Commodity.Type]:
-	return _satisfier_cascade(settlement_id, need, func(c: Commodity.Type) -> float: return _household_offer(settlement_id, c))
+	return _satisfier_cascade(settlement_id, need, func(c: Commodity.Type) -> float: return _household_offer(settlement_id, c), true)
 
 ## The order `_run_market` clears a settlement's household goods in: each
 ## need's cascade (cheapest first), then its satisfiers nobody is selling.
@@ -3091,6 +3112,28 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 ## forth over it. With it, demand shifts gradually across the range.
 const HOUSEHOLD_TASTE_SPREAD := 0.35
 
+## Affluence: how far above subsistence a household's savings sit, from 0
+## (comfort goods judged at their posted price, like anything else) to 1 (they
+## look AFFLUENCE_PRICE_TOLERANCE cheaper). Measured in days of a basic basket
+## for the household, priced at BASE_PRICE so it does not swing with the market.
+const AFFLUENCE_MIN_DAYS := 60.0
+const AFFLUENCE_FULL_DAYS := 240.0
+const AFFLUENCE_PRICE_TOLERANCE := 0.75
+
+## One person's daily basic basket (every need that needs no dedicated seller,
+## via its baseline satisfier) at base prices.
+static func basket_cost_per_person() -> float:
+	var total := 0.0
+	for need in HENeeds.all():
+		if not need.needs_seller:
+			total += need.per_person_daily * BASE_PRICE[need.baseline] / need.value_of(need.baseline)
+	return total
+
+## 0..1: see AFFLUENCE_MIN_DAYS.
+func _household_affluence(h: HEHousehold) -> float:
+	var basket := basket_cost_per_person() * float(maxi(h.headcount(), 1))
+	return smoothstep(AFFLUENCE_MIN_DAYS, AFFLUENCE_FULL_DAYS, h.balance / basket)
+
 ## A household's fixed, deterministic taste in [-1, 1) -- derived from its id
 ## rather than drawn from the sim's RNG, so it neither perturbs other random
 ## draws nor changes between runs.
@@ -3105,12 +3148,15 @@ func _household_taste(h: HEHousehold) -> float:
 func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity.Type]) -> Commodity.Type:
 	var local_market: HEMarket = markets[h.settlement_id]
 	var taste := _household_taste(h) * HOUSEHOLD_TASTE_SPREAD
+	var affluence := _household_affluence(h) if not need.comfort.is_empty() else 0.0
 	var best := need.baseline
 	var best_cost: float = local_market.price[best] / need.value_of(best)
 	for c in cascade:
 		if c == need.baseline:
 			continue
 		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
+		if need.comfort_of(c) > 0.0:
+			cost *= 1.0 - AFFLUENCE_PRICE_TOLERANCE * affluence
 		if cost < best_cost - 0.0001:
 			best = c
 			best_cost = cost
@@ -3592,6 +3638,8 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# Staffed by the seed / _ensure_administrator, not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
+		if b.processes_livestock:
+			continue # crew set by _livestock_crew_target in _reconcile_employment
 		# A business is never tuned down to zero: it keeps its last worker and
 		# can only go away by exhausting its credit (see _fail_business), so
 		# there is no idle zombie and no trial rehire to bring one back.
@@ -3857,6 +3905,10 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 func _reconcile_employment(record: Dictionary = {}) -> void:
 	var business_ids := businesses.keys()
 	business_ids.sort()
+	for business_id in business_ids:
+		var processor: HEBusiness = businesses[business_id]
+		if processor.processes_livestock:
+			processor.capacity = _livestock_crew_target(processor)
 
 	# One index snapshot serves the whole layoff pass: a layoff only changes
 	# its own business's membership, and each business is visited once.
@@ -3912,15 +3964,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
 				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
-			# TODO(butcher hiring): this hires to `capacity` whatever the business has to
-			# work with. A Butcher is hired the day workers are free, but a ranch's
-			# first cull is 1.5-3 years out (herds start well below their cull target),
-			# so it pays wages for months with nothing to process and fails around
-			# day 240-360 -- before the first head it was hired for arrives. It should
-			# hire only once a ranch actually holds livestock (or is within a review of
-			# culling), and release its crew when none is expected. Until then the
-			# Butcher checks in run_household_economy.gd seed ranches near their cull
-			# target (_seed_ranches_near_cull_target) so the Butcher has input in year 1.
+			# A Butcher's capacity is its work (_livestock_crew_target), set above.
 			var business_position := _lookup_position("business", business_id)
 			while employed_workers < b.capacity and not available.is_empty():
 				var household_id: int = available.pop_at(_nearest_available_index(available, business_position, dwelling_positions))
@@ -5296,8 +5340,9 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 		if workers <= 0:
 			continue
 		var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+		var meat_room := _butchery_meat_room(butcher)
 		for species in BUTCHERY_SPECIES_ORDER:
-			if wanted_worker_days <= 0.0001:
+			if wanted_worker_days <= 0.0001 or meat_room <= 0.0001:
 				break
 			var commodity := HEBusiness.livestock_commodity(species)
 			var price: float = livestock_quote(species, LivestockQuote.BUTCHER_PURCHASE)
@@ -5311,6 +5356,7 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				market_today["offered"] += herd.stock(commodity)
 				var affordable: float = maxf(0.0, butcher.balance + BUTCHERY_CREDIT_LIMIT) / price
 				var head: float = minf(minf(herd.stock(commodity), wanted_worker_days / worker_days_per_head), affordable)
+				head = minf(head, meat_room / BUTCHERY_MEAT_PER_HEAD[species])
 				if head <= 0.0001:
 					continue
 				var cost: float = head * price
@@ -5343,6 +5389,36 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 					"value": cost,
 				})
 				wanted_worker_days -= head * worker_days_per_head
+				meat_room -= head * BUTCHERY_MEAT_PER_HEAD[species]
+
+## The crew a livestock processor needs: the worker-days of livestock it holds
+## and that ranches hold culled, over a crew's buffer of days; at least one
+## worker while a herd is within BUTCHERY_HIRE_NEAR_TARGET of its cull target,
+## and none when there is nothing to process or expect (a household is always
+## kept by the layoff rule, so an idle Butcher costs one wage, not a crew's).
+func _livestock_crew_target(b: HEBusiness) -> int:
+	var work := _butchery_held_worker_days(b)
+	var cull_near := false
+	for herd_id in _herd_business_ids(b.settlement_id):
+		var herd: HEBusiness = businesses[herd_id]
+		work += herd.stock(herd.herd_commodity()) * BUTCHERY_WORKER_DAYS_PER_HEAD[herd.species]
+		if herd.herd_size >= herd_cull_target(herd) * BUTCHERY_HIRE_NEAR_TARGET:
+			cull_near = true
+	var crew := ceili(work / BUTCHERY_INPUT_BUFFER_DAYS)
+	if cull_near:
+		crew = maxi(crew, 1)
+	return clampi(crew, 0, b.max_capacity)
+
+## How much more meat a Butcher can expect to sell, in meat units: the cover it
+## is allowed (BUTCHERY_FINISHED_COVER_DAYS of its local sales, or the floor)
+## less the meat it already holds and the meat in the live animals it holds.
+func _butchery_meat_room(butcher: HEBusiness) -> float:
+	var sold_per_day := _routine_local_use(butcher, Commodity.Type.MEAT)
+	var allowed := maxf(BUTCHERY_MIN_FINISHED_MEAT, sold_per_day * BUTCHERY_FINISHED_COVER_DAYS)
+	var held := butcher.stock(Commodity.Type.MEAT)
+	for species in BUTCHERY_SPECIES_ORDER:
+		held += butcher.stock(HEBusiness.livestock_commodity(species)) * BUTCHERY_MEAT_PER_HEAD[species]
+	return maxf(0.0, allowed - held)
 
 ## Today's livestock market totals for `commodity` in the daily record: head the
 ## ranches offered the Butcher, head its crews asked for, head actually bought,
@@ -5365,8 +5441,9 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 	if workers <= 0:
 		return 0.0
 	var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+	var meat_room := _butchery_meat_room(butcher)
 	for candidate in BUTCHERY_SPECIES_ORDER:
-		if wanted_worker_days <= 0.0001:
+		if wanted_worker_days <= 0.0001 or meat_room <= 0.0001:
 			break
 		var available: float = 0.0
 		for herd_id in _herd_business_ids(butcher.settlement_id):
@@ -5374,10 +5451,14 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 			if herd.species == candidate:
 				available += herd.stock(HEBusiness.livestock_commodity(candidate))
 		var worker_days_per_head: float = BUTCHERY_WORKER_DAYS_PER_HEAD[candidate]
-		var taken_worker_days: float = minf(wanted_worker_days, available * worker_days_per_head)
+		# Wanted head is what the crew can work AND the meat it expects to sell
+		# has room for (_butchery_meat_room), the same limit the purchase obeys.
+		var wanted_head: float = minf(wanted_worker_days / worker_days_per_head, meat_room / BUTCHERY_MEAT_PER_HEAD[candidate])
 		if candidate == species:
-			return wanted_worker_days / worker_days_per_head
-		wanted_worker_days -= taken_worker_days
+			return wanted_head
+		var taken_head: float = minf(wanted_head, available)
+		wanted_worker_days -= taken_head * worker_days_per_head
+		meat_room -= taken_head * BUTCHERY_MEAT_PER_HEAD[candidate]
 	return 0.0
 
 ## One day of butchery: the crew's worker-days go to the livestock the Butcher
