@@ -328,7 +328,8 @@ func _mounted_step(delta: float) -> void:
 		input.y = int(Input.is_physical_key_pressed(KEY_S)) - int(Input.is_physical_key_pressed(KEY_W))
 	input = input.limit_length(1.0)
 	var direction := (transform.basis * Vector3(input.x, 0.0, input.y)).normalized() * input.length()
-	_mounted_horse.ride_step(delta, direction, Input.is_physical_key_pressed(KEY_SHIFT))
+	var jump := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_physical_key_pressed(KEY_SPACE)
+	_mounted_horse.ride_step(delta, direction, Input.is_physical_key_pressed(KEY_SHIFT), jump)
 	_sync_mounted_camera()
 
 

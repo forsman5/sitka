@@ -47,11 +47,17 @@ func _ready() -> void:
 	_horse_animation = _horse_model.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if _horse_skeleton != null:
 		_anchor_bone_index = _horse_skeleton.find_bone(ANCHOR_BONE)
+	# glTF clips import as one-shot; without looping the gait freezes on its last pose.
+	if _horse_animation != null:
+		for clip in ["Idle", "Walk", "Gallop"]:
+			if _horse_animation.has_animation(clip):
+				_horse_animation.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
 	_build_riding_gear()
 	set_process_priority(100)
 	set_gait("Idle")
 
-## Selects the horse animation. Accepts Idle, Walk, or Gallop case-insensitively.
+## Selects the horse animation. Accepts Idle, Walk, Gallop, or Jump case-insensitively.
+## Jump plays once and holds its last pose until another gait is selected.
 func set_gait(gait: String) -> void:
 	var requested := gait.strip_edges().to_lower()
 	var clip := "Idle"
@@ -60,11 +66,13 @@ func set_gait(gait: String) -> void:
 			clip = "Walk"
 		"gallop", "run":
 			clip = "Gallop"
+		"jump":
+			clip = "Gallop_Jump"
 		"idle", "":
 			clip = "Idle"
 	if _horse_animation != null and _horse_animation.has_animation(clip):
 		if _current_gait != clip:
-			_horse_animation.play(clip)
+			_horse_animation.play(clip, 0.12)
 		_current_gait = clip
 
 ## Call after parenting the player's human model under RiderAnchor.

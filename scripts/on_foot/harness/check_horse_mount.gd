@@ -28,6 +28,28 @@ func _run() -> void:
 	assert(horse.global_position.distance_to(Vector3(4.0, horse.global_position.y, -3.0)) > 0.2, "Horse did not move")
 	var horse_animation := horse.visual.get("_horse_animation") as AnimationPlayer
 	assert(horse_animation.current_animation == "Gallop", "Gallop clip did not play")
+	for clip in ["Idle", "Walk", "Gallop"]:
+		assert(horse_animation.get_animation(clip).loop_mode == Animation.LOOP_LINEAR, clip + " clip does not loop")
+	# Gallop must keep animating: the pose changes over time rather than freezing.
+	# Step past several full cycles by hand: a one-shot clip would end and stop playing.
+	horse_animation.advance(horse_animation.current_animation_length * 3.3)
+	assert(horse_animation.is_playing() and horse_animation.current_animation == "Gallop", "Gallop stopped after one cycle")
+	assert(horse_animation.current_animation_position < horse_animation.current_animation_length, "Gallop position stuck at the end")
+	for i in 5:
+		horse.ride_step(1.0 / 60.0, Vector3.ZERO, false, true)
+		await physics_frame
+	assert(not horse.is_on_floor() and horse.velocity.y != 0.0, "Horse did not leave the ground on jump")
+	assert(horse_animation.current_animation == "Gallop_Jump", "Jump clip did not play")
+	var landed := false
+	for i in 240:
+		horse.ride_step(1.0 / 60.0, Vector3.ZERO, false)
+		await physics_frame
+		if horse.is_on_floor():
+			landed = true
+			break
+	assert(landed, "Horse never landed after jump")
+	horse.ride_step(1.0 / 60.0, Vector3.ZERO, false)
+	assert(horse_animation.current_animation != "Gallop_Jump", "Gait stayed on Jump after landing")
 	var expected := player._find_dismount_position()
 	assert(expected.is_finite(), "No safe dismount point near the horse")
 	player._dismount()
