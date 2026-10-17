@@ -535,7 +535,7 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## market price, same dependency-ratio shape as HESimulation._reference_
 ## wage_per_worker. Used only to size each business's STARTING_CASH_RESERVE_
 ## DAYS cushion (see _build_world) -- once the simulation is running,
-## the real _reference_wage_per_worker takes over.
+## the real HEWages.reference_wage_per_worker takes over.
 ## Cash a business needs to pay `crew` workers through one production cycle
 ## (growth_days, or STARTING_CASH_RESERVE_DAYS if it has no cycle) at the seed
 ## wage, with a safety margin. Used for the day-one Farm/Woodlot and for
