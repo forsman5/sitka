@@ -3047,7 +3047,7 @@ func _business_offer(settlement_id: int, commodity: Commodity.Type, trader_impor
 ## settlement with no real alternative behaves exactly as if the baseline
 ## were the only option. This is the single seam for how buyers choose
 ## between substitutes.
-func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> Array[Commodity.Type]:
+func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable, comfort_first: bool = false) -> Array[Commodity.Type]:
 	var cascade: Array[Commodity.Type] = []
 	for c in need.satisfiers():
 		if c == need.baseline or offers.call(c) > 0.0001:
@@ -3055,6 +3055,10 @@ func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> A
 	if cascade.size() > 1:
 		var local_market: HEMarket = markets[settlement_id]
 		cascade.sort_custom(func(a: Commodity.Type, b: Commodity.Type) -> bool:
+			# Households clear comfort goods first: a household that prefers one
+			# asks it first and falls back to the staples for what it could not get.
+			if comfort_first and (need.comfort_of(a) > 0.0) != (need.comfort_of(b) > 0.0):
+				return need.comfort_of(a) > 0.0
 			var cost_a: float = local_market.price[a] / need.value_of(a)
 			var cost_b: float = local_market.price[b] / need.value_of(b)
 			if absf(cost_a - cost_b) > 0.0001:
@@ -3065,7 +3069,7 @@ func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable) -> A
 	return cascade
 
 func _household_cascade(settlement_id: int, need: HENeed) -> Array[Commodity.Type]:
-	return _satisfier_cascade(settlement_id, need, func(c: Commodity.Type) -> float: return _household_offer(settlement_id, c))
+	return _satisfier_cascade(settlement_id, need, func(c: Commodity.Type) -> float: return _household_offer(settlement_id, c), true)
 
 ## The order `_run_market` clears a settlement's household goods in: each
 ## need's cascade (cheapest first), then its satisfiers nobody is selling.
@@ -3091,6 +3095,28 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 ## forth over it. With it, demand shifts gradually across the range.
 const HOUSEHOLD_TASTE_SPREAD := 0.35
 
+## Affluence: how far above subsistence a household's savings sit, from 0
+## (comfort goods judged at their posted price, like anything else) to 1 (they
+## look AFFLUENCE_PRICE_TOLERANCE cheaper). Measured in days of a basic basket
+## for the household, priced at BASE_PRICE so it does not swing with the market.
+const AFFLUENCE_MIN_DAYS := 60.0
+const AFFLUENCE_FULL_DAYS := 240.0
+const AFFLUENCE_PRICE_TOLERANCE := 0.75
+
+## One person's daily basic basket (every need that needs no dedicated seller,
+## via its baseline satisfier) at base prices.
+static func basket_cost_per_person() -> float:
+	var total := 0.0
+	for need in HENeeds.all():
+		if not need.needs_seller:
+			total += need.per_person_daily * BASE_PRICE[need.baseline] / need.value_of(need.baseline)
+	return total
+
+## 0..1: see AFFLUENCE_MIN_DAYS.
+func _household_affluence(h: HEHousehold) -> float:
+	var basket := basket_cost_per_person() * float(maxi(h.headcount(), 1))
+	return smoothstep(AFFLUENCE_MIN_DAYS, AFFLUENCE_FULL_DAYS, h.balance / basket)
+
 ## A household's fixed, deterministic taste in [-1, 1) -- derived from its id
 ## rather than drawn from the sim's RNG, so it neither perturbs other random
 ## draws nor changes between runs.
@@ -3105,12 +3131,15 @@ func _household_taste(h: HEHousehold) -> float:
 func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity.Type]) -> Commodity.Type:
 	var local_market: HEMarket = markets[h.settlement_id]
 	var taste := _household_taste(h) * HOUSEHOLD_TASTE_SPREAD
+	var affluence := _household_affluence(h) if not need.comfort.is_empty() else 0.0
 	var best := need.baseline
 	var best_cost: float = local_market.price[best] / need.value_of(best)
 	for c in cascade:
 		if c == need.baseline:
 			continue
 		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
+		if need.comfort_of(c) > 0.0:
+			cost *= 1.0 - AFFLUENCE_PRICE_TOLERANCE * affluence
 		if cost < best_cost - 0.0001:
 			best = c
 			best_cost = cost
