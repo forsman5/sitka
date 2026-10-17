@@ -10,6 +10,13 @@ const Shipment = preload("res://scripts/sim/records/shipment.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 const TRADE_INTERVAL_DAYS := 2
+## Migration: monthly, at most one household per connected pair. Hand-picked
+## starting values for the experiment; see docs/valley-migration.md.
+const MIGRATION_INTERVAL_DAYS := 30
+const MIGRATION_MIN_ADVANTAGE := 0.15
+const MIGRATION_HAZARD := 0.5
+const MIGRATION_ORIGIN_FLOOR := 8
+const MIGRATION_SMOOTHING := 0.3
 const TRADER_MIN_MARGIN := 0.04
 ## Wait for a useful lot while cargo weight and cart loading are unmodeled.
 const MIN_BATCH_UNITS := {Commodity.Type.CHARCOAL: 2.0, Commodity.Type.STONE: 2.0}
@@ -29,6 +36,12 @@ var shipment_relay_targets: Dictionary[int, int] = {}
 var day := 0
 var _next_shipment_id := 1
 var delivered_total := 0
+var migration_enabled := true
+var migration_total := 0
+## {day, from, to} for every move, and each town's smoothed attractiveness.
+var migration_log: Array[Dictionary] = []
+var town_utility: Dictionary[int, float] = {}
+var migration_rng := RandomNumberGenerator.new()
 
 ## Public snapshots used by the single valley graph. The graph never owns a
 ## second economy; these read the same towns its detail view opens.
@@ -133,6 +146,51 @@ func advance_ticks(days: int) -> void:
 		day += 1
 		if day % TRADE_INTERVAL_DAYS == 0:
 			_dispatch_shipments()
+		if migration_enabled and day % MIGRATION_INTERVAL_DAYS == 0:
+			_run_migration()
+
+## Higher is better: fed, employed, and room to live.
+func _town_attractiveness(town_id: int) -> float:
+	var signals: Dictionary = towns[town_id].get_migration_signals()
+	var homes := clampf(float(signals["free_homes"]) / 4.0, -1.0, 1.0)
+	return 1.0 - 1.5 * float(signals["short_share"]) - float(signals["unemployed_share"]) + 0.25 * homes
+
+## Monthly. Utilities are smoothed so one bad month sends nobody anywhere; a
+## household moves only toward a clearly better connected town with a free home.
+func _run_migration() -> void:
+	if migration_rng.seed == 0:
+		migration_rng.seed = 7777
+	var town_ids := towns.keys()
+	town_ids.sort()
+	for town_id in town_ids:
+		var raw := _town_attractiveness(town_id)
+		town_utility[town_id] = lerpf(town_utility.get(town_id, raw), raw, MIGRATION_SMOOTHING)
+	var moved_to := {}
+	var edge_ids := edges.keys()
+	edge_ids.sort()
+	for edge_id in edge_ids:
+		var edge: TransportEdge = edges[edge_id]
+		var origin: int = edge.settlement_a_id if town_utility[edge.settlement_a_id] < town_utility[edge.settlement_b_id] else edge.settlement_b_id
+		var destination: int = edge.other_end(origin)
+		var advantage: float = town_utility[destination] - town_utility[origin] - MIGRATION_MIN_ADVANTAGE
+		if advantage <= 0.0:
+			continue
+		var origin_town: HESimulation = towns[origin]
+		var destination_town: HESimulation = towns[destination]
+		# Never into a full town (arrivals would go homeless), never out of a tiny one.
+		if int(destination_town.get_migration_signals()["free_homes"]) - int(moved_to.get(destination, 0)) <= 0:
+			continue
+		if int(origin_town.get_migration_signals()["households"]) <= MIGRATION_ORIGIN_FLOOR:
+			continue
+		if migration_rng.randf() >= minf(1.0, advantage * MIGRATION_HAZARD * 2.0):
+			continue
+		var household_id := origin_town.pick_migrant_household(migration_rng)
+		if household_id == -1:
+			continue
+		destination_town.accept_migrant(origin_town.extract_migrant(household_id))
+		moved_to[destination] = int(moved_to.get(destination, 0)) + 1
+		migration_total += 1
+		migration_log.append({"day": day, "from": origin, "to": destination})
 
 func _deliver_arrivals() -> void:
 	var arrived: Array[int] = []
