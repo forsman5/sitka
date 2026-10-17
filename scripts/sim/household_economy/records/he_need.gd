@@ -51,10 +51,16 @@ var needs_seller: bool
 ## side, for wants whose absence isn't harmful but whose presence is welcome
 ## (tools). It offsets penalties -- morale still tops out at 100%.
 var morale_bonus: float
+## Satisfiers a household takes as a step up rather than just a cheaper way to
+## meet the need: satisfier -> morale gained when that satisfier supplies ALL of
+## the need (scaled by the share it actually supplies). Affluent households
+## weigh them above their price (HESimulation._household_favourite); everyone
+## else buys the cheapest satisfier as before.
+var comfort: Dictionary[Commodity.Type, float]
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
 		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "",
-		p_needs_seller: bool = false, p_morale_bonus: float = 0.0) -> void:
+		p_needs_seller: bool = false, p_morale_bonus: float = 0.0, p_comfort: Dictionary[Commodity.Type, float] = {}) -> void:
 	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
@@ -66,12 +72,17 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	effect_text = p_effect_text
 	needs_seller = p_needs_seller
 	morale_bonus = p_morale_bonus
+	comfort = p_comfort
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []
 	for commodity in unit_values.keys():
 		result.append(commodity)
 	return result
+
+## Morale a full supply of `commodity` adds to this need (0 if it is no comfort).
+func comfort_of(commodity: Commodity.Type) -> float:
+	return comfort.get(commodity, 0.0)
 
 func is_satisfied_by(commodity: Commodity.Type) -> bool:
 	return unit_values.has(commodity)

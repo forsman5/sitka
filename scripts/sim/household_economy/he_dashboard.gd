@@ -18,7 +18,7 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 ## Housing builds the Housing tab offers, in button order.
-const HOUSING_BUILD_KEYS := ["house", "tenement"]
+const HOUSING_BUILD_KEYS := ["house", "tenement", "stone_house", "stone_house_new"]
 const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const HEHouseholdTable = preload("res://scripts/sim/household_economy/he_household_table.gd")
@@ -1453,6 +1453,10 @@ func _refresh_housing_build(type_key: String, upgradable: int) -> void:
 	var noun := "house"
 	if type_key == "tenement":
 		noun = "tenement upgrade" if upgradable > 0 else "tenement"
+	elif type_key == "stone_house":
+		noun = "stone house upgrade"
+	elif type_key == "stone_house_new":
+		noun = "new stone house"
 	var cost_text := HEScenarioSeeds.cost_text(_simulation.build_cost_for(settlement_id, option))
 	button.text = "Build %s (%s)" % [noun, cost_text]
 	if order_state == "can_order":
