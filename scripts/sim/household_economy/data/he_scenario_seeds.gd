@@ -65,9 +65,9 @@ const TENEMENT_UPGRADE_TIMBER := 150.0
 ## imports it through the Trader, so the cost holds either way.
 const TENEMENT_BUILD_STONE := 100.0
 const TENEMENT_UPGRADE_STONE := 75.0
-## A stone house upgrades a plain house in place, or is built new once none is
-## left (the new price is the house price plus the upgrade): its household
-## gains HEHouse.STONE_MORALE_BONUS morale.
+## A stone house is either an in-place upgrade of a plain house or a new build
+## (priced as the house plus the upgrade): its household gains
+## HEHouse.STONE_MORALE_BONUS morale. Two options, one button each.
 const STONE_HOUSE_GOLD := 40.0
 const STONE_HOUSE_TIMBER := 50.0
 const STONE_HOUSE_STONE := 120.0
@@ -401,10 +401,19 @@ static func government_buildings() -> Array[Dictionary]:
 				var house := HEHouse.new(id, sid)
 				house.upgrade_to_dense()
 				return house},
-		{"type_key": "stone_house", "label": "Stone House", "category": "housing", "repeatable": true,
+		{"type_key": "stone_house", "label": "Stone House (upgrade)", "category": "housing", "repeatable": true,
+			"cost": build_cost(STONE_HOUSE_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
+			"hint": "Upgrades the innermost plain house in place to stone: its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
+			"upgrade_only": true,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_stone()
+				return house},
+		{"type_key": "stone_house_new", "label": "Stone House (new)", "category": "housing", "repeatable": true,
 			"cost": build_cost(STONE_HOUSE_BUILD_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_BUILD_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
-			"upgrade_cost": build_cost(STONE_HOUSE_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
-			"hint": "Upgrades the innermost plain house in place to stone (a new stone house if none is left): its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
+			"hint": "Builds a new stone house on a fresh lot: its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
+			"new_only": true,
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse:
 				var house := HEHouse.new(id, sid)

@@ -85,7 +85,8 @@ func _check_refused_without_plain_house() -> void:
 	var warehouse := sim._government_warehouse(sid)
 	warehouse.add_stock(Commodity.Type.TIMBER, HEScenarioSeeds.STONE_HOUSE_BUILD_TIMBER)
 	gov.balance += HEScenarioSeeds.STONE_HOUSE_BUILD_GOLD
-	_assert(sim.build_government_building(sid, "stone_house"), "With no plain house left a stone house is built new")
+	_assert(not sim.build_government_building(sid, "stone_house"), "The upgrade is refused with no plain house left")
+	_assert(sim.build_government_building(sid, "stone_house_new"), "A new stone house still builds")
 	_assert(sim.dwellings.size() == count + 1, "A new stone house adds a dwelling")
 	var newest: HEHouse = sim.dwellings[sim.dwellings.keys().max()]
 	_assert(newest.is_stone, "The new dwelling is stone")
