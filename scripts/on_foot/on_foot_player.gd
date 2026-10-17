@@ -97,6 +97,9 @@ var _arm: SpringArm3D
 var _camera: Camera3D
 var _model: Node3D
 var _anim: AnimationPlayer
+var _collision_shape: CollisionShape3D
+var _mounted_horse: OnFootHorse
+var _foot_camera_mode: int = CameraMode.THIRD_BACK
 var _camera_mode: int = CameraMode.THIRD_BACK
 var _bark_player: AudioStreamPlayer3D
 var _bark_cooldown_left: float = 0.0
@@ -137,6 +140,7 @@ func _ready() -> void:
 	col.shape = shape
 	col.position.y = shape.height * 0.5
 	add_child(col)
+	_collision_shape = col
 
 	_head = Node3D.new()
 	_head.position.y = eye_height
@@ -185,9 +189,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		bark()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
-			_buffer_left = jump_buffer_time
+			if _mounted_horse == null:
+				_buffer_left = jump_buffer_time
 		elif event.physical_keycode == KEY_F5:
 			_set_camera_mode((_camera_mode + 1) % CameraMode.size())
+		elif event.physical_keycode == KEY_E and selected_character == "person":
+			if _mounted_horse != null:
+				_dismount()
+			else:
+				_try_mount()
 
 ## Left click: play a random bark (dog only; the person has none). Returns whether
 ## a bark played. Emits `barked` so animals can react later.
@@ -226,6 +236,9 @@ func _set_camera_mode(mode: int) -> void:
 func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
 	_bark_anim_left = maxf(_bark_anim_left - delta, 0.0)
+	if _mounted_horse != null:
+		_mounted_step(delta)
+		return
 	if global_position.y < fall_limit:
 		global_position = spawn_point
 		velocity = Vector3.ZERO
@@ -278,6 +291,104 @@ func _physics_process(delta: float) -> void:
 	_update_model_facing(delta)
 	_update_camera(delta)
 	_update_animation()
+
+
+func _try_mount() -> void:
+	for node in get_tree().get_nodes_in_group("on_foot_horse"):
+		var horse := node as OnFootHorse
+		if horse == null or horse.rider != null:
+			continue
+		var offset := horse.global_position - global_position
+		if Vector2(offset.x, offset.z).length() > 3.0 or absf(offset.y) > 1.5:
+			continue
+		_mounted_horse = horse
+		horse.rider = self
+		horse.stop()
+		_foot_camera_mode = _camera_mode
+		_set_camera_mode(CameraMode.THIRD_BACK)
+		eye_height = 2.45
+		third_person_distance = 4.4
+		_arm.spring_length = third_person_distance
+		_collision_shape.set_deferred("disabled", true)
+		collision_layer = 0
+		collision_mask = 0
+		velocity = Vector3.ZERO
+		_buffer_left = 0.0
+		var anchor := horse.visual.get_node("RiderAnchor") as Node3D
+		_model.reparent(anchor, false)
+		horse.visual.call("apply_riding_pose", _model)
+		_sync_mounted_camera()
+		return
+
+
+func _mounted_step(delta: float) -> void:
+	var input := Vector2.ZERO
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		input.x = int(Input.is_physical_key_pressed(KEY_D)) - int(Input.is_physical_key_pressed(KEY_A))
+		input.y = int(Input.is_physical_key_pressed(KEY_S)) - int(Input.is_physical_key_pressed(KEY_W))
+	input = input.limit_length(1.0)
+	var direction := (transform.basis * Vector3(input.x, 0.0, input.y)).normalized() * input.length()
+	_mounted_horse.ride_step(delta, direction, Input.is_physical_key_pressed(KEY_SHIFT))
+	_sync_mounted_camera()
+
+
+func _sync_mounted_camera() -> void:
+	global_position = _mounted_horse.global_position
+	_head.position.y = eye_height
+
+
+func _dismount() -> void:
+	var landing := _find_dismount_position()
+	if not landing.is_finite():
+		return
+	var horse := _mounted_horse
+	if horse.visual.has_method("clear_riding_pose"):
+		horse.visual.call("clear_riding_pose", _model)
+	_model.reparent(self, false)
+	_model.position = Vector3.ZERO
+	_model.rotation_degrees = Vector3(0, 180, 0)
+	_model.scale = Vector3.ONE * float(_character["model_scale"])
+	global_position = landing
+	velocity = Vector3.ZERO
+	_mounted_horse = null
+	horse.rider = null
+	horse.stop()
+	eye_height = float(_character["eye_height"])
+	third_person_distance = float(_character["third_person_distance"])
+	_set_camera_mode(_foot_camera_mode)
+	_collision_shape.set_deferred("disabled", false)
+	collision_layer = 1
+	collision_mask = 1 | 2
+
+
+func _find_dismount_position() -> Vector3:
+	var horse := _mounted_horse
+	var terrain := get_tree().get_first_node_in_group("heightmap_terrain")
+	if terrain == null:
+		return Vector3.INF
+	var side := horse.global_transform.basis.x
+	var back := horse.global_transform.basis.z
+	var offsets := [side * 2.0, -side * 2.0, back * 2.2, (side + back).normalized() * 2.2, (-side + back).normalized() * 2.2]
+	var space := get_world_3d().direct_space_state
+	for offset: Vector3 in offsets:
+		var xz: Vector3 = horse.global_position + offset
+		var from: Vector3 = Vector3(xz.x, horse.global_position.y + 3.0, xz.z)
+		var to: Vector3 = from + Vector3.DOWN * 6.0
+		var ray := PhysicsRayQueryParameters3D.create(from, to, 2)
+		var ground := space.intersect_ray(ray)
+		if ground.is_empty() or (ground["normal"] as Vector3).dot(Vector3.UP) < 0.75:
+			continue
+		var point := ground["position"] as Vector3
+		if point.y < 0.05 or absf(point.y - horse.global_position.y) > 1.2:
+			continue
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = _collision_shape.shape
+		query.transform = Transform3D(Basis.IDENTITY, point + Vector3.UP * (0.5 * (_collision_shape.shape as CapsuleShape3D).height + 0.1))
+		query.collision_mask = 1
+		query.exclude = [get_rid(), horse.get_rid()]
+		if space.intersect_shape(query, 1).is_empty():
+			return point + Vector3.UP * 0.1
+	return Vector3.INF
 
 ## The camera yaw drives the body, but the model turns to face where it is
 ## actually moving, so strafing and backpedalling read as a turn instead of
