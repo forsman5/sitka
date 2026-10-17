@@ -16,6 +16,7 @@ const HESettlement = preload("res://scripts/sim/household_economy/records/he_set
 const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
 const HEPresets = preload("res://scripts/sim/household_economy/data/he_presets.gd")
 const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.gd")
+const ValleySeed = preload("res://scripts/sim/data/valley_seed.gd")
 
 const SETTLEMENT_ID := 1
 const WORKER_CAPACITY := 2
@@ -25,6 +26,7 @@ const HOUSEHOLD_SIZE := WORKER_CAPACITY + DEPENDENTS
 const FARM_BUSINESS_ID := 1
 const WOODLOT_BUSINESS_ID := 2
 const TRADER_BUSINESS_ID := 3
+const PORT_BUSINESS_ID := 14
 const BLOOMERY_BUSINESS_ID := 4
 const IRON_MINE_BUSINESS_ID := 5
 ## Shifted to 6/7 to leave room for the opt-in Bloomery (4) and Iron Mine (5)
@@ -43,6 +45,9 @@ const CHARCOAL_BURNER_BUSINESS_ID := 10
 const TOOLSMITH_BUSINESS_ID := 11
 ## Only seeded by presets that start with a Government Warehouse.
 const WAREHOUSE_BUSINESS_ID := 12
+## Opt-in extractor like the Iron Mine; its stone is mostly construction
+## material (see TENEMENT_BUILD_STONE).
+const QUARRY_BUSINESS_ID := 13
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
 const WAREHOUSE_BUILD_COST := 100.0
@@ -58,6 +63,18 @@ const TENEMENT_BUILD_GOLD := 60.0
 const TENEMENT_BUILD_TIMBER := 200.0
 const TENEMENT_UPGRADE_GOLD := 45.0
 const TENEMENT_UPGRADE_TIMBER := 150.0
+## Tenements are masonry: stone on top of the timber. A town with no Quarry
+## imports it through the Trader, so the cost holds either way.
+const TENEMENT_BUILD_STONE := 100.0
+const TENEMENT_UPGRADE_STONE := 75.0
+## A stone house is either an in-place upgrade of a plain house or a new build
+## (priced as the house plus the upgrade): its household gains
+## HEHouse.STONE_MORALE_BONUS morale. Two options, one button each.
+const STONE_HOUSE_GOLD := 40.0
+const STONE_HOUSE_TIMBER := 50.0
+const STONE_HOUSE_STONE := 120.0
+const STONE_HOUSE_BUILD_GOLD := HOUSE_BUILD_GOLD + STONE_HOUSE_GOLD
+const STONE_HOUSE_BUILD_TIMBER := HOUSE_BUILD_TIMBER + STONE_HOUSE_TIMBER
 ## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -173,7 +190,12 @@ static func herd_max_capacity(species: HEBusiness.Species) -> int:
 
 ## Opt-in alongside the Bloomery. Like the workshop, this is a compact,
 ## legacy (daily-output) production site rather than a land/field business.
-const IRON_MINE_MAX_CAPACITY := 20
+## Iron Mine and Quarry are both "extractors": no inputs, one raw good per
+## worker-day, no depletion yet (see make_extractor).
+const EXTRACTOR_MAX_CAPACITY := 20
+const IRON_MINE_MAX_CAPACITY := EXTRACTOR_MAX_CAPACITY
+const QUARRY_MAX_CAPACITY := EXTRACTOR_MAX_CAPACITY
+const QUARRY_OUTPUT_PER_WORKER_DAY := 2.0
 
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
@@ -188,6 +210,12 @@ const STARTING_BUFFER_DAYS := 10.0
 ## he_simulation.gd's WAGE_NEGATIVE_BALANCE_FLOOR_DAYS for what happens once
 ## it's gone).
 const STARTING_CASH_RESERVE_DAYS := 30.0
+## Valley trade is occasional while prices and routes settle. Keep a modest
+## startup float for the small permanent Trader crew; shipment purchases are
+## separately capped to leave a wage reserve.
+const VALLEY_TRADER_EXTRA_RUNWAY_DAYS := 120.0
+## Valley towns start with dense tenements so their dwellings fit the town map.
+const VALLEY_HOUSEHOLDS_PER_DWELLING := 4
 ## Startup cash for a field business covers its whole production cycle of
 ## wages, times this safety factor. The credit line only covers 60 days of the
 ## wage bill and the reference wage can swing several-fold, so a bare cycle's
@@ -223,6 +251,7 @@ const TOOL_LIFE_WORKER_DAYS := {
 	"farm": 300.0,
 	"woodlot": 200.0,
 	"iron_mine": 150.0,
+	"quarry": 150.0,
 	"bloomery": 400.0,
 	"charcoal_burner": 300.0,
 	"butcher": 250.0,
@@ -290,11 +319,20 @@ static func make_bloomery(business_id: int, settlement_id: int, initial_capacity
 	bloomery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
 	return bloomery
 
+## The shared extractor shape behind the Iron Mine and the Quarry: a legacy
+## (daily-output) site with no recipe inputs that digs one `output` unit per
+## worker-day. Depletion would hook in here for both.
+static func make_extractor(business_id: int, settlement_id: int, type_key: String, label: String, output: Commodity.Type, output_per_worker_day: float, initial_capacity: int = 0) -> HEBusiness:
+	var extractor := HEBusiness.new(business_id, label, Recipe.new(type_key, {}, {output: output_per_worker_day}), EXTRACTOR_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	extractor.type_key = type_key
+	_equip(extractor)
+	return extractor
+
 static func make_iron_mine(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
-	var iron_mine := HEBusiness.new(business_id, "Iron Mine", _iron_mine_recipe(), IRON_MINE_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
-	iron_mine.type_key = "iron_mine"
-	_equip(iron_mine)
-	return iron_mine
+	return make_extractor(business_id, settlement_id, "iron_mine", "Iron Mine", Commodity.Type.IRON_ORE, 1.0, initial_capacity)
+
+static func make_quarry(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	return make_extractor(business_id, settlement_id, "quarry", "Quarry", Commodity.Type.STONE, QUARRY_OUTPUT_PER_WORKER_DAY, initial_capacity)
 
 static func make_toolsmith(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
 	var toolsmith := HEBusiness.new(business_id, "Toolsmith", _toolsmith_recipe(), TOOLSMITH_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
@@ -361,15 +399,33 @@ static func government_buildings() -> Array[Dictionary]:
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse: return HEHouse.new(id, sid)},
 		{"type_key": "tenement", "label": "Tenement", "category": "housing", "repeatable": true,
-			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER}),
+			"cost": build_cost(TENEMENT_BUILD_GOLD, {Commodity.Type.TIMBER: TENEMENT_BUILD_TIMBER, Commodity.Type.STONE: TENEMENT_BUILD_STONE}),
 			# Charged instead of `cost` while a plain house is left to upgrade
 			# (see HESimulation.build_cost_for).
-			"upgrade_cost": build_cost(TENEMENT_UPGRADE_GOLD, {Commodity.Type.TIMBER: TENEMENT_UPGRADE_TIMBER}),
+			"upgrade_cost": build_cost(TENEMENT_UPGRADE_GOLD, {Commodity.Type.TIMBER: TENEMENT_UPGRADE_TIMBER, Commodity.Type.STONE: TENEMENT_UPGRADE_STONE}),
 			"hint": "Upgrades the innermost house in place to shelter %d households (a new tenement if none is left to upgrade)." % HEHouse.DENSE_CAPACITY,
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse:
 				var house := HEHouse.new(id, sid)
 				house.upgrade_to_dense()
+				return house},
+		{"type_key": "stone_house", "label": "Stone House (upgrade)", "category": "housing", "repeatable": true,
+			"cost": build_cost(STONE_HOUSE_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
+			"hint": "Upgrades the innermost plain house in place to stone: its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
+			"upgrade_only": true,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_stone()
+				return house},
+		{"type_key": "stone_house_new", "label": "Stone House (new)", "category": "housing", "repeatable": true,
+			"cost": build_cost(STONE_HOUSE_BUILD_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_BUILD_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
+			"hint": "Builds a new stone house on a fresh lot: its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
+			"new_only": true,
+			"startup": false,
+			"make": func(id: int, sid: int) -> HEHouse:
+				var house := HEHouse.new(id, sid)
+				house.upgrade_to_stone()
 				return house},
 		{"type_key": "warehouse", "label": "Government Warehouse", "cost": build_cost(WAREHOUSE_BUILD_COST),
 			"hint": "Employs %d admin workers; holds inventory bought with treasury funds for construction projects." % WAREHOUSE_WORKERS,
@@ -409,6 +465,8 @@ static func business_types() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEBusiness: return make_bloomery(id, sid)},
 		{"type_key": "iron_mine", "id": IRON_MINE_BUSINESS_ID, "label": "Iron Mine", "hint": "Digs ore for the Bloomery.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_iron_mine(id, sid)},
+		{"type_key": "quarry", "id": QUARRY_BUSINESS_ID, "label": "Quarry", "hint": "Cuts stone for construction.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_quarry(id, sid)},
 		{"type_key": "charcoal_burner", "id": CHARCOAL_BURNER_BUSINESS_ID, "label": "Charcoal Burner", "hint": "Turns timber into charcoal, a denser fuel for heating.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_charcoal_burner(id, sid)},
 		{"type_key": "toolsmith", "id": TOOLSMITH_BUSINESS_ID, "label": "Toolsmith", "hint": "Forges tools from iron; imports it unless a Bloomery supplies it.",
@@ -483,9 +541,6 @@ static func _toolsmith_recipe() -> Recipe:
 static func _charcoal_burner_recipe() -> Recipe:
 	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 2.5}, {Commodity.Type.CHARCOAL: 1.5})
 
-static func _iron_mine_recipe() -> Recipe:
-	return Recipe.new("iron_mine", {}, {Commodity.Type.IRON_ORE: 1.0})
-
 ## A field's labor_applied is seeded as if it had been fully staffed for
 ## every day it's already grown before day 0 -- otherwise a field seeded
 ## partway through its cycle (see FARM_FIELD_START_DAYS/WOODLOT_FIELD_
@@ -506,7 +561,7 @@ static func _make_fields(field_count: int, land_area_acres: float, start_days: A
 ## market price, same dependency-ratio shape as HESimulation._reference_
 ## wage_per_worker. Used only to size each business's STARTING_CASH_RESERVE_
 ## DAYS cushion (see _build_world) -- once the simulation is running,
-## the real _reference_wage_per_worker takes over.
+## the real HEWages.reference_wage_per_worker takes over.
 ## Cash a business needs to pay `crew` workers through one production cycle
 ## (growth_days, or STARTING_CASH_RESERVE_DAYS if it has no cycle) at the seed
 ## wage, with a safety margin. Used for the day-one Farm/Woodlot and for
@@ -581,13 +636,19 @@ static func _staggered_starting_worker_ages(household_id: int) -> Array[int]:
 ## such business id in `businesses`.
 static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capacity: int, bloomery_capacity: int = 0, iron_mine_capacity: int = 0, charcoal_burner_capacity: int = 0, toolsmith_capacity: int = 0, options: Dictionary = {}) -> Dictionary:
 	var household_count: int = int(options.get("households", HOUSEHOLD_COUNT))
+	var is_valley: bool = bool(options.get("valley", false))
 	var settlement := HESettlement.new(SETTLEMENT_ID, str(options.get("settlement_name", "Testholm")))
+	var town_scale := float(household_count) / float(HOUSEHOLD_COUNT)
+	var farm_land := FARM_LAND_AREA_ACRES * town_scale
+	var woodlot_land := WOODLOT_LAND_AREA_ACRES * town_scale
 
 	var farm := make_farm(FARM_BUSINESS_ID, SETTLEMENT_ID, farm_capacity, FARM_FIELD_START_DAYS)
-
 	var woodlot := make_woodlot(WOODLOT_BUSINESS_ID, SETTLEMENT_ID, woodlot_capacity, WOODLOT_FIELD_START_DAYS)
-
 	var trader := make_trader(TRADER_BUSINESS_ID, SETTLEMENT_ID, trader_capacity)
+	if is_valley:
+		farm.configure_land(farm_land, _make_fields(FARM_FIELD_COUNT, farm_land, FARM_FIELD_START_DAYS, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
+		woodlot.configure_land(woodlot_land, _make_fields(WOODLOT_FIELD_COUNT, woodlot_land, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
+		trader.max_capacity = maxi(TRADER_MAX_CAPACITY, ceili(TRADER_MAX_CAPACITY * town_scale))
 
 	# Ranches aren't seeded with any day-one employees (unlike Farm/Woodlot/
 	# Trader above) -- see make_herd for their starting crew allowance.
@@ -600,6 +661,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	farm.balance = startup_cash(farm, farm_capacity)
 	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
 	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
+	if is_valley:
+		trader.balance += VALLEY_TRADER_EXTRA_RUNWAY_DAYS * estimated_wage * trader_capacity
 	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY + startup_livestock_cash(BUTCHER_MIN_CAPACITY)
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
@@ -627,6 +690,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var bloomery: HEBusiness = null
 	if bloomery_capacity > 0:
 		bloomery = make_bloomery(BLOOMERY_BUSINESS_ID, SETTLEMENT_ID, bloomery_capacity)
+		if is_valley:
+			bloomery.max_capacity = maxi(BLOOMERY_MAX_CAPACITY, ceili(BLOOMERY_MAX_CAPACITY * town_scale))
 		bloomery.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * bloomery_capacity
 		businesses[BLOOMERY_BUSINESS_ID] = bloomery
 		settlement.business_ids.append(BLOOMERY_BUSINESS_ID)
@@ -634,6 +699,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var charcoal_burner: HEBusiness = null
 	if charcoal_burner_capacity > 0:
 		charcoal_burner = make_charcoal_burner(CHARCOAL_BURNER_BUSINESS_ID, SETTLEMENT_ID, charcoal_burner_capacity)
+		if is_valley:
+			charcoal_burner.max_capacity = maxi(CHARCOAL_BURNER_MAX_CAPACITY, ceili(CHARCOAL_BURNER_MAX_CAPACITY * town_scale))
 		# Wages across the whole Woodlot cycle plus its first timber input buffer
 		# (see startup_cash and make_charcoal_burner's startup_cycle_days).
 		charcoal_burner.balance = startup_cash(charcoal_burner, charcoal_burner_capacity)
@@ -647,9 +714,19 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var iron_mine: HEBusiness = null
 	if iron_mine_capacity > 0:
 		iron_mine = make_iron_mine(IRON_MINE_BUSINESS_ID, SETTLEMENT_ID, iron_mine_capacity)
+		if is_valley:
+			iron_mine.max_capacity = maxi(IRON_MINE_MAX_CAPACITY, ceili(IRON_MINE_MAX_CAPACITY * town_scale))
 		iron_mine.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * iron_mine_capacity
 		businesses[IRON_MINE_BUSINESS_ID] = iron_mine
 		settlement.business_ids.append(IRON_MINE_BUSINESS_ID)
+
+	var quarry: HEBusiness = null
+	var quarry_capacity := int(options.get("quarry_capacity", 0))
+	if quarry_capacity > 0:
+		quarry = make_quarry(QUARRY_BUSINESS_ID, SETTLEMENT_ID, quarry_capacity)
+		quarry.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * quarry_capacity
+		businesses[QUARRY_BUSINESS_ID] = quarry
+		settlement.business_ids.append(QUARRY_BUSINESS_ID)
 
 	var toolsmith: HEBusiness = null
 	if toolsmith_capacity > 0:
@@ -667,6 +744,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var woodlot_workers_assigned := 0
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
+	var quarry_workers_assigned := 0
 	var toolsmith_workers_assigned := 0
 	var charcoal_burner_workers_assigned := 0
 	var trader_workers_assigned := 0
@@ -691,6 +769,9 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 		elif iron_mine != null and iron_mine_workers_assigned < iron_mine_capacity:
 			household.employer_business_id = IRON_MINE_BUSINESS_ID
 			iron_mine_workers_assigned += WORKER_CAPACITY
+		elif quarry != null and quarry_workers_assigned < quarry_capacity:
+			household.employer_business_id = QUARRY_BUSINESS_ID
+			quarry_workers_assigned += WORKER_CAPACITY
 		elif toolsmith != null and toolsmith_workers_assigned < toolsmith_capacity:
 			household.employer_business_id = TOOLSMITH_BUSINESS_ID
 			toolsmith_workers_assigned += WORKER_CAPACITY
@@ -806,7 +887,8 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 	var iron_mine := int(crews.get("iron_mine", 0))
 	var charcoal_burner := int(crews.get("charcoal_burner", 0))
 	var toolsmith := int(crews.get("toolsmith", 0))
-	var remainder := households * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith
+	var quarry := int(crews.get("quarry", 0))
+	var remainder := households * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith - quarry
 	var farm := (int(round(remainder * float(spec.get("farm_share", 0.5)))) / WORKER_CAPACITY) * WORKER_CAPACITY
 	var options := {
 		"households": households,
@@ -814,6 +896,7 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"houses": int(spec.get("housing", {}).get("houses", -1)),
 		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
+		"quarry_capacity": quarry,
 	}
 	var warehouse: Dictionary = spec.get("warehouse", {})
 	if not warehouse.is_empty():
@@ -847,11 +930,52 @@ static func build_preset(_rng: RandomNumberGenerator, key: String) -> Dictionary
 	assert(not spec.is_empty(), "Unknown preset '%s'" % key)
 	return build_from_spec(spec)
 
+## Valley towns reuse H1 businesses with acreage, stock and staffing scaled to
+## their authored household counts. Towns share the same local market rules.
+static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dictionary:
+	var household_count: int = ValleySeed.HOUSEHOLDS_PER_SETTLEMENT[town_id]
+	var trader := 8
+	var bloomery := 8 if town_id == ValleySeed.STAITHE else 0
+	var iron_mine := 8 if town_id == ValleySeed.IRONBANK else 0
+	var charcoal_burner := CHARCOAL_BURNER_STARTING_CREW * household_count / HOUSEHOLD_COUNT if town_id == ValleySeed.OAKMERE else 0
+	var toolsmith := TOOLSMITH_STARTING_CAPACITY if town_id == ValleySeed.STAITHE else 0
+	var quarry := 4 if town_id == ValleySeed.IRONBANK else 0
+	var remainder := household_count * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith - quarry
+	var farm_share := 0.2 if town_id == ValleySeed.HIGH_FELL else 0.5
+	var farm := int(round(float(remainder) * farm_share / 2.0)) * 2
+	var tenement_count := ceili(household_count * (1.0 + HOUSING_STARTING_HEADROOM) / VALLEY_HOUSEHOLDS_PER_DWELLING)
+	var options := {
+		"valley": true,
+		"households": household_count,
+		"houses": tenement_count,
+		"tenements": tenement_count,
+		"quarry_capacity": quarry,
+	}
+	var world := build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
+	if town_id == ValleySeed.STAITHE:
+		var port := HEBusiness.new(PORT_BUSINESS_ID, "Port", null, 2, 2, HEBusiness.Kind.PORT, SETTLEMENT_ID)
+		port.type_key = "port"
+		port.balance = STARTING_CASH_RESERVE_DAYS * _estimated_starting_reference_wage() * 2.0
+		world["businesses"][PORT_BUSINESS_ID] = port
+		world["settlements"][SETTLEMENT_ID].business_ids.append(PORT_BUSINESS_ID)
+		for household in world["households"].values():
+			if household.employer_business_id == WOODLOT_BUSINESS_ID and household.worker_capacity() >= 2:
+				household.employer_business_id = PORT_BUSINESS_ID
+				break
+	if town_id == ValleySeed.IRONBANK or town_id == ValleySeed.STAITHE:
+		# Industrial towns retain Woodlot jobs but grow only a fraction of the
+		# timber their households and workshops need. Imports fill the gap.
+		var woodlot: HEBusiness = world["businesses"][WOODLOT_BUSINESS_ID]
+		var acres := woodlot.land_area_acres * 0.25
+		woodlot.configure_land(acres, _make_fields(WOODLOT_FIELD_COUNT, acres, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
+	return world
+
 static func _commodity_by_key(key: String) -> int:
 	match key:
 		"grain": return Commodity.Type.GRAIN
 		"timber": return Commodity.Type.TIMBER
 		"wool": return Commodity.Type.WOOL
+		"stone": return Commodity.Type.STONE
 	assert(false, "Unknown commodity '%s' in a preset spec" % key)
 	return Commodity.Type.GRAIN
 

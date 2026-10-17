@@ -4,7 +4,6 @@ extends Control
 ## Layout, selection, pan/zoom and overlays never change simulation state.
 signal settlement_selected(settlement_id: int)
 
-const Simulation = preload("res://scripts/sim/simulation.gd")
 const TransportEdge = preload("res://scripts/sim/records/transport_edge.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const AUTHORED_POSITIONS := {
@@ -16,7 +15,7 @@ const STATUS_COLORS := {
 	"contracting": Color("db904f"), "collapsed": Color("a85159"),
 }
 
-var simulation: Simulation
+var simulation
 var graph: Dictionary = {}
 var overlay: int = 0 # 0 routes, 1 weekly capacity, 2 cargo currently in transit, 3 commodity price
 ## The one persistent commodity filter shared by every overlay that cares
@@ -177,6 +176,8 @@ func _get_tooltip(at_position: Vector2) -> String:
 			var price: float = _prices.get(sid, 0.0)
 			var deviation: float = (price / price_mean - 1.0) * 100.0 if price_mean > 0 else 0.0
 			price_note = "\n%s price %.2f | world mean %.2f | %+.1f%%" % [Commodity.name_of(selected_commodity), price, price_mean, deviation]
+		if s.has("households_short_of_goods"):
+			return "%s\nPopulation %d | %s\n%d households short of goods\nClick to inspect" % [s["name"], s["population"], s["status"], s["households_short_of_goods"]] + price_note
 		return "%s\nPopulation %d | %s\n30-day food fulfillment %.0f%%\nClick to inspect" % [s["name"], s["population"], s["status"], s["grain_fulfillment_rolling_30d"] * 100] + price_note
 	for edge in _edges:
 		var a: Vector2 = _screen(edge["settlement_a_id"])

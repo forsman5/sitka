@@ -124,6 +124,9 @@ var employment_changed: Callable
 ## HESimulation._reconcile_housing writes it: a household keeps its house
 ## until it ceases to exist.
 var dwelling_id: int = -1
+## Morale from the house it lives in (HEHouse.morale_bonus); 0 when homeless or
+## in a plain house. Only HESimulation._reconcile_housing writes it.
+var home_morale_bonus: float = 0.0
 
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
@@ -564,8 +567,8 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 			break
 	return out
 
-## Morale gained from needs fully met today (HENeed.morale_bonus), as
-## [{label, bonus}]. Everyone in the household shares it.
+## Morale gained from needs fully met today (HENeed.morale_bonus) and from a
+## stone home, as [{label, bonus}]. Everyone in the household shares it.
 func morale_bonuses() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for need in HENeeds.all():
@@ -574,6 +577,17 @@ func morale_bonuses() -> Array[Dictionary]:
 		var required: float = last_need_required.get(need.id, 0.0)
 		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
+	if home_morale_bonus > 0.0:
+		out.append({"label": "Stone house", "bonus": home_morale_bonus})
+	for need in HENeeds.all():
+		var required: float = last_need_required.get(need.id, 0.0)
+		if need.comfort.is_empty() or required <= 0.0001:
+			continue
+		for commodity in need.comfort.keys():
+			var share := minf(1.0, last_consumed.get(commodity, 0.0) * need.value_of(commodity) / required)
+			var bonus: float = need.comfort[commodity] * share
+			if bonus > 0.001:
+				out.append({"label": "%s: %s" % [need.label, Commodity.name_of(commodity)], "bonus": bonus})
 	return out
 
 func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> float:

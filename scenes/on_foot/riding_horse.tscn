@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/on_foot/riding_horse_visual.gd" id="1_visual"]
+[ext_resource type="PackedScene" path="res://assets/models/animals/Horse.gltf" id="2_horse"]
+
+[node name="RidingHorseVisual" type="Node3D"]
+script = ExtResource("1_visual")
+
+[node name="RiderAnchor" type="Node3D" parent="."]
+
+[node name="Model" parent="." instance=ExtResource("2_horse")]
