@@ -7,3 +7,7 @@
 # generated graphs/run logs are meant to stay local, not be committed.
 /multivalley.json
 /*.jsonl
+
+# Baked valleys from the valley generator dev tool are several MB each; commit the
+# ones worth keeping with `git add -f`.
+/data/valley_bakes/

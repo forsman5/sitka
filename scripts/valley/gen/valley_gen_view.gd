@@ -1,6 +1,6 @@
 extends Control
 
-## Valley generator experiment: pick a landscape and spec, browse seeds as shaded
+## Valley generator dev tool: pick a landscape and spec, browse seeds as shaded
 ## relief, a 3D mesh viewed through the RTS camera, or a contact sheet of eight seeds, and copy or
 ## save the spec of a seed you like.
 
@@ -8,6 +8,8 @@ const Generator = preload("res://scripts/valley/gen/valley_generator.gd")
 const Relief = preload("res://scripts/valley/gen/valley_gen_relief.gd")
 const Terrain = preload("res://scripts/valley/gen/valley_gen_terrain.gd")
 const Spec = preload("res://scripts/valley/gen/valley_spec.gd")
+const Bake = preload("res://scripts/valley/gen/valley_gen_bake.gd")
+const BakeScene = preload("res://scripts/valley/gen/valley_gen_bake_scene.gd")
 
 const MAP_SCALE := 4
 const SHEET_COUNT := 8
@@ -17,13 +19,34 @@ const CAMERA_SCENE := preload("res://scenes/camera/rts_camera.tscn")
 ## exported builds fall back to user://.
 const SPEC_DIR := "res://data/valley_specs"
 const USER_SPEC_DIR := "user://valley_specs"
+## Baked valleys (several MB each) go here; the folder is gitignored, force-add the
+## ones worth keeping.
+const BAKE_DIR := "res://data/valley_bakes"
+const USER_BAKE_DIR := "user://valley_bakes"
 
-enum Mode { MAP, VIEW_3D, SHEET }
+signal bake_finished(ok: bool)
+
+enum Mode { MAP, VIEW_3D, SHEET, BAKED }
 
 var _spec: Spec = Spec.preset("river_valley", 1)
 var _mode := Mode.MAP
 var _result: Dictionary = {}
 var _sheet_serial := 0
+var _baking := false
+var _baker: Variant = null
+var _bake: Dictionary = {}
+var _baked_world: Node3D
+## Overrides for Bake.DEFAULTS (scale, step, erosion, ...); tests use a coarse bake.
+var _bake_options := {}
+var _bake_button: Button
+var _cancel_button: Button
+var _save_bake_button: Button
+var _baked_mode_button: Button
+var _progress_bar: ProgressBar
+var _env_node: WorldEnvironment
+var _env_strategic: Environment
+var _env_baked: Environment
+var _sun: DirectionalLight3D
 
 var _landscape_box: OptionButton
 var _seed_box: SpinBox
@@ -66,7 +89,7 @@ func _build_ui() -> void:
 	side.add_theme_constant_override("separation", 5)
 	root.add_child(side)
 	var title := Label.new()
-	title.text = "Valley generator (sketch)"
+	title.text = "Valley generator (dev tool)"
 	title.add_theme_font_size_override("font_size", 18)
 	side.add_child(title)
 
@@ -152,6 +175,27 @@ func _build_ui() -> void:
 	mode_row.add_child(_button("Relief", func() -> void: _show(Mode.MAP)))
 	mode_row.add_child(_button("3D", func() -> void: _show(Mode.VIEW_3D)))
 	mode_row.add_child(_button("8 seeds", func() -> void: _show(Mode.SHEET)))
+	_baked_mode_button = _button("Baked", func() -> void: _show(Mode.BAKED))
+	_baked_mode_button.disabled = true
+	mode_row.add_child(_baked_mode_button)
+
+	var bake_row := HBoxContainer.new()
+	side.add_child(bake_row)
+	_bake_button = _button("Bake detailed", func() -> void: _bake_detailed())
+	_bake_button.tooltip_text = "3x scale, 1 unit terrain with erosion, about 30k trees, villages. ~10 s on desktop, around 1-2 min in the web build."
+	bake_row.add_child(_bake_button)
+	_cancel_button = _button("Cancel", func() -> void:
+		if _baker != null:
+			_baker.cancel())
+	_cancel_button.visible = false
+	bake_row.add_child(_cancel_button)
+	_save_bake_button = _button("Save bake", _save_bake)
+	_save_bake_button.disabled = true
+	bake_row.add_child(_save_bake_button)
+	_progress_bar = ProgressBar.new()
+	_progress_bar.visible = false
+	_progress_bar.show_percentage = true
+	side.add_child(_progress_bar)
 
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -224,19 +268,36 @@ func _button(text: String, action: Callable) -> Button:
 func _build_3d_stage() -> void:
 	_world = Node3D.new()
 	_viewport.add_child(_world)
-	var environment := Environment.new()
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color(0.55, 0.7, 0.85)
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(0.75, 0.78, 0.85)
-	environment.ambient_light_energy = 1.0
-	var env_node := WorldEnvironment.new()
-	env_node.environment = environment
-	_viewport.add_child(env_node)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -35, 0)
-	sun.light_energy = 1.3
-	_viewport.add_child(sun)
+	_env_strategic = Environment.new()
+	_env_strategic.background_mode = Environment.BG_COLOR
+	_env_strategic.background_color = Color(0.55, 0.7, 0.85)
+	_env_strategic.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env_strategic.ambient_light_color = Color(0.75, 0.78, 0.85)
+	_env_strategic.ambient_light_energy = 1.0
+	# The baked view gets a sky, haze and filmic tonemapping so it reads as a place.
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color(0.28, 0.5, 0.82)
+	sky_material.sky_horizon_color = Color(0.74, 0.82, 0.9)
+	sky_material.ground_horizon_color = Color(0.74, 0.82, 0.9)
+	var sky := Sky.new()
+	sky.sky_material = sky_material
+	_env_baked = Environment.new()
+	_env_baked.background_mode = Environment.BG_SKY
+	_env_baked.sky = sky
+	_env_baked.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env_baked.ambient_light_color = Color(0.82, 0.86, 0.95)
+	_env_baked.ambient_light_energy = 0.9
+	_env_baked.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	_env_baked.fog_enabled = true
+	_env_baked.fog_light_color = Color(0.74, 0.82, 0.9)
+	_env_baked.fog_density = 0.00006
+	_env_node = WorldEnvironment.new()
+	_env_node.environment = _env_strategic
+	_viewport.add_child(_env_node)
+	_sun = DirectionalLight3D.new()
+	_sun.rotation_degrees = Vector3(-50, -35, 0)
+	_sun.light_energy = 1.3
+	_viewport.add_child(_sun)
 	# The same rig the RTS and valley scenes use, bounded to the generated map.
 	_rig = CAMERA_SCENE.instantiate()
 	_rig.zoom_min = 28.0
@@ -245,9 +306,7 @@ func _build_3d_stage() -> void:
 	_rig.pan_limit = Terrain.SIZE * 0.5
 	_rig.max_ground_height = 60.0
 	_viewport.add_child(_rig)
-	var camera: Camera3D = _rig.get_node("Camera3D")
-	camera.far = 2000.0
-	camera.size = 260.0
+	_configure_rig(false)
 	_rig._current_tilt = 50.0
 	_rig._apply_tilt()
 	_rig.center_on(Vector3.ZERO)
@@ -256,11 +315,35 @@ func _build_3d_stage() -> void:
 ## it reacting to WASD/Q/E typed into the spec box, or while hidden.
 func _process(_delta: float) -> void:
 	var focus := get_viewport().gui_get_focus_owner()
-	_rig.set_process(_mode == Mode.VIEW_3D and not (focus is LineEdit or focus is TextEdit))
+	_rig.set_process((_mode == Mode.VIEW_3D or _mode == Mode.BAKED) and not (focus is LineEdit or focus is TextEdit))
+
+## Strategic and baked views are different sizes, so the rig is re-bounded.
+func _configure_rig(baked: bool) -> void:
+	var camera: Camera3D = _rig.get_node("Camera3D")
+	camera.far = 6000.0
+	if baked and not _bake.is_empty():
+		var size: Vector2 = _bake["size"]
+		_rig.zoom_min = 40.0
+		_rig.zoom_max = 1600.0
+		_rig.zoom_step = 40.0
+		_rig.pivot_height = 700.0
+		_rig.pan_limit = size * 0.5
+		_rig.max_ground_height = float(_bake["height_max"])
+		camera.size = 760.0
+	else:
+		_rig.zoom_min = 28.0
+		_rig.zoom_max = 420.0
+		_rig.zoom_step = 2.0
+		_rig.pivot_height = 140.0
+		_rig.pan_limit = Terrain.SIZE * 0.5
+		_rig.max_ground_height = 60.0
+		camera.size = 260.0
+	_rig._apply_tilt()
+	_rig.center_on(Vector3.ZERO)
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	# Arrow keys pan the 3D camera, so they only step seeds in the other views.
-	if event is InputEventKey and event.pressed and _mode != Mode.VIEW_3D and not _spec_text.has_focus():
+	if event is InputEventKey and event.pressed and _mode != Mode.VIEW_3D and _mode != Mode.BAKED and not _spec_text.has_focus():
 		if event.keycode == KEY_RIGHT:
 			_set_seed(_spec.seed + 1)
 		elif event.keycode == KEY_LEFT:
@@ -324,6 +407,7 @@ func _save_spec() -> void:
 # -- generating and showing ----------------------------------------------------
 
 func _generate() -> void:
+	_discard_bake()
 	var result := Generator.generate(_spec)
 	if result.has("spec_errors"):
 		_status.text = "Invalid spec: %s" % ", ".join(result["spec_errors"])
@@ -340,8 +424,17 @@ func _show(mode: Mode) -> void:
 	_mode = mode
 	_map.visible = mode == Mode.MAP
 	_labels.visible = mode == Mode.MAP
-	_container.visible = mode == Mode.VIEW_3D
+	_container.visible = mode == Mode.VIEW_3D or mode == Mode.BAKED
 	_sheet_scroll.visible = mode == Mode.SHEET
+	var baked := mode == Mode.BAKED and _baked_world != null
+	_world.visible = not baked
+	if _baked_world != null:
+		_baked_world.visible = baked
+	_env_node.environment = _env_baked if baked else _env_strategic
+	_sun.shadow_enabled = baked
+	_sun.directional_shadow_max_distance = 1500.0
+	if (baked and _rig.pan_limit != _bake["size"] * 0.5) or (not baked and _rig.pan_limit != Terrain.SIZE * 0.5):
+		_configure_rig(baked)
 	if mode == Mode.SHEET:
 		_build_sheet()
 
@@ -523,3 +616,99 @@ static func _first_failure(result: Dictionary) -> String:
 		if not c["ok"]:
 			return c["name"]
 	return ""
+
+# -- detailed bake (dev tool) --------------------------------------------------
+
+func _discard_bake() -> void:
+	if _baker != null:
+		_baker.cancel()
+	if _baked_world != null:
+		_baked_world.queue_free()
+		_baked_world = null
+	_bake = {}
+	if _mode == Mode.BAKED:
+		_mode = Mode.MAP
+	if _baked_mode_button != null:
+		_baked_mode_button.disabled = true
+		_save_bake_button.disabled = true
+
+func _on_bake_progress(fraction: float, text: String) -> void:
+	_progress_bar.value = fraction * 100.0
+	_status.text = text
+
+func _set_baking(active: bool) -> void:
+	_baking = active
+	_bake_button.disabled = active
+	_cancel_button.visible = active
+	_progress_bar.visible = active
+	_progress_bar.value = 0.0
+
+## Coroutine: bakes the current valley, builds its scene, and switches to it.
+func _bake_detailed() -> void:
+	if _result.is_empty() or _baking:
+		return
+	_discard_bake()
+	_set_baking(true)
+	var baker := Bake.new()
+	_baker = baker
+	var data: Dictionary = await baker.run(_result, get_tree(), _on_bake_progress, _bake_options)
+	if baker.cancelled or data.is_empty() or not is_inside_tree():
+		_finish_bake(false, "Bake cancelled.")
+		return
+	var builder := BakeScene.new()
+	_baker = builder
+	var world: Node3D = await builder.build(data, get_tree(), _on_bake_progress)
+	if world == null or not is_inside_tree():
+		_finish_bake(false, "Bake cancelled.")
+		return
+	_bake = data
+	_baked_world = world
+	_viewport.add_child(world)
+	var stats: Dictionary = data["stats"]
+	# Finish the UI before announcing, since listeners run as soon as it is emitted.
+	_baked_mode_button.disabled = false
+	_save_bake_button.disabled = false
+	_show(Mode.BAKED)
+	_finish_bake(true, "Baked %d x %d units: %d cells, %d trees, %d buildings, %.0f s." % [data["size"].x, data["size"].y, stats["cells"], stats["trees"], stats["buildings"], float(stats["ms"]) / 1000.0])
+
+func _finish_bake(ok: bool, message: String) -> void:
+	_baker = null
+	_set_baking(false)
+	_status.text = message
+	bake_finished.emit(ok)
+
+## Saves the bake as a folder of plain files (see Bake.save). On the web build the
+## browser's storage is private, so the folder is zipped and downloaded instead.
+func _save_bake() -> void:
+	if _bake.is_empty():
+		return
+	var name := "%s_%d" % [_spec.landscape, _spec.seed]
+	if OS.has_feature("web"):
+		var temp_dir := "%s/%s" % [USER_BAKE_DIR, name]
+		var failure := Bake.save(_bake, temp_dir)
+		if failure != "":
+			_status.text = failure
+			return
+		var bytes := _zip_dir(temp_dir, name, "user://%s_bake.zip" % name)
+		JavaScriptBridge.download_buffer(bytes, "%s_bake.zip" % name, "application/zip")
+		_status.text = "Downloading %s_bake.zip (check your browser's downloads)." % name
+		return
+	var last_error := ""
+	for base in [BAKE_DIR, USER_BAKE_DIR]:
+		var dir := "%s/%s" % [base, name]
+		last_error = Bake.save(_bake, dir)
+		if last_error == "":
+			_status.text = "Saved bake to %s" % ProjectSettings.globalize_path(dir)
+			return
+	_status.text = last_error
+
+func _zip_dir(dir: String, folder: String, zip_path: String) -> PackedByteArray:
+	var packer := ZIPPacker.new()
+	if packer.open(zip_path) != OK:
+		return PackedByteArray()
+	for file_name in DirAccess.get_files_at(dir):
+		packer.start_file("%s/%s" % [folder, file_name])
+		packer.write_file(FileAccess.get_file_as_bytes("%s/%s" % [dir, file_name]))
+		packer.close_file()
+	packer.close()
+	return FileAccess.get_file_as_bytes(zip_path)

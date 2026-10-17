@@ -53,6 +53,27 @@ func _init() -> void:
 	if DisplayServer.get_name() != "headless" and not camera.size < before:
 		print("FAIL: wheel input did not reach the RTS camera (size %.0f -> %.0f)" % [before, camera.size])
 		failures += 1
+	# The dev-tool bake: runs, switches to the baked view, is discarded when the spec
+	# changes, and can be cancelled. (Coarse options keep it quick.)
+	view._bake_options = {"step": 6.0, "erosion": 2, "tree_spacing": 8.0}
+	view._bake_detailed()
+	var finished: bool = await view.bake_finished
+	if not finished or view._baked_world == null or view._baked_mode_button.disabled or view._save_bake_button.disabled or view._mode != view.Mode.BAKED:
+		print("FAIL: the viewer's bake did not complete into the baked view")
+		failures += 1
+	view._set_seed(11)
+	await process_frame
+	if not view._bake.is_empty() or view._baked_world != null or not view._baked_mode_button.disabled:
+		print("FAIL: changing the spec did not discard the bake")
+		failures += 1
+	view._bake_detailed()
+	await process_frame
+	view._cancel_button.pressed.emit()
+	var cancelled_ok: bool = await view.bake_finished
+	if cancelled_ok or view._baked_world != null:
+		print("FAIL: cancelling the bake still produced a baked view")
+		failures += 1
+
 	# Editing the spec box and applying it switches landscape.
 	var edited: Dictionary = JSON.parse_string(view._spec_text.text)
 	edited["landscape"] = "coast"

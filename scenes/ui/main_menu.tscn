@@ -70,7 +70,7 @@ text = "Large Valleys Simulation"
 text = "Single Valley (Game View)"
 
 [node name="ValleyGeneratorButton" type="Button" parent="Panel/VBox"]
-text = "Valley Generator (Experiment)"
+text = "Valley Generator (Dev Tool)"
 
 [node name="OnFootButton" type="Button" parent="Panel/VBox"]
 text = "On Foot"
