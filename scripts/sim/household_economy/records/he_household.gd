@@ -579,6 +579,15 @@ func morale_bonuses() -> Array[Dictionary]:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
 	if home_morale_bonus > 0.0:
 		out.append({"label": "Stone house", "bonus": home_morale_bonus})
+	for need in HENeeds.all():
+		var required: float = last_need_required.get(need.id, 0.0)
+		if need.comfort.is_empty() or required <= 0.0001:
+			continue
+		for commodity in need.comfort.keys():
+			var share := minf(1.0, last_consumed.get(commodity, 0.0) * need.value_of(commodity) / required)
+			var bonus: float = need.comfort[commodity] * share
+			if bonus > 0.001:
+				out.append({"label": "%s: %s" % [need.label, Commodity.name_of(commodity)], "bonus": bonus})
 	return out
 
 func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> float:
