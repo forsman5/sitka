@@ -11,7 +11,7 @@ The aim is a household that decides what to buy with its means: comfort goods (m
 On the merged wage model, day 365, mean of 3 seeds (`measure_stratification.gd`): meat is 0-1% of food in every preset. Two reasons:
 
 - **Price**: meat costs about 3.2x grain per food-unit most of the year (grain sits at its 0.25 floor; meat 1.6 for 2 food-units). A cost-minimiser never buys it. In the lean season (last month of the year) grain spikes to 3-4 and meat becomes cheaper, but then there is none.
-- **Supply**: meat is on offer 1-5 days a year. Meat is first in `EXPORT_PINNED_FIRST`, the cattle ranch runs one worker, and the Butcher only grows from measured output (it cannot grow from unmet demand it never sees).
+- **Supply**: meat is on offer 1-5 days a year because very little is made: a year-1 run produces 98 meat in the small village, 0 in mining and 24 in large (a household of four wants ~290 a year if it ate only meat). The cattle ranch runs one worker, and the Butcher only grows from measured output (it cannot grow from unmet demand it never sees). Export is not the cause: meat export is off by default and the Trader allocates capacity by margin per unit, not by `EXPORT_PINNED_FIRST` (that list only orders the settings page and breaks ties).
 
 ## Built (this branch)
 
@@ -28,7 +28,7 @@ Effect today: none in the full sim, by design of the problem above. The demand s
 
 1. **Let demand reach the producers.** A comfort good nobody can currently buy is left out of the household cascade, so unmet preference never shows up as `unmet_demand` for the Butcher or the ranches. Record a preferred-but-unavailable comfort request as unmet scarcity.
 2. **Butcher and ranch staffing from demand.** The Butcher grows only when it has measured output; the herd model decides ranch size. Both need a path from sustained local meat demand to more herd and more crew.
-3. **Local before export.** Meat is pinned first for export. Hold back a local share (or make the Trader bid below the local price) so the town's own tables come first.
+3. **Keep export profit-driven.** Sellers already offer only stock above their forecast of local use, and the Trader ranks offers by margin per unit of capacity. If meat export is ever switched on, the sellers' local-use forecast (`_known_daily_local_use`) must include comfort demand, or exports will drain the shelf affluent households want.
 4. **Seasonal fallback.** Meat (and stored grain) as the answer to the lean-season grain spike is a separate, larger supply problem; do not design around it yet.
 
 Gate for each step: `measure_stratification.gd` (meat share rising with income quintile), solvency held, employment held, ranches not collapsing, meat price stable.
