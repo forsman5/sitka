@@ -27,6 +27,10 @@ extends RefCounted
 ##                 Warehouse already stands, holding this stock (what a
 ##                 house/tenement build draws on); empty/absent = none
 ##
+##   water         {wells, river_intakes}  optional: seeded water sources (the
+##                 government services them from the warehouse's timber). Absent
+##                 = none, so older specs load unchanged
+##
 ## Adding a field: read it in HEScenarioSeeds.build_from_spec with a default so
 ## older specs keep loading, and document it here.
 
@@ -45,6 +49,7 @@ const PRESETS := {
 		"housing": {"houses": 24, "tenements": 0},
 		"treasury_bonus": 250.0,
 		"warehouse": {"stock": {"timber": 150, "stone": 100}},
+		"water": {"wells": 2},
 	},
 	"mining_village": {
 		"format": FORMAT,
@@ -58,6 +63,7 @@ const PRESETS := {
 		"housing": {"houses": 36, "tenements": 0},
 		"treasury_bonus": 150.0,
 		"warehouse": {"stock": {"timber": 300, "stone": 200}},
+		"water": {"wells": 3},
 	},
 	"large_village": {
 		"format": FORMAT,
@@ -71,6 +77,7 @@ const PRESETS := {
 		"housing": {"houses": 56, "tenements": 0},
 		"treasury_bonus": 400.0,
 		"warehouse": {"stock": {"timber": 600, "stone": 400}},
+		"water": {"wells": 5},
 	},
 }
 
@@ -87,6 +94,8 @@ const CUSTOM_MAX_HOUSEHOLDS := 50
 ## The town layout seats roughly this many houses before reporting them unplaced.
 const CUSTOM_MAX_HOUSES := 100
 const CUSTOM_MAX_GOLD := 5000
+## People a seeded well supplies (HEScenarioSeeds.WELL_PEOPLE, kept equal by the water check); a Custom roster gets enough wells for its 4-person households.
+const CUSTOM_PEOPLE_PER_WELL := 40
 
 ## The business type_keys a preset starts with: its crewed trades plus the
 ## ones every town gets (Farm, Woodlot, Trader, ranches, Butcher).
@@ -136,6 +145,7 @@ static func custom_spec(included: Array, households: int, options: Dictionary = 
 		"housing": {"houses": plain_houses + tenements, "tenements": tenements},
 		"treasury_bonus": float(options.get("treasury_bonus", 5.0 * households)),
 		"warehouse": {"stock": {"timber": 7.5 * households, "stone": 5.0 * households}},
+		"water": {"wells": ceili(households * 4.0 / CUSTOM_PEOPLE_PER_WELL)},
 	}
 
 ## Whether a roster can be started: it needs a Farm or a Woodlot.

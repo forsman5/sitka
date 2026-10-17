@@ -47,6 +47,10 @@ const ART := {
 	# Barracks reads as communal housing (bunk rows, multiple doors/windows)
 	# rather than a business, closer to a 4-household tenement than the tavern.
 	"tenement": {"model": "building_barracks_blue.gltf", "width": 6.5},
+	# Water sources (KayKit Medieval Hexagon Pack well). There is no river in
+	# the town view, so a river intake reuses the well, drawn larger.
+	"well": {"model": "building_well_blue.gltf", "width": 3.0},
+	"river_intake": {"model": "building_well_blue.gltf", "width": 4.5},
 }
 ## Houses cycle through this pool by site id, for variety. Index 0 matches
 ## ART["house"] so a plain lookup and a pool lookup agree for site 0.
@@ -210,7 +214,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 		if not site["built"]:
 			continue
 		_sync_site(site)
-	_villager_layer.sync(layout, villagers)
+	_villager_layer.sync(layout, villagers, _working_water_sites(layout))
 	_livestock_layer.sync(layout, reports)
 	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
 		_selected_villager = Vector2i(-1, -1)
@@ -222,6 +226,17 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 	var strained := int(housing.get("homeless_households", 0)) > 0 or bool(housing.get("saturated", false))
 	_housing_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3) if strained else Color(1, 1, 1, 0.95))
 	_refresh_info()
+
+## Built water sources that are not in disrepair, as layout sites.
+func _working_water_sites(layout: HETownLayout) -> Array:
+	var out: Array = []
+	for site in layout.get_sites():
+		if not HETownLayout.WATER_TYPE_KEYS.has(site["type_key"]) or not site["built"] or site["under_construction"]:
+			continue
+		var water: Dictionary = (_reports.get(int(site["business_id"]), {}) as Dictionary).get("water", {})
+		if not bool(water.get("in_disrepair", false)):
+			out.append(site)
+	return out
 
 ## "Housing: 41 homes for 30 households" with homeless / full flags.
 static func housing_text(housing: Dictionary) -> String:
@@ -1089,6 +1104,8 @@ static func activity_text(activity: Dictionary, employer_name: String) -> String
 			return "Taking a break outside %s" % workplace
 		"plaza":
 			return "At the town square"
+		"fill_water":
+			return "Filling up at the water source"
 	return ""
 
 func _business_name(business_id: int) -> String:
