@@ -2146,7 +2146,10 @@ func _refresh_need_detail() -> void:
 		_add_need_detail_line("Stress and emigration: only food shortfalls cause emigration. Unmet %s still builds stress, which lowers health and morale (see household and person pages)." % detail["label"].to_lower())
 
 	var required: float = detail["required"]
-	_add_need_detail_line("Demand today: %.2f need units" % required)
+	if detail["is_service"]:
+		_add_need_detail_line("Drinks needed today: %.0f (one per person)" % required)
+	else:
+		_add_need_detail_line("Demand today: %.2f need units" % required)
 	for name in detail["met_by"].keys():
 		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])

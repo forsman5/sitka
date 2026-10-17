@@ -110,6 +110,12 @@ func _check_thirst() -> void:
 	var h: HEHousehold = sim.households[sim.get_household_ids(SID)[0]]
 	_assert(h.stress_of(HENeed.Id.WATER) == 0.0 and h.last_need_required.has(HENeed.Id.WATER), "working sources: a water need, no thirst")
 	_assert(int(sim.get_need_detail(HENeed.Id.WATER, 0, SID)["households_unmet"]) == 0, "nobody unmet while the sources work")
+	# The Needs page shows who supplied the water, by kind of source.
+	var calm_detail := sim.get_need_detail(HENeed.Id.WATER, 30, SID)
+	var met_by: Dictionary = calm_detail["met_by"]
+	_assert(float(met_by["Well"]) > 0.0 and float(met_by["River Intake"]) == 0.0, "a town of wells is supplied by wells (%s)" % str(met_by))
+	_assert(absf(float(met_by["Well"]) + float(met_by["River Intake"]) - float(calm_detail["provided"])) < 0.01, "met-by sources add up to the water supplied")
+	_assert((calm_detail["met_history"]["Well"] as Array).size() > 0 and float((calm_detail["met_history"]["Well"] as Array).back()) > 0.0, "the Needs chart has a Well series")
 	var calm_morale := h.morale()
 	var calm_health := h.health()
 

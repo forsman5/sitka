@@ -875,6 +875,10 @@ var _import_cost_total := 0.0
 ## costs the source's water_upkeep_timber and water_upkeep_stone from the Government Warehouse and
 ## needs government staff to do the work.
 const WATER_SERVICE_INTERVAL_DAYS := 365
+## The water need's "met by" rows, one per kind of source (HEBusiness.name).
+const WATER_SOURCE_NAMES := ["Well", "River Intake"]
+## Today's drinks supplied per source kind, by settlement id: {name: people}.
+var _water_met_by: Dictionary = {}
 
 ## Treasury money spent on constructing government buildings
 ## (build_government_building) -- it leaves circulation like _import_cost_total
@@ -3351,6 +3355,10 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 	var met_by := {}
 	for c in need.satisfiers():
 		met_by[Commodity.name_of(c)] = 0.0
+	if need.is_service():
+		var today: Dictionary = _water_met_by.get(s.id, {})
+		for source_name in WATER_SOURCE_NAMES:
+			met_by[source_name] = float(today.get(source_name, 0.0))
 	for household_id in s.household_ids:
 		var h: HEHousehold = households[household_id]
 		var h_required: float = h.last_need_required.get(need.id, 0.0)
@@ -3372,6 +3380,9 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 	var met_history := {}
 	for c in need.satisfiers():
 		met_history[Commodity.name_of(c)] = []
+	if need.is_service():
+		for source_name in WATER_SOURCE_NAMES:
+			met_history[source_name] = []
 	var unmet_history: Array = []
 	for record in get_daily_history(days):
 		var entry: Dictionary = record["needs"].get(need.id, {})
@@ -3384,6 +3395,7 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		"id": need.id,
 		"label": need.label,
 		"drives_lifecycle": need.drives_lifecycle,
+		"is_service": need.is_service(),
 		"households_met": met,
 		"households_unmet": unmet,
 		"required": required,
@@ -3420,12 +3432,16 @@ func _run_water_need(record: Dictionary) -> void:
 		var settlement: HESettlement = settlements[settlement_id]
 		var sources := 0
 		var capacity := 0
+		var capacity_by_name := {}
+		for source_name in WATER_SOURCE_NAMES:
+			capacity_by_name[source_name] = 0
 		for business_id in settlement.business_ids:
 			var b: HEBusiness = businesses.get(business_id)
 			if b != null and b.kind == HEBusiness.Kind.WATER:
 				sources += 1
 				if not b.in_disrepair:
 					capacity += b.water_capacity
+					capacity_by_name[b.name] = int(capacity_by_name.get(b.name, 0)) + b.water_capacity
 		if sources == 0:
 			continue
 		var population := 0
@@ -3435,10 +3451,12 @@ func _run_water_need(record: Dictionary) -> void:
 		var need_record: Dictionary = record["needs"].get_or_add(need.id, {
 			"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
 		var town_need: Dictionary = (record["needs_by_settlement"] as Dictionary).get_or_add(settlement_id, {}).get_or_add(need.id, {"required": 0.0, "provided": 0.0})
+		var supplied := 0.0
 		for household_id in settlement.household_ids:
 			var h: HEHousehold = households[household_id]
 			var needed := float(h.headcount()) * need.per_person_daily
 			var provided := needed * coverage
+			supplied += provided
 			h.last_need_required[need.id] = needed
 			h.last_need_provided[need.id] = provided
 			h.record_need_stress(need, needed, provided)
@@ -3450,6 +3468,14 @@ func _run_water_need(record: Dictionary) -> void:
 				need_record["households_unmet"] += 1
 			else:
 				need_record["households_met"] += 1
+		# What was supplied came from the working sources, in proportion to what
+		# each kind can give.
+		var met_by_today := {}
+		for source_name in capacity_by_name:
+			var share: float = supplied * float(capacity_by_name[source_name]) / float(capacity) if capacity > 0 else 0.0
+			met_by_today[source_name] = share
+			need_record["met_by"][source_name] = float(need_record["met_by"].get(source_name, 0.0)) + share
+		_water_met_by[settlement_id] = met_by_today
 
 ## One need for one household: spend satisfiers densest-first until the need
 ## is met. A shortfall is reported against the need's baseline satisfier, in
