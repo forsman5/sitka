@@ -24,7 +24,15 @@ On the merged wage model, day 365, mean of 3 seeds (`measure_stratification.gd`)
 
 Effect today: none in the full sim, by design of the problem above. The demand side works; meat is not on the shelf.
 
-## The next piece is supply
+## Built: the Butcher is sized to demand
+
+Tracing a four-year run of the small village showed the real supply failure. The Butcher was not short of animals (275 head became 6,105 meat) and export was not the cause. It bought every cull whatever households would buy, so meat piled up unsold (2,800 units against ~13 sold a day), the price fell to its floor, and it ran out of cash and failed around day 720-840; after that the ranches' culls left as live exports at half price.
+
+`_butchery_meat_room` now caps the Butcher's livestock purchases, and `_butchery_wanted_head` (which the ranches' sales forecast also reads) uses the same cap: finished meat plus the meat in held animals may not exceed `BUTCHERY_FINISHED_COVER_DAYS` (45) of its local sales, with a floor of `BUTCHERY_MIN_FINISHED_MEAT` (150) so it keeps producing a little and demand can scale it. Result (small village, 4 years): the Butcher survives, crew 2 to 4, finished meat 50-150, and year-3 meat share of food rises with income (2%, 0%, 10%, 10%, 21% by quintile). `check_butcher_demand.gd` covers it; two `run_household_economy.gd` assertions that encoded the old behaviour (the Butcher buys the full buffer; most of the cull goes to the Butcher) now check the sized lot and that households eat what is made.
+
+Open: mining and large still show 0% meat. Mining's cattle ranch has no crew and sits at -946; the large village's Butcher is not trading in year 3. Each needs its own trace.
+
+## The next piece is supply (remaining)
 
 1. **Let demand reach the producers.** A comfort good nobody can currently buy is left out of the household cascade, so unmet preference never shows up as `unmet_demand` for the Butcher or the ranches. Record a preferred-but-unavailable comfort request as unmet scarcity.
 2. **Butcher and ranch staffing from demand.** The Butcher grows only when it has measured output; the herd model decides ranch size. Both need a path from sustained local meat demand to more herd and more crew.

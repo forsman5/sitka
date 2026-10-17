@@ -590,6 +590,15 @@ const BUTCHERY_INPUT_BUFFER_DAYS := 30.0
 ## capital for its first cull (HEScenarioSeeds seeds it) and the livestock it
 ## holds secures that overdraft (_butchery_collateral).
 const BUTCHERY_CREDIT_LIMIT := 2000.0
+## The Butcher buys livestock only as far as it expects to sell the meat: its
+## finished meat plus the meat in the animals it holds may not exceed this many
+## days of what it has been selling locally (never less than the floor below).
+## Without it the Butcher worked through every cull whatever households would
+## buy, sat on thousands of unsold meat while the price fell to its floor, and
+## ran out of cash. The floor keeps it producing a little while no one is buying
+## so demand (affluent households, a Trader bid) can show up and scale it.
+const BUTCHERY_FINISHED_COVER_DAYS := 45.0
+const BUTCHERY_MIN_FINISHED_MEAT := 150.0
 
 ## Home butchery: a ranch's culled animals go to a staffed Butcher or Trader
 ## when one exists. Otherwise the ranch butchers them itself (see
@@ -5325,8 +5334,9 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 		if workers <= 0:
 			continue
 		var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+		var meat_room := _butchery_meat_room(butcher)
 		for species in BUTCHERY_SPECIES_ORDER:
-			if wanted_worker_days <= 0.0001:
+			if wanted_worker_days <= 0.0001 or meat_room <= 0.0001:
 				break
 			var commodity := HEBusiness.livestock_commodity(species)
 			var price: float = livestock_quote(species, LivestockQuote.BUTCHER_PURCHASE)
@@ -5340,6 +5350,7 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				market_today["offered"] += herd.stock(commodity)
 				var affordable: float = maxf(0.0, butcher.balance + BUTCHERY_CREDIT_LIMIT) / price
 				var head: float = minf(minf(herd.stock(commodity), wanted_worker_days / worker_days_per_head), affordable)
+				head = minf(head, meat_room / BUTCHERY_MEAT_PER_HEAD[species])
 				if head <= 0.0001:
 					continue
 				var cost: float = head * price
@@ -5372,6 +5383,18 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 					"value": cost,
 				})
 				wanted_worker_days -= head * worker_days_per_head
+				meat_room -= head * BUTCHERY_MEAT_PER_HEAD[species]
+
+## How much more meat a Butcher can expect to sell, in meat units: the cover it
+## is allowed (BUTCHERY_FINISHED_COVER_DAYS of its local sales, or the floor)
+## less the meat it already holds and the meat in the live animals it holds.
+func _butchery_meat_room(butcher: HEBusiness) -> float:
+	var sold_per_day := _routine_local_use(butcher, Commodity.Type.MEAT)
+	var allowed := maxf(BUTCHERY_MIN_FINISHED_MEAT, sold_per_day * BUTCHERY_FINISHED_COVER_DAYS)
+	var held := butcher.stock(Commodity.Type.MEAT)
+	for species in BUTCHERY_SPECIES_ORDER:
+		held += butcher.stock(HEBusiness.livestock_commodity(species)) * BUTCHERY_MEAT_PER_HEAD[species]
+	return maxf(0.0, allowed - held)
 
 ## Today's livestock market totals for `commodity` in the daily record: head the
 ## ranches offered the Butcher, head its crews asked for, head actually bought,
@@ -5394,8 +5417,9 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 	if workers <= 0:
 		return 0.0
 	var wanted_worker_days: float = float(workers) * BUTCHERY_INPUT_BUFFER_DAYS - _butchery_held_worker_days(butcher)
+	var meat_room := _butchery_meat_room(butcher)
 	for candidate in BUTCHERY_SPECIES_ORDER:
-		if wanted_worker_days <= 0.0001:
+		if wanted_worker_days <= 0.0001 or meat_room <= 0.0001:
 			break
 		var available: float = 0.0
 		for herd_id in _herd_business_ids(butcher.settlement_id):
@@ -5403,10 +5427,14 @@ func _butchery_wanted_head(butcher: HEBusiness, species: HEBusiness.Species) -> 
 			if herd.species == candidate:
 				available += herd.stock(HEBusiness.livestock_commodity(candidate))
 		var worker_days_per_head: float = BUTCHERY_WORKER_DAYS_PER_HEAD[candidate]
-		var taken_worker_days: float = minf(wanted_worker_days, available * worker_days_per_head)
+		# Wanted head is what the crew can work AND the meat it expects to sell
+		# has room for (_butchery_meat_room), the same limit the purchase obeys.
+		var wanted_head: float = minf(wanted_worker_days / worker_days_per_head, meat_room / BUTCHERY_MEAT_PER_HEAD[candidate])
 		if candidate == species:
-			return wanted_worker_days / worker_days_per_head
-		wanted_worker_days -= taken_worker_days
+			return wanted_head
+		var taken_head: float = minf(wanted_head, available)
+		wanted_worker_days -= taken_head * worker_days_per_head
+		meat_room -= taken_head * BUTCHERY_MEAT_PER_HEAD[candidate]
 	return 0.0
 
 ## One day of butchery: the crew's worker-days go to the livestock the Butcher
