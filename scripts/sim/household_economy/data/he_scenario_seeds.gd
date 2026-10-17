@@ -65,11 +65,14 @@ const TENEMENT_UPGRADE_TIMBER := 150.0
 ## imports it through the Trader, so the cost holds either way.
 const TENEMENT_BUILD_STONE := 100.0
 const TENEMENT_UPGRADE_STONE := 75.0
-## A stone house upgrades a plain house in place (never a new build): its
-## household gains HEHouse.STONE_MORALE_BONUS morale.
+## A stone house upgrades a plain house in place, or is built new once none is
+## left (the new price is the house price plus the upgrade): its household
+## gains HEHouse.STONE_MORALE_BONUS morale.
 const STONE_HOUSE_GOLD := 40.0
 const STONE_HOUSE_TIMBER := 50.0
 const STONE_HOUSE_STONE := 120.0
+const STONE_HOUSE_BUILD_GOLD := HOUSE_BUILD_GOLD + STONE_HOUSE_GOLD
+const STONE_HOUSE_BUILD_TIMBER := HOUSE_BUILD_TIMBER + STONE_HOUSE_TIMBER
 ## Default seeded housing: one house per starting household, plus this fraction extra
 ## so early births and coming-of-age splits have somewhere to go before the
 ## player builds more.
@@ -399,9 +402,9 @@ static func government_buildings() -> Array[Dictionary]:
 				house.upgrade_to_dense()
 				return house},
 		{"type_key": "stone_house", "label": "Stone House", "category": "housing", "repeatable": true,
-			"cost": build_cost(STONE_HOUSE_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
-			"hint": "Upgrades the innermost plain house in place to stone: its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
-			"upgrade_only": true,
+			"cost": build_cost(STONE_HOUSE_BUILD_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_BUILD_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
+			"upgrade_cost": build_cost(STONE_HOUSE_GOLD, {Commodity.Type.TIMBER: STONE_HOUSE_TIMBER, Commodity.Type.STONE: STONE_HOUSE_STONE}),
+			"hint": "Upgrades the innermost plain house in place to stone (a new stone house if none is left): its household gains %.0f%% morale." % (HEHouse.STONE_MORALE_BONUS * 100.0),
 			"startup": false,
 			"make": func(id: int, sid: int) -> HEHouse:
 				var house := HEHouse.new(id, sid)

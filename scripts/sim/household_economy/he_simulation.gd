@@ -1222,8 +1222,6 @@ func government_build_blocker(settlement_id: int, option: Dictionary) -> String:
 		return "already built"
 	if not repeatable and _construction_pending(settlement_id, option["type_key"]):
 		return "under construction"
-	if option.get("upgrade_only", false) and _innermost_plain_house(settlement_id) == null:
-		return "no plain house to upgrade"
 	var cost: Dictionary = build_cost_for(settlement_id, option)
 	if gov.balance < float(cost.get("gold", 0.0)):
 		return "treasury too low (%.0f g)" % gov.balance
@@ -1309,7 +1307,7 @@ func _finish_due_constructions() -> void:
 				else:
 					(dwellings[target] as HEHouse).upgrade_to_dense()
 				_reconcile_housing(int(entry["settlement_id"]))
-			elif not (record as HEHouse).is_stone:
+			else:
 				add_dwelling(record)
 		elif entry["startup"]:
 			add_new_business(record)
