@@ -86,6 +86,8 @@ const TRACK_ROAD_TRIES := 4
 ## the other sources (capped at WATER_SPREAD_CAP) and closest to a ring
 ## WATER_RING from the civic anchor, so a few wells end up spread through the
 ## neighbourhoods. They never vacate (an unserviced source is still standing).
+## Workplaces whose staff run the house-upkeep deliveries (see HEVillagerSchedule).
+const STAFF_TYPE_KEYS := ["government", "warehouse"]
 const WATER_TYPE_KEYS := ["well", "river_intake"]
 const WATER_FOOTPRINT := Vector2(4.0, 4.0)
 const WATER_RING := 52.0

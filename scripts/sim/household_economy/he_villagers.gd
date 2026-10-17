@@ -122,7 +122,7 @@ func _shadow_mode() -> GeometryInstance3D.ShadowCastingSetting:
 ## Existing villagers keep their node; only new ones are added and departed
 ## ones removed, and a villager's plan is rebuilt only if its role, house or
 ## workplace changed.
-func sync(layout: HETownLayout, reports: Array, water_sites: Array = []) -> void:
+func sync(layout: HETownLayout, reports: Array, water_sites: Array = [], errand_sites: Array = []) -> void:
 	if layout != _layout:
 		_layout = layout
 		_paths = HETownPaths.new(layout)
@@ -133,6 +133,8 @@ func sync(layout: HETownLayout, reports: Array, water_sites: Array = []) -> void
 		_water_sig = water_sig
 		_water_sites = water_sites
 	_roster.clear()
+	var placements: Array = []
+	var staff: Array = [] # keys of government workers, who run the house-upkeep errands
 	var wanted: Dictionary = {}
 	var work_sites: Dictionary = {} # employer business id -> site, or {}
 	for report in reports:
@@ -159,7 +161,20 @@ func sync(layout: HETownLayout, reports: Array, water_sites: Array = []) -> void
 				work = work_sites[employer]
 			var key := Vector2i(household_id, member_number)
 			wanted[key] = true
-			_place(key, role, child, sex == HEHousehold.SEX_FEMALE, home, work)
+			placements.append([key, role, child, sex == HEHousehold.SEX_FEMALE, home, work])
+			if role == HEVillagerSchedule.ROLE_EMPLOYED and HETownLayout.STAFF_TYPE_KEYS.has(str(work.get("type_key", ""))):
+				staff.append(key)
+	staff.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x < b.x or (a.x == b.x and a.y < b.y))
+	var errands: Dictionary = {} # staff key -> house sites to deliver to today
+	for i in errand_sites.size():
+		if staff.is_empty():
+			break
+		var carrier: Vector2i = staff[i % staff.size()]
+		if not errands.has(carrier):
+			errands[carrier] = []
+		(errands[carrier] as Array).append(errand_sites[i])
+	for placement in placements:
+		_place(placement[0], placement[1], placement[2], placement[3], placement[4], placement[5], errands.get(placement[0], []))
 	for key in _villagers.keys():
 		if not wanted.has(key):
 			(_villagers[key]["node"] as Node3D).queue_free()
@@ -269,13 +284,16 @@ func _work_site(layout: HETownLayout, business_id: int) -> Dictionary:
 		return {}
 	return site
 
-func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictionary, work: Dictionary) -> void:
+func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictionary, work: Dictionary, errands: Array = []) -> void:
 	var entry: Dictionary = _villagers.get(key, {})
 	female = female and ResourceLoader.exists(FEMALE_MODEL)
 	if not entry.is_empty() and (entry["child"] != child or entry["female"] != female):
 		(entry["node"] as Node3D).queue_free()
 		entry = {}
-	var sig := Vector4i(HEVillagerSchedule.ROLES.find(role), int(home.get("site_id", -1)), int(work.get("site_id", -1)), _water_sig)
+	var errand_sig := 0
+	for errand in errands:
+		errand_sig = hash([errand_sig, int(errand["site_id"])]) & 0x7FFFFFFF
+	var sig := Vector4i(HEVillagerSchedule.ROLES.find(role), int(home.get("site_id", -1)), int(work.get("site_id", -1)), hash([_water_sig, errand_sig]) & 0x7FFFFFFF)
 	if entry.is_empty():
 		var rng := RandomNumberGenerator.new()
 		rng.seed = hash("villager|%d|%d" % [key.x, key.y])
@@ -290,6 +308,7 @@ func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictio
 			"role": role,
 			"home": home,
 			"work": work,
+			"errands": errands,
 			"sig": sig,
 			"plan": {},
 			"plan_day": -1,
@@ -316,12 +335,13 @@ func _place(key: Vector2i, role: String, child: bool, female: bool, home: Dictio
 		entry["role"] = role
 		entry["home"] = home
 		entry["work"] = work
+		entry["errands"] = errands
 		entry["sig"] = sig
 		_replan(entry)
 		_update_entry(entry, 0.0)
 
 func _replan(entry: Dictionary) -> void:
-	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths, _water_sites)
+	entry["plan"] = HEVillagerSchedule.plan(entry["key"], entry["role"], _day, entry["home"], entry["work"], _paths, _water_sites, entry.get("errands", []))
 	entry["plan_day"] = _day
 	entry["seg"] = {}
 	entry["hide_t0"] = 0.0
