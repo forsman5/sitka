@@ -149,7 +149,8 @@ func _apply_preset(index: int) -> void:
 		var trades: Array[String] = ["Farm", "Woodlot"]
 		for crew_key in spec.get("crews", {}):
 			trades.append(str(crew_key).capitalize())
-		_detail_label.text = "%d households, %d houses. Trades: %s." % [int(spec["households"]), int(housing.get("houses", 0)), ", ".join(trades)]
+		var wells := int(spec.get("water", {}).get("wells", 0))
+		_detail_label.text = "%d households, %d houses%s. Trades: %s." % [int(spec["households"]), int(housing.get("houses", 0)), ", %d wells" % wells if wells > 0 else "", ", ".join(trades)]
 	_detail_label.visible = not is_custom
 	_update_start_state()
 

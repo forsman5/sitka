@@ -28,7 +28,7 @@ Options 1 and 2 are the live ones; the household economy is the engine behind op
 
 - `HESimulation` (`scripts/sim/household_economy/he_simulation.gd`) is the authoritative sim; one instance per town. Views (dashboard `he_dashboard.gd`, 3D town view `he_town_view.gd`) read the same live instance and must not change economic rules or tick order.
 - Starting towns are JSON-able specs (`scripts/sim/household_economy/data/he_presets.gd`: Small / Mining / Large village + Custom roster) built by `HEScenarioSeeds.build_from_spec`. That spec is the new-game/save format to grow.
-- Reference docs in `docs/`: `household-housing.md`, `household-employment-index.md`, `household-dashboard-performance-plan.md`, `household-town-view-plan.md`, `tools-industrial-demand-plan.md`, `population-capacity-ideas.md` (proposals only).
+- Reference docs in `docs/`: `household-housing.md`, `household-employment-index.md`, `household-dashboard-performance-plan.md`, `household-town-view-plan.md`, `household-water.md`, `tools-industrial-demand-plan.md`, `population-capacity-ideas.md` (proposals only).
 - Headless checks live under `scripts/sim/harness/` and `scripts/valley/harness/`; run with `Godot_v4.6.2-stable_win64_console.exe --headless --path . --script <path>`.
 - Town view reuses RTS building models as visual-only instances (RTS building scripts must not run there).
 
