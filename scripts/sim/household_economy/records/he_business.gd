@@ -114,7 +114,7 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE, PORT }
 enum Species { CATTLE, SHEEP }
 
 ## id, settlement_id, name and type_key come from HEBuilding.

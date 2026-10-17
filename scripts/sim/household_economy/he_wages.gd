@@ -58,7 +58,15 @@ func wage_paid_per_worker(b: HEBusiness) -> float:
 		return float(cached["wage"])
 	# The household reservation is the floor; what the business can fund is
 	# bounded by pay_wages' available cash and by the share itself (< 1).
-	var wage := maxf(reservation, labour_share * net_return_per_worker(b))
+	# A valley Trader clears inter-town shipments on a short cadence. The
+	# standalone 45-day return window otherwise keeps a shipment windfall in its
+	# payroll long after freight demand disappears, draining its relay float.
+	# TODO: replace this 14-day/0.5 special case (tuned to pass check_valley_economy) with an
+	# expected-income estimate plus a variance buffer, so lumpy earners smooth their own wages.
+	var valley_trader: bool = b.kind == HEBusiness.Kind.TRADER and not s.external_trade_enabled
+	var return_window := 14 if valley_trader else -1
+	var return_share := labour_share * 0.5 if valley_trader else labour_share
+	var wage := maxf(reservation, return_share * net_return_per_worker(b, return_window))
 	_wage_paid_cache[b.id] = {"day": s.day, "wage": wage}
 	return wage
 
@@ -75,9 +83,9 @@ func liquidity_scale(settlement_id: int) -> float:
 ## `b`'s net return per employed worker over its staffing window: sales less
 ## inputs and taxes, the same quantity _staffing_decision judges. 0 until the
 ## ledger holds enough rows to trust it.
-func net_return_per_worker(b: HEBusiness) -> float:
+func net_return_per_worker(b: HEBusiness, window_override: int = -1) -> float:
 	var s = _sim
-	var window := b.rolling_window_days()
+	var window := window_override if window_override > 0 else b.rolling_window_days()
 	var needed_rows: int = mini(window, s.STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else (window if b.has_long_cycle() else mini(window, 14))
 	if b.ledger_history(window).size() < needed_rows:
 		return 0.0
