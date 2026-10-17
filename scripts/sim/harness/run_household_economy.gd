@@ -2601,9 +2601,9 @@ func _check_needs_catalog() -> void:
 
 	# The Needs tab lists the catalog, so a new need can't be forgotten there.
 	var tab_order: Array = HENeeds.display_order()
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
 		_assert(tab_order.has(need.id), "%s is missing from the Needs tab" % need.label)
-	_assert(tab_order.size() == HENeeds.all().size(), "The Needs tab should list each need exactly once")
+	_assert(tab_order.size() == HENeeds.felt().size(), "The Needs tab should list each need exactly once (goods needs plus water)")
 
 	# Tools: morale only. Going without costs no health, having them lifts
 	# morale, and the lift offsets other penalties (an unemployed household here).
