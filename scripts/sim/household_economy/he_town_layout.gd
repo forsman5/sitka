@@ -159,6 +159,7 @@ const TYPE_ZONES := {
 	"woodlot": ZONE_FIELD,
 	"cattle_ranch": ZONE_PASTURE,
 	"sheep_farm": ZONE_PASTURE,
+	"goat_farm": ZONE_PASTURE,
 }
 
 const _GOLDEN_ANGLE := 2.399963229728653

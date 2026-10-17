@@ -40,6 +40,7 @@ const ART := {
 	"quarry": {"model": "building_mine_blue.gltf", "width": 6.0},
 	"cattle_ranch": {"model": "barn", "width": 8.0},
 	"sheep_farm": {"model": "barn", "width": 7.0},
+	"goat_farm": {"model": "barn", "width": 6.0},
 	# Actual house rendering always goes through HOUSE_ART_POOL below; this
 	# entry only documents the type and matches the pool's index 0.
 	"house": {"model": "building_home_A_blue.gltf", "width": 4.5},
@@ -706,7 +707,7 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 		"woodlot":
 			_add_stand(body, footprint, int(site["site_id"]))
 			building_offset = Vector3(-footprint.x * 0.5 + 4.0, 0.0, 0.0)
-		"cattle_ranch", "sheep_farm":
+		"cattle_ranch", "sheep_farm", "goat_farm":
 			_add_pasture(body, footprint)
 			building_offset = Vector3(-footprint.x * 0.5 + 5.5, 0.0, 0.0)
 		_:

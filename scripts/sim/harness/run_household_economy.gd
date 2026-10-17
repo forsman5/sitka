@@ -1418,7 +1418,7 @@ func _check_export_settings_derived_from_commodities() -> void:
 	for commodity in HESimulation.EXPORT_PINNED_FIRST + HESimulation.EXPORT_PINNED_LAST:
 		_assert(priority.has(commodity), "Pinned good %s is not exportable" % Commodity.name_of(commodity))
 	_assert(priority[0] == Commodity.Type.IRON, "Iron must keep first call on Trader capacity")
-	_assert(priority[priority.size() - 1] == Commodity.Type.SHEEP and priority[priority.size() - 2] == Commodity.Type.CATTLE, "Livestock must stay last")
+	_assert(priority[priority.size() - 1] == Commodity.Type.GOAT and priority[priority.size() - 2] == Commodity.Type.SHEEP and priority[priority.size() - 3] == Commodity.Type.CATTLE, "Livestock must stay last")
 	for commodity in HESimulation.EXPORT_COMMODITIES:
 		_assert(priority.has(commodity), "Default-enabled %s is not exportable" % Commodity.name_of(commodity))
 

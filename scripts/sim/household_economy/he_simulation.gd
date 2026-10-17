@@ -146,14 +146,14 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## exactly that early window, well before its own weekly capacity
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
-const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.STONE, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.STONE, Commodity.Type.CATTLE, Commodity.Type.SHEEP, Commodity.Type.GOAT]
 ## Goods that jump the queue for shared Trader capacity, in order. Everything
 ## else exportable follows in Commodity.ALL order, then EXPORT_PINNED_LAST. Only
 ## goods whose place matters belong here: iron first (see above), and culled
 ## livestock last because the Butcher gets first call on it anyway (see
 ## _run_livestock_purchasing).
 const EXPORT_PINNED_FIRST: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.MEAT, Commodity.Type.LEATHER]
-const EXPORT_PINNED_LAST: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+const EXPORT_PINNED_LAST: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP, Commodity.Type.GOAT]
 ## Every good the Trader can export, in the fixed order it draws on shared
 ## capacity -- so changing checkboxes never silently reorders which good gets
 ## first use of it. Derived rather than hand-listed: a good is exportable if it
@@ -294,6 +294,7 @@ const SEASONAL_CARRY_LOOKAHEAD_DAYS := 180
 const FODDER_PER_HEAD_PER_WINTER: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 3.0,
 	HEBusiness.Species.SHEEP: 0.6, # 3.0 * SHEEP_LAND_PER_HEAD (0.6) / CATTLE_LAND_PER_HEAD (3.0)
+	HEBusiness.Species.GOAT: 0.5, # 3.0 * GOAT_LAND_PER_HEAD (0.5) / CATTLE_LAND_PER_HEAD (3.0),
 }
 
 static func season_of_day(p_day: int) -> int:
@@ -358,6 +359,10 @@ static func seasonal_yield_scale(commodity: Commodity.Type, p_day: int) -> float
 ## that ceiling and takes the harsher "neglected" mortality rate below.
 const CATTLE_LAND_PER_HEAD := 3.0
 const SHEEP_LAND_PER_HEAD := 0.6
+## 3.0 / 6: extension guidance is about six goats to a cow unit against five
+## sheep, and goats browse as well as graze, so mixed pasture carries them a
+## little denser than sheep.
+const GOAT_LAND_PER_HEAD := 0.5
 
 ## Share of a ranch's carrying capacity its cull target sits at: culling back
 ## to this, rather than to the ceiling itself, leaves room to grow between
@@ -372,10 +377,16 @@ const HERD_STOCKING_UTILIZATION := 0.75
 const DEFAULT_RANCH_LAND_ACRES: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 600.0,
 	HEBusiness.Species.SHEEP: 160.0,
+	HEBusiness.Species.GOAT: 120.0,
 }
 
 static func land_per_head(species: HEBusiness.Species) -> float:
-	return CATTLE_LAND_PER_HEAD if species == HEBusiness.Species.CATTLE else SHEEP_LAND_PER_HEAD
+	match species:
+		HEBusiness.Species.CATTLE:
+			return CATTLE_LAND_PER_HEAD
+		HEBusiness.Species.SHEEP:
+			return SHEEP_LAND_PER_HEAD
+	return GOAT_LAND_PER_HEAD
 
 ## Most head `land_acres` of pasture can carry (the herd's hard ceiling).
 static func herd_land_capacity(species: HEBusiness.Species, land_acres: float) -> float:
@@ -396,6 +407,7 @@ static func default_cull_target(species: HEBusiness.Species, land_acres: float) 
 const HERD_GROWTH_RATE: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 0.035,
 	HEBusiness.Species.SHEEP: 0.10,
+	HEBusiness.Species.GOAT: 0.11,
 }
 
 ## Single knob for how fast herds grow overall, independent of the
@@ -419,10 +431,12 @@ const HERD_GROWTH_RATE_MULTIPLIER := 1.6
 const HERD_LOSS_RATE_FED: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 0.015,
 	HEBusiness.Species.SHEEP: 0.03,
+	HEBusiness.Species.GOAT: 0.035,
 }
 const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 0.12,
 	HEBusiness.Species.SHEEP: 0.20,
+	HEBusiness.Species.GOAT: 0.17,
 }
 
 ## Husbandry (the herd analogue of a field's labor_per_area_per_day). A herd
@@ -439,6 +453,7 @@ const HERD_LOSS_RATE_NEGLECTED: Dictionary[HEBusiness.Species, float] = {
 const HERD_LABOR_PER_HEAD_PER_DAY: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 1.0 / 150.0,
 	HEBusiness.Species.SHEEP: 1.0 / 120.0,
+	HEBusiness.Species.GOAT: 1.0 / 110.0,
 }
 
 ## What staffing BUYS, as upsides over the authored free-range baseline (the
@@ -498,6 +513,7 @@ const WOOL_PER_HEAD_PER_INTERVAL := 0.75
 const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 60.0,
 	HEBusiness.Species.SHEEP: 3.0,
+	HEBusiness.Species.GOAT: 8.0,
 }
 
 ## Culled cattle and sheep are saleable goods: they sit in a ranch's (or the
@@ -506,7 +522,7 @@ const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
 ## they have no single local clearing price, households never request them, and
 ## they never run through the ordinary household clearing. The living herd
 ## (herd_size) is ranch state, not stock, and is not part of this list.
-const LIVESTOCK_GOODS: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+const LIVESTOCK_GOODS: Array[Commodity.Type] = [Commodity.Type.CATTLE, Commodity.Type.SHEEP, Commodity.Type.GOAT]
 
 ## Everything that can sit in some business's or household's inventory: the
 ## priced market goods plus livestock. Used wherever stock is counted or written
@@ -517,13 +533,22 @@ static func inventory_goods() -> Array[Commodity.Type]:
 	goods.append_array(LIVESTOCK_GOODS)
 	return goods
 
+## Display name of a herd species (what a herd business reports as `species`).
+static func species_name(species: HEBusiness.Species) -> String:
+	return Commodity.name_of(HEBusiness.livestock_commodity(species))
+
 static func is_livestock(commodity: Commodity.Type) -> bool:
 	return LIVESTOCK_GOODS.has(commodity)
 
 ## The species whose culled head `commodity` is. Only meaningful for a livestock
 ## good (see is_livestock).
 static func livestock_species(commodity: Commodity.Type) -> HEBusiness.Species:
-	return HEBusiness.Species.CATTLE if commodity == Commodity.Type.CATTLE else HEBusiness.Species.SHEEP
+	match commodity:
+		Commodity.Type.CATTLE:
+			return HEBusiness.Species.CATTLE
+		Commodity.Type.SHEEP:
+			return HEBusiness.Species.SHEEP
+	return HEBusiness.Species.GOAT
 
 ## The prices a head of livestock is quoted at, all off one posted price:
 ## POSTED is the good's price (HERD_EXPORT_PRICE), the analogue of another good's
@@ -565,19 +590,22 @@ const BUTCHERY_PURCHASE_PRICE_FRACTION := 0.75
 const BUTCHERY_WORKER_DAYS_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 3.0,
 	HEBusiness.Species.SHEEP: 0.5,
+	HEBusiness.Species.GOAT: 0.4,
 }
 const BUTCHERY_MEAT_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 120.0,
 	HEBusiness.Species.SHEEP: 12.0,
+	HEBusiness.Species.GOAT: 10.0,
 }
 const BUTCHERY_LEATHER_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 6.0,
 	HEBusiness.Species.SHEEP: 1.0,
+	HEBusiness.Species.GOAT: 0.8,
 }
 ## Species the Butcher works through, in order. Cattle first: more meat per
 ## worker-day and a far higher price, so a crew short of time does the most
 ## valuable work.
-const BUTCHERY_SPECIES_ORDER: Array[HEBusiness.Species] = [HEBusiness.Species.CATTLE, HEBusiness.Species.SHEEP]
+const BUTCHERY_SPECIES_ORDER: Array[HEBusiness.Species] = [HEBusiness.Species.CATTLE, HEBusiness.Species.SHEEP, HEBusiness.Species.GOAT]
 ## Days of work the Butcher stocks livestock for. A ranch's cull arrives in
 ## one lump every HERD_EVAL_INTERVAL_DAYS, far more than a crew handles in a
 ## day, so the Butcher holds live animals and works through them.
@@ -635,11 +663,13 @@ const BUTCHERY_MIN_FINISHED_MEAT := 150.0
 const HOME_BUTCHER_MEAT_PER_HEAD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 10.0,
 	HEBusiness.Species.SHEEP: 1.0,
+	HEBusiness.Species.GOAT: 0.8,
 }
 const HOME_BUTCHER_WORK_MULTIPLIER := 2.0
 const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 30.0,
 	HEBusiness.Species.SHEEP: 20.0,
+	HEBusiness.Species.GOAT: 18.0,
 }
 
 ## _run_input_purchasing reuses TRADER_CAPACITY_PER_WORKER and
@@ -1920,7 +1950,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 		elif b.kind == HEBusiness.Kind.HERD:
 			var herd_commodity := b.herd_commodity()
 			report["recipe_id"] = "herd"
-			report["species"] = "Cattle" if b.species == HEBusiness.Species.CATTLE else "Sheep"
+			report["species"] = species_name(b.species)
 			report["herd_size"] = b.herd_size
 			report["output_commodity"] = Commodity.name_of(herd_commodity)
 			report["stock"] = b.stock(herd_commodity)
