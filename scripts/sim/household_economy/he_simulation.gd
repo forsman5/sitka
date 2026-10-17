@@ -1348,16 +1348,16 @@ func _run_water_maintenance() -> void:
 func _government_staff_count(settlement_id: int) -> int:
 	var count := 0
 	for business_id in (settlements[settlement_id] as HESettlement).business_ids:
-		var b: HEBusiness = businesses[business_id]
-		if b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE:
+		var b: HEBusiness = businesses.get(business_id)
+		if b != null and (b.kind == HEBusiness.Kind.GOVERNMENT or b.kind == HEBusiness.Kind.WAREHOUSE):
 			count += _business_employed_household_count(business_id)
 	return count
 
 ## The town's drinking water at a glance: {sources, serving, in_disrepair,
 ## capacity (people the working sources supply), population, coverage (0..1,
 ## 1 when nobody lives there), upkeep_timber (a year's servicing for all),
-## next_service_days (soonest, -1 with no sources)}. Water is reporting only for
-## now: it does not change health, morale or any economic rule.
+## next_service_days (soonest, -1 with no sources)}. The coverage is what
+## _run_water_need feeds into every household's thirst.
 func get_water_summary(settlement_id: int) -> Dictionary:
 	var sources := 0
 	var serving := 0
@@ -1367,8 +1367,8 @@ func get_water_summary(settlement_id: int) -> Dictionary:
 	var soonest := -1
 	if settlements.has(settlement_id):
 		for business_id in (settlements[settlement_id] as HESettlement).business_ids:
-			var b: HEBusiness = businesses[business_id]
-			if b.kind != HEBusiness.Kind.WATER:
+			var b: HEBusiness = businesses.get(business_id)
+			if b == null or b.kind != HEBusiness.Kind.WATER:
 				continue
 			sources += 1
 			upkeep += b.water_upkeep_timber
@@ -1649,7 +1649,9 @@ func get_household_summary(household_id: int) -> Dictionary:
 	# Today's outcome per NEED, in need units, with the satisfier goods that
 	# met it. This -- not a per-good "demand" -- is what a household requires.
 	var needs: Array[Dictionary] = []
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
+		if need.is_service() and not h.last_need_required.has(need.id):
+			continue # a service need (water) the town does not provide
 		var satisfiers: Array[Dictionary] = []
 		for c in need.satisfiers():
 			satisfiers.append({"name": Commodity.name_of(c), "consumed": h.last_consumed.get(c, 0.0)})
@@ -1790,7 +1792,9 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 		note = "%.0f%% chance per month of leaving to found a household" % (HEHousehold.leave_home_chance(age) * 100.0)
 
 	var needs: Array[Dictionary] = []
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
+		if need.is_service() and not h.last_need_required.has(need.id):
+			continue
 		var required := need.per_person_daily
 		var household_required: float = h.last_need_required.get(need.id, 0.0)
 		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
@@ -2645,6 +2649,7 @@ func _daily_tick() -> void:
 		(market as HEMarket).record_supply_demand_history()
 	_record_business_revenue_history()
 	_run_consumption(record)
+	_run_water_need(record)
 	if (day + 1) % HERD_EVAL_INTERVAL_DAYS == 0:
 		_run_herds(record)
 	# After herd production, so a review's wool and culled head land in the day
@@ -3403,6 +3408,48 @@ func _run_consumption(record: Dictionary) -> void:
 		var h: HEHousehold = households[household_id]
 		for need in HENeeds.all():
 			_consume_need(h, need, record)
+
+## The water need (HENeeds.water): in a town with at least one water source,
+## every household is owed a drink per person, and the sources' working capacity
+## covers that share of the town's people (the same share for every household).
+## Thirst builds stress that costs health and morale. A town with no source at
+## all has no water need, so nothing here runs for it.
+func _run_water_need(record: Dictionary) -> void:
+	var need := HENeeds.water()
+	for settlement_id in settlements.keys():
+		var settlement: HESettlement = settlements[settlement_id]
+		var sources := 0
+		var capacity := 0
+		for business_id in settlement.business_ids:
+			var b: HEBusiness = businesses.get(business_id)
+			if b != null and b.kind == HEBusiness.Kind.WATER:
+				sources += 1
+				if not b.in_disrepair:
+					capacity += b.water_capacity
+		if sources == 0:
+			continue
+		var population := 0
+		for household_id in settlement.household_ids:
+			population += (households[household_id] as HEHousehold).headcount()
+		var coverage := 1.0 if population <= 0 else minf(1.0, float(capacity) / float(population))
+		var need_record: Dictionary = record["needs"].get_or_add(need.id, {
+			"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
+		var town_need: Dictionary = (record["needs_by_settlement"] as Dictionary).get_or_add(settlement_id, {}).get_or_add(need.id, {"required": 0.0, "provided": 0.0})
+		for household_id in settlement.household_ids:
+			var h: HEHousehold = households[household_id]
+			var needed := float(h.headcount()) * need.per_person_daily
+			var provided := needed * coverage
+			h.last_need_required[need.id] = needed
+			h.last_need_provided[need.id] = provided
+			h.record_need_stress(need, needed, provided)
+			need_record["required"] += needed
+			need_record["provided"] += provided
+			town_need["required"] += needed
+			town_need["provided"] += provided
+			if needed - provided > NEED_MET_EPSILON:
+				need_record["households_unmet"] += 1
+			else:
+				need_record["households_met"] += 1
 
 ## One need for one household: spend satisfiers densest-first until the need
 ## is met. A shortfall is reported against the need's baseline satisfier, in

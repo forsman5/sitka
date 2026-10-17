@@ -11,6 +11,9 @@ const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout
 const HETownPaths = preload("res://scripts/sim/household_economy/he_town_paths.gd")
 const HEVillagerSchedule = preload("res://scripts/sim/household_economy/he_villager_schedule.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
+const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 
 const SEED := 4242
 const SID := HEScenarioSeeds.SETTLEMENT_ID
@@ -22,6 +25,7 @@ func _init() -> void:
 	_check_presets_cover_their_towns()
 	_check_yearly_maintenance()
 	_check_neglect()
+	_check_thirst()
 	_check_government_build()
 	_check_layout_and_schedule()
 	print("WATER %s" % ("OK" if _ok else "FAILED"))
@@ -93,6 +97,63 @@ func _check_neglect() -> void:
 	warehouse.add_stock(Commodity.Type.STONE, 100.0)
 	sim.advance_ticks(1)
 	_assert(int(sim.get_water_summary(SID)["in_disrepair"]) == 0, "restocking the warehouse restores the sources")
+
+## Water is a real need: shown on the Needs page, fine while the sources work,
+## and hard on health (-20 points) and morale (-40) when the town goes thirsty.
+func _check_thirst() -> void:
+	var water := HENeeds.water()
+	_assert(HENeeds.display_order().has(HENeed.Id.WATER), "water is on the Needs page")
+	_assert(is_equal_approx(water.health_weight, 0.2) and is_equal_approx(water.morale_penalty, 0.4), "thirst costs 20 health and 40 morale at full stress")
+
+	var sim := _sim("small_village")
+	sim.advance_ticks(30)
+	var h: HEHousehold = sim.households[sim.get_household_ids(SID)[0]]
+	_assert(h.stress_of(HENeed.Id.WATER) == 0.0 and h.last_need_required.has(HENeed.Id.WATER), "working sources: a water need, no thirst")
+	_assert(int(sim.get_need_detail(HENeed.Id.WATER, 0, SID)["households_unmet"]) == 0, "nobody unmet while the sources work")
+	var calm_morale := h.morale()
+	var calm_health := h.health()
+
+	# Out of stone for a year: the sources fail, the whole town goes thirsty.
+	var warehouse := _warehouse(sim)
+	for day in HESimulation.WATER_SERVICE_INTERVAL_DAYS + 5:
+		warehouse.consume(Commodity.Type.STONE, warehouse.stock(Commodity.Type.STONE))
+		sim.advance_ticks(1)
+	h = sim.households[sim.get_household_ids(SID)[0]]
+	_assert(h.stress_of(HENeed.Id.WATER) > 0.95, "thirst stress is near full (%.2f)" % h.stress_of(HENeed.Id.WATER))
+	var detail := sim.get_need_detail(HENeed.Id.WATER, 0, SID)
+	_assert(int(detail["households_unmet"]) > 0 and int(detail["households_met"]) == 0, "the Needs page counts thirsty households")
+	var thirst_loss := 0.0
+	for loss in h.health_losses():
+		if loss["label"] == "Water":
+			thirst_loss = float(loss["loss"])
+	_assert(absf(thirst_loss - 0.2 * h.stress_of(HENeed.Id.WATER)) < 0.001 and thirst_loss > 0.18, "health loses about 20 points (%.3f)" % thirst_loss)
+	var thirst_penalty := 0.0
+	for entry in h.morale_penalties():
+		if entry["label"] == "Thirsty":
+			thirst_penalty = float(entry["penalty"])
+	_assert(thirst_penalty > 0.38 and thirst_penalty <= 0.4001, "morale drops about 40 points (%.3f)" % thirst_penalty)
+	_assert(h.morale() < calm_morale - 0.35 and h.health() < calm_health - 0.15, "morale and health fall (morale %.2f -> %.2f, health %.2f -> %.2f)" % [calm_morale, h.morale(), calm_health, h.health()])
+	var summary := sim.get_household_summary(h.id)
+	var listed := false
+	for need in summary["needs"]:
+		listed = listed or need["label"] == "Water"
+	_assert(listed, "the household page lists the water need")
+
+	# Stone arrives, sources are serviced, and the thirst clears.
+	warehouse.add_stock(Commodity.Type.STONE, 200.0)
+	sim.advance_ticks(25)
+	h = sim.households[sim.get_household_ids(SID)[0]]
+	_assert(h.stress_of(HENeed.Id.WATER) < 0.05, "thirst clears once water is back (%.2f)" % h.stress_of(HENeed.Id.WATER))
+
+	# A town with no water source has no water need at all.
+	var dry_spec := HEPresets.spec("small_village")
+	dry_spec.erase("water")
+	var dry := HESimulation.new(SEED, Callable(HEScenarioSeeds, "build_spec").bind(dry_spec))
+	dry.advance_ticks(20)
+	var dry_household: HEHousehold = dry.households[dry.get_household_ids(SID)[0]]
+	_assert(not dry_household.last_need_required.has(HENeed.Id.WATER) and dry_household.stress_of(HENeed.Id.WATER) == 0.0, "no water source, no water need")
+	for need in dry.get_household_summary(dry_household.id)["needs"]:
+		_assert(need["label"] != "Water", "a town without water does not list the need")
 
 func _check_government_build() -> void:
 	var sim := _sim("small_village")
