@@ -234,6 +234,7 @@ var _business_detail_cull_target_hint: Label
 ## Which business the cull-target box was last loaded for. The box is only
 ## (re)loaded when the selection changes -- the detail view refreshes every
 ## tick, and rewriting the box then would clobber whatever's being typed.
+var _business_detail_dynamic_cull_check: CheckBox
 var _cull_target_loaded_for: int = -1
 var _business_detail_warehouse_section: VBoxContainer
 var _business_detail_tax_section: VBoxContainer
@@ -736,6 +737,11 @@ func _build_ui() -> void:
 	_business_detail_cull_target_box.custom_minimum_size = Vector2(110, 0)
 	_business_detail_cull_target_box.value_changed.connect(_on_cull_target_changed)
 	cull_target_row.add_child(_business_detail_cull_target_box)
+	_business_detail_dynamic_cull_check = CheckBox.new()
+	_business_detail_dynamic_cull_check.text = "Dynamic cull"
+	_business_detail_dynamic_cull_check.tooltip_text = "Sell part of each review's herd growth once the herd is past its breeding stock, rather than waiting to reach the cull target."
+	_business_detail_dynamic_cull_check.toggled.connect(_on_dynamic_cull_toggled)
+	_business_detail_herd_controls_section.add_child(_business_detail_dynamic_cull_check)
 	# Sheep only (hidden for cattle): what flock the settlement's wool demand
 	# would actually support. Plain label, refreshed every tick -- unlike the
 	# box above it, nothing to clobber.
@@ -1927,6 +1933,10 @@ func _on_cull_target_changed(value: float) -> void:
 		_business_detail_cull_target_box.set_value_no_signal(applied)
 		_refresh_business_detail()
 
+func _on_dynamic_cull_toggled(enabled: bool) -> void:
+	if _selected_business_id != -1:
+		_simulation.set_herd_dynamic_cull(_selected_business_id, enabled)
+
 ## Link handlers: open a detail view from inside another one, remembering the
 ## current view so closing returns to it (no visual stacking).
 func _on_linked_business_pressed(business_id: int) -> void:
@@ -2426,6 +2436,7 @@ func _refresh_business_detail_header(report: Dictionary) -> void:
 		_business_detail_cull_target_box.min_value = report["cull_target_min"]
 		_business_detail_cull_target_box.max_value = report["cull_target_max"]
 		_business_detail_cull_target_box.set_value_no_signal(report["cull_target"])
+		_business_detail_dynamic_cull_check.set_pressed_no_signal(report["dynamic_cull"])
 	_business_detail_warehouse_section.visible = report["kind"] == "warehouse"
 	_business_detail_tax_section.visible = report["kind"] == "government"
 	_business_detail_transaction_section.visible = report["kind"] == "trader"

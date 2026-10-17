@@ -61,6 +61,7 @@ func _init() -> void:
 	_check_old_age_orphans_get_adopted()
 	_check_herds_grow_and_cull()
 	_check_herd_cull_target_is_configurable()
+	_check_herd_dynamic_cull()
 	_check_herd_collateral_finances_wages()
 	_check_herd_staffing_matters()
 	_check_herd_monetization()
@@ -1994,6 +1995,33 @@ func _check_herd_cull_target_is_configurable() -> void:
 	_assert(is_equal_approx(sim.set_herd_cull_target(sheep_id, 1000000.0), limits.y), "A target above what the pasture holds should clamp down")
 	_assert(sim.set_herd_cull_target(HEScenarioSeeds.FARM_BUSINESS_ID, 100.0) < 0.0, "Setting a cull target on a non-herd business should be rejected")
 
+## Dynamic cull: a young herd past its breeding-stock floor sells part of its
+## growth each review, so the first sale lands within a year or so instead of
+## ~900 days; switching it off restores hold-until-target.
+func _check_herd_dynamic_cull() -> void:
+	print("\n=== Herds: dynamic cull sells growth ahead of the cull target ===")
+	var cattle_id := HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID
+	var results := {}
+	for enabled in [true, false]:
+		var sim := _new_sim("build_three_business_economy")
+		_assert(sim.set_herd_dynamic_cull(cattle_id, enabled) == enabled, "Dynamic cull should be switchable on a ranch")
+		var ranch: HEBusiness = sim.businesses[cattle_id]
+		var target := sim.herd_cull_target(ranch)
+		var culled := 0.0
+		var first_cull_day := -1
+		for review in 16: # ~4 years
+			sim.advance_ticks(HESimulation.HERD_EVAL_INTERVAL_DAYS)
+			_assert(ranch.herd_size <= target + EPSILON, "Herd must never exceed its cull target, got %.2f" % ranch.herd_size)
+			if ranch.last_actual_units > 0.0:
+				culled += ranch.last_actual_units
+				if first_cull_day < 0:
+					first_cull_day = sim.day
+		results[enabled] = first_cull_day
+		print("  dynamic=%s: first cull day %d, culled %.1f head in ~4 years, herd now %.1f / %.0f" % [enabled, first_cull_day, culled, ranch.herd_size, target])
+	_assert(results[true] > 0 and results[true] <= 360, "Dynamic cull should sell within the first year, got day %d" % results[true])
+	_assert(results[false] < 0 or results[false] > 600, "Static cull should hold until the herd nears its target, got day %d" % results[false])
+	_assert(HESimulation.dynamic_cull_share(60.0, 150.0) == 0.0 and is_equal_approx(HESimulation.dynamic_cull_share(150.0, 150.0), 1.0), "Share should run from 0 at the breeding floor to 1 at the target")
+
 ## Husbandry: a herd's labor must have a real marginal product, or the
 ## capacity tuner has no stable staffing level to find (it churned the Sheep
 ## Farm ~400 times in 10 years when staffing changed nothing). Same seed, two
@@ -3259,11 +3287,15 @@ func _check_winter_fodder_and_herd_outcomes() -> void:
 			_assert(absf(float(record["consumed"].get("Grain", 0.0)) - eaten) < 0.01, "Fodder should be recorded as consumed grain")
 			_assert(absf(b.last_fodder_eaten - eaten) < 0.01 and absf(b.last_fodder_needed - need) < 0.01, "The herd should report its winter fodder need and intake")
 			_assert(b.last_review_season == HESimulation.Season.WINTER, "The review should record that it closed winter")
-			var born: float = b.herd_events.back()["born"]
+			var birth_event: Dictionary = {}
+			for herd_event in b.herd_events: # a dynamic cull may log after the birth
+				if herd_event["type"] == "herd_birth":
+					birth_event = herd_event
+			var born: float = birth_event["born"]
 			_assert(born > 0.0, "Births are a flat per-review rate, so winter reviews still add young (got %.2f)" % born)
 			outcomes.append(b.herd_size / head)
 			if cover == 1.0:
-				deaths_fed = b.herd_events.back()["died"]
+				deaths_fed = birth_event["died"]
 		rows.append("%s herd retained: fed %.3f, half-fed %.3f, unfed %.3f" % [("Cattle" if species == HEBusiness.Species.CATTLE else "Sheep"), outcomes[0], outcomes[1], outcomes[2]])
 		_assert(outcomes[0] > outcomes[1] and outcomes[1] > outcomes[2], "Less winter fodder should mean a smaller surviving herd (%s)" % rows.back())
 		_assert(deaths_fed > 0.0, "Even a fed herd should lose its baseline mortality in winter")

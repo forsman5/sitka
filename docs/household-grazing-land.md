@@ -39,6 +39,11 @@ Research behind `CATTLE_LAND_PER_HEAD`, `SHEEP_LAND_PER_HEAD`,
 - The defaults land on the earlier 150 / 200 targets, so the economy's
   timings (~900 days to first cull) are unchanged, and sheep winter fodder
   (0.6 grain per head) is the same.
+- Dynamic cull (on by default, per-ranch checkbox in the dashboard): rather than
+  holding the herd until it reaches the target, a ranch past a breeding-stock
+  floor (40% of target) also sells a share of each review's net growth, rising
+  from 0 at the floor to all of it at the target. The first sale lands in the
+  first year or so instead of ~540-900 days; the target remains a hard cap.
 - Each ranch owns its land; the old shared 300-acre settlement pool is gone.
 
 ## Farm and woodlot
