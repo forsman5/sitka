@@ -10,7 +10,9 @@ const Shipment = preload("res://scripts/sim/records/shipment.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 
 const TRADE_INTERVAL_DAYS := 2
-const MIN_PRICE_GAP := 0.5
+const TRADER_MIN_MARGIN := 0.04
+## Wait for a useful lot while cargo weight and cart loading are unmodeled.
+const MIN_BATCH_UNITS := {Commodity.Type.CHARCOAL: 2.0, Commodity.Type.STONE: 2.0}
 const TOWN_NAMES := {
 	ValleySeed.ALDFORD: "Aldford",
 	ValleySeed.HIGH_FELL: "High Fell",
@@ -23,6 +25,7 @@ var towns: Dictionary[int, HESimulation] = {}
 var edges: Dictionary[int, TransportEdge] = {}
 var shipments: Dictionary[int, Shipment] = {}
 var shipment_prices: Dictionary[int, float] = {}
+var shipment_relay_targets: Dictionary[int, int] = {}
 var day := 0
 var _next_shipment_id := 1
 var delivered_total := 0
@@ -137,7 +140,8 @@ func _deliver_arrivals() -> void:
 		var shipment: Shipment = shipments[shipment_id]
 		if shipment.arrival_day > day:
 			continue
-		towns[shipment.destination_settlement_id].receive_valley_shipment(shipment.commodity, shipment.quantity)
+		var relay_target: int = shipment_relay_targets.get(shipment_id, -1)
+		towns[shipment.destination_settlement_id].receive_valley_shipment(shipment.commodity, shipment.quantity, relay_target, shipment_prices[shipment_id])
 		var origin_name: String = TOWN_NAMES[shipment.origin_settlement_id]
 		towns[shipment.destination_settlement_id].record_valley_transaction("import", shipment.commodity,
 			shipment.quantity, shipment_prices[shipment_id], origin_name, true)
@@ -146,6 +150,7 @@ func _deliver_arrivals() -> void:
 	for shipment_id in arrived:
 		shipments.erase(shipment_id)
 		shipment_prices.erase(shipment_id)
+		shipment_relay_targets.erase(shipment_id)
 
 func _dispatch_shipments() -> void:
 	var opportunities: Array[Dictionary] = []
@@ -158,6 +163,9 @@ func _dispatch_shipments() -> void:
 			var source: HESimulation = towns[source_id]
 			var destination: HESimulation = towns[destination_id]
 			for commodity in HESimulation.EXPORT_PRIORITY:
+				var committed_destination: int = source.get_valley_relay_destination(commodity)
+				if committed_destination >= 0 and committed_destination != destination_id:
+					continue
 				var offer := source.get_valley_trade_offer(commodity)
 				if offer["quantity"] <= 0.0001:
 					continue
@@ -166,23 +174,64 @@ func _dispatch_shipments() -> void:
 				var port_bid := destination.get_valley_port_buy_price(commodity)
 				if port_bid > 0.0:
 					destination_price = port_bid
+				var local_destination_price := destination_price
+				# A posted quote without a buyer is not an import bid. Let an
+				# actual downstream household or workshop bid take precedence.
+				if commodity in [Commodity.Type.CHARCOAL, Commodity.Type.STONE] and port_bid <= 0.0 and destination.get_valley_import_interest(commodity, local_destination_price) <= 0.0001:
+					local_destination_price = 0.0
+				# A neighbor can pass a bounded buyer quote through this Trader.
+				# The imported lot is physically handed to the middle Trader first;
+				# later dispatches can only use the stock it actually holds.
+				var relay_buyer := -1
+				var relay_price := 0.0
+				for next_edge_id in edge_ids:
+					var next_edge: TransportEdge = edges[next_edge_id]
+					if not next_edge.connects(destination_id):
+						continue
+					var next_id := next_edge.other_end(destination_id)
+					if next_id == source_id:
+						continue
+					var next_town: HESimulation = towns[next_id]
+					var next_port_bid := next_town.get_valley_port_buy_price(commodity)
+					var downstream_bid := next_port_bid if next_port_bid > 0.0 else next_town.get_valley_trade_price(commodity)
+					var next_cost: float = next_edge.toll + next_edge.risk * 2.0 + TRADER_MIN_MARGIN
+					var delivered_bid: float = downstream_bid - next_cost
+					if next_town.get_valley_import_interest(commodity, downstream_bid) <= 0.0 and next_port_bid <= 0.0:
+						continue
+					if delivered_bid > relay_price:
+						relay_price = delivered_bid
+						relay_buyer = next_id
+				if relay_buyer >= 0 and relay_price > local_destination_price:
+					destination_price = relay_price
+				var is_relay: bool = relay_buyer >= 0 and relay_price > local_destination_price
 				# The Port is a standing outside buyer. An origin's local retail
 				# quote can stay high when nobody there uses the good (stone is
 				# one case), so negotiate from the producer's floor instead.
-				var seller_price: float = offer["min_price"] if port_bid > 0.0 else maxf(source_price, offer["min_price"])
-				var gap: float = destination_price - seller_price - edge.toll - edge.risk * 2.0
-				if gap < MIN_PRICE_GAP:
+				var seller_price: float = offer["min_price"] if port_bid > 0.0 or float(offer.get("held", 0.0)) > 0.0 else maxf(source_price, offer["min_price"])
+				var route_cost: float = edge.toll + edge.risk * 2.0
+				var gap: float = destination_price - seller_price - route_cost
+				if gap < TRADER_MIN_MARGIN:
 					continue
 				# Split the price room between the origin and destination Traders.
 				# Transport cost is a hurdle in the route decision, as elsewhere here.
-				var unit_price: float = seller_price + gap * 0.5
+				var unit_price: float = seller_price + route_cost + maxf(TRADER_MIN_MARGIN, gap * 0.5)
+				var destination_interest: float = destination.get_valley_import_interest(commodity, unit_price)
 				opportunities.append({"source": source_id, "destination": destination_id, "edge": edge_id,
-					"commodity": commodity, "gap": gap, "price": unit_price, "seller_price": seller_price})
+					"commodity": commodity, "gap": gap, "price": unit_price, "seller_price": seller_price,
+					"relay_buyer": relay_buyer,
+					"is_relay": is_relay,
+					"construction_reserve": commodity == Commodity.Type.STONE and destination_interest > 0.0})
 	opportunities.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if a["commodity"] == Commodity.Type.GRAIN and b["commodity"] != Commodity.Type.GRAIN:
 			return true
 		if b["commodity"] == Commodity.Type.GRAIN and a["commodity"] != Commodity.Type.GRAIN:
 			return false
+		var a_critical: bool = a["commodity"] in [Commodity.Type.IRON_ORE, Commodity.Type.IRON]
+		var b_critical: bool = b["commodity"] in [Commodity.Type.IRON_ORE, Commodity.Type.IRON]
+		if a_critical != b_critical:
+			return a_critical
+		if a["construction_reserve"] != b["construction_reserve"]:
+			return bool(a["construction_reserve"])
 		return a["gap"] > b["gap"]
 	)
 	var remaining_edges := {}
@@ -197,21 +246,45 @@ func _dispatch_shipments() -> void:
 		var edge_id: int = opportunity["edge"]
 		var commodity: Commodity.Type = opportunity["commodity"]
 		var source: HESimulation = towns[source_id]
+		var committed_destination: int = source.get_valley_relay_destination(commodity)
+		if committed_destination >= 0 and committed_destination != destination_id:
+			continue
+		if opportunity["is_relay"] and _has_conflicting_relay(destination_id, commodity, int(opportunity["relay_buyer"])):
+			continue
 		var destination: HESimulation = towns[destination_id]
+		if opportunity["is_relay"] and destination.get_valley_relay_destination(commodity) not in [-1, int(opportunity["relay_buyer"])]:
+			continue
 		var current_offer := source.get_valley_trade_offer(commodity)
 		var quantity: float = minf(current_offer["quantity"],
 			minf(remaining_edges[edge_id], minf(remaining_traders[source_id], remaining_traders[destination_id])))
-		if commodity in [Commodity.Type.IRON, Commodity.Type.IRON_ORE] and destination.get_valley_port_buy_price(commodity) <= 0.0:
-			var inbound := 0.0
+		var inbound := 0.0
+		for shipment in shipments.values():
+			if shipment.destination_settlement_id == destination_id and shipment.commodity == commodity:
+				inbound += shipment.quantity
+		var local_interest: float = destination.get_valley_import_interest(commodity, opportunity["price"], inbound)
+		if opportunity["is_relay"]:
+			var buyer: HESimulation = towns[int(opportunity["relay_buyer"])]
+			var downstream_inbound := 0.0
 			for shipment in shipments.values():
-				if shipment.destination_settlement_id == destination_id and shipment.commodity == commodity:
-					inbound += shipment.quantity
+				if shipment.destination_settlement_id == int(opportunity["relay_buyer"]) and shipment.commodity == commodity:
+					downstream_inbound += shipment.quantity
+			var committed_at_relay := destination.get_valley_relay_reserved_stock(commodity) if destination.get_valley_relay_destination(commodity) == int(opportunity["relay_buyer"]) else 0.0
+			for shipment_id in shipment_relay_targets:
+				var incoming: Shipment = shipments[shipment_id]
+				if incoming.destination_settlement_id == destination_id and incoming.commodity == commodity and shipment_relay_targets[shipment_id] == int(opportunity["relay_buyer"]):
+					committed_at_relay += incoming.quantity
+			var downstream_need := buyer.get_valley_import_interest(commodity, buyer.get_valley_trade_price(commodity), downstream_inbound)
+			quantity = minf(quantity, maxf(0.0, downstream_need - committed_at_relay))
+		elif commodity in [Commodity.Type.CHARCOAL, Commodity.Type.STONE] and destination.get_valley_port_buy_price(commodity) <= 0.0:
+			quantity = minf(quantity, local_interest)
+		if commodity in [Commodity.Type.IRON, Commodity.Type.IRON_ORE] and destination.get_valley_port_buy_price(commodity) <= 0.0:
 			quantity = minf(quantity, destination.get_valley_workshop_import_need(commodity, inbound))
 		quantity = minf(quantity, destination.get_valley_trader_purchase_capacity(opportunity["price"]))
-		if quantity <= 0.0001:
+		if quantity < float(MIN_BATCH_UNITS.get(commodity, 0.0001)):
 			continue
 		var unit_price: float = opportunity["price"]
-		quantity = source.dispatch_valley_shipment(commodity, quantity, unit_price, opportunity["seller_price"])
+		var route_cost: float = edges[edge_id].toll + edges[edge_id].risk * 2.0
+		quantity = source.dispatch_valley_shipment(commodity, quantity, unit_price, opportunity["seller_price"], route_cost)
 		if quantity <= 0.0001:
 			continue
 		towns[destination_id].pay_for_valley_shipment(commodity, quantity, unit_price)
@@ -222,7 +295,17 @@ func _dispatch_shipments() -> void:
 			destination_id, HEScenarioSeeds.TRADER_BUSINESS_ID, edge_id, day, arrival)
 		shipments[shipment.id] = shipment
 		shipment_prices[shipment.id] = unit_price
+		if opportunity["is_relay"]:
+			shipment_relay_targets[shipment.id] = int(opportunity["relay_buyer"])
 		_next_shipment_id += 1
 		remaining_edges[edge_id] -= quantity
 		remaining_traders[source_id] -= quantity
 		remaining_traders[destination_id] -= quantity
+
+func _has_conflicting_relay(destination_id: int, commodity: Commodity.Type, target_id: int) -> bool:
+	for shipment_id in shipment_relay_targets:
+		var shipment: Shipment = shipments.get(shipment_id)
+		if shipment != null and shipment.destination_settlement_id == destination_id and shipment.commodity == commodity:
+			if shipment_relay_targets[shipment_id] != target_id:
+				return true
+	return false

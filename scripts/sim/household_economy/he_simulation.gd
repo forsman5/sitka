@@ -774,6 +774,11 @@ var position_lookup: Callable = Callable()
 var price_adjustment_enabled: bool = true
 ## Valley mode routes exports through transport edges instead of the standalone outside market.
 var external_trade_enabled: bool = true
+## Inventory committed to an agreed onward sale while a shipment passes
+## through this Trader. It remains real stock but is unavailable locally.
+var _valley_reserved_stock: Dictionary = {}
+var _valley_reserved_destination: Dictionary = {}
+var _valley_reserved_unit_cost: Dictionary = {}
 var _pending_valley_transactions: Array[Dictionary] = []
 
 ## Industrial tools (docs/tools-industrial-demand-plan.md): businesses that use
@@ -3151,7 +3156,7 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 	if not external_trade_enabled:
 		var trader := _settlement_trader(settlement_id)
 		if trader != null:
-			local_offer += trader.stock(commodity)
+			local_offer += maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0))
 	return local_offer
 
 ## What a business buyer can actually get of `commodity` today. A local seller
@@ -3170,7 +3175,7 @@ func _business_offer(settlement_id: int, commodity: Commodity.Type, trader_impor
 	if not allow_import or trader == null:
 		return 0.0
 	if not external_trade_enabled:
-		return trader.stock(commodity)
+		return maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0))
 	if not trader_import_capacity.has(trader.id):
 		trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
 	return trader_import_capacity[trader.id]
@@ -4162,7 +4167,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	var seller: HEBusiness = _business_selling(settlement_id, commodity)
 	var importer: HEBusiness = _settlement_trader(settlement_id) if not external_trade_enabled else null
 	var total_offer := _household_offer(settlement_id, commodity)
-	var imported_offer: float = importer.stock(commodity) if importer != null else 0.0
+	var imported_offer: float = maxf(0.0, importer.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)) if importer != null else 0.0
 	var local_offer: float = maxf(0.0, total_offer - imported_offer)
 	# Today's input purchases (_run_input_purchasing) already took their
 	# pro-rata share of this seller's paced offer; households clear against
@@ -4398,13 +4403,58 @@ func get_valley_trade_offer(commodity: Commodity.Type) -> Dictionary:
 	var settlement_id := _resolve_settlement_id(-1)
 	var trader := _settlement_trader(settlement_id)
 	var seller := _business_selling(settlement_id, commodity)
-	if trader == null or seller == null:
+	if trader == null:
 		return {"quantity": 0.0, "min_price": 0.0}
 	if not _trader_export_enabled.get(trader.id, {}).get(commodity, false):
 		return {"quantity": 0.0, "min_price": 0.0}
 	var capacity: float = float(_business_employed_worker_count(trader.id)) * VALLEY_TRADER_CAPACITY_PER_WORKER
-	var offer := _seller_trade_offer(seller, commodity)
-	return {"quantity": minf(capacity, offer["quantity"]), "min_price": offer["min_price"]}
+	var held := minf(trader.stock(commodity), _valley_reserved_stock.get(commodity, 0.0))
+	var offer := _seller_trade_offer(seller, commodity) if seller != null else {"quantity": 0.0, "min_price": 0.0}
+	var floor_price: float = offer["min_price"]
+	if held > 0.0001:
+		floor_price = maxf(floor_price, _valley_reserved_unit_cost.get(commodity, 0.0))
+	return {"quantity": minf(capacity, held + offer["quantity"]), "min_price": floor_price, "held": held}
+
+## Bounded interest a neighboring Trader can act on. Charcoal is only attractive
+## when its delivered price beats timber's heat value, and imports are limited
+## to a month of likely household use. Stone fills a small construction reserve.
+func get_valley_import_interest(commodity: Commodity.Type, delivered_price: float, in_transit: float = 0.0) -> float:
+	var settlement_id := _resolve_settlement_id(-1)
+	if delivered_price <= 0.0:
+		return 0.0
+	var trader := _settlement_trader(settlement_id)
+	var held := trader.stock(commodity) if trader != null else 0.0
+	if commodity in [Commodity.Type.CHARCOAL, Commodity.Type.STONE] and _business_selling(settlement_id, commodity) != null:
+		return 0.0 # local producers do not import their own output
+	if commodity == Commodity.Type.CHARCOAL:
+		var market: HEMarket = markets[settlement_id]
+		var heat_need := 0.0
+		var household_stock := 0.0
+		var household_timber_stock := 0.0
+		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+			var h: HEHousehold = households[household_id]
+			heat_need += float(h.headcount()) * 0.1 / 4.0
+			household_stock += h.stock(commodity)
+			household_timber_stock += h.stock(Commodity.Type.TIMBER)
+		# Timber is the baseline heat source; charcoal must offer at least as
+		# much heat per coin when timber is actually available. A town whose
+		# Woodlot has run dry can still bid for dearer charcoal to avoid cold.
+		var timber_available: float = _household_offer(settlement_id, Commodity.Type.TIMBER) + household_timber_stock / TARGET_BUFFER_DAYS
+		if delivered_price / 4.0 > market.price[Commodity.Type.TIMBER] * 1.03 and timber_available >= heat_need * 4.0:
+			return 0.0
+		var business_use := _business_input_daily_use(settlement_id, commodity, null)
+		var business_stock := 0.0
+		for business in businesses.values():
+			if business.settlement_id == settlement_id and business.recipe != null and business.recipe.inputs.has(commodity):
+				business_stock += business.stock(commodity)
+		var local_seller := _business_selling(settlement_id, commodity)
+		var seller_stock := local_seller.stock(commodity) if local_seller != null else 0.0
+		var business_reserve := maxf(0.0, business_use * 30.0 - business_stock)
+		return maxf(0.0, heat_need * 30.0 + business_reserve - held - household_stock - seller_stock - in_transit)
+	if commodity == Commodity.Type.STONE:
+		var target := 20.0 # small repair stock; construction can place a larger order
+		return maxf(0.0, target - _town_stored(settlement_id, commodity) - in_transit)
+	return 0.0
 
 func get_valley_trader_capacity() -> float:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
@@ -4418,8 +4468,16 @@ func get_valley_trader_purchase_capacity(unit_price: float) -> float:
 	var employed := _business_employed_worker_count(trader.id)
 	if employed <= 0:
 		return 0.0
-	var wage_reserve := 30.0 * _reference_wage_per_worker(settlement_id) * employed
+	# Neighbor contracts turn over within days; holding a full month of wages
+	# idle prevented otherwise funded relay purchases in small towns.
+	var wage_reserve := 7.0 * _reference_wage_per_worker(settlement_id) * employed
 	return maxf(0.0, trader.balance - wage_reserve) / unit_price
+
+func get_valley_relay_destination(commodity: Commodity.Type) -> int:
+	return int(_valley_reserved_destination.get(commodity, -1))
+
+func get_valley_relay_reserved_stock(commodity: Commodity.Type) -> float:
+	return float(_valley_reserved_stock.get(commodity, 0.0))
 
 func get_valley_trade_price(commodity: Commodity.Type) -> float:
 	var settlement_id := _resolve_settlement_id(-1)
@@ -4471,27 +4529,34 @@ func _run_port_trade() -> void:
 				sellers.append(local_seller)
 			for seller in sellers:
 				var quantity := minf(remaining, seller.stock(commodity))
+				var seller_buy_price := buy_price
 				if seller == trader:
+					quantity = minf(quantity, maxf(0.0, seller.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)))
 					var local_use := _settlement_daily_demand(settlement_id, commodity) + _business_input_daily_use(settlement_id, commodity, null)
 					quantity = minf(quantity, maxf(0.0, seller.stock(commodity) - local_use * 30.0))
 				else:
 					var offer := _seller_trade_offer(seller, commodity)
-					if buy_price + 0.00001 < offer["min_price"]:
+					# Keep the usual half-price bid, but a staffed producer can
+					# negotiate up to its cost floor while the Port still clears a
+					# margin. Otherwise a temporary output glut can cut off its only
+					# buyer and turn into a permanent business failure.
+					seller_buy_price = maxf(buy_price, offer["min_price"])
+					if seller_buy_price > market_price * 0.9:
 						continue
 					quantity = minf(quantity, offer["quantity"])
 				if quantity <= 0.0001:
 					continue
 				seller.consume(commodity, quantity)
 				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
-				seller.balance += quantity * buy_price
-				seller.ledger_add("sales_export" if seller != trader else "sales_business", quantity * buy_price)
-				seller.last_revenue += quantity * buy_price
+				seller.balance += quantity * seller_buy_price
+				seller.ledger_add("sales_export" if seller != trader else "sales_business", quantity * seller_buy_price)
+				seller.last_revenue += quantity * seller_buy_price
 				if seller == trader:
 					trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + quantity
-				port.balance += quantity * (market_price - buy_price)
-				port.ledger_add("trade_margin", quantity * (market_price - buy_price))
+				port.balance += quantity * (market_price - seller_buy_price)
+				port.ledger_add("trade_margin", quantity * (market_price - seller_buy_price))
 				port.ledger_add_good("export", commodity, quantity)
-				port.last_revenue += quantity * (market_price - buy_price)
+				port.last_revenue += quantity * (market_price - seller_buy_price)
 				port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + quantity
 				_export_revenue_total += quantity * market_price
 				remaining -= quantity
@@ -4508,9 +4573,9 @@ func get_valley_market_prices() -> Dictionary:
 ## The origin Trader buys at the negotiated seller price and sells to the
 ## destination Trader at the intertown price. Both values come from the matched
 ## valley opportunity, never from the standalone excess-clearing bid.
-func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_price: float, seller_price: float) -> float:
+func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_price: float, seller_price: float, route_cost: float = 0.0) -> float:
 	var offer := get_valley_trade_offer(commodity)
-	if seller_price + 0.00001 < offer["min_price"] or sale_price + 0.00001 < seller_price:
+	if sale_price + 0.00001 < seller_price:
 		return 0.0
 	var quantity: float = minf(requested, offer["quantity"])
 	if quantity <= 0.0001:
@@ -4518,16 +4583,42 @@ func dispatch_valley_shipment(commodity: Commodity.Type, requested: float, sale_
 	var settlement_id := _resolve_settlement_id(-1)
 	var trader := _settlement_trader(settlement_id)
 	var seller := _business_selling(settlement_id, commodity)
-	seller.consume(commodity, quantity)
-	seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
-	seller.balance += quantity * seller_price
-	seller.ledger_add("sales_export", quantity * seller_price)
-	seller.ledger_add_good("export", commodity, quantity)
-	seller.last_revenue += quantity * seller_price
-	var margin := quantity * (sale_price - seller_price)
-	trader.balance += margin
-	trader.ledger_add("trade_margin", margin)
-	trader.last_revenue += margin
+	var held_sale := minf(quantity, _valley_reserved_stock.get(commodity, 0.0))
+	if held_sale > 0.0:
+		var held_unit_cost: float = _valley_reserved_unit_cost.get(commodity, 0.0)
+		_valley_reserved_stock[commodity] = maxf(0.0, _valley_reserved_stock.get(commodity, 0.0) - held_sale)
+		if _valley_reserved_stock[commodity] <= 0.0001:
+			_valley_reserved_stock.erase(commodity)
+			_valley_reserved_destination.erase(commodity)
+			_valley_reserved_unit_cost.erase(commodity)
+		trader.consume(commodity, held_sale)
+		trader.add_flow(HEBusiness.FLOW_SOLD, commodity, held_sale)
+		trader.balance += held_sale * (sale_price - route_cost)
+		var held_margin := held_sale * (sale_price - route_cost - held_unit_cost)
+		trader.ledger_add("trade_margin", held_margin)
+		trader.ledger_add("transport_cost", held_sale * route_cost)
+		trader.ledger_add_good("export", commodity, held_sale)
+		trader.last_revenue += held_margin
+	var local_sale := quantity - held_sale
+	if local_sale > 0.0001:
+		if seller == null:
+			return held_sale
+		var local_offer := _seller_trade_offer(seller, commodity)
+		if seller_price + 0.00001 < local_offer["min_price"]:
+			return held_sale
+		local_sale = minf(local_sale, local_offer["quantity"])
+		quantity = held_sale + local_sale
+		seller.consume(commodity, local_sale)
+		seller.add_flow(HEBusiness.FLOW_SOLD, commodity, local_sale)
+		seller.balance += local_sale * seller_price
+		seller.ledger_add("sales_export", local_sale * seller_price)
+		seller.ledger_add_good("export", commodity, local_sale)
+		seller.last_revenue += local_sale * seller_price
+		var margin := local_sale * (sale_price - seller_price - route_cost)
+		trader.balance += margin
+		trader.ledger_add("trade_margin", margin)
+		trader.ledger_add("transport_cost", local_sale * route_cost)
+		trader.last_revenue += margin
 	trader.last_exported[commodity] = trader.last_exported.get(commodity, 0.0) + quantity
 	_export_revenue_total += quantity * sale_price
 	return quantity
@@ -4538,10 +4629,16 @@ func pay_for_valley_shipment(commodity: Commodity.Type, quantity: float, unit_pr
 		trader.balance -= quantity * unit_price
 		_import_cost_total += quantity * unit_price
 
-func receive_valley_shipment(commodity: Commodity.Type, quantity: float) -> void:
+func receive_valley_shipment(commodity: Commodity.Type, quantity: float, relay_destination: int = -1, unit_cost: float = 0.0) -> void:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
 	if trader != null:
 		trader.add_stock(commodity, quantity)
+		if relay_destination >= 0:
+			var previous_quantity: float = _valley_reserved_stock.get(commodity, 0.0)
+			var previous_cost: float = _valley_reserved_unit_cost.get(commodity, 0.0)
+			_valley_reserved_stock[commodity] = previous_quantity + quantity
+			_valley_reserved_unit_cost[commodity] = (previous_quantity * previous_cost + quantity * unit_cost) / (previous_quantity + quantity)
+			_valley_reserved_destination[commodity] = relay_destination
 
 func record_valley_transaction(direction: String, commodity: Commodity.Type, quantity: float, unit_price: float, route: String, on_arrival: bool = false) -> void:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
