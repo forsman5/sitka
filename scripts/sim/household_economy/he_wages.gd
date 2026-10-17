@@ -61,6 +61,8 @@ func wage_paid_per_worker(b: HEBusiness) -> float:
 	# A valley Trader clears inter-town shipments on a short cadence. The
 	# standalone 45-day return window otherwise keeps a shipment windfall in its
 	# payroll long after freight demand disappears, draining its relay float.
+	# TODO: replace this 14-day/0.5 special case (tuned to pass check_valley_economy) with an
+	# expected-income estimate plus a variance buffer, so lumpy earners smooth their own wages.
 	var valley_trader: bool = b.kind == HEBusiness.Kind.TRADER and not s.external_trade_enabled
 	var return_window := 14 if valley_trader else -1
 	var return_share := labour_share * 0.5 if valley_trader else labour_share
