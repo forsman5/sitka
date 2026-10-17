@@ -155,7 +155,9 @@ func _check_business_fails_at_credit_limit() -> void:
 			zombie.advance_ticks(1)
 			for id in zombie.businesses.keys():
 				var zb: HEBusiness = zombie.businesses[id]
-				if zb.kind != HEBusiness.Kind.GOVERNMENT and zb.max_capacity > 0 and zb.capacity < 1:
+				# A livestock processor's crew follows its work (_livestock_crew_target)
+				# and is legitimately zero while no ranch has anything to cull.
+				if zb.kind != HEBusiness.Kind.GOVERNMENT and not zb.processes_livestock and zb.max_capacity > 0 and zb.capacity < 1:
 					zero_days += 1
 		_assert(zero_days == 0, "%s: a surviving business sat at zero capacity on %d business-days" % [builder, zero_days])
 

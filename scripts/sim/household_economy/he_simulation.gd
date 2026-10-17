@@ -597,6 +597,12 @@ const BUTCHERY_CREDIT_LIMIT := 2000.0
 ## buy, sat on thousands of unsold meat while the price fell to its floor, and
 ## ran out of cash. The floor keeps it producing a little while no one is buying
 ## so demand (affluent households, a Trader bid) can show up and scale it.
+## The Butcher's crew follows its work (see _livestock_crew_target): it is hired
+## once a ranch holds culled livestock or its herd is within this share of its
+## cull target (a cull is a review away), and released when there is none. Hired
+## from day one it paid wages for a year or more before the first head arrived
+## and failed before the work it was hired for.
+const BUTCHERY_HIRE_NEAR_TARGET := 0.9
 const BUTCHERY_FINISHED_COVER_DAYS := 45.0
 const BUTCHERY_MIN_FINISHED_MEAT := 150.0
 
@@ -1425,6 +1431,8 @@ func set_warehouse_order(business_id: int, commodity: Commodity.Type, buy_up_to:
 ## Lowest crew the tuner may set: one worker (or the business's own
 ## min_capacity if higher), unless max_capacity itself is 0.
 func _capacity_floor(b: HEBusiness) -> int:
+	if b.processes_livestock:
+		return 0 # follows its work, see _livestock_crew_target
 	return mini(maxi(b.min_capacity, 1), b.max_capacity)
 
 func next_business_id() -> int:
@@ -3630,6 +3638,8 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			# Staffed by the seed / _ensure_administrator, not by revenue
 			# signals -- it has no revenue per worker to judge.
 			continue
+		if b.processes_livestock:
+			continue # crew set by _livestock_crew_target in _reconcile_employment
 		# A business is never tuned down to zero: it keeps its last worker and
 		# can only go away by exhausting its credit (see _fail_business), so
 		# there is no idle zombie and no trial rehire to bring one back.
@@ -3895,6 +3905,10 @@ func _business_cash_runway_days(b: HEBusiness) -> float:
 func _reconcile_employment(record: Dictionary = {}) -> void:
 	var business_ids := businesses.keys()
 	business_ids.sort()
+	for business_id in business_ids:
+		var processor: HEBusiness = businesses[business_id]
+		if processor.processes_livestock:
+			processor.capacity = _livestock_crew_target(processor)
 
 	# One index snapshot serves the whole layoff pass: a layoff only changes
 	# its own business's membership, and each business is visited once.
@@ -3950,15 +3964,7 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			if b.kind == HEBusiness.Kind.GOVERNMENT:
 				continue # TODO(builders): hire builder_slots households here once modeled
 			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
-			# TODO(butcher hiring): this hires to `capacity` whatever the business has to
-			# work with. A Butcher is hired the day workers are free, but a ranch's
-			# first cull is 1.5-3 years out (herds start well below their cull target),
-			# so it pays wages for months with nothing to process and fails around
-			# day 240-360 -- before the first head it was hired for arrives. It should
-			# hire only once a ranch actually holds livestock (or is within a review of
-			# culling), and release its crew when none is expected. Until then the
-			# Butcher checks in run_household_economy.gd seed ranches near their cull
-			# target (_seed_ranches_near_cull_target) so the Butcher has input in year 1.
+			# A Butcher's capacity is its work (_livestock_crew_target), set above.
 			var business_position := _lookup_position("business", business_id)
 			while employed_workers < b.capacity and not available.is_empty():
 				var household_id: int = available.pop_at(_nearest_available_index(available, business_position, dwelling_positions))
@@ -5384,6 +5390,24 @@ func _run_livestock_purchasing(record: Dictionary) -> void:
 				})
 				wanted_worker_days -= head * worker_days_per_head
 				meat_room -= head * BUTCHERY_MEAT_PER_HEAD[species]
+
+## The crew a livestock processor needs: the worker-days of livestock it holds
+## and that ranches hold culled, over a crew's buffer of days; at least one
+## worker while a herd is within BUTCHERY_HIRE_NEAR_TARGET of its cull target,
+## and none when there is nothing to process or expect (a household is always
+## kept by the layoff rule, so an idle Butcher costs one wage, not a crew's).
+func _livestock_crew_target(b: HEBusiness) -> int:
+	var work := _butchery_held_worker_days(b)
+	var cull_near := false
+	for herd_id in _herd_business_ids(b.settlement_id):
+		var herd: HEBusiness = businesses[herd_id]
+		work += herd.stock(herd.herd_commodity()) * BUTCHERY_WORKER_DAYS_PER_HEAD[herd.species]
+		if herd.herd_size >= herd_cull_target(herd) * BUTCHERY_HIRE_NEAR_TARGET:
+			cull_near = true
+	var crew := ceili(work / BUTCHERY_INPUT_BUFFER_DAYS)
+	if cull_near:
+		crew = maxi(crew, 1)
+	return clampi(crew, 0, b.max_capacity)
 
 ## How much more meat a Butcher can expect to sell, in meat units: the cover it
 ## is allowed (BUTCHERY_FINISHED_COVER_DAYS of its local sales, or the floor)

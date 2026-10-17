@@ -28,8 +28,9 @@ func _init() -> void:
 				continue
 			var sold: float = sim._routine_local_use(b, Commodity.Type.MEAT)
 			var allowed: float = maxf(HESimulation.BUTCHERY_MIN_FINISHED_MEAT, sold * HESimulation.BUTCHERY_FINISHED_COVER_DAYS)
-			# One head of cattle of slack: a purchase is sized in whole lumps of the cull.
-			worst_overshoot = maxf(worst_overshoot, b.stock(Commodity.Type.MEAT) - allowed - HESimulation.BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE])
+			# Two lots of slack: a purchase is sized in whole head, and the allowed
+			# cover shrinks when sales slow while meat already made cannot be unmade.
+			worst_overshoot = maxf(worst_overshoot, b.stock(Commodity.Type.MEAT) - allowed - 2.0 * HESimulation.BUTCHERY_MEAT_PER_HEAD[HEBusiness.Species.CATTLE])
 	var butcher: Variant = null
 	for b in sim.businesses.values():
 		if b.processes_livestock:
