@@ -80,6 +80,7 @@ func _ready() -> void:
 	player.position = player.spawn_point
 	add_child(player)
 
+	_spawn_horse()
 	_spawn_companion(spawn)
 	_spawn_pen()
 	_spawn_flock()
@@ -88,6 +89,8 @@ func _ready() -> void:
 	hint.text = "WASD move · Shift sprint · Space jump · F5 camera view · Esc menu"
 	if OnFootPlayer.selected_character == "dog":
 		hint.text = "Left click bark · " + hint.text
+	else:
+		hint.text = "E mount/dismount · " + hint.text
 	hint.position = Vector2(12, 8)
 	var layer := CanvasLayer.new()
 	layer.add_child(hint)
@@ -356,6 +359,12 @@ func _spawn_companion(spawn: Vector3) -> void:
 	var xz := Vector2(spawn.x + offset.x, spawn.z + offset.z)
 	companion.position = _ground_point(xz) + Vector3(0, 0.3, 0)
 	add_child(companion)
+
+
+func _spawn_horse() -> void:
+	var horse := OnFootHorse.new()
+	horse.position = _ground_point(Vector2(4.0, -3.0))
+	add_child(horse)
 
 ## Open-gated pen on the flat ground east of the town, gate facing the spawn.
 func _spawn_pen() -> void:
