@@ -80,6 +80,7 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.TIMBER: 1.0,
 	Commodity.Type.CHARCOAL: 1.5,
 	Commodity.Type.IRON: 4.0,
+	Commodity.Type.IRON_ORE: 2.0,
 	Commodity.Type.TOOLS: 6.0,
 }
 ## Fallback target stock for commodities _target_stock() can't derive from
@@ -98,6 +99,7 @@ const REFERENCE_STOCK: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.TIMBER: 500.0,
 	Commodity.Type.CHARCOAL: 300.0,
 	Commodity.Type.IRON: 150.0,
+	Commodity.Type.IRON_ORE: 150.0,
 	Commodity.Type.TOOLS: 100.0,
 }
 const PRICE_MULTIPLIER_MIN := 0.5

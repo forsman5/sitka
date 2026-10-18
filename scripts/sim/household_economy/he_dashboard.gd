@@ -1,5 +1,9 @@
 extends Control
 
+signal back_requested
+signal speed_requested(speed: float)
+signal town_mode_changed(enabled: bool)
+
 ## H1 equivalent of scripts/sim/dashboard.gd: a live, speed-controllable
 ## read-out of HESimulation. This is a view only -- it holds one
 ## HESimulation instance, advances it by calling advance_ticks(), and
@@ -14,7 +18,7 @@ const HEBusiness = preload("res://scripts/sim/household_economy/records/he_busin
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 ## Housing builds the Housing tab offers, in button order.
-const HOUSING_BUILD_KEYS := ["house", "tenement"]
+const HOUSING_BUILD_KEYS := ["house", "tenement", "stone_house", "stone_house_new"]
 const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const HEHouseholdTable = preload("res://scripts/sim/household_economy/he_household_table.gd")
@@ -124,6 +128,8 @@ const BLOTTER_FILTERS := [
 static var pending_builder: Callable = Callable()
 
 var _simulation: HESimulation
+var external_simulation: HESimulation
+var embedded_mode := false
 ## Where each business stands in the town view. Owned here, not by the view, so
 ## rebuilding or hiding the view never moves a building. See he_town_layout.gd.
 var _town_layout: HETownLayout
@@ -298,15 +304,21 @@ var _end_screen_summary: Label
 var _ended := false
 
 func _ready() -> void:
-	# The valley hosting an embedded view has its own menu. get() because
-	# embedded_mode only exists once the valley integration lands.
-	if not get("embedded_mode"):
+	# The valley hosting an embedded view has its own menu.
+	if not embedded_mode:
 		EscapeMenu.attach_to(self)
 	for filter in BLOTTER_FILTERS:
 		_blotter_filter_enabled[filter["type"]] = true
 	_configure_tooltip_theme()
 	GameState.settings_changed.connect(_on_history_settings_changed)
-	_load_scenario()
+	if external_simulation != null:
+		_simulation = external_simulation
+		_town_layout = HETownLayout.new("valley:%s" % _simulation.get_city_summary()["name"],
+			_town_settlement_id(), _simulation.get_business_reports(), _simulation.get_dwelling_reports())
+		for report in _simulation.get_business_reports():
+			_business_names[report["business_id"]] = report["name"]
+	else:
+		_load_scenario()
 	_build_ui()
 	_update_history_titles()
 	_refresh()
@@ -333,6 +345,10 @@ func _configure_tooltip_theme() -> void:
 	theme = tooltip_theme
 
 func _process(delta: float) -> void:
+	if embedded_mode:
+		if _town_view != null:
+			_town_view.set_villagers_paused(true)
+		return
 	if _town_view != null:
 		_town_view.set_villagers_paused(_simulation == null or _ended or _speed_multiplier <= 0.0)
 	if _simulation == null or _ended or _speed_multiplier <= 0.0:
@@ -351,6 +367,16 @@ func _process(delta: float) -> void:
 	_presenter.note_simulated(days_to_advance)
 	if _presenter.due(delta):
 		_refresh()
+
+func refresh_external() -> void:
+	if embedded_mode and is_node_ready():
+		_refresh()
+
+func set_external_town_phase(phase: float) -> void:
+	if not embedded_mode or _town_view == null:
+		return
+	_town_phase = fposmod(phase, 1.0)
+	_town_view.set_time_of_day(_town_phase)
 
 ## Advances the Town view clock by `delta` real seconds and steps the sim one
 ## day when it passes dawn. Stepped (not scaled) so there is never more than
@@ -428,6 +454,10 @@ func _build_ui() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
+	var view_title := Label.new()
+	view_title.text = "%s household economy" % _simulation.get_city_summary()["name"] if external_simulation != null else "Default household economy"
+	view_title.add_theme_font_size_override("font_size", 28)
+	vbox.add_child(view_title)
 
 	var top_bar := HBoxContainer.new()
 	top_bar.add_theme_constant_override("separation", 8)
@@ -436,6 +466,12 @@ func _build_ui() -> void:
 	_day_label = Label.new()
 	_day_label.add_theme_font_size_override("font_size", 22)
 	top_bar.add_child(_day_label)
+
+	if embedded_mode:
+		var back_button := Button.new()
+		back_button.text = "← Valley"
+		back_button.pressed.connect(func() -> void: back_requested.emit())
+		top_bar.add_child(back_button)
 
 	# Government treasury: "<gold icon> 99 gold", hover for the 30-day change.
 	# Hidden when the scenario has no government.
@@ -714,7 +750,7 @@ func _build_ui() -> void:
 	_business_detail_transaction_section.add_child(_business_detail_transaction_empty)
 
 	_business_detail_transaction_grid = GridContainer.new()
-	_business_detail_transaction_grid.columns = 5
+	_business_detail_transaction_grid.columns = 6
 	_business_detail_transaction_section.add_child(_business_detail_transaction_grid)
 
 	# Built once, shown for whichever herd business is selected (Cattle Ranch
@@ -1423,6 +1459,10 @@ func _refresh_housing_build(type_key: String, upgradable: int) -> void:
 	var noun := "house"
 	if type_key == "tenement":
 		noun = "tenement upgrade" if upgradable > 0 else "tenement"
+	elif type_key == "stone_house":
+		noun = "stone house upgrade"
+	elif type_key == "stone_house_new":
+		noun = "new stone house"
 	var cost_text := HEScenarioSeeds.cost_text(_simulation.build_cost_for(settlement_id, option))
 	button.text = "Build %s (%s)" % [noun, cost_text]
 	if order_state == "can_order":
@@ -1579,6 +1619,8 @@ func _make_speed_button(label: String, speed: float) -> Button:
 	btn.text = label
 	btn.pressed.connect(func() -> void:
 		_speed_multiplier = speed
+		if embedded_mode:
+			speed_requested.emit(speed)
 		_town_speed_scale = 1.0 # Play / 1x in town mode is the base pace
 		_sync_town_speed_buttons()
 		_last_town_chart_day = -1
@@ -2114,7 +2156,10 @@ func _refresh_need_detail() -> void:
 		_add_need_detail_line("Stress and emigration: only food shortfalls cause emigration. Unmet %s still builds stress, which lowers health and morale (see household and person pages)." % detail["label"].to_lower())
 
 	var required: float = detail["required"]
-	_add_need_detail_line("Demand today: %.2f need units" % required)
+	if detail["is_service"]:
+		_add_need_detail_line("Drinks needed today: %.0f (one per person)" % required)
+	else:
+		_add_need_detail_line("Demand today: %.2f need units" % required)
 	for name in detail["met_by"].keys():
 		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
@@ -2424,7 +2469,7 @@ func _refresh_business_detail_header(report: Dictionary) -> void:
 		# per HERD_EVAL_INTERVAL_DAYS), not a daily rate -- label it as such.
 		rows.append(["Last review culled", [[report["output_commodity"], "%.1f %s" % [report["last_actual_units"], report["output_commodity"]]]]])
 	else:
-		rows.append(["Activity" if report["kind"] == "trader" else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] == "trader"]]])
+		rows.append(["Activity" if report["kind"] in ["trader", "port"] else "Output", [[report["output_commodity"], "%.1f %s/day (planned %.1f)" % [report["last_actual_units"], report["output_commodity"], report["last_planned_units"]], report["kind"] in ["trader", "port"]]]])
 	for row in rows:
 		_add_detail_row(row[0], row[1])
 
@@ -2495,7 +2540,7 @@ func _refresh_business_detail_stocks(report: Dictionary) -> void:
 			stock_rows.append(["Inventory", "empty"])
 		else:
 			stock_rows.append(["Inventory", held_parts])
-	elif report["kind"] != "trader":
+	elif not (report["kind"] in ["trader", "port"]):
 		stock_rows.append(["Output inventory", [[report["output_commodity"], "%.1f %s" % [report["stock"], report["output_commodity"]]]]])
 	if report.has("input_inventory") and not (report["input_inventory"] as Dictionary).is_empty():
 		var input_parts: Array = []
@@ -2883,7 +2928,7 @@ func _refresh_trader_transactions() -> void:
 		_business_detail_transaction_grid.remove_child(child)
 		child.queue_free()
 
-	for heading in ["Day", "Direction", "Commodity", "Quantity", "Local value"]:
+	for heading in ["Day", "Direction", "Route", "Commodity", "Quantity", "Local value"]:
 		var header := Label.new()
 		header.text = heading
 		header.custom_minimum_size = Vector2(80 if heading != "Commodity" else 120, 0)
@@ -2898,6 +2943,7 @@ func _refresh_trader_transactions() -> void:
 		var values := [
 			_format_day(transaction["day"]),
 			direction.capitalize(),
+			transaction.get("route", "Outside"),
 			transaction["commodity"],
 			"%.1f" % transaction["quantity"],
 			"%.1f" % transaction["local_value"],
@@ -3183,22 +3229,29 @@ func _build_town_gov_build_button() -> MenuButton:
 	button.about_to_popup.connect(_refresh_government_build_menu)
 	return button
 
-## Dashboard <-> town map. The simulation keeps running either way; only which
-## half of the window is shown changes.
+## Dashboard <-> town map. Embedded hosts pause their valley clock in Town view.
 func _set_town_mode(enabled: bool) -> void:
+	var changed := _town_view.visible != enabled
 	_town_view.visible = enabled
 	for body in _dashboard_body:
 		body.visible = not enabled
-	_town_mode_button.text = "Dashboard" if enabled else "Town view"
-	# Town time has one pace (the day-length setting): Pause and Play only.
-	_speed_buttons[1].text = "Play" if enabled else "1x"
-	_speed_buttons[2].visible = not enabled
-	_speed_buttons[3].visible = not enabled
+	_town_mode_button.text = "Dashboard (resume)" if enabled and embedded_mode else ("Dashboard" if enabled else "Town view")
+	_town_mode_button.tooltip_text = "Return to the dashboard and resume the valley clock." if enabled and embedded_mode else "Switch between the dashboard and a map of the town's buildings."
+	# Standalone Town view has its own pace. An embedded view pauses the valley.
+	var standalone_town_time := enabled and not embedded_mode
+	_speed_buttons[1].text = "Play" if standalone_town_time else "1x"
+	_speed_buttons[2].visible = not standalone_town_time
+	_speed_buttons[3].visible = not standalone_town_time
+	if embedded_mode:
+		for button in _speed_buttons:
+			button.visible = not enabled
 	for btn in _town_speed_buttons:
-		btn.visible = enabled
+		btn.visible = standalone_town_time
 	_sync_town_speed_buttons()
 	if enabled:
 		_town_view.set_time_of_day(_town_phase)
+	if changed:
+		town_mode_changed.emit(enabled)
 
 ## "Open business details" in the town view: back to the dashboard with that
 ## business's detail panel open.
@@ -3636,7 +3689,7 @@ func _refresh_business_row_values(reports: Array) -> void:
 			var warehouse_text := "Holding %.1f units · wages and purchases paid by the treasury" % report["stock"]
 			status_label.text = warehouse_text
 			status_label.tooltip_text = "%s\n\nOpen the warehouse to set buy/sell orders against the local market and the Trader." % warehouse_text
-		elif report["kind"] == "trader":
+		elif report["kind"] in ["trader", "port"]:
 			status_label.text = "Moved %.1f / %.1f units" % [report["last_actual_units"], report["last_planned_units"]]
 			status_label.tooltip_text = report["output_commodity"]
 		else:

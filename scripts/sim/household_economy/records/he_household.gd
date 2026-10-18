@@ -124,6 +124,9 @@ var employment_changed: Callable
 ## HESimulation._reconcile_housing writes it: a household keeps its house
 ## until it ceases to exist.
 var dwelling_id: int = -1
+## Morale from the house it lives in (HEHouse.morale_bonus); 0 when homeless or
+## in a plain house. Only HESimulation._reconcile_housing writes it.
+var home_morale_bonus: float = 0.0
 
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
@@ -517,9 +520,9 @@ func record_need_stress(need: HENeed, required: float, provided: float) -> void:
 	var ratio := (provided / required) if required > 0.0 else 1.0
 	var current: float = need_stress.get(need.id, 0.0)
 	if ratio >= 1.0:
-		need_stress[need.id] = maxf(current - Household.STRESS_RECOVERY_PER_DAY, 0.0)
+		need_stress[need.id] = maxf(current - (need.stress_recovery if need.stress_recovery > 0.0 else Household.STRESS_RECOVERY_PER_DAY), 0.0)
 	else:
-		need_stress[need.id] = minf(current + (1.0 - ratio) * Household.STRESS_GAIN_PER_SHORTAGE, 1.0)
+		need_stress[need.id] = minf(current + (1.0 - ratio) * (need.stress_gain if need.stress_gain > 0.0 else Household.STRESS_GAIN_PER_SHORTAGE), 1.0)
 
 func stress_of(need_id: int) -> float:
 	return need_stress.get(need_id, 0.0)
@@ -527,8 +530,17 @@ func stress_of(need_id: int) -> float:
 ## Health-weighted stress across all needs, 0..1.
 func weighted_need_stress() -> float:
 	var total := 0.0
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
 		total += need.health_weight * stress_of(need.id)
+	return total
+
+## The same over the needs that share the pooled "Unmet needs" morale penalty
+## (those with their own morale_penalty, like water, are charged separately).
+func pooled_need_stress() -> float:
+	var total := 0.0
+	for need in HENeeds.felt():
+		if need.morale_penalty <= 0.0:
+			total += need.health_weight * stress_of(need.id)
 	return total
 
 ## 1.0 = fully healthy. `vulnerability` scales the shortfall (1.0 for the
@@ -539,7 +551,7 @@ func health(vulnerability: float = 1.0) -> float:
 ## What each need's stress costs in health, for display: [{label, loss}].
 func health_losses(vulnerability: float = 1.0) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
 		out.append({"label": need.label, "loss": need.health_weight * stress_of(need.id) * vulnerability})
 	return out
 
@@ -553,9 +565,15 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 		out.append({"label": "Low taxes", "penalty": -tax_morale})
 	elif tax_morale < -0.001:
 		out.append({"label": "High taxes", "penalty": -tax_morale})
-	var need_penalty := MORALE_NEED_PENALTY * minf(weighted_need_stress() * vulnerability, 1.0)
+	var need_penalty := MORALE_NEED_PENALTY * minf(pooled_need_stress() * vulnerability, 1.0)
 	if need_penalty > 0.001:
 		out.append({"label": "Unmet needs", "penalty": need_penalty})
+	for need in HENeeds.felt():
+		if need.morale_penalty <= 0.0:
+			continue
+		var own_penalty := need.morale_penalty * minf(stress_of(need.id) * vulnerability, 1.0)
+		if own_penalty > 0.001:
+			out.append({"label": need.shortfall_label, "penalty": own_penalty})
 	if works and not is_employed():
 		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
 	for amount in last_unmet_unaffordable.values():
@@ -564,8 +582,8 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 			break
 	return out
 
-## Morale gained from needs fully met today (HENeed.morale_bonus), as
-## [{label, bonus}]. Everyone in the household shares it.
+## Morale gained from needs fully met today (HENeed.morale_bonus) and from a
+## stone home, as [{label, bonus}]. Everyone in the household shares it.
 func morale_bonuses() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for need in HENeeds.all():
@@ -574,6 +592,8 @@ func morale_bonuses() -> Array[Dictionary]:
 		var required: float = last_need_required.get(need.id, 0.0)
 		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
+	if home_morale_bonus > 0.0:
+		out.append({"label": "Stone house", "bonus": home_morale_bonus})
 	for need in HENeeds.all():
 		var required: float = last_need_required.get(need.id, 0.0)
 		if need.comfort.is_empty() or required <= 0.0001:

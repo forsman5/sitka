@@ -33,6 +33,11 @@ extends RefCounted
 ## when a route is too long for that window. Evening commuters leave at
 ## LEAVE_WORK and arrive home after the route's travel time.
 ##
+## Water: a housed villager who walks out for the day (work or plaza) stops at
+## the water source that adds the least walking, stands there FILL_HOURS to fill
+## up, and carries on (skipped when no source is within WELL_MAX_DETOUR extra
+## walking). The way home is the direct route.
+##
 ## Mill segments (yard, plaza, a field) put the villager on a slow Lissajous
 ## wander inside an area, a pure function of absolute time (day * 24 + hour), blended in and out of the
 ## segment's end points so there are no jumps.
@@ -72,6 +77,10 @@ const PLAZA_HALF := 1.5
 const SITE_INSET := 1.0
 ## Town workers step out to their door this long (hours), twice a day.
 const DOOR_STINT := 0.3
+## Water stop: time spent filling up (hours), and the most extra walking (world
+## units) a villager will go out of their way for it.
+const FILL_HOURS := 0.15
+const WELL_MAX_DETOUR := 90.0
 
 const OPEN_ZONES := ["field", "pasture"]
 
@@ -171,10 +180,11 @@ static func is_open_site(site: Dictionary) -> bool:
 
 ## The day's segments for one villager. `home` is the house's site dictionary
 ## ({} = homeless), `work` the workplace's ({} = none), `paths` an HETownPaths
-## (or null, which leaves everyone at home). Segment types: "inside" (hidden),
+## (or null, which leaves everyone at home), `water_sites` the working water
+## sources' site dictionaries. Segment types: "inside" (hidden),
 ## "door" (standing at the door), "walk", "mill". Every segment has "t0", "t1"
 ## (plan hours), "act" and "site_id".
-static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: Dictionary, paths) -> Dictionary:
+static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: Dictionary, paths, water_sites: Array = []) -> Dictionary:
 	var segs: Array = []
 	## Hour count since sim day 0 started: wanders run on it so they stay
 	## continuous across the day boundary.
@@ -221,10 +231,13 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 	if homeless:
 		length += wander(plaza, phase, base + wake).distance_to(route[0])
 	var walk_duration := length / WALK_CAP
-	var s1 := maxf(DAY_START, arrive_work - walk_duration)
+	# Water stop on the way out: home -> source -> destination.
+	var well := {} if homeless else _best_water_stop(paths, home_id, dest_id, length, water_sites)
+	var out_duration := walk_duration if well.is_empty() else (float(well["length"]) / WALK_CAP + FILL_HOURS)
+	var s1 := maxf(DAY_START, arrive_work - out_duration)
 	if homeless:
 		out_pts = PackedVector2Array([wander(plaza, phase, base + s1)]) + route
-	var walk_arrival := s1 + walk_duration
+	var walk_arrival := s1 + out_duration
 	arrive_work = walk_arrival
 	var s2 := leave_work
 	var arrive_home := s2 + walk_duration
@@ -235,7 +248,16 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 		_push(segs, _mill(base, plaza, phase, Vector2.INF, Vector2.INF, "plaza", -1), s1)
 	else:
 		_push(segs, _inside(door, "indoors", -1), s1)
-	_push(segs, _walk(out_pts, "walk_plaza" if kind == "plaza" else "walk_work", dest_id), walk_arrival)
+	var walk_act := "walk_plaza" if kind == "plaza" else "walk_work"
+	if well.is_empty():
+		_push(segs, _walk(out_pts, walk_act, dest_id), walk_arrival)
+	else:
+		var to_well: PackedVector2Array = well["to_well"]
+		var stand: Vector2 = to_well[to_well.size() - 1]
+		var reached := s1 + HETownPaths.path_length(to_well) / WALK_CAP
+		_push(segs, _walk(to_well, walk_act, int(well["site_id"])), reached)
+		_push(segs, {"type": "door", "pos": stand, "act": "fill_water", "site_id": int(well["site_id"])}, reached + FILL_HOURS)
+		_push(segs, _walk(well["from_well"], walk_act, dest_id), walk_arrival)
 	var end := route[route.size() - 1]
 	match kind:
 		"plaza":
@@ -260,6 +282,24 @@ static func plan(key: Vector2i, role: String, day: int, home: Dictionary, work: 
 		_push(segs, _mill(base, yard, phase, door, door, "yard", -1), bed)
 		_push(segs, _inside(door, "indoors", -1), DAY_END)
 	return {"segs": segs, "day": day}
+
+## The water source that costs the least extra walking between home and
+## destination: {"site_id", "to_well", "from_well", "length"} (total walked), or
+## {} when none is within WELL_MAX_DETOUR of the direct `direct_length`.
+static func _best_water_stop(paths, home_id: int, dest_id: int, direct_length: float, water_sites: Array) -> Dictionary:
+	var best := {}
+	for water in water_sites:
+		var water_id := int(water["site_id"])
+		var to_well: PackedVector2Array = paths.path(home_id, water_id)
+		var from_well: PackedVector2Array = paths.path(water_id, dest_id)
+		if to_well.is_empty() or from_well.is_empty():
+			continue
+		var length := HETownPaths.path_length(to_well) + HETownPaths.path_length(from_well)
+		if length - direct_length > WELL_MAX_DETOUR:
+			continue
+		if best.is_empty() or length < float(best["length"]) or (length == float(best["length"]) and water_id < int(best["site_id"])):
+			best = {"site_id": water_id, "to_well": to_well, "from_well": from_well, "length": length}
+	return best
 
 static func _stay_home(segs: Array, base: float, homeless: bool, plaza: Dictionary, yard: Dictionary, door: Vector2, phase: Vector2, wake: float, bed: float) -> void:
 	if homeless:

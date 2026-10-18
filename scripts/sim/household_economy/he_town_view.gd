@@ -34,6 +34,7 @@ const ART := {
 	"farm": {"model": "building_home_A_blue.gltf", "width": 6.0},
 	"woodlot": {"model": "building_home_B_blue.gltf", "width": 5.0},
 	"trader": {"model": "building_tavern_blue.gltf", "width": 7.0},
+	"port": {"model": "building_tavern_blue.gltf", "width": 7.0},
 	# Extractors share the mine model (hillside shaft and cart).
 	"iron_mine": {"model": "building_mine_blue.gltf", "width": 6.0},
 	"quarry": {"model": "building_mine_blue.gltf", "width": 6.0},
@@ -45,6 +46,10 @@ const ART := {
 	# Barracks reads as communal housing (bunk rows, multiple doors/windows)
 	# rather than a business, closer to a 4-household tenement than the tavern.
 	"tenement": {"model": "building_barracks_blue.gltf", "width": 6.5},
+	# Water sources (KayKit Medieval Hexagon Pack well). There is no river in
+	# the town view, so a river intake reuses the well, drawn larger.
+	"well": {"model": "building_well_blue.gltf", "width": 3.0},
+	"river_intake": {"model": "building_well_blue.gltf", "width": 4.5},
 }
 ## Houses cycle through this pool by site id, for variety. Index 0 matches
 ## ART["house"] so a plain lookup and a pool lookup agree for site 0.
@@ -62,6 +67,12 @@ const HOUSE_ART_POOL: Array[Dictionary] = [
 	# than the 6x6 house plot and may slightly overlap the plot's margin.
 	{"model": "building_house_builder_blue.glb", "width": 4.5, "scale_ref": Vector2(0.98, 1.12)},
 ]
+## Placeholder look for a stone house (HEHouse.is_stone) until it has its own
+## model: the plain house, bigger, tinted grey and glossy.
+const STONE_SCALE := 1.15
+const STONE_TINT := Color(0.78, 0.8, 0.85)
+const STONE_ROUGHNESS := 0.3
+const STONE_METALLIC := 0.35
 const DEFAULT_ART := {"model": "building_home_B_blue.gltf", "width": 6.0}
 const BARN_SIZE := Vector3(6.0, 3.0, 4.0)
 const BARN_COLOR := Color(0.55, 0.27, 0.07)
@@ -202,7 +213,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 		if not site["built"]:
 			continue
 		_sync_site(site)
-	_villager_layer.sync(layout, villagers)
+	_villager_layer.sync(layout, villagers, _working_water_sites(layout))
 	_livestock_layer.sync(layout, reports)
 	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
 		_selected_villager = Vector2i(-1, -1)
@@ -214,6 +225,17 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 	var strained := int(housing.get("homeless_households", 0)) > 0 or bool(housing.get("saturated", false))
 	_housing_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3) if strained else Color(1, 1, 1, 0.95))
 	_refresh_info()
+
+## Built water sources that are not in disrepair, as layout sites.
+func _working_water_sites(layout: HETownLayout) -> Array:
+	var out: Array = []
+	for site in layout.get_sites():
+		if not HETownLayout.WATER_TYPE_KEYS.has(site["type_key"]) or not site["built"] or site["under_construction"]:
+			continue
+		var water: Dictionary = (_reports.get(int(site["business_id"]), {}) as Dictionary).get("water", {})
+		if not bool(water.get("in_disrepair", false)):
+			out.append(site)
+	return out
 
 ## "Housing: 41 homes for 30 households" with homeless / full flags.
 static func housing_text(housing: Dictionary) -> String:
@@ -639,7 +661,7 @@ func _draw_road(road: Dictionary) -> void:
 func _sync_site(site: Dictionary) -> void:
 	var site_id: int = site["site_id"]
 	var occupied: bool = site["business_id"] != HETownLayout.NO_BUSINESS or site["dwelling_id"] != HETownLayout.NO_BUSINESS
-	var signature := "%s|%s|%s" % [site["type_key"], occupied, site["under_construction"]]
+	var signature := "%s|%s|%s|%s" % [site["type_key"], occupied, site["under_construction"], _is_stone_site(site)]
 	var entry: Dictionary = _site_nodes.get(site_id, {})
 	if entry.is_empty() or entry["signature"] != signature:
 		if not entry.is_empty():
@@ -653,6 +675,9 @@ func _sync_site(site: Dictionary) -> void:
 	elif site["under_construction"]:
 		label_text += " (under construction)"
 	(entry["label"] as Label3D).text = label_text
+
+func _is_stone_site(site: Dictionary) -> bool:
+	return bool(_dwellings.get(int(site["dwelling_id"]), {}).get("stone", false))
 
 func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	var root := Node3D.new()
@@ -689,11 +714,17 @@ func _build_site(site: Dictionary, occupied: bool) -> Dictionary:
 	var art: Dictionary = ART.get(type_key, DEFAULT_ART)
 	if type_key == HETownLayout.HOUSE_TYPE_KEY:
 		art = HOUSE_ART_POOL[int(site["site_id"]) % HOUSE_ART_POOL.size()]
+	var stone := _is_stone_site(site)
+	if stone:
+		art = art.duplicate()
+		art["width"] = float(art["width"]) * STONE_SCALE
 	_add_door_path(root, site, art)
 	if under_construction:
 		_add_foundation(body, float(art["width"]), building_offset)
 	else:
 		var building := _make_building(art, occupied)
+		if stone:
+			_make_stone(building)
 		building.position = building_offset
 		body.add_child(building)
 		_place_on_ground(building, art, building_offset)
@@ -763,6 +794,21 @@ func _make_building(art: Dictionary, occupied: bool) -> Node3D:
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		(node as MeshInstance3D).material_overlay = overlay
 	return model
+
+## Tints and glosses every surface of `building`, keeping its textures.
+func _make_stone(building: Node3D) -> void:
+	for node in building.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node := node as MeshInstance3D
+		for surface in mesh_node.get_surface_override_material_count():
+			var source := mesh_node.get_active_material(surface) as StandardMaterial3D
+			if source == null:
+				continue
+			var stone := StandardMaterial3D.new()
+			stone.albedo_texture = source.albedo_texture
+			stone.albedo_color = source.albedo_color * STONE_TINT
+			stone.roughness = STONE_ROUGHNESS
+			stone.metallic = STONE_METALLIC
+			mesh_node.set_surface_override_material(surface, stone)
 
 ## Scales a freshly built model to the art's width and sits it on the ground.
 ## art["scale_ref"] (optional Vector2 x/z), when present, replaces the live
@@ -952,7 +998,7 @@ func _refresh_info_panel() -> void:
 		return
 	if site["dwelling_id"] != HETownLayout.NO_BUSINESS:
 		_details_button.visible = false
-		_info_title.text = str(site["label"])
+		_info_title.text = str(site["label"]) + (" (stone)" if _is_stone_site(site) else "")
 		var dwelling: Dictionary = _dwellings.get(int(site["dwelling_id"]), {})
 		var shelter := occupants_text(dwelling)
 		if not dwelling.get("occupant_household_ids", []).is_empty():
@@ -1057,6 +1103,8 @@ static func activity_text(activity: Dictionary, employer_name: String) -> String
 			return "Taking a break outside %s" % workplace
 		"plaza":
 			return "At the town square"
+		"fill_water":
+			return "Filling up at the water source"
 	return ""
 
 func _business_name(business_id: int) -> String:

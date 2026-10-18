@@ -15,6 +15,14 @@ const TYPE_KEY := "house"
 const DENSE_TYPE_KEY := "tenement"
 const DENSE_CAPACITY := 4
 
+## Morale a household gains for living in a stone house (see
+## HEHousehold.home_morale_bonus). Flat: a house is either stone or it is not.
+const STONE_MORALE_BONUS := 0.08
+
+## Built of stone: same lot and capacity as a plain house, but its household
+## is happier. Set by upgrade_to_stone(); tenements are never stone.
+var is_stone: bool = false
+
 ## How many households one house shelters.
 var capacity_households: int = 1
 
@@ -26,6 +34,20 @@ func _init(p_id: int, p_settlement_id: int, p_name: String = "House") -> void:
 
 func is_dense() -> bool:
 	return type_key == DENSE_TYPE_KEY
+
+## A plain house: neither densified nor upgraded to stone. Only these can be
+## upgraded (to either).
+func is_plain() -> bool:
+	return not is_dense() and not is_stone
+
+## Morale its household gains from living here.
+func morale_bonus() -> float:
+	return STONE_MORALE_BONUS if is_stone else 0.0
+
+## Turns this house into a stone house without moving it.
+func upgrade_to_stone() -> void:
+	is_stone = true
+	name = "Stone House %d" % id
 
 ## Turns this house into a tenement without moving it.
 func upgrade_to_dense() -> void:

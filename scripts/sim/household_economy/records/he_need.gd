@@ -15,7 +15,7 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 ## good that packs more into each unit (charcoal's 4 heat vs timber's 1) is
 ## compared by price per need-unit, not price per good.
 
-enum Id { FOOD, HEAT, CLOTHING, TOOLS }
+enum Id { FOOD, HEAT, CLOTHING, TOOLS, WATER }
 
 var id: Id
 var label: String
@@ -58,10 +58,20 @@ var morale_bonus: float
 ## else buys the cheapest satisfier as before.
 var comfort: Dictionary[Commodity.Type, float]
 
+## Morale a household loses at full stress from this need. A need with a value
+## here is left out of the pooled "Unmet needs" morale penalty and shown under
+## its own `shortfall_label` instead (0 = pooled).
+var morale_penalty: float = 0.0
+var shortfall_label: String = ""
+## Daily stress gained per unit of shortfall, and lost on a day it is met
+## (<= 0 = the shared Household.STRESS_GAIN_PER_SHORTAGE / STRESS_RECOVERY_PER_DAY).
+var stress_gain: float = -1.0
+var stress_recovery: float = -1.0
+
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
 		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "",
 		p_needs_seller: bool = false, p_morale_bonus: float = 0.0, p_comfort: Dictionary[Commodity.Type, float] = {}) -> void:
-	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
+	assert(p_unit_values.is_empty() or p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
 	per_person_daily = p_per_person_daily
@@ -73,6 +83,11 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	needs_seller = p_needs_seller
 	morale_bonus = p_morale_bonus
 	comfort = p_comfort
+
+## A need no good satisfies (water: met by a town's water sources). It has no
+## satisfiers, market or price, and `baseline` is unused.
+func is_service() -> bool:
+	return unit_values.is_empty()
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []

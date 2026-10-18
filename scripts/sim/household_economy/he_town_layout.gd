@@ -71,6 +71,9 @@ const COORD_SNAP := 0.5
 ## is a much bigger spread than a 40-acre farm. LAND_PLOT_ASPECT is
 ## width / depth. Businesses without land keep their zone's footprint.
 const UNITS2_PER_ACRE := 12.0
+## Valley towns scale land from populations up to 170 households; compress
+## their plots further so all businesses fit within the existing town ground.
+const VALLEY_UNITS2_PER_ACRE := 6.0
 const LAND_PLOT_ASPECT := 1.4
 ## A land plot whose edge is farther than this from every road gets a track:
 ## a lane grown from the nearest road to the plot, stopping this short of its
@@ -78,6 +81,16 @@ const LAND_PLOT_ASPECT := 1.4
 const TRACK_MIN_GAP := 10.0
 const TRACK_END_GAP := 2.5
 const TRACK_ROAD_TRIES := 4
+## Water sources (wells, river intakes) are small and stand on the housing
+## streets, not in the town ring: each takes the free lot that is farthest from
+## the other sources (capped at WATER_SPREAD_CAP) and closest to a ring
+## WATER_RING from the civic anchor, so a few wells end up spread through the
+## neighbourhoods. They never vacate (an unserviced source is still standing).
+const WATER_TYPE_KEYS := ["well", "river_intake"]
+const WATER_FOOTPRINT := Vector2(4.0, 4.0)
+const WATER_RING := 52.0
+const WATER_SPREAD_CAP := 45.0
+const WATER_RING_WEIGHT := 0.5
 ## Zones whose candidates are tried outermost first, so land spreads out to the
 ## rim of town (leaving the middle to houses and trade) instead of landing
 ## wherever the spiral happened to start.
@@ -267,9 +280,13 @@ func reconcile(reports: Array, dwellings: Array = [], constructions: Array = [])
 		var report: Dictionary = live[business_id]
 		var type_key := _type_key_of(report)
 		var plot := land_footprint(float(report.get("land_area_acres", 0.0)))
-		var site_index := _vacant_site_index(type_key, plot)
-		if site_index == -1:
-			site_index = _allocate_site(type_key, plot)
+		var site_index := -1
+		if WATER_TYPE_KEYS.has(type_key):
+			site_index = _allocate_water_site()
+		else:
+			site_index = _vacant_site_index(type_key, plot)
+			if site_index == -1:
+				site_index = _allocate_site(type_key, plot)
 		if site_index == -1:
 			_unplaced.append(business_id)
 			continue
@@ -410,10 +427,11 @@ static func _type_key_of(report: Dictionary) -> String:
 
 ## Plot a business of `acres` land needs: zero (use the zone's footprint) for
 ## a business without land.
-static func land_footprint(acres: float) -> Vector2:
+func land_footprint(acres: float) -> Vector2:
 	if acres <= 0.0:
 		return Vector2.ZERO
-	var area := acres * UNITS2_PER_ACRE
+	var scale := VALLEY_UNITS2_PER_ACRE if scenario_key.begins_with("valley:") else UNITS2_PER_ACRE
+	var area := acres * scale
 	var width := snappedf(sqrt(area * LAND_PLOT_ASPECT), COORD_SNAP)
 	var depth := snappedf(sqrt(area / LAND_PLOT_ASPECT), COORD_SNAP)
 	return Vector2(width, depth)
@@ -430,6 +448,47 @@ func _vacant_site_index(type_key: String, needed: Vector2 = Vector2.ZERO) -> int
 		if needed != Vector2.ZERO and (have.x < needed.x or have.y < needed.y):
 			continue
 		return i
+	return -1
+
+## A new site for a water source, per the WATER_* rules above.
+func _allocate_water_site() -> int:
+	var others: Array[Vector2] = []
+	for site in _sites:
+		if WATER_TYPE_KEYS.has(site["type_key"]):
+			others.append(site["position"])
+	var candidates: Array = _candidates[ZONE_HOUSING]
+	var scored: Array = [] # [score, index]
+	for i in candidates.size():
+		var center: Vector2 = candidates[i]["position"]
+		var nearest := WATER_SPREAD_CAP
+		for other in others:
+			nearest = minf(nearest, center.distance_to(other))
+		scored.append([nearest - WATER_RING_WEIGHT * absf(center.length() - WATER_RING), i])
+	scored.sort_custom(func(a: Array, b: Array) -> bool:
+		if a[0] != b[0]:
+			return a[0] > b[0]
+		return a[1] < b[1])
+	for entry in scored:
+		var candidate: Dictionary = candidates[entry[1]]
+		if not _fits(candidate["position"], WATER_FOOTPRINT, candidate["rotation"], 0.0):
+			continue
+		_sites.append({
+			"site_id": _sites.size(),
+			"settlement_id": settlement_id,
+			"position": candidate["position"],
+			"rotation": candidate["rotation"],
+			"footprint": WATER_FOOTPRINT,
+			"zone": ZONE_HOUSING,
+			"road_id": int(candidate.get("road_id", -1)),
+			"access": candidate.get("access", Vector2.INF),
+			"business_id": NO_BUSINESS,
+			"dwelling_id": NO_BUSINESS,
+			"type_key": "",
+			"label": "",
+			"built": false,
+			"under_construction": false,
+		})
+		return _sites.size() - 1
 	return -1
 
 func _allocate_site(type_key: String, plot: Vector2 = Vector2.ZERO) -> int:

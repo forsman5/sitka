@@ -13,6 +13,7 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## addition is a one-line entry: cloth for CLOTHING (wool stays as the
 ## raw-fibre stand-in until a tailor exists).
 static var _all: Array[HENeed] = []
+static var _water: HENeed = null
 
 ## Morale a household gains from eating only meat (scaled by the meat share of
 ## its food). Morale above 100% raises output, so a better table pays back.
@@ -48,19 +49,42 @@ static func all() -> Array[HENeed]:
 		]
 	return _all
 
+## Water: a service need, met by a town's wells and river intakes rather than
+## by a good, so it is not in all() (the goods-based needs the market,
+## consumption and cost-of-living code walk). One drink per person per day.
+## Thirst bites hard and fast: full stress costs 20 points of health and 40 of
+## morale, builds in about two days, and clears in ten once water is back.
+## It only applies in a town that has a water source (see
+## HESimulation._run_water_need), so towns without one are unchanged.
+static func water() -> HENeed:
+	if _water == null:
+		_water = HENeed.new(HENeed.Id.WATER, "Water", 1.0, {}, Commodity.Type.GRAIN, false, 0.2,
+			"Thirst wears down health and sharply lowers morale. Met by the town's wells and river intakes (Government build menu); each needs timber and stone every year.")
+		_water.morale_penalty = 0.4
+		_water.shortfall_label = "Thirsty"
+		_water.stress_gain = 0.5
+		_water.stress_recovery = 0.1
+	return _water
+
+## Every need a household feels: the goods-based ones, then water.
+static func felt() -> Array[HENeed]:
+	var out: Array[HENeed] = all().duplicate()
+	out.append(water())
+	return out
+
 ## Top-to-bottom order of the dashboard's Needs tab. Only a preference: every
 ## need in the catalog appears, so adding one here can't leave it off the tab.
 const DISPLAY_PREFERRED_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOTHING]
 
 static func display_order() -> Array:
 	var order: Array = DISPLAY_PREFERRED_ORDER.duplicate()
-	for need in all():
+	for need in felt():
 		if not order.has(need.id):
 			order.append(need.id)
 	return order
 
 static func get_need(id: HENeed.Id) -> HENeed:
-	for need in all():
+	for need in felt():
 		if need.id == id:
 			return need
 	return null

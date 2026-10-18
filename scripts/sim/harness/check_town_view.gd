@@ -55,6 +55,19 @@ func _run() -> void:
 		view._select_site(home_site["site_id"])
 		check(view._info_body.text.contains("Home of household") and view._info_body.text.contains(str(first_household)), "House panel names its household (got '%s')" % view._info_body.text)
 		view.clear_selection()
+	# A stone house is redrawn (bigger, glossy) and says so in its panel.
+	if not home_site.is_empty():
+		var plain_mesh := _house_mesh(view, home_site["site_id"])
+		var plain_scale: float = plain_mesh.get_parent().scale.x
+		dashboard._simulation.dwellings[home_id].upgrade_to_stone()
+		view.sync(layout, dashboard._simulation.get_business_reports(), dashboard._simulation.get_housing_report(1), dashboard._simulation.get_dwelling_reports(), dashboard._simulation.get_villager_reports(1))
+		var stone_mesh := _house_mesh(view, home_site["site_id"])
+		check(stone_mesh.get_parent().scale.x > plain_scale, "A stone house is drawn larger than a plain one")
+		var stone_material := stone_mesh.get_surface_override_material(0) as StandardMaterial3D
+		check(stone_material != null and is_equal_approx(stone_material.roughness, view.STONE_ROUGHNESS), "A stone house gets the glossy material")
+		view._select_site(home_site["site_id"])
+		check(view._info_title.text.contains("stone"), "Stone house panel says so (got '%s')" % view._info_title.text)
+		view.clear_selection()
 	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
 	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
 
@@ -281,6 +294,13 @@ func _run() -> void:
 ## Villagers: one model per household member, milling in front of their own
 ## house (homeless at the plaza); clicking one opens the person window, whose
 ## buttons jump to the home and to the dashboard's person detail.
+## The first model mesh of a drawn site (skips the door path's box).
+func _house_mesh(view, site_id: int) -> MeshInstance3D:
+	for node in view._site_nodes[site_id]["root"].find_children("*", "MeshInstance3D", true, false):
+		if not (node.mesh is BoxMesh):
+			return node
+	return null
+
 func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
 	var sim = dashboard._simulation
 	var reports: Array = sim.get_villager_reports(dashboard._town_settlement_id())
