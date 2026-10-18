@@ -19,7 +19,7 @@ jobs:
   # so fork PRs must never reach it. Do not switch this to pull_request_target.
   # The workflow always runs (so CI/docs PRs still exercise teardown and meta); only the
   # expensive build is gated. A PR needs a preview only if some changed file is outside
-  # docs/, .github/, markdown and serve.py (server-side only, not part of the export). Scenes, assets, shaders and project settings still build.
+  # docs/, .github/, .claude/ (agent tooling), markdown and serve.py (server-side only, not part of the export). Scenes, assets, shaders and project settings still build.
   # Plain GitHub-hosted runner: this only reads the PR's file list, no cluster access.
   changes:
     if: >-
@@ -39,7 +39,7 @@ jobs:
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
-            const ignored = (p) => p.startsWith('docs/') || p.startsWith('.github/') || p.endsWith('.md') || p === 'serve.py';
+            const ignored = (p) => p.startsWith('docs/') || p.startsWith('.github/') || p.startsWith('.claude/') || p.endsWith('.md') || p === 'serve.py';
             // A rename out of a game path counts too, so check the old name as well.
             const game = files.some(f => !ignored(f.filename) || (f.previous_filename && !ignored(f.previous_filename)));
             core.info(`${files.length} changed files; game files changed: ${game}`);
