@@ -127,6 +127,22 @@ var dwelling_id: int = -1
 ## Morale from the house it lives in (HEHouse.morale_bonus); 0 when homeless or
 ## in a plain house. Only HESimulation._reconcile_housing writes it.
 var home_morale_bonus: float = 0.0
+## This household's share of its house's yearly upkeep, in goods it buys itself
+## (HEHouse.upkeep_*, split between a tenement's households). Only
+## HESimulation._reconcile_housing writes them.
+var home_upkeep_timber: float = 0.0
+var home_upkeep_stone: float = 0.0
+
+## Yearly upkeep goods of `commodity` (0 for anything but timber and stone).
+func upkeep_per_year(commodity: Commodity.Type) -> float:
+	match commodity:
+		Commodity.Type.TIMBER: return home_upkeep_timber
+		Commodity.Type.STONE: return home_upkeep_stone
+	return 0.0
+
+## What it must hold of `commodity` for the next repair visit: one slice.
+func upkeep_slice(commodity: Commodity.Type) -> float:
+	return upkeep_per_year(commodity) * HEHouse.UPKEEP_SLICE_YEARS
 
 ## Years the home's upkeep is overdue beyond the normal visit interval; set
 ## daily by HESimulation._run_house_maintenance. Drives the disrepair penalty.
@@ -602,7 +618,8 @@ func morale_bonuses() -> Array[Dictionary]:
 		var required: float = last_need_required.get(need.id, 0.0)
 		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
-	if home_morale_bonus > 0.0:
+	# A stone house that has fallen behind on repairs stops lifting morale.
+	if home_morale_bonus > 0.0 and home_overdue_years <= 0.0:
 		out.append({"label": "Stone house", "bonus": home_morale_bonus})
 	for need in HENeeds.all():
 		var required: float = last_need_required.get(need.id, 0.0)

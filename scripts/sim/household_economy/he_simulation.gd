@@ -1121,9 +1121,18 @@ func _reconcile_all_housing() -> void:
 ## assigned -- and homeless counts are unchanged by assignment.
 func _reconcile_housing(settlement_id: int) -> void:
 	_assign_dwellings(settlement_id)
+	var residents: Dictionary = {} # dwelling_id -> households living there
+	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+		var lodger: HEHousehold = households[household_id]
+		if lodger.dwelling_id != -1:
+			residents[lodger.dwelling_id] = int(residents.get(lodger.dwelling_id, 0)) + 1
 	for household_id in (settlements[settlement_id] as HESettlement).household_ids:
 		var h: HEHousehold = households[household_id]
 		h.home_morale_bonus = (dwellings[h.dwelling_id] as HEHouse).morale_bonus() if dwellings.has(h.dwelling_id) else 0.0
+		var home: HEHouse = dwellings.get(h.dwelling_id)
+		var sharers: int = maxi(int(residents.get(h.dwelling_id, 1)), 1)
+		h.home_upkeep_timber = home.upkeep_timber() / float(sharers) if home != null else 0.0
+		h.home_upkeep_stone = home.upkeep_stone() / float(sharers) if home != null else 0.0
 
 func _assign_dwellings(settlement_id: int) -> void:
 	var s: HESettlement = settlements[settlement_id]
@@ -1348,7 +1357,7 @@ func _construction_pending(settlement_id: int, type_key: String) -> bool:
 ## (it supplies nobody) and is retried every day until it can be paid for.
 ## Nothing here touches wages, markets or the treasury, so a town with no water
 ## source behaves exactly as before.
-func _run_water_maintenance() -> void:
+func _run_water_maintenance(record: Dictionary) -> void:
 	var ids := businesses.keys()
 	ids.sort()
 	for business_id in ids:
@@ -1359,17 +1368,27 @@ func _run_water_maintenance() -> void:
 		if warehouse != null and _government_staff_count(b.settlement_id) > 0 and warehouse.stock(Commodity.Type.TIMBER) >= b.water_upkeep_timber and warehouse.stock(Commodity.Type.STONE) >= b.water_upkeep_stone:
 			warehouse.consume(Commodity.Type.TIMBER, b.water_upkeep_timber)
 			warehouse.consume(Commodity.Type.STONE, b.water_upkeep_stone)
+			_accumulate(record["consumed"], Commodity.name_of(Commodity.Type.TIMBER), b.water_upkeep_timber)
+			_accumulate(record["consumed"], Commodity.name_of(Commodity.Type.STONE), b.water_upkeep_stone)
 			b.in_disrepair = false
 			b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
 		else:
 			b.in_disrepair = true
 
-## Accrues a day of upkeep on every house, then lets government staff deliver
-## timber (and stone for tenements) from the Government Warehouse to the houses
-## that are owed a slice, round robin from just after the last house visited.
-## Without staff, a warehouse or enough stock nothing is paid and the backlog
-## (and the households' "Home in disrepair" morale penalty) keeps growing.
-func _run_house_maintenance() -> void:
+## Accrues a day of upkeep on every lived-in house, then sends government staff
+## round to the houses that are owed a slice, round robin from just after the
+## last one visited. The staff do the work; the goods come from the households
+## living there, who buy them on the market (_desired_purchase) and hand over
+## their share. A house whose households do not all hold their share is skipped,
+## so its backlog (and their "Home in disrepair" morale penalty) keeps growing;
+## an empty house owes nothing until someone moves in. Without government staff
+## nobody visits.
+func _run_house_maintenance(record: Dictionary) -> void:
+	var residents: Dictionary = {} # dwelling_id -> Array[HEHousehold]
+	for household in households.values():
+		var lodger: HEHousehold = household
+		if lodger.dwelling_id != -1:
+			(residents.get_or_add(lodger.dwelling_id, []) as Array).append(lodger)
 	var settlement_ids := settlements.keys()
 	settlement_ids.sort()
 	for settlement_id in settlement_ids:
@@ -1387,9 +1406,9 @@ func _run_house_maintenance() -> void:
 			if house.neglect_years < 0.0:
 				# Stagger the first visits so they do not all fall on one day.
 				house.neglect_years = fposmod(dwelling_id * 0.37, 1.0) * HOUSE_VISIT_YEARS
-			house.neglect_years += 1.0 / 365.0
-		var warehouse := _government_warehouse(settlement_id)
-		var budget := _government_staff_count(settlement_id) * HOUSE_VISITS_PER_STAFF if warehouse != null else 0
+			if residents.has(dwelling_id):
+				house.neglect_years += 1.0 / 365.0
+		var budget := _government_staff_count(settlement_id) * HOUSE_VISITS_PER_STAFF
 		if budget > 0:
 			var start := ids.bsearch(_house_cursor.get(settlement_id, -1), false)
 			for step in ids.size():
@@ -1397,15 +1416,22 @@ func _run_house_maintenance() -> void:
 					break
 				var dwelling_id: int = ids[(start + step) % ids.size()]
 				var house: HEHouse = dwellings[dwelling_id]
-				if house.neglect_years < HOUSE_VISIT_YEARS:
+				if house.neglect_years < HOUSE_VISIT_YEARS or not residents.has(dwelling_id):
 					continue
-				var timber := HOUSE_VISIT_YEARS * house.upkeep_timber()
-				var stone := HOUSE_VISIT_YEARS * house.upkeep_stone()
-				if warehouse.stock(Commodity.Type.TIMBER) < timber or warehouse.stock(Commodity.Type.STONE) < stone:
+				var lodgers: Array = residents[dwelling_id]
+				var supplied := true
+				for lodger in lodgers:
+					for good in [Commodity.Type.TIMBER, Commodity.Type.STONE]:
+						if (lodger as HEHousehold).stock(good) < (lodger as HEHousehold).upkeep_slice(good) - 0.0001:
+							supplied = false
+				if not supplied:
 					continue
-				warehouse.consume(Commodity.Type.TIMBER, timber)
-				if stone > 0.0:
-					warehouse.consume(Commodity.Type.STONE, stone)
+				for lodger in lodgers:
+					for good in [Commodity.Type.TIMBER, Commodity.Type.STONE]:
+						var slice: float = (lodger as HEHousehold).upkeep_slice(good)
+						if slice > 0.0:
+							var used: float = (lodger as HEHousehold).consume(good, slice)
+							_accumulate(record["consumed"], Commodity.name_of(good), used)
 				house.neglect_years -= HOUSE_VISIT_YEARS
 				deliveries.append(dwelling_id)
 				_house_cursor[settlement_id] = dwelling_id
@@ -2744,8 +2770,8 @@ func _daily_tick() -> void:
 	if external_trade_enabled:
 		_run_trade(record)
 	_run_warehouse_orders(record)
-	_run_water_maintenance()
-	_run_house_maintenance()
+	_run_water_maintenance(record)
+	_run_house_maintenance(record)
 	_apply_price_signals()
 	for market in markets.values():
 		(market as HEMarket).record_supply_demand_history()
@@ -3345,6 +3371,13 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 		for c in need.satisfiers():
 			if not cascade.has(c):
 				order.append(c)
+	# Stone has no need, but a stone house or tenement's households buy it for
+	# repairs; towns without one leave the stone market to business and export.
+	if not order.has(Commodity.Type.STONE):
+		for household_id in (settlements[settlement_id] as HESettlement).household_ids:
+			if (households[household_id] as HEHousehold).home_upkeep_stone > 0.0:
+				order.append(Commodity.Type.STONE)
+				break
 	return order
 
 ## How far a household's own judgement of a non-baseline satisfier's price may
@@ -3413,9 +3446,13 @@ func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity
 ## cheaper good takes what it can and the next one is asked for the rest
 ## instead of the household going without when the cheaper good runs short.
 func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade: Array[Commodity.Type] = []) -> float:
+	# Goods the household needs in hand for its house's next repair visit
+	# (timber, and stone for a stone house or tenement): bought like any other
+	# good, whatever the household uses the same good for otherwise.
+	var upkeep := h.upkeep_slice(commodity)
 	var need := HENeeds.for_commodity(commodity)
 	if need == null or not _need_served(h.settlement_id, need):
-		return 0.0
+		return maxf(0.0, upkeep - h.stock(commodity))
 	if need.unit_values.size() > 1:
 		# Households clear a need's satisfiers in cascade order (cheapest posted
 		# first). Each reaches for its own favourite (see _household_favourite)
@@ -3424,10 +3461,10 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade
 		# dearer than posted keeps buying grain until meat is clearly cheaper.
 		var cascade := shared_cascade if not shared_cascade.is_empty() else _household_cascade(h.settlement_id, need)
 		if not cascade.has(commodity):
-			return 0.0
+			return maxf(0.0, upkeep - h.stock(commodity))
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
-			return 0.0
-	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS
+			return maxf(0.0, upkeep - h.stock(commodity))
+	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## A household whose need shortfall is below this counts as having met it.
@@ -6274,7 +6311,7 @@ func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> 
 		# Only households whose favourite is a substitute count toward it.
 		if is_substitute and _household_favourite(h, need, cascade) != commodity:
 			continue
-		total += _daily_need(h, commodity)
+		total += _daily_need(h, commodity) + h.upkeep_per_year(commodity) / 365.0
 	return total
 
 func _invalidate_employment() -> void:

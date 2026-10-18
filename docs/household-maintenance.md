@@ -2,33 +2,21 @@
 
 ## What it is
 
-Every house needs upkeep. Neglected homes cost their households morale. Wells and river intakes have their own yearly servicing (`household-water.md`), paid by the government because they are public; this covers dwellings.
+Every lived-in house needs upkeep, and the **households living there pay for it, on the market**. Government staff do the repair work. Neglected homes cost their households morale. Wells and river intakes have their own yearly servicing (`household-water.md`), paid by the government because they are public; this covers dwellings.
 
-## Direction (revised): households pay, on the market
+Why households and not the government: stone houses (#116) and wages that differ by employer (`household-wage-model-plan.md`) mean households have very different means. Measured numbers are in `household-housing-choice-plan.md`: median surplus 650-1,050 g/yr. With the government paying, a house's upkeep was about 1 g/yr (0.1% of that) and stone had no household buyer at all, only the Trader's exports.
 
-**As built below, the government pays**: staff deliver timber (and stone for tenements) out of the Government Warehouse. Two things have changed since:
+## Sim
 
-- **Stone houses merged** (#116, `HEHouse.is_stone`, +8% morale). They are upgrades of plain houses. A stone house now needs stone to keep up (0.2 timber and 0.4 stone a year, `HEHouse.STONE_UPKEEP_*`), so it falls behind when the warehouse has no stone; but at these sizes the cost is negligible, and nothing in the sim makes a family want one or be able to afford one.
-- **Wages now differ by employer** (productivity pay, `household-wage-model-plan.md`), so households have very different disposable income. Measured numbers are in `household-housing-choice-plan.md`: median surplus 650-1,050 g/yr, a plain house's upkeep is about 1 g/yr (0.1% of that), and the quarry crew that digs the stone is among the poorest.
-
-So the direction is:
-
-1. **The household buys the upkeep goods itself.** Timber (and stone, for a stone house or its share of a tenement) is bought on the market like any other good and used up when the repair is done. The warehouse stops paying for dwellings, which also frees its timber for construction. Wells and river intakes stay with the government.
-2. **Government staff become the labour**, not the supplier: the existing round of visits and town-view errands stays, but a visit only repairs a house whose household holds the goods for that slice (otherwise the backlog grows and, as built, the household loses morale). Paying the crew a wage for the work remains open.
-3. **Upkeep gets a real size**, so it is a choice. Starting point (tune with a sweep): plain house 1 timber/yr; stone house 4 timber + 10 stone/yr (about 56 g/yr at 4 g a unit, roughly 9% of the large village's median surplus); tenement split over its households. A stone house carries stone upkeep (as built, 0.4 stone a year), and while it is in arrears its +8% morale bonus is lost (not yet built).
-4. **First household demand for stone.** Stone has no household buyer today (the quarry lives on export), so market-paid upkeep is the first.
-5. **Why timber upkeep is not a `HENeed`.** `HENeeds.for_commodity` maps a good to one need, and timber is already heat's; a house also needs timber AND stone together, not either. Add an upkeep reserve to `_desired_purchase` (like the heat buffer) instead, valued at base prices so affordability does not flip with the 0.25-4.0 timber price swing.
-
-What to build next, who lives in the stone houses, and what else pulls richer families into them: `household-housing-choice-plan.md`.
-
-## Sim (as built)
-
-- **Cost.** A house takes 0.2 timber a year. A stone house takes 0.2 timber and 0.4 stone. A tenement takes 0.8 timber and 0.8 stone (`HEHouse.upkeep_timber()` / `upkeep_stone()`).
-- **Backlog.** `HEHouse.neglect_years` grows 1/365 a day. First visits are staggered by dwelling id.
-- **Deliveries.** `HESimulation._run_house_maintenance` runs daily after the water pass. Each government worker household can serve `HOUSE_VISITS_PER_STAFF` (4) houses a day. A house is only visited once a slice (`HOUSE_VISIT_YEARS`, a quarter year) is owed, and each visit pays one slice. Houses are visited round robin from just after the last one served (`_house_cursor`), so a short warehouse spreads its timber over the whole town instead of finishing one house.
-- **Shortage.** With no staff, no warehouse or too little stock, nothing is paid and the backlog grows.
-- **Morale.** `HEHousehold.home_overdue_years` is the backlog beyond one visit interval. It costs 4 points of morale per year (`MORALE_DISREPAIR_PER_YEAR`), capped at 20, shown as "Home in disrepair". A healthy town carries no penalty. Paying the backlog down eases it.
+- **Cost** (yearly goods, `HEHouse`): plain house 1 timber; stone house 4 timber + 10 stone (about 56 g at 4 g a unit, roughly 9% of the large village's median surplus); tenement 4 timber + 4 stone, split between its households. A household's share is `HEHousehold.home_upkeep_timber` / `home_upkeep_stone`, set by `_reconcile_housing`.
+- **Households buy the goods.** `_desired_purchase` asks for one slice (`HEHouse.UPKEEP_SLICE_YEARS`, a quarter year) of the household's share on top of whatever else it buys the good for, so timber is bought alongside heat fuel and stone appears in the household clearing order (`_market_clearing_order`) once any household has a stone bill. It is a normal market request: limited by the household's balance, shown in the market's household demand and traded quantity, and moving the price. Sellers keep stock back for it (`_settlement_daily_demand`). A town with no stone house leaves the stone market to business and export, as before.
+- **Staff do the repair.** `_run_house_maintenance` runs daily after the water pass. Each government worker household (government or warehouse) can serve `HOUSE_VISITS_PER_STAFF` (4) houses a day. A house is visited once a slice is owed (`HOUSE_VISIT_YEARS`, a quarter year), round robin from just after the last one served (`_house_cursor`), and only if every household living there holds its slice. The goods are taken from the households' stock and booked as consumed in the daily record, so stock conservation holds. The warehouse is not involved.
+- **Backlog.** `HEHouse.neglect_years` grows 1/365 a day while the house is lived in (an empty house owes nothing until someone moves in). First visits are staggered by dwelling id.
+- **Shortage.** If a household cannot afford or cannot find the goods (poor, or no stone for sale), the visit is skipped and the backlog grows. Staff are not the limit unless there are none.
+- **Morale.** `HEHousehold.home_overdue_years` is the backlog beyond one visit interval. It costs 4 points of morale per year (`MORALE_DISREPAIR_PER_YEAR`), capped at 20, shown as "Home in disrepair", and while it is above zero a stone house's +8% "Stone house" bonus is lost. A healthy town carries neither.
 - **Reports.** `get_house_maintenance_summary(settlement_id)`; `get_housing_report` adds `maintenance_deliveries` (dwelling ids served today); `get_dwelling_reports` adds `neglect_years`.
+- **Why not a `HENeed`.** `HENeeds.for_commodity` maps a good to one need, and timber is already heat's; a stone house needs timber AND stone together. So upkeep is a reserve added to the purchase target, like the heat buffer.
+- **Also fixed here:** water servicing (#113) and house repairs now book the goods they use as consumed, which the stock-conservation check needs.
 
 ## Town view
 
@@ -36,5 +24,5 @@ Government and warehouse workers whose house deliveries fall on a day leave thei
 
 ## Checks and open items
 
-- `scripts/sim/harness/check_house_maintenance.gd`: costs, penalty size and cap, a healthy town, round-robin fairness, shortage and recovery, and the errand round in the schedule.
-- Open: a dashboard line for the backlog; a visible marker on houses in disrepair; stone and other upkeep for non-house buildings; paying for the work (wages) rather than only materials.
+- `scripts/sim/harness/check_house_maintenance.gd`: costs and shares, penalty size and cap, the stone bonus lost in arrears, a healthy town buying timber without touching the warehouse, six stone houses putting stone on the market, a stone house with no stone to buy falling behind and recovering, every lived-in house being visited, and the errand round in the schedule.
+- Open: the costs are a first guess (tune with a 3-seed sweep, see the plan doc); who gets the stone houses (`household-housing-choice-plan.md`); a dashboard line for the backlog; a visible marker on houses in disrepair; paying the crew a wage for the work; upkeep for non-house buildings.

@@ -1,12 +1,12 @@
 # Household economy: who lives in which house (proposal)
 
-Status: **proposal and measurements only, nothing built.** Follows `household-maintenance.md` (upkeep paid by households on the market) and the stone houses merged in #116.
+Status: **proposal and measurements; the upkeep half is built.** `household-maintenance.md` now has households buying their house's upkeep on the market (stone houses 4 timber + 10 stone a year), and stone houses merged in #116. Who gets which house (section B onwards) is not built.
 
 ## Today
 
 - **Houses are assigned by id, not by choice.** `HESimulation._assign_dwellings`: sticky for life; unhoused households, ascending id, take the lowest-id house with room (innermost first). Nothing considers money, upkeep or distance, so a stone house goes to whoever has the lowest id.
 - **Job proximity is on the hiring side.** `_nearest_available_index` (weekly hiring) gives a business the unemployed household that lives nearest to it, using `position_lookup` (the town layout). Houses never move, so this only changes who is hired, not where anyone lives.
-- **A stone house is +8% morale** (`HEHouse.STONE_MORALE_BONUS`) and costs 40 g + 50 timber + 120 stone to upgrade. Its upkeep is 0.2 timber and 0.4 stone a year, so it needs stone from the warehouse, but at that size the cost is negligible.
+- **A stone house is +8% morale** (`HEHouse.STONE_MORALE_BONUS`) and costs 40 g + 50 timber + 120 stone to upgrade. Its upkeep is 4 timber and 10 stone a year, bought by its household on the market (about 56 g at 4 g a unit).
 
 ## Measurements
 
@@ -24,14 +24,14 @@ What this says:
 
 1. **Disposable income is real but uneven** in the large and mining villages, and it follows the employer. The quarry crew who dig the stone are among the poorest; bloomery families are the richest ordinary ones.
 2. **The small village has no slack at all** on this seed (the median household runs a deficit), so no stone houses should appear there until the economy grows. A rule that gates stone on affordability gives that for free.
-3. **Today's upkeep cannot bind**: 0.2 timber a year is 0.8 g at timber 4.0, about 0.1% of the large village's median surplus. At 56 g/yr a stone house would be about 9% of the large village's median surplus and 5% of the mining village's, which is a real but affordable choice for the upper half and out of reach for the bottom quarter.
+3. **Upkeep was too small to bind** when the government paid 0.2 timber a year (0.8 g at timber 4.0, about 0.1% of the large village's median surplus). At 56 g/yr a stone house is about 9% of the large village's median surplus and 5% of the mining village's, which is a real but affordable choice for the upper half and out of reach for the bottom quarter. That is what is built now.
 4. **One-household outliers**: the Trader's household earns 10-60x the median and holds a balance of 9-19k against a median of a few hundred. A rule that ranks by balance will put it first every time, which is fine for one stone house, but it shows why rankings should use income as well as savings.
 
 ## Proposed direction
 
 ### A. Make upkeep matter (in `household-maintenance.md`)
 
-Households buy the upkeep goods on the market; stone houses carry stone upkeep; arrears cost morale and the stone bonus.
+**Built.** Households buy the upkeep goods on the market; stone houses carry stone upkeep; arrears cost morale and the stone bonus.
 
 ### B. A housing review that considers affordability and distance
 
