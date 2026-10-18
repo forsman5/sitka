@@ -105,6 +105,9 @@ var _skeleton: Skeleton3D
 var _bow_bones: Dictionary = {}
 var _bow_pose_weight: float = 0.0
 var _bow_draw_fraction: float = 0.0
+var _hair_mesh: MeshInstance3D
+var _hair_surface_index: int = -1
+var _hidden_hair_material: StandardMaterial3D
 var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
@@ -181,6 +184,8 @@ func _ready() -> void:
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if selected_character == "person" and selected_weapon != "":
 		_skeleton = _model.find_child("Skeleton3D", true, false) as Skeleton3D
+		if selected_weapon == "bow":
+			_setup_first_person_hair()
 		var holder := OnFootWeapons.attach(_model, selected_weapon)
 		if holder != null:
 			_weapon = selected_weapon
@@ -306,9 +311,28 @@ func _set_camera_mode(mode: int) -> void:
 	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
 	_model.visible = mode != CameraMode.FIRST_PERSON or show_bow_pose
 	_head.position.z = -0.24 if show_bow_pose else 0.0
+	_set_first_person_hair_hidden(show_bow_pose)
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
 	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
+
+func _setup_first_person_hair() -> void:
+	_hair_mesh = _model.find_child("Body2", true, false) as MeshInstance3D
+	if _hair_mesh == null or _hair_mesh.mesh == null:
+		return
+	for surface_index in _hair_mesh.mesh.get_surface_count():
+		if _hair_mesh.mesh.surface_get_name(surface_index) == "Hair":
+			_hair_surface_index = surface_index
+			break
+	_hidden_hair_material = StandardMaterial3D.new()
+	_hidden_hair_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_hidden_hair_material.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
+	_hidden_hair_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+
+func _set_first_person_hair_hidden(hidden: bool) -> void:
+	if _hair_mesh == null or _hair_surface_index < 0:
+		return
+	_hair_mesh.set_surface_override_material(_hair_surface_index, _hidden_hair_material if hidden else null)
 
 func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
