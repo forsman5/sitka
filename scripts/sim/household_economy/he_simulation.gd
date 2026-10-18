@@ -1948,6 +1948,12 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				report["wool_sustaining_current"] = int(sustaining.y)
 				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
+			# Care so far this review window: care_fraction only moves at a
+			# review, so on its own it reads 0 for up to a season after a ranch
+			# is first staffed. -1 on the first day of a window (nothing accrued).
+			var window_days: int = day % HERD_EVAL_INTERVAL_DAYS
+			var window_need: float = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species] * window_days
+			report["care_fraction_now"] = clampf(b.care_worker_days / window_need, 0.0, 1.0) if window_need > 0.0 else -1.0
 			var fodder_target: float = b.herd_size * FODDER_PER_HEAD_PER_WINTER[b.species]
 			report["fodder_stock"] = b.stock(Commodity.Type.GRAIN)
 			report["fodder_target"] = fodder_target

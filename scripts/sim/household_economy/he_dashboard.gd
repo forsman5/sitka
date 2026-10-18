@@ -2589,7 +2589,8 @@ func _refresh_business_detail_productivity(report: Dictionary) -> void:
 		productivity_rows.append(["Species", [[report["species"], report["species"]]]])
 		productivity_rows.append(["Herd size", "%.1f head" % report["herd_size"]])
 		productivity_rows.append(["Next review", "%dd" % report["days_to_next_harvest"]])
-		productivity_rows.append(["Husbandry", "%.0f%% care last review (%.2f workers for full care)" % [report["care_fraction"] * 100.0, report["care_workers_needed"]]])
+		var care_now_text: String = "%.0f%% care this review so far, " % (report["care_fraction_now"] * 100.0) if report["care_fraction_now"] >= 0.0 else ""
+		productivity_rows.append(["Husbandry", "%s%.0f%% care last review (%.2f workers for full care)" % [care_now_text, report["care_fraction"] * 100.0, report["care_workers_needed"]]])
 		productivity_rows.append(["Winter fodder", "%.0f of %.0f grain held (%.0f%%); last winter ate %.0f of %.0f" % [report["fodder_stock"], report["fodder_target"], report["fodder_cover"] * 100.0, report["last_fodder_eaten"], report["last_fodder_needed"]]])
 		productivity_rows.append(["Last hardship butchered", "%.1f head" % report["last_hardship_butchered"]])
 	for row in productivity_rows:
