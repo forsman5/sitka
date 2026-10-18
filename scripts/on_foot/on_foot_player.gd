@@ -301,7 +301,11 @@ func scare_radius() -> float:
 
 func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
-	_model.visible = mode != CameraMode.FIRST_PERSON
+	# Keep the bow user visible in first person so the draw pose can be seen.
+	# Move the camera just ahead of the face; the body stays behind the view.
+	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
+	_model.visible = mode != CameraMode.FIRST_PERSON or show_bow_pose
+	_head.position.z = -0.24 if show_bow_pose else 0.0
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
 	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
