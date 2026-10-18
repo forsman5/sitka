@@ -3,6 +3,8 @@ class_name OnFootArrow extends Node3D
 ## fades away. Terrain/world collide on layers 1 and 2.
 
 const SPEED := 32.0
+## Arrow speed multiplier at the shortest draw that still fires.
+const MIN_POWER := 0.35
 const GRAVITY := 14.0
 const LIFETIME := 6.0
 const STUCK_LIFETIME := 4.0

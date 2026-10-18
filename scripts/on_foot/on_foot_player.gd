@@ -111,7 +111,8 @@ var _bark_anim_left: float = 0.0
 var _bark_anim_pending: bool = false
 var _last_bark: int = -1
 var _weapon: String = ""
-var _weapon_node: Node3D
+var _drawing: bool = false
+var _draw_time: float = 0.0
 var _attack_cooldown_left: float = 0.0
 var _attack_anim_pending: bool = false
 var _pitch: float = 0.0
@@ -178,7 +179,6 @@ func _ready() -> void:
 		var holder := OnFootWeapons.attach(_model, selected_weapon)
 		if holder != null:
 			_weapon = selected_weapon
-			_weapon_node = holder.get_node("Weapon") as Node3D
 
 	_bark_player = AudioStreamPlayer3D.new()
 	_bark_player.position.y = eye_height * 0.8
@@ -203,6 +203,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			attack()
 		else:
 			bark()
+	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		release_draw()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			if _mounted_horse == null:
@@ -237,31 +239,47 @@ func bark() -> bool:
 ## Left click with a weapon: swing the sword, or loose an arrow where the camera
 ## points. Returns whether an attack started.
 func attack() -> bool:
-	if _weapon == "" or _attack_cooldown_left > 0.0 or _mounted_horse != null:
+	if _weapon == "" or _attack_cooldown_left > 0.0 or _mounted_horse != null or _drawing:
 		return false
 	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+	if def.has("draw_time"):
+		# Bow: start drawing; letting go of the button fires (see release_draw).
+		_drawing = true
+		_draw_time = 0.0
+		return true
 	_attack_cooldown_left = float(def["cooldown"])
 	_attack_anim_pending = true
-	if def.has("aim_rotation_degrees"):
-		# The aim clip raises the arm, so re-grip the bow to keep it upright.
-		_weapon_node.rotation_degrees = def["aim_rotation_degrees"]
-		get_tree().create_timer(float(def["attack_hold"])).timeout.connect(_restore_weapon_pose)
-	if _weapon == "bow":
-		get_tree().create_timer(float(def["release_delay"])).timeout.connect(_release_arrow)
 	return true
 
-func _restore_weapon_pose() -> void:
-	if is_instance_valid(_weapon_node):
-		_weapon_node.rotation_degrees = OnFootWeapons.DEFS[_weapon]["rotation_degrees"]
+## 0..1 draw strength of the bow right now (0 when not drawing).
+func draw_fraction() -> float:
+	if not _drawing:
+		return 0.0
+	return clampf(_draw_time / float(OnFootWeapons.DEFS[_weapon]["draw_time"]), 0.0, 1.0)
 
-func _release_arrow() -> void:
+## Left button released: loose the arrow with power scaled by how long it was
+## drawn (full power after draw_time). A tap shorter than min_draw cancels.
+func release_draw() -> void:
+	if not _drawing:
+		return
+	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+	var fraction := draw_fraction()
+	var held := _draw_time
+	_drawing = false
+	_draw_time = 0.0
+	if held < float(def["min_draw"]):
+		return
+	_attack_cooldown_left = float(def["cooldown"])
+	_release_arrow(lerpf(OnFootArrow.MIN_POWER, 1.0, fraction))
+
+func _release_arrow(power: float) -> void:
 	if not is_inside_tree():
 		return
 	var arrow := OnFootArrow.new()
 	get_parent().add_child(arrow)
 	var forward := -_camera.global_transform.basis.z
 	arrow.global_position = _head.global_position + forward * 0.6
-	arrow.velocity = forward * OnFootArrow.SPEED
+	arrow.velocity = forward * OnFootArrow.SPEED * power
 	arrow.look_at(arrow.global_position + forward, Vector3.UP)
 
 ## How far (in metres) a bark startles animals.
@@ -283,6 +301,8 @@ func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
 	_bark_anim_left = maxf(_bark_anim_left - delta, 0.0)
 	_attack_cooldown_left = maxf(_attack_cooldown_left - delta, 0.0)
+	if _drawing:
+		_draw_time += delta
 	if _mounted_horse != null:
 		_mounted_step(delta)
 		return
@@ -349,6 +369,7 @@ func _try_mount() -> void:
 		if Vector2(offset.x, offset.z).length() > 3.0 or absf(offset.y) > 1.5:
 			continue
 		_mounted_horse = horse
+		_drawing = false
 		horse.rider = self
 		horse.stop()
 		_foot_camera_mode = _camera_mode

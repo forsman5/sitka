@@ -1,11 +1,11 @@
 class_name OnFootWeapons extends RefCounted
 ## Weapons the person can carry in On Foot combat mode. Models are KayKit Fantasy
-## Weapons Bits; they are parented to the right-hand bone so they follow every
+## Weapons Bits; they are parented to the hand bone (right for the sword, left for the bow) so they follow every
 ## animation clip. The hand transform is in bone space and is tuned by eye. The
 ## skeleton is in centimetres (about 54x after the model scale), so weapon scales
 ## are tiny; sized for a ~0.7 m sword and ~0.9 m bow on the 0.54-scale person.
 
-const HAND_BONE := "Fist.R"
+const HAND_BONE := "Fist.R"  # default; a def may set "bone" (the bow is held in the left)
 
 const DEFS := {
 	"sword": {
@@ -22,13 +22,14 @@ const DEFS := {
 		"label": "Bow",
 		"scene": preload("res://assets/models/weapons/bow_A_withString.gltf"),
 		"position": Vector3(0.0, 0.0, 0.0),
-		"rotation_degrees": Vector3(-6.5, -13.7, -87.7),
-		"aim_rotation_degrees": Vector3(-62.6, 144.0, 120.6),
+		"bone": "Fist.L",
+		"rotation_degrees": Vector3(-6.4, 14.4, -92.3),
 		"scale": 0.0085,
-		"attack_anim": "CharacterArmature|Shoot_OneHanded",
-		"attack_hold": 0.5,
-		"cooldown": 0.8,
-		"release_delay": 0.25,
+		# Hold to draw; release fires. No clip yet: the draw pose (left arm out, right
+		# hand pulling the string) is still to be animated.
+		"draw_time": 1.0,
+		"min_draw": 0.15,
+		"cooldown": 0.4,
 	},
 }
 
@@ -40,13 +41,14 @@ static func attach(model: Node3D, weapon: String) -> Node3D:
 	if not DEFS.has(weapon):
 		return null
 	var skeleton := model.find_child("Skeleton3D", true, false) as Skeleton3D
-	if skeleton == null or skeleton.find_bone(HAND_BONE) < 0:
-		return null
 	var def: Dictionary = DEFS[weapon]
+	var bone: String = def.get("bone", HAND_BONE)
+	if skeleton == null or skeleton.find_bone(bone) < 0:
+		return null
 	var holder := BoneAttachment3D.new()
 	holder.name = "WeaponHand"
 	skeleton.add_child(holder)
-	holder.bone_name = HAND_BONE
+	holder.bone_name = bone
 	var node := (def["scene"] as PackedScene).instantiate() as Node3D
 	node.name = "Weapon"
 	node.position = def["position"]
