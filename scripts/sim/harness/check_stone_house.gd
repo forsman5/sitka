@@ -64,6 +64,11 @@ func _check_heat_saving() -> void:
 	sim.advance_ticks(1)
 	var stone_ratio := float(resident.last_need_required[HENeed.Id.HEAT]) / (float(resident.headcount()) * heat.per_person_daily)
 	_assert(is_equal_approx(stone_ratio, 0.75), "In a stone house heat is 25%% lower (%.3f)" % stone_ratio)
+	# The Needs page shows the saving beside the goods that met the need.
+	var detail := sim.get_need_detail(HENeed.Id.HEAT, 5, sid)
+	var expected_saving := float(resident.headcount()) * heat.per_person_daily * HEHouse.STONE_HEAT_SAVING
+	_assert(float(detail["saved"]) >= expected_saving - 0.0001, "The heat need detail reports the saving (%.3f >= %.3f)" % [float(detail["saved"]), expected_saving])
+	_assert((detail["saved_history"] as Array).size() > 0 and float((detail["saved_history"] as Array).back()) >= expected_saving - 0.0001, "and keeps a history of it")
 	var summary := sim.get_household_summary(resident.id)
 	for need in summary["needs"]:
 		if need["label"] == "Heat":

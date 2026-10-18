@@ -21,6 +21,9 @@
 
 - **Stone house** (`HEHouse.is_stone`): an in-place upgrade or a new lot. Its household gains `STONE_MORALE_BONUS` (8%) morale and needs `STONE_HEAT_SAVING` (25%) less heat, whoever lives there: `HEHouse.heat_factor()` is copied to `HEHousehold.home_heat_factor` by `_reconcile_housing`, and `HEHousehold.need_scale(need)` applies it to the heat requirement in the purchase target, the daily use forecast, consumption and the household and person pages. About 150 g a year for four people at timber 4.0 (about 10 at 0.25). Nothing yet steers richer households into stone houses; see `household-housing-choice-plan.md` if that branch has landed.
 
+- **Housing tab layout.** Stats on the left, the government builds on the right as one row each (button, name, icon costs, one-line state), so they are on the tab's first screen. Costs are icons (gold from the treasury, goods from the warehouse), red when the town is short of that item. The warehouse order rules (a build that lacks goods turns its button into Order, which sets a standing buy order) are explained once, on the "Government builds (?)" tooltip. Below: the house upkeep readout and three charts (repair goods used and repair visits, trailing 30 days; houses overdue and stone bonuses lost), fed by each day's `record["maintenance"][settlement_id]` (see `household-maintenance.md`).
+- **Heat on the Needs page.** The heat need detail lists "Saved by stone houses" (need units the homes spared, and its share of the demand without them) and charts it as a series beside the goods that met the need and the unmet line. `get_need_detail()` returns `saved` and `saved_history`; `_consume_need` books `record["needs"][id]["saved"]`. A saving is not a good, so it is shown as another way the need was covered, not as a "met by" line.
+
 ## API a UI needs
 
 | What | Where |

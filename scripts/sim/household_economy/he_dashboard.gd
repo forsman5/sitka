@@ -19,6 +19,12 @@ const HEHousehold = preload("res://scripts/sim/household_economy/records/he_hous
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 ## Housing builds the Housing tab offers, in button order.
 const HOUSING_BUILD_KEYS := ["house", "tenement", "stone_house", "stone_house_new"]
+## Shown once, on the Housing tab's "Government builds" header, instead of under each button.
+const HOUSING_ORDER_TOOLTIP := "A build pays gold from the treasury and goods from the Government Warehouse. If the warehouse lacks the goods, the button becomes Order: pressing it sets a standing buy order in the warehouse up to the build's cost, and the warehouse buys a limited amount each day within its wage reserve. Press again when the goods have arrived. The order stays standing, so the warehouse keeps restocking for the next build."
+## Housing tab upkeep charts: [series name]. Colours follow HESparkline.color_for_series.
+const UPKEEP_GOODS_SERIES := [["Timber"], ["Stone"]]
+const UPKEEP_VISITS_SERIES := [["Repair visits"]]
+const UPKEEP_ARREARS_SERIES := [["Overdue houses"], ["Stone bonus lost"]]
 const HETownView = preload("res://scripts/sim/household_economy/he_town_view.gd")
 const HESparkline = preload("res://scripts/sim/household_economy/he_sparkline.gd")
 const HEHouseholdTable = preload("res://scripts/sim/household_economy/he_household_table.gd")
@@ -31,6 +37,7 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## Row order of the Needs tab comes from HENeeds.display_order(): every need in
 ## the catalog, so a new need can't be left off the tab.
 const NEED_UNMET_COLOR := Color(0.9, 0.35, 0.35)
+const NEED_SAVED_COLOR := Color(0.45, 0.75, 0.5)
 ## Offered by the Businesses tab's "Create business" menu: every kind in
 ## HEScenarioSeeds.business_types(), so a new kind shows up here by being
 ## registered there. Each kind is unique per town (matched by
@@ -140,6 +147,13 @@ var _housing_detail_labels: Dictionary = {} # key -> Label
 var _housing_hint_label: Label
 var _housing_buttons: Dictionary = {} # type_key ("house"/"tenement") -> Button
 var _housing_blocker_labels: Dictionary = {} # type_key -> Label
+var _housing_name_labels: Dictionary = {} # type_key -> Label
+var _housing_cost_boxes: Dictionary = {} # type_key -> HBoxContainer (icon + amount chips)
+var _upkeep_summary_label: Label
+var _upkeep_goods_chart: HESparkline
+var _upkeep_visits_chart: HESparkline
+var _upkeep_arrears_chart: HESparkline
+var _last_upkeep_chart_day := -1
 var _town_mode_button: Button
 var _dashboard_body: Array[Control] = [] # hidden while the town view is shown
 var _speed_buttons: Array[Button] = [] # Pause, 1x, 10x, 100x -- see _set_town_mode
@@ -1356,10 +1370,15 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	box.add_theme_constant_override("separation", 10)
 	scroll.add_child(box)
 
+	# Stats on the left, the government builds beside them, so the builds are
+	# on the first screen of this (short) tab.
+	var top_row := HBoxContainer.new()
+	top_row.add_theme_constant_override("separation", 48)
+	box.add_child(top_row)
 	var grid := GridContainer.new()
 	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 48)
-	box.add_child(grid)
+	grid.add_theme_constant_override("h_separation", 32)
+	top_row.add_child(grid)
 	for stat in [["houses", "Homes"], ["households", "Households"], ["free", "Free homes"], ["homeless", "Homeless households"]]:
 		var cell := VBoxContainer.new()
 		grid.add_child(cell)
@@ -1378,21 +1397,82 @@ func _build_housing_tab(top_tabs: TabContainer) -> void:
 	rules.text = "One home shelters one household (a house is one home, a tenement several); capacity is pooled across the town. When no home is free, births fall by 80%. Households with no home lose members to emigration."
 	box.add_child(rules)
 
-	# Both housing builds are always offered; the hint says which one the
-	# layout recommends (see HETownLayout.prefers_densify).
+	# One compact row per government build: Build/Order button, name, icon costs
+	# (red when short) and a one-line state. The warehouse order rules are
+	# explained once, on the header's tooltip, not under every button.
 	_housing_hint_label = Label.new()
 	_housing_hint_label.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	box.add_child(_housing_hint_label)
+	var builds_column := VBoxContainer.new()
+	builds_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	builds_column.add_theme_constant_override("separation", 4)
+	top_row.add_child(builds_column)
+	var build_header := HBoxContainer.new()
+	build_header.add_theme_constant_override("separation", 8)
+	builds_column.add_child(build_header)
+	var build_title := Label.new()
+	build_title.text = "Government builds"
+	build_title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	build_header.add_child(build_title)
+	var build_help := Label.new()
+	build_help.text = "(?)"
+	build_help.mouse_filter = Control.MOUSE_FILTER_STOP
+	build_help.add_theme_color_override("font_color", Color(0.55, 0.7, 0.9))
+	build_help.tooltip_text = HOUSING_ORDER_TOOLTIP
+	build_header.add_child(build_help)
+	var build_rows := VBoxContainer.new()
+	build_rows.add_theme_constant_override("separation", 4)
+	builds_column.add_child(build_rows)
 	for type_key in HOUSING_BUILD_KEYS:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		build_rows.add_child(row)
 		var button := Button.new()
-		button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		button.custom_minimum_size = Vector2(64, 0)
 		button.pressed.connect(_on_build_housing_pressed.bind(type_key))
-		box.add_child(button)
+		row.add_child(button)
 		_housing_buttons[type_key] = button
+		var name_label := Label.new()
+		name_label.custom_minimum_size = Vector2(150, 0)
+		row.add_child(name_label)
+		_housing_name_labels[type_key] = name_label
+		var cost_box := HBoxContainer.new()
+		cost_box.add_theme_constant_override("separation", 10)
+		cost_box.custom_minimum_size = Vector2(230, 0)
+		row.add_child(cost_box)
+		_housing_cost_boxes[type_key] = cost_box
 		var blocker_label := Label.new()
 		blocker_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
-		box.add_child(blocker_label)
+		blocker_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		blocker_label.clip_text = true
+		blocker_label.mouse_filter = Control.MOUSE_FILTER_STOP
+		row.add_child(blocker_label)
 		_housing_blocker_labels[type_key] = blocker_label
+
+	# House upkeep: households buy the goods, government staff repair.
+	var upkeep_title := Label.new()
+	upkeep_title.text = "House upkeep"
+	upkeep_title.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
+	upkeep_title.tooltip_text = "Households buy the timber (and stone) for their house's repairs on the market; government staff do the work. A house whose households cannot supply their share falls behind, which costs them morale (and a stone house its bonus)."
+	upkeep_title.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.add_child(upkeep_title)
+	_upkeep_summary_label = Label.new()
+	box.add_child(_upkeep_summary_label)
+	var upkeep_charts := HBoxContainer.new()
+	upkeep_charts.add_theme_constant_override("separation", 16)
+	upkeep_charts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(upkeep_charts)
+	_upkeep_goods_chart = _add_upkeep_chart(upkeep_charts, "Repair goods used (trailing %d days)" % TOWN_FLOW_WINDOW_DAYS, UPKEEP_GOODS_SERIES)
+	_upkeep_visits_chart = _add_upkeep_chart(upkeep_charts, "Repair visits (trailing %d days)" % TOWN_FLOW_WINDOW_DAYS, UPKEEP_VISITS_SERIES)
+	_upkeep_arrears_chart = _add_upkeep_chart(upkeep_charts, "Houses behind on repairs", UPKEEP_ARREARS_SERIES)
+
+## A chart column for the Housing tab: legend row above a hoverable chart,
+## sharing the row evenly with its neighbours.
+func _add_upkeep_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(column)
+	return _add_town_chart(column, title_text, series_defs)
 
 func _housing_option_index(type_key: String) -> int:
 	var options := HEScenarioSeeds.government_buildings()
@@ -1436,38 +1516,137 @@ func _refresh_housing() -> void:
 		_housing_hint_label.text = ""
 	for type_key in HOUSING_BUILD_KEYS:
 		_refresh_housing_build(type_key, upgradable)
+	_refresh_upkeep()
 
-## One housing build button: label, price and blocker line for `type_key`.
+## One housing build row: button, name, icon costs and state for `type_key`.
 func _refresh_housing_build(type_key: String, upgradable: int) -> void:
 	var button: Button = _housing_buttons[type_key]
+	var name_label: Label = _housing_name_labels[type_key]
+	var cost_box: HBoxContainer = _housing_cost_boxes[type_key]
 	var blocker_label: Label = _housing_blocker_labels[type_key]
 	var index := _housing_option_index(type_key)
 	if index < 0:
-		button.visible = false
-		blocker_label.visible = false
+		button.get_parent().visible = false
 		return
+	button.get_parent().visible = true
 	var option: Dictionary = HEScenarioSeeds.government_buildings()[index]
 	var settlement_id := _town_settlement_id()
 	var blocker := _simulation.government_build_blocker(settlement_id, option)
 	var order_state := _simulation.build_goods_order_state(settlement_id, option)
-	var noun := "house"
+	var noun := "House"
 	if type_key == "tenement":
-		noun = "tenement upgrade" if upgradable > 0 else "tenement"
+		noun = "Tenement upgrade" if upgradable > 0 else "Tenement"
 	elif type_key == "stone_house":
-		noun = "stone house upgrade"
+		noun = "Stone house upgrade"
 	elif type_key == "stone_house_new":
-		noun = "new stone house"
-	var cost_text := HEScenarioSeeds.cost_text(_simulation.build_cost_for(settlement_id, option))
-	button.text = "Build %s (%s)" % [noun, cost_text]
-	if order_state == "can_order":
-		button.text = "Order timber for a %s (%s)" % [noun, cost_text]
+		noun = "New stone house"
+	name_label.text = noun
+	_fill_cost_chips(cost_box, settlement_id, _simulation.build_cost_for(settlement_id, option))
+	button.text = "Order" if order_state == "can_order" else "Build"
 	button.disabled = blocker != "" and order_state != "can_order"
+	button.tooltip_text = "Orders the missing goods for the warehouse (see (?) above)." if order_state == "can_order" else ""
+	blocker_label.tooltip_text = blocker
 	if order_state == "can_order":
-		blocker_label.text = "%s. Pressing sets a standing warehouse buy order; press again when it arrives." % blocker
+		blocker_label.text = "short of goods - press to order"
 	elif order_state == "ordered":
-		blocker_label.text = "Goods on order: %s" % blocker
+		blocker_label.text = "goods on order"
 	else:
 		blocker_label.text = blocker
+
+## "<icon> 15  <icon> 50 ..." for a build cost: gold from the treasury and goods
+## from the warehouse, each number red when the town is short of it. Rebuilt only
+## when the cost or the shortages change.
+func _fill_cost_chips(box: HBoxContainer, settlement_id: int, cost: Dictionary) -> void:
+	var treasury := float(_simulation.get_government_summary(settlement_id).get("treasury", 0.0))
+	var stock: Dictionary = {}
+	for row in _simulation.get_warehouse_inventory(settlement_id):
+		stock[row["commodity"]] = float(row["units"])
+	var chips: Array = []
+	var gold := float(cost.get("gold", 0.0))
+	if gold > 0.0:
+		chips.append({"icon": Commodity.gold_icon(), "name": "Gold (treasury)", "need": gold, "have": treasury})
+	var goods: Dictionary = cost.get("goods", {})
+	for commodity in goods:
+		chips.append({"icon": Commodity.icon_of(commodity), "name": Commodity.name_of(commodity), "need": float(goods[commodity]), "have": float(stock.get(commodity, 0.0))})
+	var signature := ""
+	for chip in chips:
+		signature += "%s|%.0f|%s;" % [chip["name"], chip["need"], str(chip["have"] >= chip["need"])]
+	if box.get_meta("signature", "") == signature:
+		return
+	box.set_meta("signature", signature)
+	for child in box.get_children():
+		box.remove_child(child)
+		child.queue_free()
+	if chips.is_empty():
+		var free_label := Label.new()
+		free_label.text = "free"
+		box.add_child(free_label)
+		return
+	for chip in chips:
+		var item := HBoxContainer.new()
+		item.add_theme_constant_override("separation", 3)
+		item.mouse_filter = Control.MOUSE_FILTER_STOP
+		item.tooltip_text = "%s: %.0f needed, %.0f in stock" % [chip["name"], chip["need"], chip["have"]]
+		var icon := TextureRect.new()
+		icon.texture = chip["icon"]
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2(18, 18)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item.add_child(icon)
+		var amount := Label.new()
+		amount.text = "%.0f" % chip["need"] if icon.texture != null else "%.0f %s" % [chip["need"], chip["name"]]
+		amount.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if chip["have"] < chip["need"]:
+			amount.add_theme_color_override("font_color", Color(0.9, 0.4, 0.35))
+		item.add_child(amount)
+		box.add_child(item)
+
+## The upkeep readout and charts (house maintenance, see household-maintenance.md).
+func _refresh_upkeep() -> void:
+	var settlement_id := _town_settlement_id()
+	var summary := _simulation.get_house_maintenance_summary(settlement_id)
+	var stone_lost := 0
+	for household_id in _simulation.get_household_ids(settlement_id):
+		var h: HEHousehold = _simulation.households[household_id]
+		if h.home_morale_bonus > 0.0 and h.home_overdue_years > 0.0:
+			stone_lost += 1
+	_upkeep_summary_label.text = "%d houses, %d overdue, %.1f years owed; %d repaired today; %d stone houses without their bonus. A year of upkeep for the town: %.0f timber, %.0f stone." % [
+		summary["houses"], summary["overdue"], summary["owed_years"], summary["delivered_today"], stone_lost, summary["upkeep_timber"], summary["upkeep_stone"]]
+	# History charts: redraw at most once per sim day.
+	if _last_upkeep_chart_day == _simulation.day:
+		return
+	_last_upkeep_chart_day = _simulation.day
+	var history := _simulation.get_daily_history(GameState.sparkline_days + TOWN_FLOW_WINDOW_DAYS - 1)
+	var shown_from := maxi(0, history.size() - GameState.sparkline_days)
+	var timber: Array[float] = []
+	var stone: Array[float] = []
+	var visits: Array[float] = []
+	var overdue: Array[float] = []
+	var lost: Array[float] = []
+	for d in range(shown_from, history.size()):
+		var timber_total := 0.0
+		var stone_total := 0.0
+		var visit_total := 0.0
+		for k in range(maxi(0, d - TOWN_FLOW_WINDOW_DAYS + 1), d + 1):
+			var day_entry: Dictionary = (history[k].get("maintenance", {}) as Dictionary).get(settlement_id, {})
+			timber_total += float(day_entry.get("timber_used", 0.0))
+			stone_total += float(day_entry.get("stone_used", 0.0))
+			visit_total += float(day_entry.get("visits", 0.0))
+		var today: Dictionary = (history[d].get("maintenance", {}) as Dictionary).get(settlement_id, {})
+		timber.append(timber_total)
+		stone.append(stone_total)
+		visits.append(visit_total)
+		overdue.append(float(today.get("overdue_houses", 0.0)))
+		lost.append(float(today.get("stone_bonus_lost", 0.0)))
+	_upkeep_goods_chart.set_series([
+		{"name": "Timber", "values": timber, "color": HESparkline.color_for_series(0)},
+		{"name": "Stone", "values": stone, "color": HESparkline.color_for_series(1)}])
+	_upkeep_visits_chart.set_series([{"name": "Repair visits", "values": visits, "color": HESparkline.color_for_series(0)}])
+	_upkeep_arrears_chart.set_series([
+		{"name": "Overdue houses", "values": overdue, "color": HESparkline.color_for_series(0)},
+		{"name": "Stone bonus lost", "values": lost, "color": HESparkline.color_for_series(1)}])
 
 ## A title row with a color-keyed legend above a hoverable chart.
 func _add_town_chart(parent: Control, title_text: String, series_defs: Array) -> HESparkline:
@@ -2153,6 +2332,12 @@ func _refresh_need_detail() -> void:
 	for name in detail["met_by"].keys():
 		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
+	# What homes spared households (a stone house keeps heat in): not a good, so
+	# shown beside the goods as another way the need was covered.
+	var saved: float = detail["saved"]
+	var saving_shown: bool = saved > 0.0001 or (detail["saved_history"] as Array).any(func(v): return float(v) > 0.0001)
+	if saved > 0.0001:
+		_add_need_detail_line("   Saved by stone houses: %.2f (%s of the %.2f this need would be without them)" % [saved, _percent_of(saved, required + saved), required + saved])
 
 	var series: Array = []
 	var header := HBoxContainer.new()
@@ -2166,6 +2351,8 @@ func _refresh_need_detail() -> void:
 	for name in detail["met_history"].keys():
 		series.append({"name": name, "values": detail["met_history"][name], "color": HESparkline.color_for_series(index)})
 		index += 1
+	if saving_shown:
+		series.append({"name": "Saved by stone houses", "values": detail["saved_history"], "color": NEED_SAVED_COLOR})
 	series.append({"name": "Unmet", "values": detail["unmet_history"], "color": NEED_UNMET_COLOR})
 	for entry in series:
 		var legend := Label.new()
