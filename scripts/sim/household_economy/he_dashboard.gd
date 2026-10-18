@@ -2344,6 +2344,8 @@ func _refresh_need_detail() -> void:
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
 	# What homes spared households (a stone house keeps heat in): not a good, so
 	# shown beside the goods as another way the need was covered.
+	if absf(float(detail["season_scale"]) - 1.0) > 0.02:
+		_add_need_detail_line("   %s: demand is x%.2f the yearly average." % [detail["season_name"], detail["season_scale"]])
 	var saved: float = detail["saved"]
 	var saving_shown: bool = saved > 0.0001 or (detail["saved_history"] as Array).any(func(v): return float(v) > 0.0001)
 	if saved > 0.0001:

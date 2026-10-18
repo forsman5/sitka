@@ -1957,7 +1957,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 	for need in HENeeds.felt():
 		if need.is_service() and not h.last_need_required.has(need.id):
 			continue
-		var required := need.per_person_daily * h.need_scale(need)
+		var required := need.per_person_daily * _need_scale(h, need)
 		var household_required: float = h.last_need_required.get(need.id, 0.0)
 		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
 		needs.append({
@@ -3308,7 +3308,7 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 ## satisfy no need return 0.
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (h.need_scale(need) if need != null else 1.0)
+	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (_need_scale(h, need) if need != null else 1.0)
 
 ## Whether `need` is part of this settlement's economy at all: always, unless
 ## the need can only be met by a dedicated business (HENeed.needs_seller) and
@@ -3510,7 +3510,7 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade
 			return maxf(0.0, upkeep - h.stock(commodity))
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
 			return maxf(0.0, upkeep - h.stock(commodity))
-	var target := float(h.headcount()) * need.per_person_daily * h.need_scale(need) * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
+	var target := float(h.headcount()) * need.per_person_daily * _need_scale(h, need) * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## A household whose need shortfall is below this counts as having met it.
@@ -3522,6 +3522,11 @@ const NEED_MET_EPSILON := 0.0001
 ## demand left unmet, plus `days` of daily history. Only needs flagged
 ## drives_lifecycle (food) feed stress and emigration -- check
 ## "drives_lifecycle" before presenting those fields for any other need.
+## The multiplier on `need`'s per-person requirement for household `h` today:
+## its home's effect (a stone house saves heat) times the season's.
+func _need_scale(h: HEHousehold, need: HENeed) -> float:
+	return h.need_scale(need) * need.seasonal_scale(day)
+
 func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> Dictionary:
 	var need := HENeeds.get_need(need_id)
 	assert(need != null, "Unknown need id %d" % need_id)
@@ -3547,7 +3552,7 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		var h_provided: float = h.last_need_provided.get(need.id, 0.0)
 		required += h_required
 		provided += h_provided
-		saved += float(h.headcount()) * need.per_person_daily * (1.0 - h.need_scale(need)) if h_required > 0.0 else 0.0
+		saved += (h_required / h.need_scale(need) - h_required) if h_required > 0.0 else 0.0
 		for c in need.satisfiers():
 			met_by[Commodity.name_of(c)] += h.last_consumed.get(c, 0.0) * need.value_of(c)
 		if h_required - h_provided > NEED_MET_EPSILON:
@@ -3576,6 +3581,8 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		unmet_history.append(maxf(0.0, entry.get("required", 0.0) - entry.get("provided", 0.0)))
 
 	var household_count := met + unmet
+	var latest := get_daily_history(1)
+	var latest_day: int = int(latest.back()["day"]) if not latest.is_empty() else day
 	return {
 		"id": need.id,
 		"label": need.label,
@@ -3595,6 +3602,10 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		"unmet_history": unmet_history,
 		# Need units the households' homes spared them (a stone house's heat saving).
 		"saved": saved,
+		# The season's multiplier on the per-person requirement for the latest day
+		# (1.0 for a need with no seasonal curve) and the season's name.
+		"season_scale": need.seasonal_scale(latest_day),
+		"season_name": season_name_of_day(latest_day),
 		"saved_history": saved_history,
 	}
 
@@ -3670,7 +3681,7 @@ func _run_water_need(record: Dictionary) -> void:
 ## that good's units. The household's record is the need's own outcome
 ## (required and provided, in need units) plus what each satisfier spent.
 func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
-	var full_need := float(h.headcount()) * need.per_person_daily
+	var full_need := float(h.headcount()) * need.per_person_daily * need.seasonal_scale(day)
 	var needed := full_need * h.need_scale(need)
 	var result := need.burn(h, needed)
 	var provided: float = result["provided"]

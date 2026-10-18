@@ -56,23 +56,26 @@ func _check_heat_saving() -> void:
 			resident = household
 			break
 	_assert(resident != null, "A household lives in a plain house")
+	# Heat follows the season (check_heat_seasons.gd); compare within the same day.
+	var season := heat.seasonal_scale(sim.day - 1)
 	var plain_ratio := float(resident.last_need_required[HENeed.Id.HEAT]) / (float(resident.headcount()) * heat.per_person_daily)
-	_assert(is_equal_approx(plain_ratio, 1.0), "In a plain house heat is the full per-person figure (%.3f)" % plain_ratio)
+	_assert(is_equal_approx(plain_ratio, season), "In a plain house heat is the full per-person figure for the season (%.3f vs %.3f)" % [plain_ratio, season])
 	(sim.dwellings[resident.dwelling_id] as HEHouse).upgrade_to_stone()
 	sim._reconcile_housing(sid)
 	_assert(is_equal_approx(resident.home_heat_factor, 0.75), "The resident's heat factor follows the house")
 	sim.advance_ticks(1)
+	season = heat.seasonal_scale(sim.day - 1)
 	var stone_ratio := float(resident.last_need_required[HENeed.Id.HEAT]) / (float(resident.headcount()) * heat.per_person_daily)
-	_assert(is_equal_approx(stone_ratio, 0.75), "In a stone house heat is 25%% lower (%.3f)" % stone_ratio)
+	_assert(is_equal_approx(stone_ratio, 0.75 * season), "In a stone house heat is 25%% lower than the season's (%.3f vs %.3f)" % [stone_ratio, 0.75 * season])
 	# The Needs page shows the saving beside the goods that met the need.
 	var detail := sim.get_need_detail(HENeed.Id.HEAT, 5, sid)
-	var expected_saving := float(resident.headcount()) * heat.per_person_daily * HEHouse.STONE_HEAT_SAVING
+	var expected_saving := float(resident.headcount()) * heat.per_person_daily * season * HEHouse.STONE_HEAT_SAVING
 	_assert(float(detail["saved"]) >= expected_saving - 0.0001, "The heat need detail reports the saving (%.3f >= %.3f)" % [float(detail["saved"]), expected_saving])
 	_assert((detail["saved_history"] as Array).size() > 0 and float((detail["saved_history"] as Array).back()) >= expected_saving - 0.0001, "and keeps a history of it")
 	var summary := sim.get_household_summary(resident.id)
 	for need in summary["needs"]:
 		if need["label"] == "Heat":
-			_assert(is_equal_approx(float(need["required"]) / float(resident.headcount()), heat.per_person_daily * 0.75), "The household page shows the lower requirement")
+			_assert(is_equal_approx(float(need["required"]) / float(resident.headcount()), heat.per_person_daily * 0.75 * season), "The household page shows the lower requirement")
 
 func _sim() -> HESimulation:
 	var spec := HEPresets.spec("mining_village")

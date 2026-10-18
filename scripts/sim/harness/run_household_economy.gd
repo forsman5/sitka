@@ -2675,8 +2675,8 @@ func _check_needs_catalog() -> void:
 		var need: HENeed = HENeeds.all()[i]
 		var entry: Dictionary = needs[i]
 		_assert(entry["label"] == need.label, "Summary needs should follow catalog order")
-		_assert(is_equal_approx(entry["required"], h["headcount"] * need.per_person_daily),
-			"%s required should be headcount x per-person daily need" % need.label)
+		_assert(is_equal_approx(entry["required"], h["headcount"] * need.per_person_daily * need.seasonal_scale(sim.day - 1)),
+			"%s required should be headcount x per-person daily need (x the season's factor)" % need.label)
 		_assert(entry["provided"] <= entry["required"] + EPSILON, "%s cannot be provided beyond what is required" % need.label)
 		_assert((entry["satisfiers"] as Array).size() == need.satisfiers().size(), "%s should list each of its satisfiers" % need.label)
 	print("  household summary reports each need's required/provided and its satisfiers")

@@ -9,6 +9,14 @@ Seasons are a property of the household economy (H1) itself, not of any one scen
 - `HERD_EVAL_INTERVAL_DAYS` already equals 90, so **each herd review closes exactly one season**: the review on day `d` (when `(d + 1) % 90 == 0`) belongs to `season_of_day(d)`.
 - The dashboard shows `Season · Year N, Day M` in the top bar (tooltip: season number and day of season). Its day formatter now uses the 360-day year; it used 365 before, which disagreed with every simulation interval.
 
+## Seasonal heat demand
+
+Heating is the one need that follows the season (`HENeed.seasonal_curve`, `HENeeds.HEAT_SEASONAL_CURVE`). The shape is spring 1.0, summer 0.4, autumn 1.0, winter 1.8, interpolated through the season midpoints so demand glides instead of stepping at a boundary (winter needs 4.5x summer), and normalised so a year averages exactly 1.0: the yearly requirement and the cost-of-living basket are unchanged.
+
+- `HENeed.seasonal_scale(day)` is the multiplier; `HESimulation._need_scale(household, need)` multiplies it by the home's effect (a stone house saves 25%). It is applied to the purchase target, the daily-use forecast, consumption and the household and person pages.
+- The heat Needs detail shows the season's factor ("Winter: demand is x1.71 the yearly average"), and the chart follows it.
+- Status: see the PR for the harness results; the scenario fixtures that run for years are sensitive to winter timber demand.
+
 ## Seasonal output
 
 `SEASONAL_OUTPUT_MODIFIER` carries the pooled valley's curves (`valley_seed.gd`), spring/summer/autumn/winter:
