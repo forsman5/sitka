@@ -68,6 +68,8 @@ func _capture() -> void:
 			var clip := "CharacterArmature|Idle"
 			if anim_mode == "attack":
 				clip = OnFootWeapons.DEFS[weapon]["attack_anim"]
+				if holder != null and OnFootWeapons.DEFS[weapon].has("aim_rotation_degrees"):
+					holder.get_node("Weapon").rotation_degrees = OnFootWeapons.DEFS[weapon]["aim_rotation_degrees"]
 			anim.play(clip)
 			anim.seek(0.25 if anim_mode == "attack" else 0.0, true)
 			anim.pause()

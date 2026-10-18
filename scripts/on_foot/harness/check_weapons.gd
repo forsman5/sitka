@@ -1,6 +1,6 @@
 extends SceneTree
 ## Spawns the On Foot world armed and exercises the sword swing and bow shot. Run with:
-##   godot --headless --path . --script res://scripts/on_foot/harness/check_weapons.gd
+##   godot --path . --script res://scripts/on_foot/harness/check_weapons.gd (windowed, so the click path runs; --headless skips it)
 
 var failures := 0
 
@@ -37,6 +37,16 @@ func _run() -> void:
 	spawned = await _spawn("sword")
 	player = spawned[1]
 	check(player._model.find_child("WeaponHand", true, false) != null, "sword is in hand")
+	# A real left click must start the attack (the click handler, not just attack()).
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	player._unhandled_input(click)
+	# Mouse capture only works with a real window, so skip this part when headless.
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		check(player._attack_cooldown_left > 0.0, "left click swings the sword")
+	player._attack_cooldown_left = 0.0
 	check(player.attack(), "sword attack starts")
 	check(not player.attack(), "sword attack respects cooldown")
 	player._update_animation()

@@ -111,6 +111,7 @@ var _bark_anim_left: float = 0.0
 var _bark_anim_pending: bool = false
 var _last_bark: int = -1
 var _weapon: String = ""
+var _weapon_node: Node3D
 var _attack_cooldown_left: float = 0.0
 var _attack_anim_pending: bool = false
 var _pitch: float = 0.0
@@ -174,8 +175,10 @@ func _ready() -> void:
 		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if selected_character == "person" and selected_weapon != "":
-		if OnFootWeapons.attach(_model, selected_weapon) != null:
+		var holder := OnFootWeapons.attach(_model, selected_weapon)
+		if holder != null:
 			_weapon = selected_weapon
+			_weapon_node = holder.get_node("Weapon") as Node3D
 
 	_bark_player = AudioStreamPlayer3D.new()
 	_bark_player.position.y = eye_height * 0.8
@@ -196,7 +199,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
 		_head.rotation.x = _pitch
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		bark()
+		if _weapon != "":
+			attack()
+		else:
+			bark()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			if _mounted_horse == null:
@@ -236,9 +242,17 @@ func attack() -> bool:
 	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
 	_attack_cooldown_left = float(def["cooldown"])
 	_attack_anim_pending = true
+	if def.has("aim_rotation_degrees"):
+		# The aim clip raises the arm, so re-grip the bow to keep it upright.
+		_weapon_node.rotation_degrees = def["aim_rotation_degrees"]
+		get_tree().create_timer(float(def["attack_hold"])).timeout.connect(_restore_weapon_pose)
 	if _weapon == "bow":
 		get_tree().create_timer(float(def["release_delay"])).timeout.connect(_release_arrow)
 	return true
+
+func _restore_weapon_pose() -> void:
+	if is_instance_valid(_weapon_node):
+		_weapon_node.rotation_degrees = OnFootWeapons.DEFS[_weapon]["rotation_degrees"]
 
 func _release_arrow() -> void:
 	if not is_inside_tree():
