@@ -44,6 +44,10 @@ static var selected_character: String = "person"
 ## chooser scene while validating; hide that field before release.
 static var sheep_repro_percent: float = 10.0
 
+## Weapon the person spawns holding ("sword", "bow", or "" for bare hands); set
+## by the combat chooser scene. Ignored for the dog.
+static var selected_weapon: String = ""
+
 ## Sheep in the flock at the start of a fresh run (set from the chooser scene).
 ## The pen grows to fit.
 static var start_sheep_count: int = 25
@@ -106,6 +110,9 @@ var _bark_cooldown_left: float = 0.0
 var _bark_anim_left: float = 0.0
 var _bark_anim_pending: bool = false
 var _last_bark: int = -1
+var _weapon: String = ""
+var _attack_cooldown_left: float = 0.0
+var _attack_anim_pending: bool = false
 var _pitch: float = 0.0
 var _coyote_left: float = 0.0
 var _buffer_left: float = 0.0
@@ -166,6 +173,9 @@ func _ready() -> void:
 	if selected_character == "person":
 		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
+	if selected_character == "person" and selected_weapon != "":
+		if OnFootWeapons.attach(_model, selected_weapon) != null:
+			_weapon = selected_weapon
 
 	_bark_player = AudioStreamPlayer3D.new()
 	_bark_player.position.y = eye_height * 0.8
@@ -218,6 +228,28 @@ func bark() -> bool:
 	barked.emit(global_position)
 	return true
 
+## Left click with a weapon: swing the sword, or loose an arrow where the camera
+## points. Returns whether an attack started.
+func attack() -> bool:
+	if _weapon == "" or _attack_cooldown_left > 0.0 or _mounted_horse != null:
+		return false
+	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+	_attack_cooldown_left = float(def["cooldown"])
+	_attack_anim_pending = true
+	if _weapon == "bow":
+		get_tree().create_timer(float(def["release_delay"])).timeout.connect(_release_arrow)
+	return true
+
+func _release_arrow() -> void:
+	if not is_inside_tree():
+		return
+	var arrow := OnFootArrow.new()
+	get_parent().add_child(arrow)
+	var forward := -_camera.global_transform.basis.z
+	arrow.global_position = _head.global_position + forward * 0.6
+	arrow.velocity = forward * OnFootArrow.SPEED
+	arrow.look_at(arrow.global_position + forward, Vector3.UP)
+
 ## How far (in metres) a bark startles animals.
 func bark_radius() -> float:
 	return scare_radius() * bark_range_multiplier
@@ -236,6 +268,7 @@ func _set_camera_mode(mode: int) -> void:
 func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
 	_bark_anim_left = maxf(_bark_anim_left - delta, 0.0)
+	_attack_cooldown_left = maxf(_attack_cooldown_left - delta, 0.0)
 	if _mounted_horse != null:
 		_mounted_step(delta)
 		return
@@ -418,7 +451,13 @@ func _update_camera(delta: float) -> void:
 func _update_animation() -> void:
 	if _anim == null or not _model.visible:
 		_bark_anim_pending = false
+		_attack_anim_pending = false
 		return
+	if _attack_anim_pending:
+		_attack_anim_pending = false
+		var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+		_bark_anim_left = float(def["attack_hold"])
+		_anim.play(def["attack_anim"], 0.05)
 	# One-shot bark pose; hold it briefly before returning to locomotion.
 	if _bark_anim_pending:
 		_bark_anim_pending = false
