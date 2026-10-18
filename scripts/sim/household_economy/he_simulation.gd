@@ -1133,6 +1133,7 @@ func _reconcile_housing(settlement_id: int) -> void:
 		var sharers: int = maxi(int(residents.get(h.dwelling_id, 1)), 1)
 		h.home_upkeep_timber = home.upkeep_timber() / float(sharers) if home != null else 0.0
 		h.home_upkeep_stone = home.upkeep_stone() / float(sharers) if home != null else 0.0
+		h.home_heat_factor = (dwellings[h.dwelling_id] as HEHouse).heat_factor() if dwellings.has(h.dwelling_id) else 1.0
 
 func _assign_dwellings(settlement_id: int) -> void:
 	var s: HESettlement = settlements[settlement_id]
@@ -1922,7 +1923,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 	for need in HENeeds.felt():
 		if need.is_service() and not h.last_need_required.has(need.id):
 			continue
-		var required := need.per_person_daily
+		var required := need.per_person_daily * h.need_scale(need)
 		var household_required: float = h.last_need_required.get(need.id, 0.0)
 		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
 		needs.append({
@@ -3262,7 +3263,8 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 ## `commodity` is expressed as if it were the need's only source; goods that
 ## satisfy no need return 0.
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
-	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
+	var need := HENeeds.for_commodity(commodity)
+	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (h.need_scale(need) if need != null else 1.0)
 
 ## Whether `need` is part of this settlement's economy at all: always, unless
 ## the need can only be met by a dedicated business (HENeed.needs_seller) and
@@ -3464,7 +3466,7 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade
 			return maxf(0.0, upkeep - h.stock(commodity))
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
 			return maxf(0.0, upkeep - h.stock(commodity))
-	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
+	var target := float(h.headcount()) * need.per_person_daily * h.need_scale(need) * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## A household whose need shortfall is below this counts as having met it.
@@ -3617,7 +3619,7 @@ func _run_water_need(record: Dictionary) -> void:
 ## that good's units. The household's record is the need's own outcome
 ## (required and provided, in need units) plus what each satisfier spent.
 func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
-	var needed := float(h.headcount()) * need.per_person_daily
+	var needed := float(h.headcount()) * need.per_person_daily * h.need_scale(need)
 	var result := need.burn(h, needed)
 	var provided: float = result["provided"]
 	var burned: Dictionary = result["burned"]

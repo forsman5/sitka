@@ -11,6 +11,8 @@ const HESimulation = preload("res://scripts/sim/household_economy/he_simulation.
 const HEHouse = preload("res://scripts/sim/household_economy/records/he_house.gd")
 const HEHousehold = preload("res://scripts/sim/household_economy/records/he_household.gd")
 const HEBusiness = preload("res://scripts/sim/household_economy/records/he_business.gd")
+const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
+const HENeeds = preload("res://scripts/sim/household_economy/data/he_needs.gd")
 
 const SEED := 12345
 
@@ -20,6 +22,7 @@ func _init() -> void:
 	_check_house_flags()
 	_check_upgrade_in_place()
 	_check_refused_without_plain_house()
+	_check_heat_saving()
 	print("STONE HOUSE %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
 
@@ -34,6 +37,37 @@ func _check_house_flags() -> void:
 	house.upgrade_to_stone()
 	_assert(house.is_stone and not house.is_plain() and not house.is_dense(), "A stone house is neither plain nor dense")
 	_assert(house.capacity_households == 1 and is_equal_approx(house.morale_bonus(), HEHouse.STONE_MORALE_BONUS), "Stone keeps capacity 1 and gives the bonus")
+
+## A stone house keeps its household 25% warmer for the same fuel, whoever lives
+## in it: the household's daily heat requirement drops by HEHouse.STONE_HEAT_SAVING.
+func _check_heat_saving() -> void:
+	var plain := HEHouse.new(1, 1)
+	_assert(is_equal_approx(plain.heat_factor(), 1.0), "A plain house saves no heat")
+	plain.upgrade_to_stone()
+	_assert(is_equal_approx(plain.heat_factor(), 1.0 - HEHouse.STONE_HEAT_SAVING), "A stone house saves a quarter of the heat")
+
+	var sim := _sim()
+	var sid := HEScenarioSeeds.SETTLEMENT_ID
+	sim.advance_ticks(2)
+	var heat := HENeeds.get_need(HENeed.Id.HEAT)
+	var resident: HEHousehold = null
+	for household in sim.households.values():
+		if household.dwelling_id != -1 and (sim.dwellings[household.dwelling_id] as HEHouse).is_plain():
+			resident = household
+			break
+	_assert(resident != null, "A household lives in a plain house")
+	var plain_ratio := float(resident.last_need_required[HENeed.Id.HEAT]) / (float(resident.headcount()) * heat.per_person_daily)
+	_assert(is_equal_approx(plain_ratio, 1.0), "In a plain house heat is the full per-person figure (%.3f)" % plain_ratio)
+	(sim.dwellings[resident.dwelling_id] as HEHouse).upgrade_to_stone()
+	sim._reconcile_housing(sid)
+	_assert(is_equal_approx(resident.home_heat_factor, 0.75), "The resident's heat factor follows the house")
+	sim.advance_ticks(1)
+	var stone_ratio := float(resident.last_need_required[HENeed.Id.HEAT]) / (float(resident.headcount()) * heat.per_person_daily)
+	_assert(is_equal_approx(stone_ratio, 0.75), "In a stone house heat is 25%% lower (%.3f)" % stone_ratio)
+	var summary := sim.get_household_summary(resident.id)
+	for need in summary["needs"]:
+		if need["label"] == "Heat":
+			_assert(is_equal_approx(float(need["required"]) / float(resident.headcount()), heat.per_person_daily * 0.75), "The household page shows the lower requirement")
 
 func _sim() -> HESimulation:
 	var spec := HEPresets.spec("mining_village")

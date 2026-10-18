@@ -19,6 +19,8 @@
 - The dashboard Build button switches from House to the tenement upgrade when `HETownLayout.prefers_densify()` (roads had to grow, a house went unplaced, or 48+ houses stand) and a plain house is left, so the town densifies instead of growing outward. Art is a placeholder (`building_tavern_blue`); footprint stays 6x6.
 - Pressing Build on a goods-priced item that lacks warehouse goods (with a warehouse and enough treasury gold) sets a standing warehouse buy order for the missing goods up to the build's cost (`HESimulation.request_government_build`, state via `build_goods_order_state`: `none` / `can_order` / `ordered`). The order stays standing, so the warehouse keeps restocking for the next build. The player presses again once the goods arrive (the warehouse buys up to `WAREHOUSE_DAILY_TRADE_CAP` a day, within its wage reserve).
 
+- **Stone house** (`HEHouse.is_stone`): an in-place upgrade or a new lot. Its household gains `STONE_MORALE_BONUS` (8%) morale and needs `STONE_HEAT_SAVING` (25%) less heat, whoever lives there: `HEHouse.heat_factor()` is copied to `HEHousehold.home_heat_factor` by `_reconcile_housing`, and `HEHousehold.need_scale(need)` applies it to the heat requirement in the purchase target, the daily use forecast, consumption and the household and person pages. About 150 g a year for four people at timber 4.0 (about 10 at 0.25). Nothing yet steers richer households into stone houses; see `household-housing-choice-plan.md` if that branch has landed.
+
 ## API a UI needs
 
 | What | Where |
