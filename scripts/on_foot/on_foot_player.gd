@@ -101,6 +101,10 @@ var _arm: SpringArm3D
 var _camera: Camera3D
 var _model: Node3D
 var _anim: AnimationPlayer
+var _skeleton: Skeleton3D
+var _bow_bones: Dictionary = {}
+var _bow_pose_weight: float = 0.0
+var _bow_draw_fraction: float = 0.0
 var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
@@ -176,9 +180,13 @@ func _ready() -> void:
 		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if selected_character == "person" and selected_weapon != "":
+		_skeleton = _model.find_child("Skeleton3D", true, false) as Skeleton3D
 		var holder := OnFootWeapons.attach(_model, selected_weapon)
 		if holder != null:
 			_weapon = selected_weapon
+			if _weapon == "bow":
+				for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
+					_bow_bones[bone_name] = _skeleton.find_bone(bone_name)
 
 	_bark_player = AudioStreamPlayer3D.new()
 	_bark_player.position.y = eye_height * 0.8
@@ -189,6 +197,7 @@ func _ready() -> void:
 	_set_camera_mode(_camera_mode)
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	set_process_priority(100)
 
 func _exit_tree() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -358,6 +367,47 @@ func _physics_process(delta: float) -> void:
 	_update_model_facing(delta)
 	_update_camera(delta)
 	_update_animation()
+
+func _process(delta: float) -> void:
+	if _weapon != "bow" or _skeleton == null:
+		return
+	if _drawing:
+		_bow_draw_fraction = draw_fraction()
+	_bow_pose_weight = move_toward(_bow_pose_weight, 1.0 if _drawing else 0.0, delta * (7.0 if _drawing else 5.0))
+	if _bow_pose_weight <= 0.001:
+		_bow_draw_fraction = 0.0
+	_apply_bow_pose(_bow_pose_weight, _bow_draw_fraction)
+
+func _apply_bow_pose(weight: float, fraction: float) -> void:
+	apply_bow_pose_to_skeleton(_skeleton, _bow_bones, weight, fraction)
+
+static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, weight: float, fraction: float) -> void:
+	if skeleton == null:
+		return
+	# Imported armature axes: -Y is forward, +Z is up. Segment vectors are in
+	# Skeleton3D space; solve rotations from each bone's actual rest segment.
+	var hand_back := lerpf(0.12, 0.62, fraction)
+	var elbow_up := lerpf(0.34, 0.49, fraction)
+	var poses := [
+		{"bone": "UpperArm.L", "child": "LowerArm.L", "direction": Vector3(0.0, -0.90, 0.42)},
+		{"bone": "LowerArm.L", "child": "Fist.L", "direction": Vector3(0.0, -0.98, 0.18)},
+		{"bone": "UpperArm.R", "child": "LowerArm.R", "direction": Vector3(0.30, -0.91, elbow_up)},
+		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(0.22 - fraction * 0.12, hand_back, 0.42)},
+	]
+	for segment in poses:
+		var bone_index := int(bones.get(segment["bone"], -1))
+		var child_index := skeleton.find_bone(segment["child"])
+		if bone_index < 0 or child_index < 0:
+			continue
+		var rest := skeleton.get_bone_global_rest(bone_index)
+		var child_rest := skeleton.get_bone_global_rest(child_index)
+		var local_segment: Vector3 = rest.basis.inverse() * (child_rest.origin - rest.origin)
+		var animated_rotation := skeleton.get_bone_pose_rotation(bone_index)
+		skeleton.set_bone_pose_rotation(bone_index, Quaternion.IDENTITY)
+		var parent_basis := skeleton.get_bone_global_pose(bone_index).basis
+		var target_local: Vector3 = parent_basis.inverse() * segment["direction"]
+		var target_rotation := Quaternion(local_segment.normalized(), target_local.normalized())
+		skeleton.set_bone_pose_rotation(bone_index, animated_rotation.slerp(target_rotation, weight))
 
 
 func _try_mount() -> void:

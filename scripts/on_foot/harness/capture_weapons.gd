@@ -10,11 +10,14 @@ func _init() -> void:
 func _capture() -> void:
 	var output_path := "user://weapons.png"
 	var anim_mode := "idle"
+	var draw_fraction := -1.0
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--output="):
 			output_path = argument.trim_prefix("--output=")
 		elif argument.begins_with("--anim="):
 			anim_mode = argument.trim_prefix("--anim=")
+		elif argument.begins_with("--draw="):
+			draw_fraction = clampf(float(argument.trim_prefix("--draw=")), 0.0, 1.0)
 
 	var world := Node3D.new()
 	root.add_child(world)
@@ -71,6 +74,12 @@ func _capture() -> void:
 			anim.play(clip)
 			anim.seek(0.25 if anim_mode == "attack" else 0.0, true)
 			anim.pause()
+		if weapon == "bow" and draw_fraction >= 0.0:
+			var skeleton := model.find_child("Skeleton3D", true, false) as Skeleton3D
+			var bones := {}
+			for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
+				bones[bone_name] = skeleton.find_bone(bone_name)
+			OnFootPlayer.apply_bow_pose_to_skeleton(skeleton, bones, 1.0, draw_fraction)
 		x += step
 
 	var cam := Camera3D.new()

@@ -74,7 +74,12 @@ func _run() -> void:
 	player.attack()
 	player._draw_time = 0.5
 	check(is_equal_approx(player.draw_fraction(), 0.5), "half draw is 0.5")
+	player._process(0.1)
+	check(is_equal_approx(player._bow_draw_fraction, 0.5) and player._bow_pose_weight > 0.0, "draw pose tracks half draw strength")
 	player.release_draw()
+	var pose_before_ease: float = player._bow_pose_weight
+	player._process(0.05)
+	check(player._bow_pose_weight < pose_before_ease and player._bow_pose_weight > 0.0, "draw pose eases out after release")
 	var arrows := _arrows(world)
 	check(arrows.size() == 1, "an arrow is released on button release")
 	var half_speed: float = arrows[0].velocity.length() if arrows.size() == 1 else 0.0
