@@ -1793,7 +1793,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 	else:
 		role = "Dependent"
 		life_stage = "Adult living at home"
-		note = "%.0f%% chance per month of leaving to found a household" % (HEHousehold.leave_home_chance(age) * 100.0)
+		note = "%.0f%% chance per month of leaving to found a household, once the home is crowded or a house is free" % (HEHousehold.leave_home_chance(age) * 100.0)
 
 	var needs: Array[Dictionary] = []
 	for need in HENeeds.felt():
@@ -3610,6 +3610,9 @@ func _evaluate_old_age(record: Dictionary) -> void:
 			continue
 		deaths += died
 		_log_event("old_age", {"household_id": household_id, "count": died})
+		var heirs := h.promote_heirs(died)
+		if heirs > 0:
+			_log_event("succession", {"household_id": household_id, "count": heirs})
 		if h.worker_capacity() <= 0:
 			h.employer_business_id = -1
 			if h.demographics.dependents > 0:
@@ -3736,12 +3739,19 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	var promotions := 0
 	var new_households: Array[HEHousehold] = []
 	var saturated: Dictionary = {}
+	# Empty houses per settlement; each split-off household takes one, so a full
+	# town only sees splits from households over HEHousehold.HOME_HEADCOUNT_CAP.
+	var free_houses: Dictionary = {}
 	for settlement_id in settlements.keys():
-		saturated[settlement_id] = get_housing_report(settlement_id)["saturated"]
+		var housing := get_housing_report(settlement_id)
+		saturated[settlement_id] = housing["saturated"]
+		free_houses[settlement_id] = maxi(int(housing["capacity"]) - int(housing["households"]), 0) if housing["modeled"] else HEHousehold.FREE_HOUSING_UNLIMITED
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
-		var promoted := h.evaluate_aging(rng)
+		var promoted := h.evaluate_aging(rng, free_houses[h.settlement_id])
+		if free_houses[h.settlement_id] < HEHousehold.FREE_HOUSING_UNLIMITED:
+			free_houses[h.settlement_id] = maxi(free_houses[h.settlement_id] - promoted, 0)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
 			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i], h.last_promoted_sexes[i]))

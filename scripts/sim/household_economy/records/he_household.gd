@@ -85,12 +85,15 @@ const BIRTH_STRESS_THRESHOLD := 0.1
 ## into a worker) at once -- a soft brake on growth rate, not a cap on the
 ## household's eventual total size.
 const MAX_PENDING_DEPENDENTS := 6
-## Crowding. A household with more than this many adults (its workers plus
-## dependents past AGING_THRESHOLD_DAYS who haven't left yet) pushes the extras
-## out faster: each adult beyond the cap has its monthly leave-home chance
-## multiplied by CROWDED_LEAVE_MULTIPLIER.
-const CROWDED_ADULT_COUNT := 4
-const CROWDED_LEAVE_MULTIPLIER := 3.0
+## Staying home. A grown dependent only rolls to leave when the household is
+## over this headcount (workers + all dependents) -- the extra people push the
+## eldest out one by one as younger siblings are born -- or when the town has a
+## free house for them (evaluate_aging's `free_housing`). With neither they stay
+## on as adult dependents, so a full town does not mint homeless one-person
+## households. The workers are the household's heads: they never leave.
+const HOME_HEADCOUNT_CAP := 4
+## evaluate_aging's `free_housing` when housing is not modeled.
+const FREE_HOUSING_UNLIMITED := 1 << 30
 
 ## Reused pooled record: worker_capacity, dependents, food_stress,
 ## apply_daily_fulfillment(), update_migration_pressure(),
@@ -403,23 +406,28 @@ func remove_member_for_emigration() -> void:
 ## each monthly check they go with leave_home_chance(age), so they stay on
 ## as an adult dependent for a few months on average. `rng` is the
 ## simulation's, so runs stay deterministic.
-func evaluate_aging(rng: RandomNumberGenerator) -> int:
+##
+## Only an adult in a household over HOME_HEADCOUNT_CAP, or one that can take
+## one of the town's `free_housing` empty houses, rolls at all. Dependents are
+## kept oldest first, so the eldest sibling goes first, and the headcount drops
+## as each one leaves. A leaver uses a free house if one is left; a household
+## over the cap pushes one out even with none (they start homeless).
+func evaluate_aging(rng: RandomNumberGenerator, free_housing: int = FREE_HOUSING_UNLIMITED) -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
 	var remaining_sexes: Array[int] = []
 	last_promoted_member_numbers.clear()
 	last_promoted_sexes.clear()
-	var adult_slots := CROWDED_ADULT_COUNT - _worker_ages.size()
-	var adults_seen := 0
+	var headcount_now := headcount()
+	var houses_left := free_housing
 	for i in _dependent_ages.size():
 		var age: int = _dependent_ages[i]
-		var chance := 0.0
-		if age >= AGING_THRESHOLD_DAYS:
-			chance = leave_home_chance(age)
-			if adults_seen >= adult_slots:
-				chance = minf(1.0, chance * CROWDED_LEAVE_MULTIPLIER)
-			adults_seen += 1
-		if age >= AGING_THRESHOLD_DAYS and rng.randf() < chance:
+		var leaves := false
+		if age >= AGING_THRESHOLD_DAYS and (headcount_now > HOME_HEADCOUNT_CAP or houses_left > 0):
+			leaves = rng.randf() < leave_home_chance(age)
+		if leaves:
+			headcount_now -= 1
+			houses_left = maxi(houses_left - 1, 0)
 			promoted += 1
 			# 1-based position in the member list (workers first, then
 			# dependents) as of just before promotion.
@@ -473,6 +481,31 @@ func evaluate_old_age_death() -> int:
 	_worker_sexes = remaining_sexes
 	demographics.worker_capacity -= died
 	return died
+
+## An adult dependent still at home takes over each worker's place after a
+## death of old age (at most `count`, eldest first), so a house keeps its family
+## and its job when nobody had room to found a household of their own. They
+## keep their age, so their own lifespan clock is unchanged. Returns how many
+## stepped up; worker_capacity is restored by that many.
+func promote_heirs(count: int) -> int:
+	var promoted := 0
+	var remaining: Array[int] = []
+	var remaining_sexes: Array[int] = []
+	for i in _dependent_ages.size():
+		if promoted < count and _dependent_ages[i] >= AGING_THRESHOLD_DAYS:
+			_worker_ages.append(_dependent_ages[i])
+			_worker_sexes.append(_dependent_sexes[i])
+			promoted += 1
+		else:
+			remaining.append(_dependent_ages[i])
+			remaining_sexes.append(_dependent_sexes[i])
+	if promoted == 0:
+		return 0
+	_dependent_ages = remaining
+	_dependent_sexes = remaining_sexes
+	demographics.dependents -= promoted
+	demographics.worker_capacity += promoted
+	return promoted
 
 ## Monthly, called after evaluate_aging so a just-freed pipeline slot counts
 ## this same period: a household that's been prosperous for at least
