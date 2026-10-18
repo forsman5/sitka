@@ -127,6 +127,26 @@ var dwelling_id: int = -1
 ## Morale from the house it lives in (HEHouse.morale_bonus); 0 when homeless or
 ## in a plain house. Only HESimulation._reconcile_housing writes it.
 var home_morale_bonus: float = 0.0
+## This household's share of its house's yearly upkeep, in goods it buys itself
+## (HEHouse.upkeep_*, split between a tenement's households). Only
+## HESimulation._reconcile_housing writes them.
+var home_upkeep_timber: float = 0.0
+var home_upkeep_stone: float = 0.0
+
+## Yearly upkeep goods of `commodity` (0 for anything but timber and stone).
+func upkeep_per_year(commodity: Commodity.Type) -> float:
+	match commodity:
+		Commodity.Type.TIMBER: return home_upkeep_timber
+		Commodity.Type.STONE: return home_upkeep_stone
+	return 0.0
+
+## What it must hold of `commodity` for the next repair visit: one slice.
+func upkeep_slice(commodity: Commodity.Type) -> float:
+	return upkeep_per_year(commodity) * HEHouse.UPKEEP_SLICE_YEARS
+
+## Years the home's upkeep is overdue beyond the normal visit interval; set
+## daily by HESimulation._run_house_maintenance. Drives the disrepair penalty.
+var home_overdue_years: float = 0.0
 
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
@@ -219,6 +239,10 @@ const FRAIL_LIFESPAN_FRACTION := 0.8
 const MORALE_NEED_PENALTY := 0.6
 const MORALE_UNEMPLOYED_PENALTY := 0.15
 const MORALE_UNAFFORDABLE_PENALTY := 0.1
+## A home whose upkeep is overdue by more than the town's visit interval costs
+## this much morale per year of delay, up to the cap (4 points a year, max 20).
+const MORALE_DISREPAIR_PER_YEAR := 0.04
+const MORALE_DISREPAIR_MAX := 0.2
 ## Bonuses can carry morale past 100% (up to this ceiling). Morale above 100%
 ## is the only part that feeds production: a worker's output is multiplied by
 ## 1 + (morale - 1) * MORALE_PRODUCTIVITY_PER_POINT, so +10% morale is +10%
@@ -576,6 +600,8 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 			out.append({"label": need.shortfall_label, "penalty": own_penalty})
 	if works and not is_employed():
 		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
+	if home_overdue_years > 0.001:
+		out.append({"label": "Home in disrepair", "penalty": minf(home_overdue_years * MORALE_DISREPAIR_PER_YEAR, MORALE_DISREPAIR_MAX)})
 	for amount in last_unmet_unaffordable.values():
 		if amount > 0.001:
 			out.append({"label": "Could not afford goods today", "penalty": MORALE_UNAFFORDABLE_PENALTY})
@@ -592,7 +618,8 @@ func morale_bonuses() -> Array[Dictionary]:
 		var required: float = last_need_required.get(need.id, 0.0)
 		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
-	if home_morale_bonus > 0.0:
+	# A stone house that has fallen behind on repairs stops lifting morale.
+	if home_morale_bonus > 0.0 and home_overdue_years <= 0.0:
 		out.append({"label": "Stone house", "bonus": home_morale_bonus})
 	for need in HENeeds.all():
 		var required: float = last_need_required.get(need.id, 0.0)
