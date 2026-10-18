@@ -465,6 +465,15 @@ const HERD_STAFFED_WOOL_BONUS := 1.0
 ## overrides it.
 ## (Per-species default cull targets come from a ranch's land: see
 ## default_cull_target.)
+##
+## Dynamic cull (HEBusiness.dynamic_cull, on by default): a ranch does not sit
+## on a growing herd for years waiting to hit the target. Once the herd is past
+## a breeding-stock floor (this share of its cull target) it also sells part of
+## each review's net growth, ramping from none at the floor up to all of it as
+## the herd nears the target. A young herd keeps what it needs to breed; a
+## near-full one sells its whole increase and settles at the target. The target
+## stays a hard cap either way. Turn it off for the old hold-then-cull behavior.
+const HERD_BREEDING_STOCK_FLOOR := 0.4
 
 ## Sheep only: a renewable trickle straight into inventory from live
 ## herd_size every eval interval, independent of culling -- wool doesn't
@@ -2053,6 +2062,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			if include_detail:
 				report["herd_events"] = b.herd_events.duplicate(true)
 				report["cull_target"] = herd_cull_target(b)
+				report["dynamic_cull"] = b.dynamic_cull
 				report["cull_target_min"] = herd_cull_target_range(b).x
 				report["cull_target_max"] = herd_cull_target_range(b).y
 			if include_detail and b.species == HEBusiness.Species.SHEEP:
@@ -2061,6 +2071,12 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				report["wool_sustaining_current"] = int(sustaining.y)
 				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
+			# Care so far this review window: care_fraction only moves at a
+			# review, so on its own it reads 0 for up to a season after a ranch
+			# is first staffed. -1 on the first day of a window (nothing accrued).
+			var window_days: int = day % HERD_EVAL_INTERVAL_DAYS
+			var window_need: float = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species] * window_days
+			report["care_fraction_now"] = clampf(b.care_worker_days / window_need, 0.0, 1.0) if window_need > 0.0 else -1.0
 			var fodder_target: float = b.herd_size * FODDER_PER_HEAD_PER_WINTER[b.species]
 			report["fodder_stock"] = b.stock(Commodity.Type.GRAIN)
 			report["fodder_target"] = fodder_target
@@ -5210,6 +5226,24 @@ func _export_reference_price(settlement_id: int, commodity: Commodity.Type) -> f
 func herd_cull_target(b: HEBusiness) -> float:
 	return b.cull_target if b.cull_target > 0.0 else default_cull_target(b.species, ranch_land(b))
 
+## Share (0..1) of a review's net herd growth a dynamic-cull ranch sells at
+## `herd_size` against `target`: 0 at the breeding-stock floor, 1 at the target.
+static func dynamic_cull_share(herd_size: float, target: float) -> float:
+	if target <= 0.0:
+		return 0.0
+	return clampf((herd_size / target - HERD_BREEDING_STOCK_FLOOR) / (1.0 - HERD_BREEDING_STOCK_FLOOR), 0.0, 1.0)
+
+## Player-facing switch for a ranch's dynamic cull. Returns the applied value,
+## or false for an unknown / non-herd business.
+func set_herd_dynamic_cull(business_id: int, enabled: bool) -> bool:
+	if not businesses.has(business_id):
+		return false
+	var b: HEBusiness = businesses[business_id]
+	if b.kind != HEBusiness.Kind.HERD:
+		return false
+	b.dynamic_cull = enabled
+	return enabled
+
 ## A ranch's acreage: its own land_area_acres, or the species default for a
 ## builder that never set one.
 func ranch_land(b: HEBusiness) -> float:
@@ -5334,9 +5368,15 @@ func _run_herds(record: Dictionary) -> void:
 		b.last_culled = {}
 		b.last_actual_units = 0.0
 		var target: float = herd_cull_target(b)
-		if b.herd_size > target:
-			var excess: float = b.herd_size - target
-			b.herd_size = target
+		# Dynamic cull: sell a share of this review's net growth ahead of the
+		# hard cap, so income starts well before the herd fills its target.
+		var growth_sold := 0.0
+		if b.dynamic_cull and b.herd_size < target:
+			growth_sold = maxf(b.herd_size - herd_before, 0.0) * dynamic_cull_share(b.herd_size, target)
+			b.herd_size -= growth_sold
+		if growth_sold > 0.0 or b.herd_size > target:
+			var excess: float = growth_sold + maxf(b.herd_size - target, 0.0)
+			b.herd_size = minf(b.herd_size, target)
 			var commodity := b.herd_commodity()
 			b.add_stock(commodity, excess)
 			b.last_culled[commodity] = excess
