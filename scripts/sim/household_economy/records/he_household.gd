@@ -85,6 +85,12 @@ const BIRTH_STRESS_THRESHOLD := 0.1
 ## into a worker) at once -- a soft brake on growth rate, not a cap on the
 ## household's eventual total size.
 const MAX_PENDING_DEPENDENTS := 6
+## Crowding. A household with more than this many adults (its workers plus
+## dependents past AGING_THRESHOLD_DAYS who haven't left yet) pushes the extras
+## out faster: each adult beyond the cap has its monthly leave-home chance
+## multiplied by CROWDED_LEAVE_MULTIPLIER.
+const CROWDED_ADULT_COUNT := 4
+const CROWDED_LEAVE_MULTIPLIER := 3.0
 
 ## Reused pooled record: worker_capacity, dependents, food_stress,
 ## apply_daily_fulfillment(), update_migration_pressure(),
@@ -100,7 +106,27 @@ var settlement_id: int
 ## or -1 if unemployed. A household always works as one unit -- it doesn't
 ## split workers across two employers -- see he_simulation.gd's weekly
 ## labor reconciliation.
-var employer_business_id: int = -1
+var employer_business_id: int = -1:
+	set(value):
+		if value == employer_business_id:
+			return
+		employer_business_id = value
+		if employment_changed.is_valid():
+			employment_changed.call()
+
+## Set by the owning HESimulation so its employment index learns of every
+## employer change, including direct writes from harness fixtures. Never
+## carries state of its own.
+var employment_changed: Callable
+
+## The house (HESimulation.dwellings id) this household lives in, or -1 when
+## it is homeless or its settlement does not model housing. Only
+## HESimulation._reconcile_housing writes it: a household keeps its house
+## until it ceases to exist.
+var dwelling_id: int = -1
+## Morale from the house it lives in (HEHouse.morale_bonus); 0 when homeless or
+## in a plain house. Only HESimulation._reconcile_housing writes it.
+var home_morale_bonus: float = 0.0
 
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
@@ -132,6 +158,22 @@ var _dependent_ages: Array[int] = []
 ## of their working life, not all freshly of age) override this via
 ## seed_worker_ages() instead, mirroring seed_dependent_ages().
 var _worker_ages: Array[int] = []
+
+## Sex of each current member, parallel to _worker_ages / _dependent_ages
+## (SEX_MALE or SEX_FEMALE). Cosmetic and descriptive for now: nothing in the
+## economy reads it. Drawn from a hash, not the simulation's rng, so adding
+## it cannot shift any run; it travels with the member through promotion,
+## adoption, emigration and death like the age does.
+const SEX_MALE := 0
+const SEX_FEMALE := 1
+var _worker_sexes: Array[int] = []
+var _dependent_sexes: Array[int] = []
+## Members this household has ever created; the hash input for the next
+## drawn sex, so the same history always gives the same sexes.
+var _members_made: int = 0
+## Sexes of whoever the last evaluate_aging() promoted, parallel to
+## last_promoted_member_numbers.
+var last_promoted_sexes: Array[int] = []
 
 ## Member numbers (see the household detail's "Member N" list) of whoever the
 ## last evaluate_aging() promoted, in the order they left. Placeholder until
@@ -177,6 +219,12 @@ const FRAIL_LIFESPAN_FRACTION := 0.8
 const MORALE_NEED_PENALTY := 0.6
 const MORALE_UNEMPLOYED_PENALTY := 0.15
 const MORALE_UNAFFORDABLE_PENALTY := 0.1
+## Bonuses can carry morale past 100% (up to this ceiling). Morale above 100%
+## is the only part that feeds production: a worker's output is multiplied by
+## 1 + (morale - 1) * MORALE_PRODUCTIVITY_PER_POINT, so +10% morale is +10%
+## output at the default 1.0. Below 100% there is no output penalty (yet).
+const MORALE_MAX := 1.25
+const MORALE_PRODUCTIVITY_PER_POINT := 1.0
 
 ## Smoothed shortfall per need (HENeed.Id -> 0..1), using the same gain and
 ## recovery as food stress: a bad day jumps it, recovery takes ~20 days. Food
@@ -190,6 +238,36 @@ func _init(p_id: int, p_worker_capacity: int, p_dependents: int, p_starting_bala
 	balance = p_starting_balance
 	_worker_ages.resize(p_worker_capacity)
 	_worker_ages.fill(AGING_THRESHOLD_DAYS)
+	_worker_sexes = _draw_paired_sexes(p_worker_capacity)
+	_dependent_sexes = _draw_sexes(p_dependents)
+
+## Display word for a SEX_* value.
+static func sex_label(sex: int) -> String:
+	return "Female" if sex == SEX_FEMALE else "Male"
+
+## Next sex for a new member of this household: a pure function of (id,
+## members made so far), so it needs no rng and is stable across runs.
+func _draw_sex() -> int:
+	var sex := hash(Vector2i(id, _members_made)) & 1
+	_members_made += 1
+	return SEX_FEMALE if sex == 1 else SEX_MALE
+
+## Workers alternate sex (first one drawn), so a household's adults are
+## male-female pairs rather than independent flips.
+func _draw_paired_sexes(count: int) -> Array[int]:
+	var out: Array[int] = []
+	for i in count:
+		if i == 0:
+			out.append(_draw_sex())
+		else:
+			out.append(SEX_MALE if out[i - 1] == SEX_FEMALE else SEX_FEMALE)
+	return out
+
+func _draw_sexes(count: int) -> Array[int]:
+	var out: Array[int] = []
+	for i in count:
+		out.append(_draw_sex())
+	return out
 
 func worker_capacity() -> int:
 	return demographics.worker_capacity
@@ -242,6 +320,7 @@ func rolling_grain_fulfillment() -> float:
 ## every seeded dependent aging into a worker on the exact same day.
 func seed_dependent_ages(ages: Array[int]) -> void:
 	_dependent_ages = ages.duplicate()
+	_dependent_sexes = _draw_sexes(ages.size())
 
 func dependent_ages() -> Array[int]:
 	return _dependent_ages.duplicate()
@@ -253,9 +332,24 @@ func dependent_ages() -> Array[int]:
 ## lifespan instead of every seeded worker being freshly of age.
 func seed_worker_ages(ages: Array[int]) -> void:
 	_worker_ages = ages.duplicate()
+	_worker_sexes = _draw_paired_sexes(ages.size())
 
 func worker_ages() -> Array[int]:
 	return _worker_ages.duplicate()
+
+## World-seed / harness only: overrides the drawn sexes (same count as the
+## members already seeded).
+func seed_dependent_sexes(sexes: Array[int]) -> void:
+	_dependent_sexes = sexes.duplicate()
+
+func seed_worker_sexes(sexes: Array[int]) -> void:
+	_worker_sexes = sexes.duplicate()
+
+func dependent_sexes() -> Array[int]:
+	return _dependent_sexes.duplicate()
+
+func worker_sexes() -> Array[int]:
+	return _worker_sexes.duplicate()
 
 ## Called once per day by HESimulation, after today's grain consumption/
 ## stress update -- ages every current dependent by one day and extends or
@@ -286,8 +380,10 @@ func remove_member_for_emigration() -> void:
 	demographics.remove_member()
 	if removing_a_dependent and not _dependent_ages.is_empty():
 		_dependent_ages.pop_back()
+		_dependent_sexes.pop_back()
 	elif not removing_a_dependent and not _worker_ages.is_empty():
 		_worker_ages.pop_back()
+		_worker_sexes.pop_back()
 
 ## Monthly: removes every dependent whose age has crossed
 ## AGING_THRESHOLD_DAYS from THIS household and returns how many. Jobs are
@@ -310,19 +406,32 @@ func remove_member_for_emigration() -> void:
 func evaluate_aging(rng: RandomNumberGenerator) -> int:
 	var promoted := 0
 	var remaining: Array[int] = []
+	var remaining_sexes: Array[int] = []
 	last_promoted_member_numbers.clear()
+	last_promoted_sexes.clear()
+	var adult_slots := CROWDED_ADULT_COUNT - _worker_ages.size()
+	var adults_seen := 0
 	for i in _dependent_ages.size():
 		var age: int = _dependent_ages[i]
-		if age >= AGING_THRESHOLD_DAYS and rng.randf() < leave_home_chance(age):
+		var chance := 0.0
+		if age >= AGING_THRESHOLD_DAYS:
+			chance = leave_home_chance(age)
+			if adults_seen >= adult_slots:
+				chance = minf(1.0, chance * CROWDED_LEAVE_MULTIPLIER)
+			adults_seen += 1
+		if age >= AGING_THRESHOLD_DAYS and rng.randf() < chance:
 			promoted += 1
 			# 1-based position in the member list (workers first, then
 			# dependents) as of just before promotion.
 			last_promoted_member_numbers.append(_worker_ages.size() + i + 1)
+			last_promoted_sexes.append(_dependent_sexes[i])
 		else:
 			remaining.append(age)
+			remaining_sexes.append(_dependent_sexes[i])
 	if promoted == 0:
 		return 0
 	_dependent_ages = remaining
+	_dependent_sexes = remaining_sexes
 	demographics.dependents -= promoted
 	return promoted
 
@@ -351,14 +460,17 @@ static func leave_home_chance(age: int) -> float:
 func evaluate_old_age_death() -> int:
 	var died := 0
 	var remaining: Array[int] = []
-	for age in _worker_ages:
-		if age >= LIFESPAN_DAYS:
+	var remaining_sexes: Array[int] = []
+	for i in _worker_ages.size():
+		if _worker_ages[i] >= LIFESPAN_DAYS:
 			died += 1
 		else:
-			remaining.append(age)
+			remaining.append(_worker_ages[i])
+			remaining_sexes.append(_worker_sexes[i])
 	if died == 0:
 		return 0
 	_worker_ages = remaining
+	_worker_sexes = remaining_sexes
 	demographics.worker_capacity -= died
 	return died
 
@@ -368,16 +480,19 @@ func evaluate_old_age_death() -> int:
 ## and has fewer than MAX_PENDING_DEPENDENTS dependents already in the
 ## pipeline gains one new dependent at age 0. Returns true if a birth
 ## happened, for HESimulation's reporting.
-func evaluate_birth(rng: RandomNumberGenerator) -> bool:
+## `chance_scale` multiplies BIRTH_MONTHLY_CHANCE (1.0 normally; a town with
+## no free housing passes less -- see HESimulation.HOUSING_SATURATED_BIRTH_SCALE).
+func evaluate_birth(rng: RandomNumberGenerator, chance_scale: float = 1.0) -> bool:
 	if _consecutive_prosperous_days < BIRTH_ELIGIBLE_DAYS:
 		return false
 	if _days_since_last_birth < _birth_cooldown_days:
 		return false
 	if _dependent_ages.size() >= MAX_PENDING_DEPENDENTS:
 		return false
-	if rng.randf() >= BIRTH_MONTHLY_CHANCE:
+	if rng.randf() >= BIRTH_MONTHLY_CHANCE * chance_scale:
 		return false
 	_dependent_ages.append(0)
+	_dependent_sexes.append(_draw_sex())
 	demographics.dependents += 1
 	_days_since_last_birth = 0
 	_birth_cooldown_days = roundi(BIRTH_COOLDOWN_DAYS * (1.0 + rng.randf_range(-BIRTH_COOLDOWN_JITTER, BIRTH_COOLDOWN_JITTER)))
@@ -390,8 +505,10 @@ func evaluate_birth(rng: RandomNumberGenerator) -> bool:
 ## BIRTH_* gating: those exist to brake ORGANIC birth-driven growth, not to
 ## turn away a dependent who already exists and just needs a new household
 ## to keep aging in.
-func add_dependent(age: int) -> void:
+## `sex` is the arriving member's own (-1 draws one).
+func add_dependent(age: int, sex: int = -1) -> void:
 	_dependent_ages.append(age)
+	_dependent_sexes.append(sex if sex >= 0 else _draw_sex())
 	demographics.dependents += 1
 
 ## Called daily per need after consumption. Food reads back the lifecycle
@@ -403,9 +520,9 @@ func record_need_stress(need: HENeed, required: float, provided: float) -> void:
 	var ratio := (provided / required) if required > 0.0 else 1.0
 	var current: float = need_stress.get(need.id, 0.0)
 	if ratio >= 1.0:
-		need_stress[need.id] = maxf(current - Household.STRESS_RECOVERY_PER_DAY, 0.0)
+		need_stress[need.id] = maxf(current - (need.stress_recovery if need.stress_recovery > 0.0 else Household.STRESS_RECOVERY_PER_DAY), 0.0)
 	else:
-		need_stress[need.id] = minf(current + (1.0 - ratio) * Household.STRESS_GAIN_PER_SHORTAGE, 1.0)
+		need_stress[need.id] = minf(current + (1.0 - ratio) * (need.stress_gain if need.stress_gain > 0.0 else Household.STRESS_GAIN_PER_SHORTAGE), 1.0)
 
 func stress_of(need_id: int) -> float:
 	return need_stress.get(need_id, 0.0)
@@ -413,8 +530,17 @@ func stress_of(need_id: int) -> float:
 ## Health-weighted stress across all needs, 0..1.
 func weighted_need_stress() -> float:
 	var total := 0.0
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
 		total += need.health_weight * stress_of(need.id)
+	return total
+
+## The same over the needs that share the pooled "Unmet needs" morale penalty
+## (those with their own morale_penalty, like water, are charged separately).
+func pooled_need_stress() -> float:
+	var total := 0.0
+	for need in HENeeds.felt():
+		if need.morale_penalty <= 0.0:
+			total += need.health_weight * stress_of(need.id)
 	return total
 
 ## 1.0 = fully healthy. `vulnerability` scales the shortfall (1.0 for the
@@ -425,17 +551,29 @@ func health(vulnerability: float = 1.0) -> float:
 ## What each need's stress costs in health, for display: [{label, loss}].
 func health_losses(vulnerability: float = 1.0) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	for need in HENeeds.all():
+	for need in HENeeds.felt():
 		out.append({"label": need.label, "loss": need.health_weight * stress_of(need.id) * vulnerability})
 	return out
 
 ## Morale penalties currently applying, as [{label, penalty}] (penalty > 0).
 ## `works` is false for dependents, who aren't affected by unemployment.
-func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[Dictionary]:
+## `tax_morale` is the town's tax policy effect (+ bonus for low tax, - for
+## high; see HESimulation.tax_morale_effect), listed as a signed penalty.
+func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	var need_penalty := MORALE_NEED_PENALTY * minf(weighted_need_stress() * vulnerability, 1.0)
+	if tax_morale > 0.001:
+		out.append({"label": "Low taxes", "penalty": -tax_morale})
+	elif tax_morale < -0.001:
+		out.append({"label": "High taxes", "penalty": -tax_morale})
+	var need_penalty := MORALE_NEED_PENALTY * minf(pooled_need_stress() * vulnerability, 1.0)
 	if need_penalty > 0.001:
 		out.append({"label": "Unmet needs", "penalty": need_penalty})
+	for need in HENeeds.felt():
+		if need.morale_penalty <= 0.0:
+			continue
+		var own_penalty := need.morale_penalty * minf(stress_of(need.id) * vulnerability, 1.0)
+		if own_penalty > 0.001:
+			out.append({"label": need.shortfall_label, "penalty": own_penalty})
 	if works and not is_employed():
 		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
 	for amount in last_unmet_unaffordable.values():
@@ -444,8 +582,8 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true) -> Array[D
 			break
 	return out
 
-## Morale gained from needs fully met today (HENeed.morale_bonus), as
-## [{label, bonus}]. Everyone in the household shares it.
+## Morale gained from needs fully met today (HENeed.morale_bonus) and from a
+## stone home, as [{label, bonus}]. Everyone in the household shares it.
 func morale_bonuses() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for need in HENeeds.all():
@@ -454,15 +592,31 @@ func morale_bonuses() -> Array[Dictionary]:
 		var required: float = last_need_required.get(need.id, 0.0)
 		if required > 0.0001 and last_need_provided.get(need.id, 0.0) >= required - 0.0001:
 			out.append({"label": "%s need met" % need.label, "bonus": need.morale_bonus})
+	if home_morale_bonus > 0.0:
+		out.append({"label": "Stone house", "bonus": home_morale_bonus})
+	for need in HENeeds.all():
+		var required: float = last_need_required.get(need.id, 0.0)
+		if need.comfort.is_empty() or required <= 0.0001:
+			continue
+		for commodity in need.comfort.keys():
+			var share := minf(1.0, last_consumed.get(commodity, 0.0) * need.value_of(commodity) / required)
+			var bonus: float = need.comfort[commodity] * share
+			if bonus > 0.001:
+				out.append({"label": "%s: %s" % [need.label, Commodity.name_of(commodity)], "bonus": bonus})
 	return out
 
-func morale(vulnerability: float = 1.0, works: bool = true) -> float:
+func morale(vulnerability: float = 1.0, works: bool = true, tax_morale: float = 0.0) -> float:
 	var total := 0.0
-	for entry in morale_penalties(vulnerability, works):
+	for entry in morale_penalties(vulnerability, works, tax_morale):
 		total -= entry["penalty"]
 	for entry in morale_bonuses():
 		total += entry["bonus"]
-	return clampf(1.0 + total, 0.0, 1.0)
+	return clampf(1.0 + total, 0.0, MORALE_MAX)
+
+## Output multiplier for this household's workers (1.0 = no bonus), from
+## morale above 100%.
+func productivity_multiplier() -> float:
+	return 1.0 + maxf(morale() - 1.0, 0.0) * MORALE_PRODUCTIVITY_PER_POINT
 
 ## 1.0 for most people; VULNERABILITY_MULTIPLIER for children and the frail.
 static func vulnerability_of(is_worker: bool, age_days: int) -> float:

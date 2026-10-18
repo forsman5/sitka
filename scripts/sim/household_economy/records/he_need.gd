@@ -15,7 +15,7 @@ const Commodity = preload("res://scripts/sim/records/commodity.gd")
 ## good that packs more into each unit (charcoal's 4 heat vs timber's 1) is
 ## compared by price per need-unit, not price per good.
 
-enum Id { FOOD, HEAT, CLOTHING, TOOLS }
+enum Id { FOOD, HEAT, CLOTHING, TOOLS, WATER }
 
 var id: Id
 var label: String
@@ -51,11 +51,33 @@ var needs_seller: bool
 ## side, for wants whose absence isn't harmful but whose presence is welcome
 ## (tools). It offsets penalties -- morale still tops out at 100%.
 var morale_bonus: float
+## Satisfiers a household takes as a step up rather than just a cheaper way to
+## meet the need: satisfier -> morale gained when that satisfier supplies ALL of
+## the need (scaled by the share it actually supplies). Affluent households
+## weigh them above their price (HESimulation._household_favourite); everyone
+## else buys the cheapest satisfier as before.
+var comfort: Dictionary[Commodity.Type, float]
+## Extra units per person per day an affluent household eats on top of
+## per_person_daily, from `comfort` satisfiers only (0 = none). Scaled by the
+## household's affluence (HESimulation._household_affluence) and never counted
+## as a shortfall: going without it costs nothing, it is only demand a better
+## table adds.
+var luxury_per_person_daily: float = 0.0
+
+## Morale a household loses at full stress from this need. A need with a value
+## here is left out of the pooled "Unmet needs" morale penalty and shown under
+## its own `shortfall_label` instead (0 = pooled).
+var morale_penalty: float = 0.0
+var shortfall_label: String = ""
+## Daily stress gained per unit of shortfall, and lost on a day it is met
+## (<= 0 = the shared Household.STRESS_GAIN_PER_SHORTAGE / STRESS_RECOVERY_PER_DAY).
+var stress_gain: float = -1.0
+var stress_recovery: float = -1.0
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
 		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "",
-		p_needs_seller: bool = false, p_morale_bonus: float = 0.0) -> void:
-	assert(p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
+		p_needs_seller: bool = false, p_morale_bonus: float = 0.0, p_comfort: Dictionary[Commodity.Type, float] = {}) -> void:
+	assert(p_unit_values.is_empty() or p_unit_values.has(p_baseline), "a need's baseline must be one of its satisfiers")
 	id = p_id
 	label = p_label
 	per_person_daily = p_per_person_daily
@@ -66,12 +88,38 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	effect_text = p_effect_text
 	needs_seller = p_needs_seller
 	morale_bonus = p_morale_bonus
+	comfort = p_comfort
+
+## A need no good satisfies (water: met by a town's water sources). It has no
+## satisfiers, market or price, and `baseline` is unused.
+func is_service() -> bool:
+	return unit_values.is_empty()
 
 func satisfiers() -> Array[Commodity.Type]:
 	var result: Array[Commodity.Type] = []
 	for commodity in unit_values.keys():
 		result.append(commodity)
 	return result
+
+## Morale a full supply of `commodity` adds to this need (0 if it is no comfort).
+func comfort_of(commodity: Commodity.Type) -> float:
+	return comfort.get(commodity, 0.0)
+
+## Burns up to `amount` need units from the comfort satisfiers alone.
+func burn_comfort(owner, amount: float) -> Dictionary:
+	var provided := 0.0
+	var burned := {}
+	for commodity in unit_values.keys():
+		var remaining := amount - provided
+		if remaining <= 0.0:
+			break
+		if comfort_of(commodity) <= 0.0:
+			continue
+		var units: float = owner.consume(commodity, remaining / unit_values[commodity])
+		if units > 0.0:
+			burned[commodity] = units
+			provided += units * unit_values[commodity]
+	return {"provided": provided, "burned": burned}
 
 func is_satisfied_by(commodity: Commodity.Type) -> bool:
 	return unit_values.has(commodity)

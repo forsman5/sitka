@@ -7,26 +7,38 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## FOOD takes bread (4 hunger points), meat (1), flour (1) or grain (0.5); HEAT
+## FOOD takes bread (4 hunger points), meat (1) or grain (0.5); HEAT
 ## takes charcoal (four times timber's heat) or timber; CLOTHING takes leather
 ## (a one-for-one alternative to wool) or wool. Planned addition is a one-line
 ## entry: cloth for CLOTHING (wool stays as the raw-fibre stand-in until a tailor
 ## exists).
 static var _all: Array[HENeed] = []
+static var _water: HENeed = null
+
+## Morale a household gains from eating only meat (scaled by the meat share of
+## its food). Morale above 100% raises output, so a better table pays back.
+const FOOD_MEAT_MORALE := 0.08
+## Likewise for bread: a household that can afford it eats it for the table, not
+## just because it is cheaper per hunger point.
+const FOOD_BREAD_MORALE := 0.05
+## What an affluent household adds to its 0.2 subsistence points a day (0.5 in
+## all), eaten as bread or meat only (HENeed.luxury_per_person_daily).
+const FOOD_LUXURY_PER_PERSON := 0.3
 
 static func all() -> Array[HENeed]:
 	if _all.is_empty():
 		_all = [
-			# Hunger points: bread 4, flour 1, grain 0.5 (densest first, so a
-			# household holding several eats bread before flour before grain).
+			# Hunger points: bread 4, meat 1, grain 0.5 (densest first). Flour is
+			# deliberately not a food: it is the Bakery's input, and households
+			# eating it starved the Bakery of flour.
 			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
 			# person -- Simulation.GRAIN_PER_PERSON_PER_DAY -- exactly as when
 			# grain was worth 1.0 and the need was 0.4.
 			# Food is the one need whose shortfall drives starvation.
-			# Meat is worth twice grain's food (1.0 vs 0.5 here), as before the
-			# rescale; densest burns first.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.FLOUR: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
-				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births."),
+			# Meat is worth twice grain's food (1.0 vs 0.5 here); densest burns first.
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
+				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births.",
+				false, 0.0, {Commodity.Type.BREAD: FOOD_BREAD_MORALE, Commodity.Type.MEAT: FOOD_MEAT_MORALE}),
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the
 			# cheaper way to heat a house. Densest first: charcoal burns first.
@@ -44,9 +56,35 @@ static func all() -> Array[HENeed]:
 			# tools costs no health -- a household that has them gets a morale
 			# lift instead (morale_bonus).
 			HENeed.new(HENeed.Id.TOOLS, "Tools", 0.005, {Commodity.Type.TOOLS: 1.0}, Commodity.Type.TOOLS, false, 0.0,
-				"Good tools lift morale; going without costs no health. Reporting only: no effect on output yet.", true, 0.1),
+				"Good tools lift morale; going without costs no health. Morale above 100% raises output at the workplace.", true, 0.1),
 		]
+		for need in _all:
+			if need.id == HENeed.Id.FOOD:
+				need.luxury_per_person_daily = FOOD_LUXURY_PER_PERSON
 	return _all
+
+## Water: a service need, met by a town's wells and river intakes rather than
+## by a good, so it is not in all() (the goods-based needs the market,
+## consumption and cost-of-living code walk). One drink per person per day.
+## Thirst bites hard and fast: full stress costs 20 points of health and 40 of
+## morale, builds in about two days, and clears in ten once water is back.
+## It only applies in a town that has a water source (see
+## HESimulation._run_water_need), so towns without one are unchanged.
+static func water() -> HENeed:
+	if _water == null:
+		_water = HENeed.new(HENeed.Id.WATER, "Water", 1.0, {}, Commodity.Type.GRAIN, false, 0.2,
+			"Thirst wears down health and sharply lowers morale. Met by the town's wells and river intakes (Government build menu); each needs timber and stone every year.")
+		_water.morale_penalty = 0.4
+		_water.shortfall_label = "Thirsty"
+		_water.stress_gain = 0.5
+		_water.stress_recovery = 0.1
+	return _water
+
+## Every need a household feels: the goods-based ones, then water.
+static func felt() -> Array[HENeed]:
+	var out: Array[HENeed] = all().duplicate()
+	out.append(water())
+	return out
 
 ## Top-to-bottom order of the dashboard's Needs tab. Only a preference: every
 ## need in the catalog appears, so adding one here can't leave it off the tab.
@@ -54,13 +92,13 @@ const DISPLAY_PREFERRED_ORDER := [HENeed.Id.HEAT, HENeed.Id.FOOD, HENeed.Id.CLOT
 
 static func display_order() -> Array:
 	var order: Array = DISPLAY_PREFERRED_ORDER.duplicate()
-	for need in all():
+	for need in felt():
 		if not order.has(need.id):
 			order.append(need.id)
 	return order
 
 static func get_need(id: HENeed.Id) -> HENeed:
-	for need in all():
+	for need in felt():
 		if need.id == id:
 			return need
 	return null

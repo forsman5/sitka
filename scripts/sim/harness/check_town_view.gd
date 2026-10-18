@@ -4,6 +4,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://scripts/sim/harness/check_town_view.gd
 
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
+const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 var failures := 0
@@ -26,7 +27,7 @@ func _run() -> void:
 	# Loaded at runtime: the dashboard script needs the GameState autoload, which
 	# is not registered yet while this script itself is being compiled.
 	var dashboard_script: GDScript = load("res://scripts/sim/household_economy/he_dashboard.gd")
-	dashboard_script.pending_builder = Callable(HEScenarioSeeds, "build_three_business_economy")
+	dashboard_script.pending_builder = Callable(HEFixtures, "build_three_business_economy")
 	var dashboard: Control = (load("res://scenes/sim/he_dashboard.tscn") as PackedScene).instantiate()
 	root.add_child(dashboard)
 	dashboard._speed_multiplier = 0.0
@@ -36,12 +37,54 @@ func _run() -> void:
 	var layout: HETownLayout = dashboard._town_layout
 	check(view != null and not view.visible, "Town view exists and starts hidden")
 	var business_count: int = dashboard._simulation.get_business_reports().size()
-	check(view.site_node_count() == business_count, "Every live business is drawn (%d sites, %d businesses)" % [view.site_node_count(), business_count])
+	var house_count: int = dashboard._simulation.get_dwelling_reports().size()
+	check(house_count > 0, "The seeded town should have houses")
+	check(view.site_node_count() == business_count + house_count, "Every business and house is drawn (%d sites, %d businesses, %d houses)" % [view.site_node_count(), business_count, house_count])
 	for key in ["government", "farm", "cattle_ranch", "sheep_farm"]:
 		var found := false
 		for site in layout.get_sites():
 			found = found or site["type_key"] == key
 		check(found, "Default scenario should place a %s" % key)
+
+	# House panel names who lives there (HESimulation house assignment).
+	var first_household: int = dashboard._simulation.get_household_ids()[0]
+	var home_id: int = dashboard._simulation.get_household_summary(first_household)["dwelling_id"]
+	var home_site := layout.site_of_dwelling(home_id)
+	check(not home_site.is_empty(), "The first household's house has a site")
+	if not home_site.is_empty():
+		view._select_site(home_site["site_id"])
+		check(view._info_body.text.contains("Home of household") and view._info_body.text.contains(str(first_household)), "House panel names its household (got '%s')" % view._info_body.text)
+		view.clear_selection()
+	# A stone house is redrawn (bigger, glossy) and says so in its panel.
+	if not home_site.is_empty():
+		var plain_mesh := _house_mesh(view, home_site["site_id"])
+		var plain_scale: float = plain_mesh.get_parent().scale.x
+		dashboard._simulation.dwellings[home_id].upgrade_to_stone()
+		view.sync(layout, dashboard._simulation.get_business_reports(), dashboard._simulation.get_housing_report(1), dashboard._simulation.get_dwelling_reports(), dashboard._simulation.get_villager_reports(1))
+		var stone_mesh := _house_mesh(view, home_site["site_id"])
+		check(stone_mesh.get_parent().scale.x > plain_scale, "A stone house is drawn larger than a plain one")
+		var stone_material := stone_mesh.get_surface_override_material(0) as StandardMaterial3D
+		check(stone_material != null and is_equal_approx(stone_material.roughness, view.STONE_ROUGHNESS), "A stone house gets the glossy material")
+		view._select_site(home_site["site_id"])
+		check(view._info_title.text.contains("stone"), "Stone house panel says so (got '%s')" % view._info_title.text)
+		view.clear_selection()
+	check(view.occupants_text({"occupant_household_ids": [3, 7], "capacity": 4}) == "Home of households 3, 7 (2 of 4)", "Tenement panel names its households and room")
+	check(view.occupants_text({"occupant_household_ids": [], "capacity": 1}) == "Empty (room for 1 household)", "Empty house says so")
+
+	# Herds: every ranch/sheep farm shows animals, and they stay in the pasture.
+	var herds = view.livestock()
+	var expected_herds := 0
+	for report in dashboard._simulation.get_business_reports():
+		if report.has("herd_size") and float(report["herd_size"]) >= 1.0:
+			expected_herds += 1
+	check(expected_herds > 0 and herds.herd_count() == expected_herds, "Each herd business gets a drawn herd (%d drawn, %d expected)" % [herds.herd_count(), expected_herds])
+	check(herds.total_animals() > 0, "Herds draw animals")
+	for i in 120:
+		herds._process(0.1)
+	for site in layout.get_sites():
+		var rect: Rect2 = herds.graze_rect(site["footprint"])
+		for p in herds.animal_positions(int(site["site_id"])):
+			check(rect.grow(0.01).has_point(p), "Animal stays inside its pasture (%s outside %s)" % [p, rect])
 
 	var before := _positions(layout)
 	dashboard._set_town_mode(true)
@@ -69,6 +112,8 @@ func _run() -> void:
 	view.clear_selection()
 	_click(view, _screen_of(view, farm_site["position"]))
 	check(view.selected_business_id() == HEScenarioSeeds.FARM_BUSINESS_ID, "Selection should still work after rotating the camera")
+
+	await _check_villagers(dashboard, view, layout)
 
 	# Wheel zoom goes through the shared RTS rig.
 	var size_before: float = view.camera().size
@@ -98,8 +143,29 @@ func _run() -> void:
 		dashboard._process(0.25)
 	check(dashboard._simulation.day == paused_day, "Paused town time must not tick the sim")
 	check(not dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "Play", "Town mode shows Pause/Play only")
+	check(dashboard._town_speed_buttons[0].visible and dashboard._town_speed_buttons[1].visible, "Town mode shows the 2x and 5x buttons")
+
+	# Town speed scale: multiplies only the town clock, still one tick per day.
+	dashboard._speed_multiplier = 1.0
+	dashboard._town_speed_buttons[1].pressed.emit() # 5x (toggle_mode flips on click, not emit)
+	check(dashboard._town_speed_scale == 5.0, "5x button should set the town scale to 5")
+	dashboard._town_phase = 0.0
+	dashboard._advance_town_time(0.25)
+	check(absf(dashboard._town_phase - 0.25 * 5.0 / 60.0) < 0.0001, "5x should advance the phase 5x as fast (got %f)" % dashboard._town_phase)
+	var scaled_day: int = dashboard._simulation.day
+	dashboard._town_phase = dashboard.TOWN_TICK_PHASE
+	for i in 60: # 60 s day at 5x = 12 s = 48 frames
+		dashboard._advance_town_time(0.25)
+	check(dashboard._simulation.day == scaled_day + 1, "A 5x town day should still tick the sim once (day %d -> %d)" % [scaled_day, dashboard._simulation.day])
+	dashboard._town_speed_buttons[1].pressed.emit() # toggle off
+	check(dashboard._town_speed_scale == 1.0, "Pressing the active scale again returns to 1x")
+	dashboard._town_speed_buttons[0].pressed.emit()
+	dashboard._speed_buttons[1].pressed.emit() # Play resets
+	check(dashboard._town_speed_scale == 1.0, "Play should reset the town scale to 1x")
+
 	dashboard._set_town_mode(false)
 	check(dashboard._speed_buttons[2].visible and dashboard._speed_buttons[1].text == "1x", "Dashboard mode restores the speed buttons")
+	check(not dashboard._town_speed_buttons[0].visible, "Dashboard mode hides the town speed buttons")
 	dashboard._set_town_mode(true)
 	game_state.town_day_seconds = saved_day_seconds
 
@@ -136,6 +202,22 @@ func _run() -> void:
 		check(after.size() == before.size() + 1, "A new business should add exactly one site")
 		check(view.site_node_count() == after.size() - (1 if not layout.get_site(0)["built"] else 0), "View should draw every built site")
 
+	# A house built mid-run (the Government build menu's "house") gets a plot
+	# and the housing readout follows the housing report.
+	var drawn_before: int = view.site_node_count()
+	var house_script: GDScript = load("res://scripts/sim/household_economy/records/he_house.gd")
+	dashboard._simulation.add_dwelling(house_script.new(dashboard._simulation.next_dwelling_id(), dashboard._town_settlement_id()))
+	dashboard._refresh()
+	check(view.site_node_count() == drawn_before + 1, "A new house should add exactly one drawn site")
+	check(view._housing_label.text.begins_with("Housing: %d homes" % (house_count + 1)), "Town view should show the housing report (got '%s')" % view._housing_label.text)
+	# The Town tab's housing line only refreshes while the dashboard is shown.
+	var was_town_mode: bool = view.visible
+	dashboard._set_town_mode(false)
+	await process_frame
+	await process_frame
+	check(dashboard._housing_label.text.begins_with("%d homes" % (house_count + 1)), "Dashboard Town tab should show housing (got '%s')" % dashboard._housing_label.text)
+	dashboard._set_town_mode(was_town_mode)
+
 	# A failed business leaves its building, vacant, for the next business.
 	var after_count: int = view.site_node_count()
 	var ranch_site := layout.site_of_business(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
@@ -144,8 +226,243 @@ func _run() -> void:
 	var vacated := layout.get_site(ranch_site["site_id"])
 	check(vacated["business_id"] == HETownLayout.NO_BUSINESS and vacated["built"], "A failed ranch should leave a vacant building")
 	check(view.site_node_count() == after_count, "The vacant building stays drawn")
+
+	# A Government-built house stands as a foundation first, then the house.
+	var sim = dashboard._simulation
+	var settlement_id: int = dashboard._town_settlement_id()
+	var warehouse = HEScenarioSeeds.make_warehouse(sim.next_business_id(), settlement_id)
+	sim.add_business(warehouse)
+	warehouse.inventory[preload("res://scripts/sim/records/commodity.gd").Type.TIMBER] = 500.0
+	sim.businesses[HEScenarioSeeds.GOVERNMENT_BUSINESS_ID].balance = 5000.0
+	var house_index := -1
+	for i in HEScenarioSeeds.government_buildings().size():
+		if HEScenarioSeeds.government_buildings()[i]["type_key"] == "house":
+			house_index = i
+	dashboard._on_build_government_pressed(house_index)
+	var construction: Array = sim.get_construction_reports(settlement_id)
+	check(construction.size() == 1, "Pressing build house starts one construction")
+	if construction.size() == 1:
+		var lot := layout.site_of_dwelling(int(construction[0]["dwelling_id"]))
+		check(not lot.is_empty() and lot["under_construction"], "The house's foundation has a lot")
+		var lot_label: Label3D = view._site_nodes[lot["site_id"]]["label"]
+		check(lot_label.text.ends_with("(under construction)"), "The foundation is labelled under construction (got '%s')" % lot_label.text)
+		sim.advance_ticks(sim.construction_days)
+		dashboard._refresh()
+		check(not layout.get_site(lot["site_id"])["under_construction"], "The house replaces its foundation")
+		lot_label = view._site_nodes[lot["site_id"]]["label"]
+		check(not lot_label.text.contains("under construction"), "The finished house drops the construction label")
+	# Snow follows the season: bare until late autumn, full through winter,
+	# melting over early spring.
+	check(view.snow_cover_for_day(0 + 100) == 0.0 and view.snow_cover_for_day(200) == 0.0, "No snow in summer or early autumn")
+	check(view.snow_cover_for_day(270) == 1.0 and view.snow_cover_for_day(359) == 1.0, "Full snow through winter")
+	check(view.snow_cover_for_day(265) > 0.0 and view.snow_cover_for_day(265) < 1.0, "Snow settles over late autumn")
+	check(view.snow_cover_for_day(362) > 0.0 and view.snow_cover_for_day(362) < 1.0, "Snow melts over early spring")
+	check(view.snow_cover_for_day(360 + 270) == 1.0, "Snow returns every year")
+	var snow_sim = dashboard._simulation
+	snow_sim.day = 280
+	dashboard._refresh_header()
+	check(view.snow_cover() == 1.0, "The dashboard turns snow on in winter (cover %.2f)" % view.snow_cover())
+	var snow_layer: MeshInstance3D = view._viewport.get_node("Snow")
+	check(snow_layer.visible, "The ground snow layer shows in winter")
+	var roofs := 0
+	for node in view._sites_root.find_children("*", "MeshInstance3D", true, false):
+		if (node as MeshInstance3D).material_overlay != null:
+			roofs += 1
+	check(roofs > 0, "Buildings carry the snow overlay")
+	var snowy_trees := 0
+	for node in view._sites_root.find_children("*", "MeshInstance3D", true, false):
+		var tree := node as MeshInstance3D
+		if tree.mesh is CylinderMesh and tree.material_overlay != null:
+			snowy_trees += 1
+	check(snowy_trees > 0, "Woodlot trees carry the snow overlay")
+	snow_sim.day = 380
+	dashboard._refresh_header()
+	check(view.snow_cover() == 0.0 and not snow_layer.visible, "Snow is gone by summer (cover %.2f)" % view.snow_cover())
+
+	# Hiring positions must not depend on the Town view having refreshed: a
+	# house added while it is hidden is seated by the next sim day.
+	var hiring_sim: HESimulation = dashboard._simulation
+	var new_house_id := hiring_sim.next_dwelling_id()
+	hiring_sim.add_dwelling(HEHouse.new(new_house_id, dashboard._town_settlement_id()))
+	check(not hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "A house the layout has not seen has no position yet")
+	dashboard._advance_sim_day()
+	check(hiring_sim.position_lookup.call("dwelling", new_house_id).is_finite(), "The next sim day seats a new house for hiring without a Town view refresh")
+
 	print("TOWN VIEW %s" % ("OK" if failures == 0 else "FAILED (%d)" % failures))
 	quit(0 if failures == 0 else 1)
+
+## Villagers: one model per household member, milling in front of their own
+## house (homeless at the plaza); clicking one opens the person window, whose
+## buttons jump to the home and to the dashboard's person detail.
+## The first model mesh of a drawn site (skips the door path's box).
+func _house_mesh(view, site_id: int) -> MeshInstance3D:
+	for node in view._site_nodes[site_id]["root"].find_children("*", "MeshInstance3D", true, false):
+		if not (node.mesh is BoxMesh):
+			return node
+	return null
+
+func _check_villagers(dashboard, view, layout: HETownLayout) -> void:
+	var sim = dashboard._simulation
+	var reports: Array = sim.get_villager_reports(dashboard._town_settlement_id())
+	var population := 0
+	for report in reports:
+		population += (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
+	check(population > 0 and view.villager_count() == population, "One villager per person (%d drawn, %d people)" % [view.villager_count(), population])
+	var females := 0
+	for key in view.villagers().villager_keys():
+		if view.villagers()._villagers[key]["female"]:
+			females += 1
+	check(females > population / 5 and females < population * 4 / 5, "Both body models are in use (%d of %d female)" % [females, population])
+	var sex_mismatches := 0
+	for report in reports:
+		var sexes: Array = Array(report["worker_sexes"]) + Array(report["dependent_sexes"])
+		for i in sexes.size():
+			var entry: Dictionary = view.villagers()._villagers[Vector2i(int(report["household_id"]), i + 1)]
+			if bool(entry["female"]) != (sexes[i] == HEHousehold.SEX_FEMALE):
+				sex_mismatches += 1
+	var same_sex_couples := 0
+	var couples := 0
+	for report in reports:
+		var worker_sexes: PackedInt32Array = report["worker_sexes"]
+		if worker_sexes.size() == 2:
+			couples += 1
+			if worker_sexes[0] == worker_sexes[1]:
+				same_sex_couples += 1
+	check(couples > 0 and same_sex_couples == 0, "Two-worker households are male-female (%d of %d same-sex)" % [same_sex_couples, couples])
+	check(sex_mismatches == 0,"Each villager's body follows the member's sex (%d mismatches)" % sex_mismatches)
+
+	# Shadows follow the GameState setting (off by default). Set directly and
+	# signalled by hand, so the check does not rewrite the user's settings file.
+	var game_state: Node = root.get_node("GameState")
+	var saved_shadows: bool = game_state.villager_shadows
+	var shadow_mesh := view.villagers().find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
+	game_state.villager_shadows = false
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "Villager shadows off when the setting is off")
+	game_state.villager_shadows = true
+	game_state.settings_changed.emit()
+	check(shadow_mesh.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "Villager shadows follow the setting when turned on")
+	game_state.villager_shadows = saved_shadows
+	game_state.settings_changed.emit()
+
+	# Schedule: at midnight nobody housed is drawn, at noon workers are at work.
+	# Everything after this runs at an at-home hour (see below).
+	_check_day_cycle(view, layout, reports)
+
+	# Each housed villager stands in its own yard (evening, before bedtime).
+	view.set_time_of_day(20.2 / 24.0)
+	var housed_key := Vector2i(-1, -1)
+	var far := 0
+	for report in reports:
+		if int(report["dwelling_id"]) == -1:
+			continue
+		var site := layout.site_of_dwelling(int(report["dwelling_id"]))
+		var position: Vector3 = view.villagers().villager_position(Vector2i(int(report["household_id"]), 1))
+		if site.is_empty() or not position.is_finite():
+			continue
+		if Vector2(position.x, position.z).distance_to(site["position"]) > 9.0:
+			far += 1
+		if housed_key.x == -1:
+			housed_key = Vector2i(int(report["household_id"]), 1)
+	check(housed_key.x != -1, "Some villager has a house")
+	check(far == 0, "Villagers mill in front of their own house (%d too far)" % far)
+
+	# Milling: they move while the town clock runs and freeze while paused.
+	var start: Vector3 = view.villagers().villager_position(housed_key)
+	view.set_villagers_paused(false)
+	for i in 120:
+		view.set_time_of_day((20.2 + 0.004 * i) / 24.0)
+		view.villagers()._process(0.1)
+	var moved := false
+	for key in view.villagers().villager_keys():
+		moved = moved or view.villagers().villager_position(key) != start
+	check(moved, "Villagers mill about while the town runs")
+	view.set_villagers_paused(true)
+	var frozen: Vector3 = view.villagers().villager_position(housed_key)
+	view.villagers()._process(1.0)
+	check(view.villagers().villager_position(housed_key) == frozen, "Paused villagers stand still")
+
+	# Click a villager: the person window names them and their household.
+	view.clear_selection()
+	var position: Vector3 = view.villagers().villager_position(housed_key)
+	var chest := position + Vector3.UP * 1.0
+	_click(view, view.camera().unproject_position(chest))
+	var picked: Vector2i = view.selected_villager()
+	check(picked.x != -1, "Clicking a villager selects them")
+	if picked.x == -1:
+		view.select_villager(housed_key.x, housed_key.y)
+		picked = housed_key
+	check(view._info_panel.visible and view._info_title.text == "Household %d - Member %d" % [picked.x, picked.y], "Person window title (got '%s')" % view._info_title.text)
+	check(view._info_body.text.contains("Household:") and view._home_button.visible and view._person_button.visible, "Person window shows the household and both buttons")
+
+	# Show home: selects the household's house and centres the camera on it.
+	var home_dwelling := int(view.villagers().household_report(picked.x)["dwelling_id"])
+	view._on_home_pressed()
+	var home_site := layout.site_of_dwelling(home_dwelling)
+	check(view._selected_site_id == int(home_site["site_id"]) and view.selected_villager().x == -1, "Show home selects the villager's house")
+	var rig: Node3D = view._rig
+	check(Vector2(rig.position.x, rig.position.z).distance_to(home_site["position"]) < 0.5, "Show home centres the camera on the house")
+	check(view._info_body.text.begins_with("Home of household") and view._info_body.text.contains(str(picked.x)), "The house panel lists the villager's household (got '%s')" % view._info_body.text)
+
+	# Person details: back to the dashboard with that person open.
+	view.select_villager(picked.x, picked.y)
+	view._on_person_pressed()
+	check(not view.visible and dashboard._selected_person_household_id == picked.x and dashboard._selected_person_number == picked.y, "Person details opens the dashboard person page")
+	dashboard._set_town_mode(true)
+	await process_frame
+
+## Night and day: housed villagers are all indoors (hidden) at midnight, and
+## employed workers are at their job at noon. Leaves the view at noon.
+func _check_day_cycle(view, layout: HETownLayout, reports: Array) -> void:
+	var layer = view.villagers()
+	view.set_time_of_day(0.0)
+	var visible_housed := 0
+	var homeless_visible := 0
+	var homeless := 0
+	for report in reports:
+		var housed := int(report["dwelling_id"]) != -1
+		var count: int = (report["worker_ages"] as PackedInt32Array).size() + (report["dependent_ages"] as PackedInt32Array).size()
+		for n in range(1, count + 1):
+			var drawn: bool = layer.villager_visible(Vector2i(int(report["household_id"]), n))
+			if housed and drawn:
+				visible_housed += 1
+			if not housed:
+				homeless += 1
+				homeless_visible += 1 if drawn else 0
+	check(visible_housed == 0, "Nobody housed is visible at midnight (%d are)" % visible_housed)
+	check(homeless_visible == homeless, "Homeless villagers stay visible at midnight")
+	view.set_time_of_day(0.5)
+	var at_work := 0
+	var workers := 0
+	for report in reports:
+		var employer := int(report["employer_business_id"])
+		var work := layout.site_of_business(employer) if employer != -1 else {}
+		if work.is_empty():
+			continue
+		var worker_count: int = (report["worker_ages"] as PackedInt32Array).size()
+		for n in range(1, worker_count + 1):
+			var key := Vector2i(int(report["household_id"]), n)
+			workers += 1
+			var position: Vector3 = layer.villager_position(key)
+			var near := layout.site_contains(work, Vector2(position.x, position.z)) or Vector2(position.x, position.z).distance_to(work["position"]) < 4.0 + maxf((work["footprint"] as Vector2).x, (work["footprint"] as Vector2).y)
+			if near:
+				at_work += 1
+	check(workers > 0, "The seeded town has employed workers")
+	check(at_work == workers, "Workers are at work at noon (%d of %d)" % [at_work, workers])
+	# A hidden selected villager keeps the person window open, with the ring hidden.
+	var hidden_key := Vector2i(-1, -1)
+	for report in reports:
+		if int(report["dwelling_id"]) != -1:
+			hidden_key = Vector2i(int(report["household_id"]), 1)
+			break
+	if hidden_key.x != -1:
+		view.set_time_of_day(0.0)
+		view.select_villager(hidden_key.x, hidden_key.y)
+		check(view.selected_villager() == hidden_key and view._info_panel.visible, "A hidden villager can still be selected from the dashboard")
+		check(view._info_body.text.contains("Indoors"), "The person window says they are indoors (got '%s')" % view._info_body.text)
+		check(not view._villager_marker.visible, "The selection ring hides while the villager is indoors")
+		check(layer.pick(view.camera(), view.camera().unproject_position(layer.villager_position(hidden_key) + Vector3.UP)) != hidden_key, "Hidden villagers cannot be picked")
+		view.clear_selection()
 
 ## Screen position (view-local) of a town-coordinate point, via the camera.
 func _screen_of(view, town_point: Vector2) -> Vector2:

@@ -1,5 +1,5 @@
 class_name HEBusiness
-extends RefCounted
+extends "res://scripts/sim/household_economy/records/he_building.gd"
 
 ## A city-owned productive site -- a "Farm" or "Woodlot" building, not
 ## something any household owns. It hires households (as whole units, never
@@ -82,6 +82,14 @@ extends RefCounted
 ## it. Likely to matter once there can be more than one (see the unique-
 ## building TODO on HESimulation.build_government_building).
 
+## Kind.WATER (a "Well" or "River Intake") is a sixth odd one out, built by the
+## town government like the Warehouse: no recipe, no workers, no sales, no cash
+## and no self-tuning. It serves `water_capacity` people with safe drinking
+## water and costs only upkeep: once a year the government's own staff service it
+## with timber from the Government Warehouse (he_simulation.gd's
+## _run_water_maintenance). A source that goes unserviced falls into disrepair
+## and serves nobody until the timber is found.
+
 const Recipe = preload("res://scripts/sim/records/recipe.gd")
 const Commodity = preload("res://scripts/sim/records/commodity.gd")
 const HEField = preload("res://scripts/sim/household_economy/records/he_field.gd")
@@ -114,17 +122,11 @@ const LEVEL_STOCK := "stock"
 ## Everything recorded into the rolling history and reported per business.
 const ALL_SERIES := [FLOW_PRODUCED, FLOW_CONSUMED, FLOW_SOLD, FLOW_BOUGHT, LEVEL_STOCK]
 
-enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE }
+enum Kind { PRODUCTION, TRADER, HERD, GOVERNMENT, WAREHOUSE, PORT, WATER }
 enum Species { CATTLE, SHEEP }
 
-var id: int
-var settlement_id: int
-var name: String
+## id, settlement_id, name and type_key come from HEBuilding.
 var kind: Kind
-## Which buildable business this is ("farm", "trader", ...), set by the
-## HEScenarioSeeds make_* factories so a unique-building limit can be checked.
-## Empty for businesses with no factory (Government, Bloomery, Iron Mine).
-var type_key: String = ""
 var recipe: Recipe # null for Kind.TRADER and Kind.HERD
 var max_capacity: int
 var capacity: int
@@ -150,6 +152,33 @@ var need_inputs: Dictionary[Commodity.Type, int] = {}
 ## recipe.inputs. See he_simulation.gd's _run_livestock_purchasing.
 var processes_livestock: bool = false
 
+## Industrial tools (see docs/tools-industrial-demand-plan.md). A business that
+## uses tools wants `tools_per_worker` of them on hand per employed worker and
+## wears out `tool_wear_per_worker_day` of them per worker-day. Tools sit in its
+## ordinary inventory (TOOLS), and the share of its crew they cover sets its
+## productivity -- never below TOOL_PRODUCTIVITY_FLOOR, so a tool-starved
+## business is poorer, not stopped. 0 = does not use tools. Inert unless the
+## simulation turns industrial tools on and a seller of tools exists in the
+## town (HESimulation._tool_productivity).
+var tools_per_worker: float = 0.0
+var tool_wear_per_worker_day: float = 0.0
+const TOOL_PRODUCTIVITY_FLOOR := 0.6
+
+func uses_tools() -> bool:
+	return tools_per_worker > 0.0
+
+## Share of `employed` workers the held tools cover, 0..1 (1 when it needs none).
+func tool_coverage(employed: int) -> float:
+	var needed := float(employed) * tools_per_worker
+	if needed <= 0.0:
+		return 1.0
+	return clampf(stock(Commodity.Type.TOOLS) / needed, 0.0, 1.0)
+
+## Output multiplier from tool coverage: TOOL_PRODUCTIVITY_FLOOR with none, 1.0
+## with full coverage.
+func tool_productivity(employed: int) -> float:
+	return TOOL_PRODUCTIVITY_FLOOR + (1.0 - TOOL_PRODUCTIVITY_FLOOR) * tool_coverage(employed)
+
 ## Kind.HERD only -- meaningless for the other two kinds.
 var species: Species = Species.CATTLE
 var herd_size: float = 0.0
@@ -160,7 +189,7 @@ var herd_size: float = 0.0
 var last_culled: Dictionary[Commodity.Type, float] = {}
 
 ## Kind.HERD only: the herd as of its last review, which is what a ranch's wage
-## overdraft is secured against (he_simulation.gd's _herd_collateral). 0 until the
+## overdraft is secured against (HEWages._herd_collateral). 0 until the
 ## first review, when it is the starting herd.
 var collateral_herd: float = 0.0
 ## Kind.HERD + Species.SHEEP only, reporting: wool added to inventory the
@@ -183,7 +212,7 @@ var herd_events: Array[Dictionary] = []
 ## labor_applied.
 var care_worker_days: float = 0.0
 ## Kind.HERD only: the herd size this ranch culls back down to each review.
-## Seeded from he_simulation.gd's HERD_CULL_TARGET species default and then
+## Seeded from he_simulation.gd's default_cull_target (from the ranch's land) and then
 ## player-configurable through HESimulation.set_herd_cull_target(), which
 ## also re-derives max_capacity from it. 0.0 = "not set, use the species
 ## default" (any builder that doesn't seed one still works).
@@ -192,6 +221,12 @@ var cull_target: float = 0.0
 ## staffed share, 0..1) the last review applied to wool, mortality and
 ## reproduction. Starts at the baseline an unstaffed herd gets.
 var last_care_fraction: float = 0.0
+## Kind.HERD only, reporting: the season the last review closed (a
+## HESimulation.Season, -1 before the first), and that review's winter fodder:
+## grain the herd needed and grain it actually ate (both 0.0 outside winter).
+var last_review_season: int = -1
+var last_fodder_needed: float = 0.0
+var last_fodder_eaten: float = 0.0
 
 ## Land-based PRODUCTION businesses (Farm, Woodlot) only -- see
 ## configure_land()/uses_field_model(). Zero/empty for Kind.TRADER and for
@@ -221,7 +256,7 @@ var last_cash_change: float = 0.0
 ## How much of today's full reference-wage bill this business couldn't
 ## cover out of its own cash (balance is allowed to run generously negative
 ## before wages get rationed -- see he_simulation.gd's WAGE_NEGATIVE_
-## BALANCE_FLOOR_DAYS and _pay_wages). 0.0 on a day it paid in full.
+## BALANCE_FLOOR_DAYS and HEWages.pay_wages). 0.0 on a day it paid in full.
 var last_wage_shortfall: float = 0.0
 
 ## Capacity self-tuning leaves this business alone until this day -- a newly
@@ -246,7 +281,7 @@ var _balance_history: Array[float] = []
 ## Reporting only: today's goods movements through this business's own
 ## storage, {flow: {Commodity.Type: units}}, where flow is one of the FLOW_*
 ## constants below (PRODUCED is derived from last_output_produced instead).
-## Reset every tick by he_simulation.gd's _pay_wages, filled by add_flow()
+## Reset every tick by he_simulation.gd's HEWages.pay_wages, filled by add_flow()
 ## from each place goods actually move, and folded into _flow_history by
 ## record_flow_day() at the end of the day.
 var todays_flows: Dictionary = {}
@@ -265,7 +300,7 @@ var _wage_history: Array[float] = []
 
 ## Rolling sales-revenue-per-employed-worker-day history, oldest first,
 ## capped at rolling_window_days() -- THIS, not the wage (which is now
-## simply set to the going reference wage every day, see _pay_wages), is
+## simply set to the going reference wage every day, see HEWages.pay_wages), is
 ## what _evaluate_business_capacity compares against the reference wage to
 ## decide growth/shrink, per he_simulation.gd's doc comment there.
 var _revenue_per_worker_history: Array[float] = []
@@ -282,6 +317,16 @@ var tax_collected_total: float = 0.0
 ## spend labor on player-ordered construction (new businesses). Kept as a
 ## plain variable now so the UI and player actions have a stable name to bind.
 var builder_slots: int = 0
+
+## Kind.WATER only: people this source can supply, the timber its yearly
+## servicing takes, the sim day it is next due (-1 = set when it opens), and
+## whether it has missed a servicing (then it supplies nobody).
+var water_capacity: int = 0
+var water_upkeep_timber: float = 0.0
+## Stone taken with the timber at each servicing (one for one).
+var water_upkeep_stone: float = 0.0
+var next_service_day: int = -1
+var in_disrepair: bool = false
 
 ## Kind.WAREHOUSE only: the player's standing orders, {Commodity.Type:
 ## {"buy_up_to": float, "sell": bool, "keep": float}}. `buy_up_to` > 0 buys the

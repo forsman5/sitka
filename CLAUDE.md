@@ -1,8 +1,45 @@
 # Sitka
 
-Orthographic top-down RTS city builder prototype in Godot 4.6.2. Persons gather resources, deposit at buildings, sleep at night, and the player expands by building forest huts and purchasing upgrades.
+Godot 4.6.2 prototype repo holding several **experiments** that share one project and one main menu. They are candidate seeds for a final game, not one game; see "Experiments and direction" before assuming any one of them is "the game".
 
 **WORKFLOW** — commit on a branch, push, and open a PR against `master`. The user reviews and verifies changes from the PR previews, so there is no need to wait for in-engine confirmation before committing. Never push directly to `master`.
+
+---
+
+## Experiments and direction
+
+| Experiment | Main menu entry | Code | Status |
+|---|---|---|---|
+| **Household economy** (town simulator) | "Household Economy Simulation" | `scripts/sim/household_economy/`, `docs/household-*.md` | **Primary work vector.** Most active development. Name is pending a rename — don't bake it into new public names. |
+| **Single valley** (river valley, game view + sim) | "Single Valley Simulation", "Single Valley (Game View)" | `scripts/valley/`, `scripts/sim/simulation.gd`, `docs/river-valley-vertical-slice.md`, `docs/shared-valley-map.md` | Next integration target: villages in the valley backed by household-economy simulations. |
+| **Large valleys / multivalley** | "Large Valleys Simulation" | `scripts/sim/data/multivalley_seed.gd`, `tools/generate_multivalley.py`, `docs/multivalley-scale-probe.md` | Scale probe, not a content requirement. |
+| **On foot** (sheep herding, dog) | "On Foot" | `scripts/on_foot/`, `docs/sheep-flocking-plan.md` | **Secondary.** Flocking accepted and merged; herding-dog brain is out of scope for now. |
+| **RTS city builder** | "Start Game" | `scripts/entities/`, `scripts/world/`, `scenes/world/` | Original prototype; kept playable, least active. Documented in the RTS sections below. |
+
+### Candidate end-games (what the experiments are converging toward)
+
+1. **Overland strategy map (Mount & Blade style):** a single valley (or several) running a live household-economy simulation, with the player moving across the map. Optional tactical layer: on-foot battles or Total War-style strategy battles.
+2. **Sheep-herding on foot:** possibly co-op, possibly with a dog companion, possibly the player whistling commands to the dog.
+3. **RTS city builder:** the original Sitka concept.
+
+Options 1 and 2 are the live ones; the household economy is the engine behind option 1 and the on-foot work is option 2. Prefer work that moves the household economy forward, and keep it decoupled from rendering (the sim must run headless and be reusable by the dashboard, the town view, and the valley).
+
+### Household economy notes
+
+- `HESimulation` (`scripts/sim/household_economy/he_simulation.gd`) is the authoritative sim; one instance per town. Views (dashboard `he_dashboard.gd`, 3D town view `he_town_view.gd`) read the same live instance and must not change economic rules or tick order.
+- Starting towns are JSON-able specs (`scripts/sim/household_economy/data/he_presets.gd`: Small / Mining / Large village + Custom roster) built by `HEScenarioSeeds.build_from_spec`. That spec is the new-game/save format to grow.
+- Reference docs in `docs/`: `household-housing.md`, `household-employment-index.md`, `household-dashboard-performance-plan.md`, `household-town-view-plan.md`, `household-water.md`, `tools-industrial-demand-plan.md`, `population-capacity-ideas.md` (proposals only).
+- Headless checks live under `scripts/sim/harness/` and `scripts/valley/harness/`; run with `Godot_v4.6.2-stable_win64_console.exe --headless --path . --script <path>`.
+- Town view reuses RTS building models as visual-only instances (RTS building scripts must not run there).
+
+### On-foot notes
+
+- `scripts/on_foot/`: player, companion (dog), sheep flocking (`on_foot_sheep.gd`, per Jadhav et al. 2024), pen, and a dusk-challenge day loop in `on_foot_world.gd` (pen the flock before 9pm; stragglers may be lost, penned sheep may breed).
+- It reuses the RTS island terrain and forest/bush managers, so RTS terrain changes can affect it.
+
+### Infrastructure
+
+- PR previews are built by CI (`.github/workflows/pr-preview.yml`); docs-only PRs skip the build. `serve.py` is a local no-cache web server for exports, not part of the game.
 
 ---
 
@@ -10,9 +47,13 @@ Orthographic top-down RTS city builder prototype in Godot 4.6.2. Persons gather 
 
 - **Engine:** Godot 4.6.2, Forward Plus, Jolt Physics, D3D12
 - **Main scene:** `res://scenes/ui/main_menu.tscn`
-- **Autoload:** `GameState` (`scripts/global/game_state.gd`)
+- **Autoloads:** `GameState` (`scripts/global/game_state.gd`), `SaveLoad` (`scripts/global/save_load.gd`), `IslandsManager` (`scripts/global/islands_manager.gd`)
 
 ---
+
+# RTS City Builder (original prototype)
+
+Everything below documents the orthographic top-down RTS prototype: persons gather resources, deposit at buildings, sleep at night, and the player expands by building forest huts and purchasing upgrades. The `GameState` autoload is RTS-specific.
 
 ## GameState (Autoload)
 
