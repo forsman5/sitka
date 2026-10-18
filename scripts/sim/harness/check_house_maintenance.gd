@@ -92,6 +92,15 @@ func _check_healthy_town() -> void:
 	for record in sim.get_daily_history(400):
 		timber_traded += float(record["traded_quantity"].get("Timber", 0.0))
 	_assert(timber_traded > 0.0, "households buy timber on the market")
+	# The daily record carries what the Housing tab charts.
+	var used := 0.0
+	var visits := 0.0
+	for record in sim.get_daily_history(400):
+		var entry: Dictionary = (record["maintenance"] as Dictionary).get(SID, {})
+		_assert(entry.has("visits") and entry.has("overdue_houses") and entry.has("stone_bonus_lost"), "each day records the settlement's maintenance")
+		used += float(entry.get("timber_used", 0.0))
+		visits += float(entry.get("visits", 0.0))
+	_assert(used > 0.0 and visits > 0.0, "the record shows timber used (%.1f) and visits made (%.0f)" % [used, visits])
 	# The warehouse no longer pays for dwellings: only wells and its own buy orders move its timber.
 	_assert(warehouse.stock(Commodity.Type.TIMBER) >= warehouse_timber - 20.0, "house upkeep does not draw on the warehouse (%.1f -> %.1f)" % [warehouse_timber, warehouse.stock(Commodity.Type.TIMBER)])
 
@@ -114,6 +123,10 @@ func _check_households_buy_stone() -> void:
 		stone_traded += float(record["traded_quantity"].get("Stone", 0.0))
 	_assert(upgraded == 6, "six houses became stone")
 	_assert(stone_traded > 0.0, "stone houses make households buy stone on the market (%.2f traded)" % stone_traded)
+	var stone_used := 0.0
+	for record in sim.get_daily_history(150):
+		stone_used += float(((record["maintenance"] as Dictionary).get(SID, {}) as Dictionary).get("stone_used", 0.0))
+	_assert(stone_used > 0.0, "and the record shows the stone used in repairs (%.1f)" % stone_used)
 	var delivered := 0
 	for record_day in 150:
 		delivered += 0
@@ -159,6 +172,8 @@ func _check_stone_shortage() -> void:
 	_assert(resident != null and resident.home_overdue_years > 0.5, "its household carries an overdue backlog")
 	_assert(resident != null and _disrepair_penalty(resident) > 0.0, "and shows 'Home in disrepair'")
 	_assert(resident != null and not _has_bonus(resident, "Stone house"), "and loses the stone house bonus")
+	var last: Dictionary = ((sim.get_daily_history(1).back() as Dictionary)["maintenance"] as Dictionary).get(SID, {})
+	_assert(int(last.get("stone_bonus_lost", 0)) >= 1 and int(last.get("overdue_houses", 0)) >= 1, "the record counts the stone house without its bonus")
 	var overdue_plain := 0
 	for dwelling_id in sim.dwellings:
 		var house: HEHouse = sim.dwellings[dwelling_id]

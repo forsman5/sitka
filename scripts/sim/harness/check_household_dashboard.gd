@@ -70,6 +70,29 @@ func _check_warehouse_strip(dashboard: Control, sim) -> void:
 	check(dashboard._warehouse_strip_more.visible, "Ellipsis shown when goods are cut off")
 	check(dashboard._town_gov_build_popup != null and dashboard._town_gov_build_popup.item_count == HEScenarioSeeds.government_buildings().size(), "Town view has a Government build menu")
 
+## Housing tab: one compact row per build with icon costs (red when short) and a
+## single shared tooltip, plus the upkeep charts.
+func _check_housing_tab(dashboard: Control, sim) -> void:
+	dashboard._refresh_housing()
+	for type_key in dashboard.HOUSING_BUILD_KEYS:
+		var row: Control = dashboard._housing_buttons[type_key].get_parent()
+		check(row.get_child_count() == 4, "%s: one row holds button, name, costs and state" % type_key)
+		check(dashboard._housing_blocker_labels[type_key].get_parent() == row, "%s: the state sits on the same row, not under it" % type_key)
+		var chips: Control = dashboard._housing_cost_boxes[type_key]
+		var icons := 0
+		for chip in chips.get_children():
+			for part in chip.get_children():
+				if part is TextureRect:
+					icons += 1
+		check(icons >= 1, "%s: costs are shown with icons (%d)" % [type_key, icons])
+	var stone_chips: Control = dashboard._housing_cost_boxes["stone_house"]
+	check(stone_chips.get_child_count() == 3, "A stone house shows gold, timber and stone (%d chips)" % stone_chips.get_child_count())
+	check(dashboard.HOUSING_ORDER_TOOLTIP != "", "The warehouse order rules are explained once, on the header tooltip")
+	for type_key in dashboard.HOUSING_BUILD_KEYS:
+		check(not (dashboard._housing_blocker_labels[type_key] as Label).text.contains("standing warehouse buy order"), "%s: the order rules are not repeated under the button" % type_key)
+	check(dashboard._upkeep_goods_chart != null and dashboard._upkeep_visits_chart != null and dashboard._upkeep_arrears_chart != null, "The Housing tab has the upkeep charts")
+	check(dashboard._upkeep_summary_label.text != "", "and an upkeep summary line")
+
 ## The top bar names the current season and follows it across boundaries.
 func _check_season_label(dashboard: Control, sim) -> void:
 	var names := ["Spring", "Summer", "Autumn", "Winter"]
@@ -155,6 +178,7 @@ func _run() -> void:
 	var expected_ids: Array = sim.get_household_ids()
 	check(table.row_count() == expected_ids.size(), "Households table is current after opening (%d vs %d)" % [table.row_count(), expected_ids.size()])
 	_check_warehouse_strip(dashboard, sim)
+	_check_housing_tab(dashboard, sim)
 	_check_season_label(dashboard, sim)
 
 	print("Household dashboard check: %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
