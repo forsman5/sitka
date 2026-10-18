@@ -465,6 +465,15 @@ const HERD_STAFFED_WOOL_BONUS := 1.0
 ## overrides it.
 ## (Per-species default cull targets come from a ranch's land: see
 ## default_cull_target.)
+##
+## Dynamic cull (HEBusiness.dynamic_cull, on by default): a ranch does not sit
+## on a growing herd for years waiting to hit the target. Once the herd is past
+## a breeding-stock floor (this share of its cull target) it also sells part of
+## each review's net growth, ramping from none at the floor up to all of it as
+## the herd nears the target. A young herd keeps what it needs to breed; a
+## near-full one sells its whole increase and settles at the target. The target
+## stays a hard cap either way. Turn it off for the old hold-then-cull behavior.
+const HERD_BREEDING_STOCK_FLOOR := 0.4
 
 ## Sheep only: a renewable trickle straight into inventory from live
 ## herd_size every eval interval, independent of culling -- wool doesn't
@@ -1133,6 +1142,7 @@ func _reconcile_housing(settlement_id: int) -> void:
 		var sharers: int = maxi(int(residents.get(h.dwelling_id, 1)), 1)
 		h.home_upkeep_timber = home.upkeep_timber() / float(sharers) if home != null else 0.0
 		h.home_upkeep_stone = home.upkeep_stone() / float(sharers) if home != null else 0.0
+		h.home_heat_factor = (dwellings[h.dwelling_id] as HEHouse).heat_factor() if dwellings.has(h.dwelling_id) else 1.0
 
 func _assign_dwellings(settlement_id: int) -> void:
 	var s: HESettlement = settlements[settlement_id]
@@ -1391,6 +1401,7 @@ func _run_house_maintenance(record: Dictionary) -> void:
 			(residents.get_or_add(lodger.dwelling_id, []) as Array).append(lodger)
 	var settlement_ids := settlements.keys()
 	settlement_ids.sort()
+	var goods_used: Dictionary = {} # settlement id -> {commodity: units}
 	for settlement_id in settlement_ids:
 		var ids: Array = []
 		for dwelling_id in (settlements[settlement_id] as HESettlement).dwelling_ids:
@@ -1432,6 +1443,7 @@ func _run_house_maintenance(record: Dictionary) -> void:
 						if slice > 0.0:
 							var used: float = (lodger as HEHousehold).consume(good, slice)
 							_accumulate(record["consumed"], Commodity.name_of(good), used)
+							_accumulate(goods_used.get_or_add(settlement_id, {}), good, used)
 				house.neglect_years -= HOUSE_VISIT_YEARS
 				deliveries.append(dwelling_id)
 				_house_cursor[settlement_id] = dwelling_id
@@ -1440,6 +1452,29 @@ func _run_house_maintenance(record: Dictionary) -> void:
 		var h: HEHousehold = household
 		var home: HEHouse = dwellings.get(h.dwelling_id)
 		h.home_overdue_years = maxf(home.neglect_years - HOUSE_VISIT_YEARS, 0.0) if home != null else 0.0
+	for settlement_id in settlement_ids:
+		var settlement: HESettlement = settlements[settlement_id]
+		var used: Dictionary = goods_used.get(settlement_id, {})
+		var entry := {
+			"visits": (_house_deliveries.get(settlement_id, []) as Array).size(),
+			"timber_used": float(used.get(Commodity.Type.TIMBER, 0.0)),
+			"stone_used": float(used.get(Commodity.Type.STONE, 0.0)),
+			"overdue_houses": 0, "backlog_years": 0.0, "households_overdue": 0, "stone_bonus_lost": 0,
+		}
+		for dwelling_id in settlement.dwelling_ids:
+			var house: HEHouse = dwellings.get(dwelling_id)
+			if house == null:
+				continue
+			entry["backlog_years"] += maxf(house.neglect_years, 0.0)
+			if house.neglect_years > HOUSE_VISIT_YEARS:
+				entry["overdue_houses"] += 1
+		for household_id in settlement.household_ids:
+			var lodger: HEHousehold = households[household_id]
+			if lodger.home_overdue_years > 0.0:
+				entry["households_overdue"] += 1
+				if lodger.home_morale_bonus > 0.0:
+					entry["stone_bonus_lost"] += 1
+		record["maintenance"][settlement_id] = entry
 
 ## The dwelling ids that received a maintenance delivery on the latest day.
 func get_house_deliveries(settlement_id: int) -> Array:
@@ -1922,7 +1957,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 	for need in HENeeds.felt():
 		if need.is_service() and not h.last_need_required.has(need.id):
 			continue
-		var required := need.per_person_daily
+		var required := need.per_person_daily * h.need_scale(need)
 		var household_required: float = h.last_need_required.get(need.id, 0.0)
 		var ratio: float = (h.last_need_provided.get(need.id, 0.0) / household_required) if household_required > 0.0 else 1.0
 		needs.append({
@@ -2053,6 +2088,7 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			if include_detail:
 				report["herd_events"] = b.herd_events.duplicate(true)
 				report["cull_target"] = herd_cull_target(b)
+				report["dynamic_cull"] = b.dynamic_cull
 				report["cull_target_min"] = herd_cull_target_range(b).x
 				report["cull_target_max"] = herd_cull_target_range(b).y
 			if include_detail and b.species == HEBusiness.Species.SHEEP:
@@ -2061,6 +2097,12 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 				report["wool_sustaining_current"] = int(sustaining.y)
 				report["wool_sustaining_staffed"] = int(sustaining.z)
 			report["care_fraction"] = b.last_care_fraction
+			# Care so far this review window: care_fraction only moves at a
+			# review, so on its own it reads 0 for up to a season after a ranch
+			# is first staffed. -1 on the first day of a window (nothing accrued).
+			var window_days: int = day % HERD_EVAL_INTERVAL_DAYS
+			var window_need: float = b.herd_size * HERD_LABOR_PER_HEAD_PER_DAY[b.species] * window_days
+			report["care_fraction_now"] = clampf(b.care_worker_days / window_need, 0.0, 1.0) if window_need > 0.0 else -1.0
 			var fodder_target: float = b.herd_size * FODDER_PER_HEAD_PER_WINTER[b.species]
 			report["fodder_stock"] = b.stock(Commodity.Type.GRAIN)
 			report["fodder_target"] = fodder_target
@@ -2841,6 +2883,9 @@ func _new_daily_record() -> Dictionary:
 		"births": 0,
 		"worker_promotions": 0,
 		"capacity_changes": {},
+		# settlement id -> {visits, timber_used, stone_used, overdue_houses,
+		# backlog_years, households_overdue, stone_bonus_lost}: see _run_house_maintenance.
+		"maintenance": {},
 	}
 
 func _finalize_daily_record(record: Dictionary) -> void:
@@ -3262,7 +3307,8 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 ## `commodity` is expressed as if it were the need's only source; goods that
 ## satisfy no need return 0.
 func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
-	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity)
+	var need := HENeeds.for_commodity(commodity)
+	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (h.need_scale(need) if need != null else 1.0)
 
 ## Whether `need` is part of this settlement's economy at all: always, unless
 ## the need can only be met by a dedicated business (HENeed.needs_seller) and
@@ -3464,7 +3510,7 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade
 			return maxf(0.0, upkeep - h.stock(commodity))
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
 			return maxf(0.0, upkeep - h.stock(commodity))
-	var target := float(h.headcount()) * need.per_person_daily * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
+	var target := float(h.headcount()) * need.per_person_daily * h.need_scale(need) * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## A household whose need shortfall is below this counts as having met it.
@@ -3487,6 +3533,7 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 	var starving := 0
 	var required := 0.0
 	var provided := 0.0
+	var saved := 0.0
 	var met_by := {}
 	for c in need.satisfiers():
 		met_by[Commodity.name_of(c)] = 0.0
@@ -3500,6 +3547,7 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		var h_provided: float = h.last_need_provided.get(need.id, 0.0)
 		required += h_required
 		provided += h_provided
+		saved += float(h.headcount()) * need.per_person_daily * (1.0 - h.need_scale(need)) if h_required > 0.0 else 0.0
 		for c in need.satisfiers():
 			met_by[Commodity.name_of(c)] += h.last_consumed.get(c, 0.0) * need.value_of(c)
 		if h_required - h_provided > NEED_MET_EPSILON:
@@ -3519,8 +3567,10 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		for source_name in WATER_SOURCE_NAMES:
 			met_history[source_name] = []
 	var unmet_history: Array = []
+	var saved_history: Array = []
 	for record in get_daily_history(days):
 		var entry: Dictionary = record["needs"].get(need.id, {})
+		saved_history.append(float(entry.get("saved", 0.0)))
 		for name in met_history.keys():
 			met_history[name].append(entry.get("met_by", {}).get(name, 0.0))
 		unmet_history.append(maxf(0.0, entry.get("required", 0.0) - entry.get("provided", 0.0)))
@@ -3543,6 +3593,9 @@ func get_need_detail(need_id: int, days: int = 90, settlement_id: int = -1) -> D
 		"emigration_likelihood": (float(starving) / household_count) if household_count > 0 else 0.0,
 		"met_history": met_history,
 		"unmet_history": unmet_history,
+		# Need units the households' homes spared them (a stone house's heat saving).
+		"saved": saved,
+		"saved_history": saved_history,
 	}
 
 ## Consume owned goods -> update household stress/outcomes, purely from
@@ -3617,7 +3670,8 @@ func _run_water_need(record: Dictionary) -> void:
 ## that good's units. The household's record is the need's own outcome
 ## (required and provided, in need units) plus what each satisfier spent.
 func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
-	var needed := float(h.headcount()) * need.per_person_daily
+	var full_need := float(h.headcount()) * need.per_person_daily
+	var needed := full_need * h.need_scale(need)
 	var result := need.burn(h, needed)
 	var provided: float = result["provided"]
 	var burned: Dictionary = result["burned"]
@@ -3632,6 +3686,8 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 		"required": 0.0, "provided": 0.0, "met_by": {}, "households_met": 0, "households_unmet": 0})
 	need_record["required"] += needed
 	need_record["provided"] += provided
+	# What the home spared the household (a stone house's heat saving).
+	need_record["saved"] = float(need_record.get("saved", 0.0)) + (full_need - needed)
 	var town_need: Dictionary = (record["needs_by_settlement"] as Dictionary).get_or_add(h.settlement_id, {}).get_or_add(need.id, {"required": 0.0, "provided": 0.0})
 	town_need["required"] += needed
 	town_need["provided"] += provided
@@ -5210,6 +5266,24 @@ func _export_reference_price(settlement_id: int, commodity: Commodity.Type) -> f
 func herd_cull_target(b: HEBusiness) -> float:
 	return b.cull_target if b.cull_target > 0.0 else default_cull_target(b.species, ranch_land(b))
 
+## Share (0..1) of a review's net herd growth a dynamic-cull ranch sells at
+## `herd_size` against `target`: 0 at the breeding-stock floor, 1 at the target.
+static func dynamic_cull_share(herd_size: float, target: float) -> float:
+	if target <= 0.0:
+		return 0.0
+	return clampf((herd_size / target - HERD_BREEDING_STOCK_FLOOR) / (1.0 - HERD_BREEDING_STOCK_FLOOR), 0.0, 1.0)
+
+## Player-facing switch for a ranch's dynamic cull. Returns the applied value,
+## or false for an unknown / non-herd business.
+func set_herd_dynamic_cull(business_id: int, enabled: bool) -> bool:
+	if not businesses.has(business_id):
+		return false
+	var b: HEBusiness = businesses[business_id]
+	if b.kind != HEBusiness.Kind.HERD:
+		return false
+	b.dynamic_cull = enabled
+	return enabled
+
 ## A ranch's acreage: its own land_area_acres, or the species default for a
 ## builder that never set one.
 func ranch_land(b: HEBusiness) -> float:
@@ -5334,9 +5408,15 @@ func _run_herds(record: Dictionary) -> void:
 		b.last_culled = {}
 		b.last_actual_units = 0.0
 		var target: float = herd_cull_target(b)
-		if b.herd_size > target:
-			var excess: float = b.herd_size - target
-			b.herd_size = target
+		# Dynamic cull: sell a share of this review's net growth ahead of the
+		# hard cap, so income starts well before the herd fills its target.
+		var growth_sold := 0.0
+		if b.dynamic_cull and b.herd_size < target:
+			growth_sold = maxf(b.herd_size - herd_before, 0.0) * dynamic_cull_share(b.herd_size, target)
+			b.herd_size -= growth_sold
+		if growth_sold > 0.0 or b.herd_size > target:
+			var excess: float = growth_sold + maxf(b.herd_size - target, 0.0)
+			b.herd_size = minf(b.herd_size, target)
 			var commodity := b.herd_commodity()
 			b.add_stock(commodity, excess)
 			b.last_culled[commodity] = excess

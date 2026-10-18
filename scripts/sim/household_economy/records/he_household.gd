@@ -148,6 +148,16 @@ func upkeep_slice(commodity: Commodity.Type) -> float:
 ## daily by HESimulation._run_house_maintenance. Drives the disrepair penalty.
 var home_overdue_years: float = 0.0
 
+## Multiplier on this household's heating need from the house it lives in
+## (HEHouse.heat_factor); 1.0 when homeless or in a house that saves nothing.
+## Only HESimulation._reconcile_housing writes it.
+var home_heat_factor: float = 1.0
+
+## How much of `need` this household requires, as a multiple of the per-person
+## figure: only heat is eased by the house (a stone house holds the warmth).
+func need_scale(need: HENeed) -> float:
+	return home_heat_factor if need.id == HENeed.Id.HEAT else 1.0
+
 ## Goods this household actually owns. Never a duplicate of settlement/city
 ## stock -- there is no pooled inventory in this scenario.
 var inventory: Dictionary[Commodity.Type, float] = {}

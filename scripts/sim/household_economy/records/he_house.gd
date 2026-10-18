@@ -19,6 +19,11 @@ const DENSE_CAPACITY := 4
 ## HEHousehold.home_morale_bonus). Flat: a house is either stone or it is not.
 const STONE_MORALE_BONUS := 0.08
 
+## Share of its heating a stone house saves (see HEHousehold.need_scale): the
+## walls hold the heat, so its household needs this much less fuel. Flat, like
+## the morale bonus, and applied whoever lives there.
+const STONE_HEAT_SAVING := 0.25
+
 ## Built of stone: same lot and capacity as a plain house, but its household
 ## is happier. Set by upgrade_to_stone(); tenements are never stone.
 var is_stone: bool = false
@@ -75,6 +80,10 @@ func is_plain() -> bool:
 ## Morale its household gains from living here.
 func morale_bonus() -> float:
 	return STONE_MORALE_BONUS if is_stone else 0.0
+
+## Multiplier on its household's heating need: 1.0, or less in stone.
+func heat_factor() -> float:
+	return 1.0 - STONE_HEAT_SAVING if is_stone else 1.0
 
 ## Turns this house into a stone house without moving it.
 func upgrade_to_stone() -> void:

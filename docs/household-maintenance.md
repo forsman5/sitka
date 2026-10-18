@@ -14,6 +14,7 @@ Why households and not the government: stone houses (#116) and wages that differ
 - **Backlog.** `HEHouse.neglect_years` grows 1/365 a day while the house is lived in (an empty house owes nothing until someone moves in). First visits are staggered by dwelling id.
 - **Shortage.** If a household cannot afford or cannot find the goods (poor, or no stone for sale), the visit is skipped and the backlog grows. Staff are not the limit unless there are none.
 - **Morale.** `HEHousehold.home_overdue_years` is the backlog beyond one visit interval. It costs 4 points of morale per year (`MORALE_DISREPAIR_PER_YEAR`), capped at 20, shown as "Home in disrepair", and while it is above zero a stone house's +8% "Stone house" bonus is lost. A healthy town carries neither.
+- **Daily record.** `record["maintenance"][settlement_id]` = `{visits, timber_used, stone_used, overdue_houses, backlog_years, households_overdue, stone_bonus_lost}`, which the Housing tab's upkeep charts read (`household-housing.md`).
 - **Reports.** `get_house_maintenance_summary(settlement_id)`; `get_housing_report` adds `maintenance_deliveries` (dwelling ids served today); `get_dwelling_reports` adds `neglect_years`.
 - **Why not a `HENeed`.** `HENeeds.for_commodity` maps a good to one need, and timber is already heat's; a stone house needs timber AND stone together. So upkeep is a reserve added to the purchase target, like the heat buffer.
 - **Also fixed here:** water servicing (#113) and house repairs now book the goods they use as consumed, which the stock-conservation check needs.
