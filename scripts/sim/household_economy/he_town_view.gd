@@ -213,7 +213,7 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 		if not site["built"]:
 			continue
 		_sync_site(site)
-	_villager_layer.sync(layout, villagers, _working_water_sites(layout))
+	_villager_layer.sync(layout, villagers, _working_water_sites(layout), _errand_sites(layout, housing))
 	_livestock_layer.sync(layout, reports)
 	if _selected_villager.x != -1 and not _villager_layer.villager_position(_selected_villager).is_finite():
 		_selected_villager = Vector2i(-1, -1)
@@ -225,6 +225,15 @@ func sync(layout: HETownLayout, reports: Array, housing: Dictionary = {}, dwelli
 	var strained := int(housing.get("homeless_households", 0)) > 0 or bool(housing.get("saturated", false))
 	_housing_label.add_theme_color_override("font_color", Color(0.95, 0.6, 0.3) if strained else Color(1, 1, 1, 0.95))
 	_refresh_info()
+
+## The houses that got a timber delivery on the latest sim day, as layout sites.
+func _errand_sites(layout: HETownLayout, housing: Dictionary) -> Array:
+	var out: Array = []
+	for dwelling_id in housing.get("maintenance_deliveries", []):
+		var site := layout.site_of_dwelling(int(dwelling_id))
+		if not site.is_empty() and bool(site.get("built", false)):
+			out.append(site)
+	return out
 
 ## Built water sources that are not in disrepair, as layout sites.
 func _working_water_sites(layout: HETownLayout) -> Array:
@@ -1105,6 +1114,10 @@ static func activity_text(activity: Dictionary, employer_name: String) -> String
 			return "At the town square"
 		"fill_water":
 			return "Filling up at the water source"
+		"walk_errand":
+			return "Carrying timber to a house"
+		"deliver_upkeep":
+			return "Repairing a house"
 	return ""
 
 func _business_name(business_id: int) -> String:

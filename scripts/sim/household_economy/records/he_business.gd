@@ -217,6 +217,10 @@ var care_worker_days: float = 0.0
 ## also re-derives max_capacity from it. 0.0 = "not set, use the species
 ## default" (any builder that doesn't seed one still works).
 var cull_target: float = 0.0
+## Kind.HERD only: also sell part of each review's net growth once past a
+## breeding-stock floor, instead of holding everything until cull_target (see
+## he_simulation.gd's HERD_BREEDING_STOCK_FLOOR). cull_target stays the cap.
+var dynamic_cull: bool = true
 ## Kind.HERD only, reporting: the effective care (free-range baseline plus
 ## staffed share, 0..1) the last review applied to wool, mortality and
 ## reproduction. Starts at the baseline an unstaffed herd gets.
