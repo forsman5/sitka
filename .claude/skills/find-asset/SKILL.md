@@ -12,10 +12,11 @@ python3 -I .claude/skills/find-asset/asset_index.py packs                 # pack
 python3 -I .claude/skills/find-asset/asset_index.py search house          # all terms must match pack/path/name
 python3 -I .claude/skills/find-asset/asset_index.py search female --pack character --not-in-repo
 python3 -I .claude/skills/find-asset/asset_index.py info "builder pack 1.0\models\objects\gltf\house"
-python3 -I .claude/skills/find-asset/asset_index.py scan                  # after downloading a new pack
+python3 -I .claude/skills/find-asset/asset_index.py add <folder-or-zip> --source <url>   # new download -> library
+python3 -I .claude/skills/find-asset/asset_index.py scan                  # rebuild index
 ```
 
-Pack roots: `SITKA_ASSET_PACKS` (path-separated), default `~/Downloads`. Index cache: `~/.claude/asset_index.json`.
+The library is `C:/gamedev-assets/packs/<pack>/` (env `SITKA_ASSET_LIBRARY`), one folder per pack with a `pack.json` (source URL, license file, date). Always `add` a newly downloaded pack so it persists outside Downloads, passing `--source` when known; `packs` shows `UNKNOWN` for missing sources. `SITKA_ASSET_PACKS` overrides the scanned roots. Index cache: `~/.claude/asset_index.json`. No backup is set up yet.
 Output shows format, `flat` (solid material colors) vs `atlas` (shared texture), raw bbox, animation count, and `IN REPO` if a same-named file is already under `assets/`.
 
 ## Before proposing or importing a model

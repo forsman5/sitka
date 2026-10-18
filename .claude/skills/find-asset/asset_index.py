@@ -5,12 +5,19 @@
   asset_index.py search <term...> [opts]    all terms must match pack/path/name
   asset_index.py info <path-or-name>        materials, bbox, animations for one model
   asset_index.py scan                       force a rescan
+  asset_index.py add <folder-or-zip> [--name N] [--source URL]   copy a pack into the library
 
-Pack roots: env SITKA_ASSET_PACKS (os.pathsep-separated), default ~/Downloads.
+Library: env SITKA_ASSET_LIBRARY, default C:/gamedev-assets/packs (one folder per pack,
+with a pack.json holding source URL and license). Override the scanned roots with
+SITKA_ASSET_PACKS (os.pathsep-separated).
 Cache: ~/.claude/asset_index.json (rebuilt on `scan`, or when missing).
 Bounding boxes are mesh-local POSITION extents (node transforms ignored).
 """
 import argparse
+import datetime
+import re
+import shutil
+import zipfile
 import json
 import os
 import struct
@@ -23,11 +30,46 @@ SKIP_DIRS = {".git", ".godot", "node_modules", "obj", "dae", "fbx(unity)", "unit
 LICENSE_HINTS = ("license", "licence")
 
 
+DEFAULT_LIBRARY = Path(os.environ.get("SITKA_ASSET_LIBRARY", "C:/gamedev-assets/packs"))
+TAKEOUT_SUFFIX = re.compile(r"-\d{8}T\d{6}Z-\d+-\d+$")
+
+
 def pack_roots():
     raw = os.environ.get("SITKA_ASSET_PACKS")
     if raw:
         return [Path(p) for p in raw.split(os.pathsep) if p]
-    return [Path.home() / "Downloads"]
+    return [DEFAULT_LIBRARY]
+
+
+def add_pack(source, name=None, source_url=None):
+    """Copy a pack folder (or unzip a .zip) into the library with a pack.json."""
+    src = Path(source)
+    name = name or TAKEOUT_SUFFIX.sub("", src.stem if src.suffix.lower() == ".zip" else src.name)
+    dest = DEFAULT_LIBRARY / name
+    if dest.exists():
+        sys.exit(f"already in library: {dest}")
+    DEFAULT_LIBRARY.mkdir(parents=True, exist_ok=True)
+    if src.suffix.lower() == ".zip":
+        with zipfile.ZipFile(src) as z:
+            z.extractall(dest)
+    elif src.is_dir():
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns("*.zip"))
+    else:
+        sys.exit("source must be a folder or .zip")
+    while True:
+        children = list(dest.iterdir())
+        if len(children) == 1 and children[0].is_dir():
+            inner = children[0]
+            for item in inner.iterdir():
+                shutil.move(str(item), str(dest / item.name))
+            inner.rmdir()
+        else:
+            break
+    lic, _ = pack_extras(dest)
+    meta = {"source_url": source_url or "unknown", "license_file": Path(lic).name if lic else None,
+            "added": datetime.date.today().isoformat()}
+    (dest / "pack.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"added {name} -> {dest}")
 
 
 def read_gltf_json(path):
@@ -104,7 +146,10 @@ def scan():
             has_gltf = any(p.suffix.lower() in (".gltf", ".glb") for p in found)
             kept = [p for p in found if not (has_gltf and p.suffix.lower() == ".fbx")]
             lic, prev = pack_extras(pack_dir)
-            packs[pack_dir.name] = {"path": str(pack_dir), "count": len(kept), "license": lic, "preview": prev}
+            meta_file = pack_dir / "pack.json"
+            source_url = json.loads(meta_file.read_text(encoding="utf-8")).get("source_url") if meta_file.exists() else None
+            packs[pack_dir.name] = {"path": str(pack_dir), "count": len(kept), "license": lic, "preview": prev,
+                                    "source": source_url}
             for p in kept:
                 stem = p.stem.lower().removesuffix(".gltf")
                 e = {"pack": pack_dir.name, "name": p.name, "path": str(p), "format": p.suffix.lower().lstrip("."),
@@ -142,6 +187,10 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("packs")
     sub.add_parser("scan")
+    a = sub.add_parser("add")
+    a.add_argument("source")
+    a.add_argument("--name")
+    a.add_argument("--source", dest="source_url")
     s = sub.add_parser("search")
     s.add_argument("terms", nargs="+")
     s.add_argument("--pack")
@@ -153,12 +202,15 @@ def main():
     i.add_argument("target")
     args = ap.parse_args()
 
+    if args.cmd == "add":
+        add_pack(args.source, args.name, args.source_url)
+        args.cmd = "scan"
     index = scan() if args.cmd == "scan" else load(getattr(args, "rescan", False))
     if args.cmd == "scan":
         print(f"indexed {len(index['entries'])} models in {len(index['packs'])} packs -> {CACHE}")
     elif args.cmd == "packs":
         for name, p in index["packs"].items():
-            print(f"{name}: {p['count']} models\n    {p['path']}\n    license: {p['license'] or 'none found'}\n    preview: {p['preview'] or 'none'}")
+            print(f"{name}: {p['count']} models\n    {p['path']}\n    source: {p.get('source') or 'UNKNOWN'}\n    license: {p['license'] or 'none found'}\n    preview: {p['preview'] or 'none'}")
     elif args.cmd == "search":
         terms = [t.lower() for t in args.terms]
         hits = [e for e in index["entries"]
