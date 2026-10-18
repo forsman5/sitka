@@ -6,7 +6,7 @@ Status: **proposal and measurements only, nothing built.** Follows `household-ma
 
 - **Houses are assigned by id, not by choice.** `HESimulation._assign_dwellings`: sticky for life; unhoused households, ascending id, take the lowest-id house with room (innermost first). Nothing considers money, upkeep or distance, so a stone house goes to whoever has the lowest id.
 - **Job proximity is on the hiring side.** `_nearest_available_index` (weekly hiring) gives a business the unemployed household that lives nearest to it, using `position_lookup` (the town layout). Houses never move, so this only changes who is hired, not where anyone lives.
-- **A stone house is +8% morale** (`HEHouse.STONE_MORALE_BONUS`) and costs 40 g + 50 timber + 120 stone to upgrade. Its upkeep is that of a plain house.
+- **A stone house is +8% morale** (`HEHouse.STONE_MORALE_BONUS`) and costs 40 g + 50 timber + 120 stone to upgrade. Its upkeep is 0.2 timber and 0.4 stone a year, so it needs stone from the warehouse, but at that size the cost is negligible.
 
 ## Measurements
 

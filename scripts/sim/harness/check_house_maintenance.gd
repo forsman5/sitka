@@ -21,6 +21,7 @@ var _ok := true
 func _init() -> void:
 	_check_costs()
 	_check_healthy_town()
+	_check_stone_house_needs_stone()
 	_check_round_robin()
 	_check_shortage_and_morale()
 	_check_schedule()
@@ -44,6 +45,9 @@ func _warehouse(sim: HESimulation) -> HEBusiness:
 func _check_costs() -> void:
 	var house := HEHouse.new(1, SID)
 	_assert(is_equal_approx(house.upkeep_timber(), 0.2) and house.upkeep_stone() == 0.0, "a house takes 0.2 timber a year")
+	var stone_house := HEHouse.new(2, SID)
+	stone_house.upgrade_to_stone()
+	_assert(is_equal_approx(stone_house.upkeep_timber(), 0.2) and is_equal_approx(stone_house.upkeep_stone(), 0.4), "a stone house takes 0.2 timber and 0.4 stone a year")
 	house.upgrade_to_dense()
 	_assert(is_equal_approx(house.upkeep_timber(), 0.8) and is_equal_approx(house.upkeep_stone(), 0.8), "a tenement takes 0.8 timber and 0.8 stone")
 	var household := HEHousehold.new(1, 2, 0, 0.0, SID)
@@ -66,6 +70,36 @@ func _check_healthy_town() -> void:
 	_assert(int(summary["overdue"]) == 0, "a staffed, stocked town keeps every house current (%d overdue)" % int(summary["overdue"]))
 	for household in sim.households.values():
 		_assert((household as HEHousehold).home_overdue_years == 0.0, "no household carries a disrepair penalty")
+
+## A stone house is repaired with stone: with the warehouse out of stone it
+## falls behind while plain houses (timber only) stay current.
+func _check_stone_house_needs_stone() -> void:
+	var sim := _sim("small_village")
+	sim.advance_ticks(2)
+	var stone_id := -1
+	var plain_id := -1
+	for dwelling_id in sim.dwellings:
+		var house: HEHouse = sim.dwellings[dwelling_id]
+		if house.is_plain():
+			if stone_id == -1:
+				stone_id = dwelling_id
+			elif plain_id == -1:
+				plain_id = dwelling_id
+	_assert(stone_id != -1 and plain_id != -1, "the town has plain houses to compare")
+	(sim.dwellings[stone_id] as HEHouse).upgrade_to_stone()
+	var warehouse := _warehouse(sim)
+	for day in 500:
+		warehouse.consume(Commodity.Type.STONE, warehouse.stock(Commodity.Type.STONE))
+		sim.advance_ticks(1)
+	var stone_house: HEHouse = sim.dwellings[stone_id]
+	var plain_house: HEHouse = sim.dwellings[plain_id]
+	_assert(stone_house.neglect_years > 1.0, "a stone house without stone falls behind (%.2f years)" % stone_house.neglect_years)
+	_assert(plain_house.neglect_years < HESimulation.HOUSE_VISIT_YEARS + 0.1, "a plain house is still kept up (%.2f years)" % plain_house.neglect_years)
+	# Stone arrives: the stone house is repaired again.
+	warehouse.add_stock(Commodity.Type.STONE, 100.0)
+	var before := stone_house.neglect_years
+	sim.advance_ticks(200)
+	_assert(stone_house.neglect_years < before, "with stone back the backlog falls (%.2f -> %.2f)" % [before, stone_house.neglect_years])
 
 func _check_round_robin() -> void:
 	var sim := _sim("small_village")
