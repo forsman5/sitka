@@ -51,6 +51,8 @@ var needs_seller: bool
 ## side, for wants whose absence isn't harmful but whose presence is welcome
 ## (tools). It offsets penalties -- morale still tops out at 100%.
 var morale_bonus: float
+## Negative values are survival foods instead: morale lost when that satisfier
+## supplies ALL of the need (grain, flour).
 ## Satisfiers a household takes as a step up rather than just a cheaper way to
 ## meet the need: satisfier -> morale gained when that satisfier supplies ALL of
 ## the need (scaled by the share it actually supplies). Affluent households

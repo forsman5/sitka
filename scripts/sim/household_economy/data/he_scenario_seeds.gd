@@ -636,8 +636,8 @@ static func _charcoal_burner_recipe() -> Recipe:
 ## Grain -> flour: MILL_FLOUR_PER_WORKER_DAY flour per grain. Flour sits at its
 ## price floor (0.45) whenever the Bakery is stocked, so the Mill only clears a
 ## wage at a high yield: 4 flour sold at the floor is ~1.8 against ~0.25 of
-## grain, versus a reference wage of roughly 0.7-1.0. Flour is not a household
-## food (HENeeds) -- the Bakery is its only buyer.
+## grain, versus a reference wage of roughly 0.7-1.0. Households can eat flour
+## as gruel, but it costs morale (HENeeds.FOOD_FLOUR_MORALE).
 static func _mill_recipe() -> Recipe:
 	return Recipe.new("mill", {Commodity.Type.GRAIN: 1.0}, {Commodity.Type.FLOUR: MILL_FLOUR_PER_WORKER_DAY})
 

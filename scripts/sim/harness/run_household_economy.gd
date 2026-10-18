@@ -2581,11 +2581,11 @@ func _check_needs_catalog() -> void:
 	for need in HENeeds.all():
 		ids.append(need.id)
 	_assert(ids == [HENeed.Id.FOOD, HENeed.Id.HEAT, HENeed.Id.CLOTHING, HENeed.Id.TOOLS], "Needs should be food, heat, clothing, tools in that order")
-	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.MEAT, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL, Commodity.Type.TOOLS],
+	_assert(HESimulation.SUBSISTENCE_COMMODITIES == [Commodity.Type.BREAD, Commodity.Type.MEAT, Commodity.Type.FLOUR, Commodity.Type.GRAIN, Commodity.Type.CHARCOAL, Commodity.Type.TIMBER, Commodity.Type.LEATHER, Commodity.Type.WOOL, Commodity.Type.TOOLS],
 		"Subsistence commodities should be the union of every need's satisfiers, in need order")
 	var food := HENeeds.get_need(HENeed.Id.FOOD)
-	_assert(food.value_of(Commodity.Type.BREAD) == 4.0 and food.value_of(Commodity.Type.GRAIN) == 0.5 and not food.is_satisfied_by(Commodity.Type.FLOUR),
-		"Food points should be bread 4, grain 0.5, and flour is not eaten")
+	_assert(food.value_of(Commodity.Type.BREAD) == 4.0 and food.value_of(Commodity.Type.FLOUR) == 1.0 and food.value_of(Commodity.Type.GRAIN) == 0.5,
+		"Food points should be bread 4, flour 1, grain 0.5")
 	for need in HENeeds.all():
 		_assert(need.is_satisfied_by(need.baseline), "%s's baseline should be one of its satisfiers" % need.label)
 		_assert(need.drives_lifecycle == (need.id == HENeed.Id.FOOD), "Only food should drive the lifecycle engine (%s)" % need.label)
@@ -2828,7 +2828,7 @@ func _check_mill_and_bakery_chain() -> void:
 
 ## The Bakery village preset keeps its Bakery employed and profitable, and
 ## households that can afford bread eat it instead of grain; the Trader exports
-## the surplus. (Flour is the Bakery's input only: households never eat it.)
+## the surplus. (Flour is gruel: eaten only by those who cannot afford better, at a morale cost.)
 func _check_bakery_village_eats_bread() -> void:
 	var spec := HEPresets.spec("bakery_village")
 	var sim := HESimulation.new(12345, Callable(HEScenarioSeeds, "build_spec").bind(spec), true)

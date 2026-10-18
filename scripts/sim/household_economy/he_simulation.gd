@@ -3264,12 +3264,11 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 const HOUSEHOLD_TASTE_SPREAD := 0.35
 
 ## Affluence: how far above subsistence a household's savings sit, from 0
-## (comfort goods judged at their posted price, like anything else) to 1 (they
-## look AFFLUENCE_PRICE_TOLERANCE cheaper). Measured in days of a basic basket
+## (foods judged at their posted price, like anything else) to 1 (their morale
+## effect fully counts, see MORALE_PRICE_WEIGHT). Measured in days of a basic basket
 ## for the household, priced at BASE_PRICE so it does not swing with the market.
 const AFFLUENCE_MIN_DAYS := 60.0
 const AFFLUENCE_FULL_DAYS := 240.0
-const AFFLUENCE_PRICE_TOLERANCE := 0.75
 
 ## One person's daily basic basket (every need that needs no dedicated seller,
 ## via its baseline satisfier) at base prices.
@@ -3309,19 +3308,27 @@ func _household_taste(h: HEHousehold) -> float:
 func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity.Type]) -> Commodity.Type:
 	var local_market: HEMarket = markets[h.settlement_id]
 	var taste := _household_taste(h) * HOUSEHOLD_TASTE_SPREAD
-	var affluence := maxf(_household_affluence(h), _household_luxury_means(h)) if not need.comfort.is_empty() else 0.0
+	var means := maxf(_household_affluence(h), _household_luxury_means(h)) if not need.comfort.is_empty() else 0.0
 	var best := need.baseline
-	var best_cost: float = local_market.price[best] / need.value_of(best)
+	var best_cost := _morale_priced_cost(local_market.price[best] / need.value_of(best), need.comfort_of(best), means)
 	for c in cascade:
 		if c == need.baseline:
 			continue
-		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
-		if need.comfort_of(c) > 0.0:
-			cost *= 1.0 - AFFLUENCE_PRICE_TOLERANCE * affluence
+		var cost := _morale_priced_cost(local_market.price[c] / need.value_of(c) * (1.0 + taste), need.comfort_of(c), means)
 		if cost < best_cost - 0.0001:
 			best = c
 			best_cost = cost
 	return best
+
+## What a household treats as a satisfier's price per need-unit once its morale
+## effect is counted: a comfort (bread, meat) looks cheaper and a survival food
+## (grain, flour; negative comfort) dearer, by `comfort * MORALE_PRICE_WEIGHT *
+## means`. `means` (0..1) is how much a household can afford to care, so a
+## household with no savings just buys the cheapest posted price.
+const MORALE_PRICE_WEIGHT := 4.0
+
+static func _morale_priced_cost(cost: float, comfort: float, means: float) -> float:
+	return cost * maxf(1.0 - comfort * MORALE_PRICE_WEIGHT * means, 0.1)
 
 ## How much of `commodity` a household asks for today. The buffer is
 ## measured in the need's units across every satisfier already held --

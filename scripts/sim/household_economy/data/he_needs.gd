@@ -7,7 +7,7 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## FOOD takes bread (4 hunger points), meat (1) or grain (0.5); HEAT
+## FOOD takes bread (4 hunger points), meat (1), flour (1) or grain (0.5); HEAT
 ## takes charcoal (four times timber's heat) or timber; CLOTHING takes leather
 ## (a one-for-one alternative to wool) or wool. Planned addition is a one-line
 ## entry: cloth for CLOTHING (wool stays as the raw-fibre stand-in until a tailor
@@ -21,6 +21,11 @@ const FOOD_MEAT_MORALE := 0.08
 ## Likewise for bread: a household that can afford it eats it for the table, not
 ## just because it is cheaper per hunger point.
 const FOOD_BREAD_MORALE := 0.05
+## Survival food: a diet of only flour (gruel) costs 20% morale, only grain 40%
+## (scaled by the share each supplies). Negative comfort, so a household that can
+## afford bread or meat has a reason to leave these.
+const FOOD_FLOUR_MORALE := -0.20
+const FOOD_GRAIN_MORALE := -0.40
 ## What an affluent household adds to its 0.2 subsistence points a day (0.5 in
 ## all), eaten as bread or meat only (HENeed.luxury_per_person_daily).
 const FOOD_LUXURY_PER_PERSON := 0.3
@@ -28,17 +33,15 @@ const FOOD_LUXURY_PER_PERSON := 0.3
 static func all() -> Array[HENeed]:
 	if _all.is_empty():
 		_all = [
-			# Hunger points: bread 4, meat 1, grain 0.5 (densest first). Flour is
-			# deliberately not a food: it is the Bakery's input, and households
-			# eating it starved the Bakery of flour.
+			# Hunger points: bread 4, meat 1, flour 1, grain 0.5 (densest first).
 			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
 			# person -- Simulation.GRAIN_PER_PERSON_PER_DAY -- exactly as when
 			# grain was worth 1.0 and the need was 0.4.
 			# Food is the one need whose shortfall drives starvation.
 			# Meat is worth twice grain's food (1.0 vs 0.5 here); densest burns first.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.FLOUR: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
 				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births.",
-				false, 0.0, {Commodity.Type.BREAD: FOOD_BREAD_MORALE, Commodity.Type.MEAT: FOOD_MEAT_MORALE}),
+				false, 0.0, {Commodity.Type.BREAD: FOOD_BREAD_MORALE, Commodity.Type.MEAT: FOOD_MEAT_MORALE, Commodity.Type.FLOUR: FOOD_FLOUR_MORALE, Commodity.Type.GRAIN: FOOD_GRAIN_MORALE}),
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the
 			# cheaper way to heat a house. Densest first: charcoal burns first.

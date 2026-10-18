@@ -574,6 +574,17 @@ func morale_penalties(vulnerability: float = 1.0, works: bool = true, tax_morale
 		var own_penalty := need.morale_penalty * minf(stress_of(need.id) * vulnerability, 1.0)
 		if own_penalty > 0.001:
 			out.append({"label": need.shortfall_label, "penalty": own_penalty})
+	for need in HENeeds.all():
+		var required: float = last_need_required.get(need.id, 0.0)
+		if required <= 0.0001:
+			continue
+		for commodity in need.comfort.keys():
+			if need.comfort[commodity] >= 0.0:
+				continue
+			var share := minf(1.0, last_consumed.get(commodity, 0.0) * need.value_of(commodity) / required)
+			var penalty: float = -need.comfort[commodity] * share
+			if penalty > 0.001:
+				out.append({"label": "%s: %s only" % [need.label, Commodity.name_of(commodity)], "penalty": penalty})
 	if works and not is_employed():
 		out.append({"label": "Unemployed household", "penalty": MORALE_UNEMPLOYED_PENALTY})
 	for amount in last_unmet_unaffordable.values():
