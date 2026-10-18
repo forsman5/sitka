@@ -72,4 +72,5 @@ func _ready() -> void:
 
 func _start(character: String) -> void:
 	OnFootPlayer.selected_character = character
+	OnFootPlayer.selected_weapon = ""
 	get_tree().change_scene_to_file("res://scenes/on_foot/on_foot.tscn")

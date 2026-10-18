@@ -10,6 +10,9 @@ const REQUIRED_MODELS: PackedStringArray = [
 	"res://assets/models/buildings/building_house_builder_blue.glb",
 	"res://assets/models/buildings/building_tavern_blue.gltf",
 	"res://assets/models/buildings/tent.gltf",
+	"res://assets/models/weapons/arrow_A.gltf",
+	"res://assets/models/weapons/bow_A_withString.gltf",
+	"res://assets/models/weapons/sword_A.gltf",
 	"res://assets/models/nature/tree_single_A.gltf",
 	"res://assets/models/nature/tree_single_B.gltf",
 ]
