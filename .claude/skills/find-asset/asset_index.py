@@ -115,7 +115,7 @@ def pack_extras(pack_dir):
         low = p.name.lower()
         if license_file is None and any(h in low for h in LICENSE_HINTS):
             license_file = str(p)
-        if preview is None and low.startswith(("preview", "overview")) and low.endswith((".png", ".jpg")):
+        if preview is None and low.startswith(("preview", "overview", "contents")) and low.endswith((".png", ".jpg")):
             preview = str(p)
     return license_file, preview
 
