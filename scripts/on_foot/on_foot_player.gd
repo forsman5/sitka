@@ -18,6 +18,7 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var bob_amount: float = 0.04
 @export var bob_frequency: float = 2.2
 @export var third_person_distance: float = 3.2
+@export var third_person_pivot_height: float = 0.8
 @export var bark_cooldown: float = 0.45
 ## A bark carries this many times farther than the normal scare radius.
 @export var bark_range_multiplier: float = 2.0
@@ -27,6 +28,7 @@ class_name OnFootPlayer extends CharacterBody3D
 signal barked(world_position: Vector3)
 
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
+const DEFAULT_THIRD_PERSON_PITCH := -0.18
 
 ## Individual barks (see assets/audio/bark/CREDITS.md). Alternatives to audition
 ## live in assets/audio/bark/options/.
@@ -61,7 +63,7 @@ const CHARACTERS := {
 		"capsule_radius": 0.35,
 		"capsule_height": 1.8,
 		"eye_height": 1.65,
-		"third_person_distance": 3.2,
+		"third_person_distance": 4.2,
 		"walk_speed": 5.0,
 		"sprint_speed": 8.5,
 		"jump_height": 1.2,
@@ -112,6 +114,9 @@ var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
 var _camera_mode: int = CameraMode.THIRD_BACK
+var _orbit_yaw: float = 0.0
+var _third_person_pitch: float = DEFAULT_THIRD_PERSON_PITCH
+var _orbit_active: bool = false
 var _bark_player: AudioStreamPlayer3D
 var _bark_cooldown_left: float = 0.0
 var _bark_anim_left: float = 0.0
@@ -169,6 +174,7 @@ func _ready() -> void:
 	_arm.shape = SphereShape3D.new()
 	(_arm.shape as SphereShape3D).radius = 0.2
 	_arm.margin = 0.1
+	_arm.collision_mask = 1 | 2
 	_arm.add_excluded_object(get_rid())
 	_head.add_child(_arm)
 
@@ -211,9 +217,20 @@ func _exit_tree() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * mouse_sensitivity)
-		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
-		_head.rotation.x = _pitch
+		if _camera_mode != CameraMode.FIRST_PERSON and Input.is_key_pressed(KEY_ALT):
+			_orbit_active = true
+			_orbit_yaw = wrapf(_orbit_yaw - event.relative.x * mouse_sensitivity, -PI, PI)
+			_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+		else:
+			rotate_y(-event.relative.x * mouse_sensitivity)
+		if _camera_mode == CameraMode.FIRST_PERSON:
+			_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
+			_head.rotation.x = _pitch
+		else:
+			# Negative pitch places the camera above the low pivot and looks down
+			# across the body. Keep it from swinging beneath the ground plane.
+			_third_person_pitch = clampf(_third_person_pitch - event.relative.y * mouse_sensitivity, -0.9, 0.08)
+			_head.rotation.x = _third_person_pitch
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		if _weapon != "":
 			attack()
@@ -221,6 +238,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			bark()
 	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		release_draw()
+	elif event is InputEventKey and not event.pressed and (event.keycode == KEY_ALT or event.physical_keycode == KEY_ALT):
+		if _orbit_active and _camera_mode != CameraMode.FIRST_PERSON:
+			_orbit_yaw = 0.0
+			_third_person_pitch = DEFAULT_THIRD_PERSON_PITCH
+			_arm.rotation.y = _camera_base_yaw()
+			_head.rotation.x = _third_person_pitch
+		_orbit_active = false
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			if _mounted_horse == null:
@@ -335,6 +359,9 @@ func scare_radius() -> float:
 
 func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
+	if mode == CameraMode.FIRST_PERSON:
+		_orbit_yaw = 0.0
+		_orbit_active = false
 	# Keep the bow user visible in first person so the draw pose can be seen.
 	# Move the camera just ahead of the face; the body stays behind the view.
 	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
@@ -343,7 +370,11 @@ func _set_camera_mode(mode: int) -> void:
 	_set_first_person_hair_hidden(show_bow_pose)
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
-	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
+	_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+	_head.rotation.x = _pitch if mode == CameraMode.FIRST_PERSON else _third_person_pitch
+
+func _camera_base_yaw() -> float:
+	return PI if _camera_mode == CameraMode.THIRD_FRONT else 0.0
 
 func _setup_first_person_hair() -> void:
 	_hair_mesh = _model.find_child("Body2", true, false) as MeshInstance3D
@@ -622,7 +653,8 @@ func _update_camera(delta: float) -> void:
 		_bob_t += delta * bob_frequency * horiz_speed
 		bob = sin(_bob_t) * bob_amount * clampf(horiz_speed / walk_speed, 0.0, 1.5)
 	_land_dip = move_toward(_land_dip, 0.0, delta * 0.6)
-	var target_y := eye_height + bob - _land_dip
+	var pivot_height := eye_height if _camera_mode == CameraMode.FIRST_PERSON else third_person_pivot_height
+	var target_y := pivot_height + bob - _land_dip
 	_head.position.y = lerpf(_head.position.y, target_y, clampf(delta * 25.0, 0.0, 1.0))
 
 func _update_animation() -> void:

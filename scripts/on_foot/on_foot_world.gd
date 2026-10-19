@@ -86,7 +86,7 @@ func _ready() -> void:
 	_spawn_flock()
 
 	var hint := Label.new()
-	hint.text = "WASD move · Shift sprint · Space jump · F5 camera view · Esc menu"
+	hint.text = "WASD move · Shift sprint · Space jump · F5 camera · hold Alt + mouse to orbit · Esc menu"
 	if OnFootPlayer.selected_character == "dog":
 		hint.text = "Left click bark · " + hint.text
 	else:
