@@ -33,6 +33,9 @@ func _on_large_valleys_sim_pressed() -> void:
 func _on_river_valley_view_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/valley/river_valley.tscn")
 
+func _on_valley_generator_pressed() -> void:
+	get_tree().change_scene_to_file("res://scenes/valley/valley_generator.tscn")
+
 func _on_on_foot_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/on_foot/on_foot_select.tscn")
 
