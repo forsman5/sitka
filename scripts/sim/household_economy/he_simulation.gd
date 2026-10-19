@@ -4459,7 +4459,7 @@ func _paced_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
 		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 	return stock
 
-## Steward offer: meet funded local use, release excess inventory steadily,
+## Steward offer: meet funded local use, release excess inventory above cost,
 ## and nudge a small amount around unit cost to let price signals settle.
 func _seller_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
 	var stock := seller.stock(commodity)
@@ -4473,19 +4473,20 @@ func _seller_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
 	var demand := known
 	var funded := _household_funded_demand(seller.settlement_id, commodity) + _business_input_daily_use(seller.settlement_id, commodity, seller)
 	var need := maxf(demand, funded)
+	var posted: float = (markets[seller.settlement_id] as HEMarket).price[commodity]
+	var reservation := _producer_cost_per_unit(seller)
+	var below_cost := reservation > 0.0001 and posted < reservation
 	if need <= 0.0001:
 		_seller_offer_in_progress.erase(guard_key)
-		return minf(stock, stock / SURPLUS_RELEASE_DAYS)
+		return 0.0 if below_cost else minf(stock, stock / SURPLUS_RELEASE_DAYS)
 	var cover := stock / demand if demand > 0.0 else INF
 	var excess_release := 0.0
 	var max_cover_stock := COVER_MAX_DAYS * demand
-	if stock > max_cover_stock:
+	if stock > max_cover_stock and not below_cost:
 		excess_release = (stock - max_cover_stock) / SURPLUS_RELEASE_DAYS
 	var offer := need * (1.0 + SELL_PACE_HEADROOM_EXTRA) + excess_release
-	var posted: float = (markets[seller.settlement_id] as HEMarket).price[commodity]
-	var reservation := _producer_cost_per_unit(seller)
 	if reservation > 0.0001 and cover > COVER_MIN_DAYS:
-		if posted < reservation:
+		if below_cost:
 			offer = need * (1.0 - NUDGE_MAX) + excess_release
 		elif posted > PRICE_BAND_HIGH * reservation and stock > COVER_MIN_DAYS * demand:
 			offer = need * (1.0 + NUDGE_MAX) + excess_release

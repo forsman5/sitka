@@ -31,9 +31,9 @@ func _init() -> void:
 	var market = sim.markets[woodlot.settlement_id]
 	woodlot.inventory[good] = need * 100.0
 	market.price[good] = Sim.BASE_PRICE[good] * Sim.PRICE_MULTIPLIER_MIN
+	assert(market.price[good] < sim._producer_cost_per_unit(woodlot), "low-price case must be below production cost")
 	var low_price_offer: float = sim._seller_offer(woodlot, good)
-	assert(low_price_offer >= expected_need * 0.9 - 0.0001, "low prices may withhold at most ten percent of funded need")
-	assert(low_price_offer <= expected_need * 0.9 + (woodlot.stock(good) - Sim.COVER_MAX_DAYS * need) / Sim.SURPLUS_RELEASE_DAYS + 0.0001, "low-price nudge should be bounded")
+	assert(is_equal_approx(low_price_offer, expected_need * (1.0 - Sim.NUDGE_MAX)), "below-cost offer should withhold surplus and limit the local-use nudge")
 	market.price[good] = Sim.BASE_PRICE[good] * Sim.PRICE_MULTIPLIER_MAX
 	var high_price_offer: float = sim._seller_offer(woodlot, good)
 	assert(high_price_offer >= expected_need * 1.1 - 0.0001, "high prices should release a small surplus")
