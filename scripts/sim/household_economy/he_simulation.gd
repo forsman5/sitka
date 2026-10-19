@@ -3709,7 +3709,8 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	need_record["required"] += needed
 	need_record["provided"] += provided
 	# What the home spared the household (a stone house's heat saving).
-	need_record["saved"] = float(need_record.get("saved", 0.0)) + (full_need - needed)
+	var seasonal_need := full_need * need.seasonal_scale(day)
+	need_record["saved"] = float(need_record.get("saved", 0.0)) + (seasonal_need - needed)
 	var town_need: Dictionary = (record["needs_by_settlement"] as Dictionary).get_or_add(h.settlement_id, {}).get_or_add(need.id, {"required": 0.0, "provided": 0.0})
 	town_need["required"] += needed
 	town_need["provided"] += provided

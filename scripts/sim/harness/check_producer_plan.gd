@@ -32,6 +32,27 @@ func _init() -> void:
 	delayed["cover_max_days"] = 90.0
 	var plan: Dictionary = Plan.target_crew(delayed)
 	assert(int(plan["target"]) == 0, "large starting stock should delay hiring")
+	var near_harvest := base.duplicate(true)
+	near_harvest["stock"] = 0.0
+	near_harvest["fields"] = [{"area": 100.0, "days_growing": 0, "labor_applied": 10.0}]
+	near_harvest["demand"] = [0.0]
+	near_harvest["yield_scales"] = [1.0]
+	near_harvest["horizon"] = 1
+	near_harvest["growth_days"] = 1
+	near_harvest["land_area"] = 100.0
+	near_harvest["labor_per_area_per_day"] = 0.1
+	near_harvest["yield_per_area"] = 1.0
+	near_harvest["average_demand"] = 1.0
+	near_harvest["cover_min_days"] = 14.0
+	assert(float(Plan.project_stock(near_harvest, 0)["min_stock"]) >= 14.0, "imminent harvest should satisfy the projected safety stock")
+	var wide_capacity := near_harvest.duplicate(true)
+	wide_capacity["fields"] = [{"area": 100.0, "days_growing": 0, "labor_applied": 0.0}]
+	wide_capacity["demand"] = [50.0]
+	wide_capacity["average_demand"] = 50.0
+	wide_capacity["cover_min_days"] = 1.0
+	wide_capacity["max_capacity"] = 100
+	var wide_plan: Dictionary = Plan.target_crew(wide_capacity)
+	assert(int(wide_plan["target"]) == 10, "crew search should converge above the old six-round bound")
 	var impossible := base.duplicate(true)
 	impossible["demand"] = [100.0, 100.0, 100.0, 100.0]
 	impossible["average_demand"] = 100.0

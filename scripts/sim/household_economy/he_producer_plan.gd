@@ -18,7 +18,10 @@ static func project_stock(inputs: Dictionary, crew: int) -> Dictionary:
 	var yield_per_area := float(inputs.get("yield_per_area", 0.0))
 	var productivity := float(inputs.get("productivity", 1.0))
 	var curve: Array = inputs.get("yield_scales", [])
-	var min_stock := stock
+	# Safety is evaluated after each forecast day's harvest and demand. The
+	# opening balance is not itself a forecast failure: an imminent harvest can
+	# restore cover before the next day's demand is served.
+	var min_stock := INF
 	var cumulative_demand := 0.0
 	for offset in range(1, horizon + 1):
 		var daily_harvest := 0.0
@@ -45,6 +48,8 @@ static func project_stock(inputs: Dictionary, crew: int) -> Dictionary:
 		min_stock = minf(min_stock, stock)
 		if daily_harvest > 0.0:
 			harvests.append({"offset": offset, "units": daily_harvest})
+	if horizon == 0:
+		min_stock = stock
 	return {"stock_end": stock, "min_stock": min_stock, "harvests": harvests,
 		"cumulative_demand": cumulative_demand}
 
@@ -65,9 +70,7 @@ static func target_crew(inputs: Dictionary) -> Dictionary:
 			"projection": max_projection}
 	var left := low
 	var right := high
-	for _i in range(6):
-		if left >= right:
-			break
+	while left < right:
 		var mid := (left + right) / 2
 		var projection := project_stock(inputs, mid)
 		if float(projection["min_stock"]) >= min_cover:
