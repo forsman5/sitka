@@ -343,7 +343,9 @@ func _release_arrow(power: float) -> void:
 		return
 	var arrow := OnFootArrow.new()
 	get_parent().add_child(arrow)
-	var forward := -_camera.global_transform.basis.z
+	# The model turns to face its movement direction while strafing. Its +Z
+	# axis is the bow's forward direction; camera orbit must not steer the shot.
+	var forward := _model.global_transform.basis.z.normalized()
 	arrow.global_position = _head.global_position + forward * 0.6
 	arrow.velocity = forward * OnFootArrow.SPEED * power
 	arrow.owner_player = self
