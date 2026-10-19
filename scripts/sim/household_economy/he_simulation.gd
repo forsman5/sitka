@@ -5594,11 +5594,10 @@ func _ensure_seller_index() -> void:
 			var live_animal := b.herd_commodity()
 			if not settlement_sellers.has(live_animal):
 				settlement_sellers[live_animal] = business_id
-			var herd_ids: Array[int] = []
-			if _seller_herds_by_settlement.has(b.settlement_id):
-				herd_ids.assign(_seller_herds_by_settlement[b.settlement_id])
-			herd_ids.append(business_id)
-			_seller_herds_by_settlement[b.settlement_id] = herd_ids
+			if not _seller_herds_by_settlement.has(b.settlement_id):
+				var herd_ids: Array[int] = []
+				_seller_herds_by_settlement[b.settlement_id] = herd_ids
+			(_seller_herds_by_settlement[b.settlement_id] as Array).append(business_id)
 		if not settlement_sellers.is_empty():
 			_seller_first[b.settlement_id] = settlement_sellers
 	for herd_ids in _seller_herds_by_settlement.values():
