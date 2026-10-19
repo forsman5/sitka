@@ -3962,7 +3962,8 @@ func _format_event(event: Dictionary) -> String:
 			return "[color=#a0a0a0]%s - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
 		"succession":
 			var heir_count: int = event["count"]
-			return "[color=#d9c98f]%s - Household %d: %d adult child%s took over a worker's place[/color]" % [day, event["household_id"], heir_count, "ren" if heir_count != 1 else ""]
+			var heir_reason := "took a job at the family's employer" if event.get("cause", "") == "hired" else "took over a worker's place"
+			return "[color=#d9c98f]%s - Household %d: %d adult child%s %s[/color]" % [day, event["household_id"], heir_count, "ren" if heir_count != 1 else "", heir_reason]
 		"adopted":
 			var dep_count: int = event["dependents"]
 			var dep_plural := "s" if dep_count != 1 else ""

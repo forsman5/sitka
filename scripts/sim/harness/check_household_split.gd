@@ -19,7 +19,9 @@ func _init() -> void:
 	_check_free_houses_are_spent()
 	_check_over_cap_pushes_out_down_to_cap()
 	_check_workers_never_leave()
+	_check_leaver_keeps_age()
 	_check_heirs_replace_dead_workers()
+	_check_hiring_prefers_family()
 	_check_sim_town_without_housing_splits_nothing()
 	print("HOUSEHOLD SPLIT %s" % ("OK" if _ok else "FAILED"))
 	quit(0 if _ok else 1)
@@ -88,21 +90,67 @@ func _check_over_cap_pushes_out_down_to_cap() -> void:
 func _check_workers_never_leave() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 5
-	var h := _household(3, [600, 600, 600] as Array[int])
+	# 4 workers: the first two are the heads, the other two took jobs at home.
+	var h := _household(4, [600, 600, 600] as Array[int])
 	_leavers_over_time(h, HEHousehold.FREE_HOUSING_UNLIMITED, rng)
-	_assert(h.worker_capacity() == 3, "Founding workers never leave, however many houses are free")
+	_assert(h.worker_capacity() == HEHousehold.HEAD_COUNT, "The head and spouse never leave; working children can (capacity %d)" % h.worker_capacity())
 	_assert(h.dependent_ages().is_empty(), "With unlimited housing every grown child eventually leaves")
+	h = _household(2, [] as Array[int])
+	_leavers_over_time(h, HEHousehold.FREE_HOUSING_UNLIMITED, rng)
+	_assert(h.worker_capacity() == 2, "A household of just its heads keeps them")
+
+## A leaving worker takes their real age with them.
+func _check_leaver_keeps_age() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6
+	var h := HEHousehold.new(1, 3, 0, 0.0)
+	h.seed_worker_ages([2000, 1900, 800] as Array[int])
+	var left := 0
+	for month in MONTHS:
+		left = h.evaluate_aging(rng, 1)
+		if left > 0:
+			break
+	_assert(left == 1 and h.last_promoted_ages == ([800] as Array[int]), "The working child leaves, aged 800 (got %s)" % str(h.last_promoted_ages))
+	_assert(h.last_promoted_member_numbers == ([3] as Array[int]), "Member number is the third worker")
 
 ## When a worker dies an adult child at home takes the place; a child still
 ## under age does not, and no more step up than died.
 func _check_heirs_replace_dead_workers() -> void:
 	var h := HEHousehold.new(1, 2, 3, 0.0)
 	h.seed_dependent_ages([700, 400, 100] as Array[int])
-	_assert(h.promote_heirs(0) == 0, "Nobody steps up when nobody died")
-	_assert(h.promote_heirs(2) == 2, "Both adult children can step up, the child cannot")
+	_assert(h.promote_adults(0) == 0, "Nobody steps up when nobody died")
+	_assert(h.promote_adults(2) == 2, "Both adult children can step up, the child cannot")
 	_assert(h.worker_capacity() == 4 and h.dependent_ages() == ([100] as Array[int]), "Two adults became workers, the child is still a dependent")
 	_assert(h.worker_ages().has(700) and h.worker_ages().has(400), "Heirs keep their own age")
-	_assert(h.promote_heirs(1) == 0, "A child under the aging threshold never steps up")
+	_assert(h.promote_adults(1) == 0, "A child under the aging threshold never steps up")
+
+## An employer with an opening hires its own employees' grown children before
+## anyone from the unemployed pool.
+func _check_hiring_prefers_family() -> void:
+	var sim := HESimulation.new(12345, Callable(HEScenarioSeeds, "build_preset").bind("small_village"), true)
+	var sid := HEScenarioSeeds.SETTLEMENT_ID
+	var farm_id := -1
+	for business_id in sim.businesses:
+		if sim.businesses[business_id].type_key == "farm":
+			farm_id = business_id
+	var farm = sim.businesses[farm_id]
+	sim._reconcile_employment() # settle government staffing first
+	var members: Array = sim._employment_index().get(farm_id, [])
+	_assert(not members.is_empty(), "Setup: the farm has employees")
+	var family: HEHousehold = sim.households[members[0]]
+	family.add_dependent(500)
+	family.add_dependent(520)
+	var before: int = sim._business_employed_worker_count(farm_id)
+	farm.capacity = before + 1
+	sim._reconcile_employment()
+	_assert(sim._business_employed_worker_count(farm_id) == before + 1, "The farm filled its one opening")
+	_assert(family.adult_dependent_count() == 1, "From its employee's family (one adult child left at home)")
+	# The unemployed pool is untouched while the family can supply.
+	var other_before: int = sim.get_unemployment_summary(sid).get("unemployed_households", 0)
+	farm.capacity = before + 2
+	sim._reconcile_employment()
+	_assert(family.adult_dependent_count() == 0, "The second opening takes the other child")
+	_assert(int(sim.get_unemployment_summary(sid).get("unemployed_households", 0)) <= other_before, "No unemployed household was hired while family could fill it")
 
 ## A seeded town with every house taken: grown children stay home instead of
 ## founding homeless one-person households.
