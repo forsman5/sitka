@@ -10,6 +10,7 @@ const LIFETIME := 6.0
 const STUCK_LIFETIME := 4.0
 
 var velocity: Vector3 = Vector3.ZERO
+var owner_player: Node3D
 var _stuck: bool = false
 var _age: float = 0.0
 
@@ -31,10 +32,15 @@ func _physics_process(delta: float) -> void:
 	var from := global_position
 	velocity.y -= GRAVITY * delta
 	var to := from + velocity * delta
-	var query := PhysicsRayQueryParameters3D.create(from, to, 1 | 2)
+	var query := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 4)
+	if owner_player != null and is_instance_valid(owner_player):
+		query.exclude = [owner_player.get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if not hit.is_empty():
 		global_position = hit["position"]
+		var sheep := hit.get("collider") as OnFootSheep
+		if sheep != null:
+			sheep.die()
 		_stuck = true
 		_age = 0.0
 		return

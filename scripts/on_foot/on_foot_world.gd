@@ -175,7 +175,7 @@ func _build_end_of_day_screen() -> void:
 
 ## Last sheep in: end the day early, after a beat so it can walk to its spot.
 func _on_sheep_penned(total: int) -> void:
-	if _day_ended or total < get_tree().get_nodes_in_group("on_foot_sheep").size():
+	if _day_ended or total < _living_sheep_count():
 		return
 	await get_tree().create_timer(EARLY_END_DELAY).timeout
 	if not _day_ended:
@@ -192,6 +192,8 @@ func _end_day() -> void:
 	_next_flock_ages.clear()
 	for node in get_tree().get_nodes_in_group("on_foot_sheep"):
 		var sheep := node as OnFootSheep
+		if sheep.is_dead():
+			continue
 		if sheep.penned:
 			penned += 1
 		else:
@@ -383,10 +385,24 @@ func _spawn_flock() -> void:
 	for age in _flock_ages:
 		var sheep := OnFootSheep.new()
 		sheep.age_days = age
+		sheep.noise_emitted.connect(_on_sheep_noise_emitted)
 		var xz := center + Vector2(randf_range(-3, 3), randf_range(-3, 3))
 		sheep.position = _ground_point(xz) + Vector3(0, 0.3, 0)
 		sheep.rotation.y = randf() * TAU
 		add_child(sheep)
+
+func _living_sheep_count() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("on_foot_sheep"):
+		if not (node as OnFootSheep).is_dead():
+			count += 1
+	return count
+
+func _on_sheep_noise_emitted(noise_pos: Vector3) -> void:
+	for node in get_tree().get_nodes_in_group("on_foot_sheep"):
+		var sheep := node as OnFootSheep
+		if not sheep.is_dead():
+			sheep.hear_noise(noise_pos)
 
 ## Light and ambient come from the RTS DayNightCycle (it needs siblings named
 ## DirectionalLight3D and WorldEnvironment). Its flat grey sky colours are meant
