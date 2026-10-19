@@ -1,0 +1,1096 @@
+{
+  "buildings": [
+    {
+      "model": "res://assets/models/buildings/building_castle_blue.gltf",
+      "pos": [
+        191.451278686523,
+        -172.270248413086
+      ],
+      "site": 1,
+      "width": 13.0,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        203.137741088867,
+        -172.736068725586
+      ],
+      "site": 1,
+      "width": 4.72622728347778,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        180.660385131836,
+        -161.660232543945
+      ],
+      "site": 1,
+      "width": 4.71352529525757,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        193.179107666016,
+        -189.68473815918
+      ],
+      "site": 1,
+      "width": 4.97403049468994,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        202.549163818359,
+        -156.329116821289
+      ],
+      "site": 1,
+      "width": 4.75384187698364,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        170.688858032227,
+        -175.957153320313
+      ],
+      "site": 1,
+      "width": 5.35889196395874,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        208.622467041016,
+        -186.92414855957
+      ],
+      "site": 1,
+      "width": 5.88984107971191,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        183.037170410156,
+        -149.867492675781
+      ],
+      "site": 1,
+      "width": 5.45789861679077,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        183.041427612305,
+        -196.011260986328
+      ],
+      "site": 1,
+      "width": 5.20530366897583,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        214.548461914063,
+        -159.56494140625
+      ],
+      "site": 1,
+      "width": 5.76941251754761,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        165.619522094727,
+        -162.930770874023
+      ],
+      "site": 1,
+      "width": 5.77637958526611,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        207.330139160156,
+        -195.959320068359
+      ],
+      "site": 1,
+      "width": 4.93111848831177,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        203.989852905273,
+        -145.545455932617
+      ],
+      "site": 1,
+      "width": 4.6449613571167,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        163.999038696289,
+        -185.511337280273
+      ],
+      "site": 1,
+      "width": 5.48791313171387,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        221.54833984375,
+        -181.220916748047
+      ],
+      "site": 1,
+      "width": 4.70506858825684,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        172.564804077148,
+        -146.082962036133
+      ],
+      "site": 1,
+      "width": 5.70663499832153,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        183.475921630859,
+        -204.441207885742
+      ],
+      "site": 1,
+      "width": 4.90031147003174,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        213.144653320313,
+        -146.122650146484
+      ],
+      "site": 1,
+      "width": 4.72544813156128,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        156.888198852539,
+        -168.38835144043
+      ],
+      "site": 1,
+      "width": 5.43412065505981,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        220.672943115234,
+        -192.539138793945
+      ],
+      "site": 1,
+      "width": 5.87211894989014,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        187.110641479492,
+        -136.205627441406
+      ],
+      "site": 1,
+      "width": 4.98872852325439,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        167.490539550781,
+        -200.552337646484
+      ],
+      "site": 1,
+      "width": 4.6191577911377,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        227.300399780273,
+        -160.308670043945
+      ],
+      "site": 1,
+      "width": 4.73532009124756,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        164.120010375977,
+        -145.154724121094
+      ],
+      "site": 1,
+      "width": 4.97634077072144,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        206.672256469727,
+        -208.386245727539
+      ],
+      "site": 1,
+      "width": 5.38523626327515,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        215.711486816406,
+        -140.630477905273
+      ],
+      "site": 1,
+      "width": 5.64899158477783,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        154.898025512695,
+        -189.788513183594
+      ],
+      "site": 1,
+      "width": 5.05233907699585,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        228.296936035156,
+        -190.672576904297
+      ],
+      "site": 1,
+      "width": 5.5842170715332,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        174.027847290039,
+        -134.247650146484
+      ],
+      "site": 1,
+      "width": 4.94216537475586,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        170.424545288086,
+        -209.149185180664
+      ],
+      "site": 1,
+      "width": 5.39784812927246,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        227.004119873047,
+        -147.961669921875
+      ],
+      "site": 1,
+      "width": 4.6976900100708,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        147.967803955078,
+        -168.185470581055
+      ],
+      "site": 1,
+      "width": 4.94835138320923,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        220.534317016602,
+        -205.64875793457
+      ],
+      "site": 1,
+      "width": 5.66289806365967,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        195.807098388672,
+        -127.62393951416
+      ],
+      "site": 1,
+      "width": 5.99265670776367,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        156.032516479492,
+        -200.730209350586
+      ],
+      "site": 1,
+      "width": 5.33876419067383,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        237.425186157227,
+        -173.982208251953
+      ],
+      "site": 1,
+      "width": 4.64272546768188,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        158.288513183594,
+        -139.578964233398
+      ],
+      "site": 1,
+      "width": 5.80370569229126,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        182.880569458008,
+        -218.604675292969
+      ],
+      "site": 1,
+      "width": 5.40066385269165,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        228.018417358398,
+        -141.693740844727
+      ],
+      "site": 1,
+      "width": 4.64060544967651,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        143.527297973633,
+        -177.467514038086
+      ],
+      "site": 1,
+      "width": 4.7621431350708,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        228.457794189453,
+        -203.984298706055
+      ],
+      "site": 1,
+      "width": 5.85949039459229,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_tavern_blue.gltf",
+      "pos": [
+        382.905517578125,
+        -77.7188110351563
+      ],
+      "site": 2,
+      "width": 8.0,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        394.472045898438,
+        -79.8604965209961
+      ],
+      "site": 2,
+      "width": 5.21832609176636,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        371.300903320313,
+        -67.824592590332
+      ],
+      "site": 2,
+      "width": 5.2641224861145,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        381.557769775391,
+        -95.317985534668
+      ],
+      "site": 2,
+      "width": 4.84137296676636,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        392.739868164063,
+        -60.7621841430664
+      ],
+      "site": 2,
+      "width": 4.65483236312866,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        362.743103027344,
+        -84.5537338256836
+      ],
+      "site": 2,
+      "width": 5.49952268600464,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        401.869323730469,
+        -90.3719787597656
+      ],
+      "site": 2,
+      "width": 5.15949773788452,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        378.018585205078,
+        -54.044189453125
+      ],
+      "site": 2,
+      "width": 4.86189603805542,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        368.413421630859,
+        -98.6366806030273
+      ],
+      "site": 2,
+      "width": 4.7195782661438,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        408.922882080078,
+        -71.9978790283203
+      ],
+      "site": 2,
+      "width": 4.96680974960327,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        358.730560302734,
+        -64.0695419311523
+      ],
+      "site": 2,
+      "width": 5.48427581787109,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        397.189514160156,
+        -102.758560180664
+      ],
+      "site": 2,
+      "width": 4.7937068939209,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        395.744323730469,
+        -50.7784576416016
+      ],
+      "site": 2,
+      "width": 5.46350049972534,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        355.193725585938,
+        -91.1970596313477
+      ],
+      "site": 2,
+      "width": 5.61590433120728,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        414.498168945313,
+        -80.8757400512695
+      ],
+      "site": 2,
+      "width": 5.27856111526489,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        363.279693603516,
+        -51.625358581543
+      ],
+      "site": 2,
+      "width": 5.32037353515625,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        375.291778564453,
+        -110.362701416016
+      ],
+      "site": 2,
+      "width": 5.88189888000488,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        410.985687255859,
+        -57.913200378418
+      ],
+      "site": 2,
+      "width": 5.97399044036865,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        347.903015136719,
+        -74.1980743408203
+      ],
+      "site": 2,
+      "width": 5.54895782470703,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        411.814514160156,
+        -99.1274719238281
+      ],
+      "site": 2,
+      "width": 5.33828926086426,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        376.876312255859,
+        -41.4710235595703
+      ],
+      "site": 2,
+      "width": 5.53679895401001,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        359.318908691406,
+        -106.870903015137
+      ],
+      "site": 2,
+      "width": 5.85995626449585,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        419.995483398438,
+        -68.4358749389648
+      ],
+      "site": 2,
+      "width": 5.19066381454468,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        347.347747802734,
+        -61.8155899047852
+      ],
+      "site": 2,
+      "width": 4.84878873825073,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        392.549743652344,
+        -116.1826171875
+      ],
+      "site": 2,
+      "width": 4.96397972106934,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_mine_blue.gltf",
+      "pos": [
+        329.733520507813,
+        -274.5791015625
+      ],
+      "site": 3,
+      "width": 8.0,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        341.020080566406,
+        -274.613006591797
+      ],
+      "site": 3,
+      "width": 4.66381168365479,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        317.504608154297,
+        -266.929016113281
+      ],
+      "site": 3,
+      "width": 5.40506982803345,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        330.696716308594,
+        -291.136260986328
+      ],
+      "site": 3,
+      "width": 5.97725057601929,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        339.533660888672,
+        -259.075531005859
+      ],
+      "site": 3,
+      "width": 5.71349620819092,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        311.203887939453,
+        -281.725067138672
+      ],
+      "site": 3,
+      "width": 4.95836114883423,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        345.053924560547,
+        -289.257263183594
+      ],
+      "site": 3,
+      "width": 5.753089427948,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        325.958526611328,
+        -252.443099975586
+      ],
+      "site": 3,
+      "width": 5.34235000610352,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        319.518951416016,
+        -295.856201171875
+      ],
+      "site": 3,
+      "width": 5.3551287651062,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        353.933349609375,
+        -269.764373779297
+      ],
+      "site": 3,
+      "width": 5.37706565856934,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        308.284149169922,
+        -260.449768066406
+      ],
+      "site": 3,
+      "width": 5.94428253173828,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        340.061859130859,
+        -299.139495849609
+      ],
+      "site": 3,
+      "width": 5.59227991104126,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        341.0068359375,
+        -249.432586669922
+      ],
+      "site": 3,
+      "width": 4.72395086288452,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_tavern_blue.gltf",
+      "pos": [
+        236.392211914063,
+        136.028915405273
+      ],
+      "site": 4,
+      "width": 8.0,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        247.903900146484,
+        133.962188720703
+      ],
+      "site": 4,
+      "width": 5.98012924194336,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        223.70588684082,
+        144.279541015625
+      ],
+      "site": 4,
+      "width": 5.81697845458984,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        236.71125793457,
+        118.53182220459
+      ],
+      "site": 4,
+      "width": 4.84793853759766,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        247.600509643555,
+        151.892608642578
+      ],
+      "site": 4,
+      "width": 5.6042275428772,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        215.412872314453,
+        133.898529052734
+      ],
+      "site": 4,
+      "width": 5.19479131698608,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        256.716400146484,
+        126.204780578613
+      ],
+      "site": 4,
+      "width": 4.95659923553467,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        229.713607788086,
+        159.008834838867
+      ],
+      "site": 4,
+      "width": 5.07393646240234,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        224.84587097168,
+        113.644912719727
+      ],
+      "site": 4,
+      "width": 4.72184801101685,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        260.981048583984,
+        145.53125
+      ],
+      "site": 4,
+      "width": 5.91162776947021,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        212.993728637695,
+        150.4169921875
+      ],
+      "site": 4,
+      "width": 5.13684272766113,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_tavern_blue.gltf",
+      "pos": [
+        -387.64501953125,
+        263.731750488281
+      ],
+      "site": 5,
+      "width": 8.0,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        -375.959899902344,
+        263.233123779297
+      ],
+      "site": 5,
+      "width": 5.95599555969238,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        -398.647491455078,
+        274.122192382813
+      ],
+      "site": 5,
+      "width": 5.77092218399048,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        -387.322357177734,
+        246.234725952148
+      ],
+      "site": 5,
+      "width": 5.53594160079956,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        -377.381500244141,
+        280.222442626953
+      ],
+      "site": 5,
+      "width": 5.49001026153564,
+      "yaw": -180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        -408.724731445313,
+        263.169097900391
+      ],
+      "site": 5,
+      "width": 5.17326879501343,
+      "yaw": 90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        -367.029235839844,
+        254.535232543945
+      ],
+      "site": 5,
+      "width": 5.14364528656006,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        -389.850219726563,
+        287.560668945313
+      ],
+      "site": 5,
+      "width": 4.78519916534424,
+      "yaw": 180.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        -396.132171630859,
+        240.018264770508
+      ],
+      "site": 5,
+      "width": 5.45441818237305,
+      "yaw": 0.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_A_blue.gltf",
+      "pos": [
+        -361.704986572266,
+        268.424255371094
+      ],
+      "site": 5,
+      "width": 5.3809552192688,
+      "yaw": -90.0
+    },
+    {
+      "model": "res://assets/models/buildings/building_home_B_blue.gltf",
+      "pos": [
+        -413.682922363281,
+        272.480102539063
+      ],
+      "site": 5,
+      "width": 5.91762828826904,
+      "yaw": 90.0
+    }
+  ],
+  "format": 1,
+  "h": 721,
+  "has_sea": false,
+  "height_max": 95.2301635742188,
+  "height_scale": 1.6,
+  "scale": 3.0,
+  "sites": [
+    {
+      "accent": "d6b45cff",
+      "height": 37.1077059719588,
+      "id": 1,
+      "name": "Aldmere",
+      "pad": 84.0,
+      "pos": [
+        191.451278686523,
+        -172.270248413086
+      ],
+      "role": "town"
+    },
+    {
+      "accent": "739fc1ff",
+      "height": 15.982323585063,
+      "id": 2,
+      "name": "Brindle",
+      "pad": 66.0,
+      "pos": [
+        382.905517578125,
+        -77.7188110351563
+      ],
+      "role": "port"
+    },
+    {
+      "accent": "a66a4aff",
+      "height": 71.8987721788243,
+      "id": 3,
+      "name": "Stanmoor",
+      "pad": 42.0,
+      "pos": [
+        329.733520507813,
+        -274.5791015625
+      ],
+      "role": "ore"
+    },
+    {
+      "accent": "547a45ff",
+      "height": 21.9377065739078,
+      "id": 4,
+      "name": "Linden",
+      "pad": 42.0,
+      "pos": [
+        236.392211914063,
+        136.028915405273
+      ],
+      "role": "woodland"
+    },
+    {
+      "accent": "a7c884ff",
+      "height": 88.331291114506,
+      "id": 5,
+      "name": "Marrow",
+      "pad": 42.0,
+      "pos": [
+        -387.64501953125,
+        263.731750488281
+      ],
+      "role": "pasture"
+    }
+  ],
+  "size": [
+    960.0,
+    720.0
+  ],
+  "stats": {
+    "buildings": 101,
+    "cells": 692881,
+    "erosion": 24,
+    "map_errors": 0,
+    "ms": 11811,
+    "trees": 48858
+  },
+  "step": 1.0,
+  "w": 961
+}

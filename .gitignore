@@ -7,3 +7,8 @@
 # generated graphs/run logs are meant to stay local, not be committed.
 /multivalley.json
 /*.jsonl
+# Baked valleys from the generator are large. Keep only the approved frozen
+# river valley in version control; other experimental bakes stay local.
+/data/valley_bakes/*
+!/data/valley_bakes/river_valley_1/
+!/data/valley_bakes/river_valley_1/**

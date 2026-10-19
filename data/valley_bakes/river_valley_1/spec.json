@@ -1,0 +1,42 @@
+{
+  "islands": 1,
+  "landscape": "river_valley",
+  "main_river": true,
+  "relief": 1.0,
+  "sea_routes": false,
+  "sea_side": "",
+  "seed": 1,
+  "settlements": [
+    {
+      "count": 1.0,
+      "optional": false,
+      "role": "town"
+    },
+    {
+      "count": 1.0,
+      "optional": false,
+      "role": "port"
+    },
+    {
+      "count": 1.0,
+      "optional": false,
+      "role": "ore"
+    },
+    {
+      "count": 1.0,
+      "optional": false,
+      "role": "woodland"
+    },
+    {
+      "count": 1.0,
+      "optional": false,
+      "role": "pasture"
+    },
+    {
+      "count": 1.0,
+      "optional": true,
+      "role": "farm"
+    }
+  ],
+  "tributaries": 1
+}

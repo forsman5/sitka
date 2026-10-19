@@ -1,0 +1,131 @@
+[gd_resource type="Resource" script_class="ValleyMapDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/valley/valley_map_definition.gd" id="1_126hc"]
+
+[resource]
+script = ExtResource("1_126hc")
+settlements = {
+1: {
+"accent": Color(0.8392157, 0.7058824, 0.36078432, 1),
+"district": "fields",
+"kind": "town",
+"name": "Aldmere",
+"pad": 84.0,
+"role": "Market town, mixed farms, and the hall",
+"site": Vector3(191.45128, 37.107704, -172.27025)
+},
+2: {
+"accent": Color(0.4509804, 0.62352943, 0.75686276, 1),
+"district": "port",
+"kind": "port",
+"name": "Brindle",
+"pad": 66.0,
+"role": "Port, milling, and outside trade",
+"site": Vector3(382.90552, 15.982325, -77.71881),
+"waterfront": Vector3(407.14288, 0, -17.032074)
+},
+3: {
+"accent": Color(0.6509804, 0.41568628, 0.2901961, 1),
+"district": "ore",
+"kind": "ore",
+"name": "Stanmoor",
+"pad": 42.0,
+"role": "Ore bank and small bloomery",
+"site": Vector3(329.73352, 71.89877, -274.5791)
+},
+4: {
+"accent": Color(0.32941177, 0.47843137, 0.27058825, 1),
+"district": "woodland",
+"kind": "woodland",
+"name": "Linden",
+"pad": 42.0,
+"role": "Woodland for timber and charcoal",
+"site": Vector3(236.39221, 21.937706, 136.02892)
+},
+5: {
+"accent": Color(0.654902, 0.78431374, 0.5176471, 1),
+"district": "pasture",
+"kind": "pasture",
+"name": "Marrow",
+"pad": 42.0,
+"role": "Upland pasture for sheep, cattle, and wool",
+"site": Vector3(-387.64502, 88.33129, 263.73175)
+}
+}
+rivers = {
+"main": {
+"node_name": "MainRiver",
+"points": [Vector3(-570, 0, 46.46967), Vector3(-456, 0, -10.225374), Vector3(-342, 0, -11.167729), Vector3(-228, 0, 36.844727), Vector3(-114, 0, 77.1911), Vector3(0, 0, 120.7679), {
+"junction": "confluence"
+}, Vector3(228, 0, 53.857315), Vector3(342, 0, 3.8513153), Vector3(456, 0, -26.35508), Vector3(570, 0, -19.638319)],
+"width": 42.19212055206299
+},
+"tributary": {
+"node_name": "Tributary",
+"points": [Vector3(-110.78105, 0, -510), Vector3(-57.67713, 0, -380.56375), Vector3(67.37634, 0, -196.64111), Vector3(117.89917, 0, -35.87771), {
+"junction": "confluence"
+}],
+"width": 27.911001
+}
+}
+roads = {
+"road_1_2": {
+"points": [{
+"settlement": 1
+}, Vector3(195, 0, -120), Vector3(180, 0, -105), Vector3(180, 0, -45), Vector3(165, 0, -30), Vector3(165, 0, -15), Vector3(195, 0, 15), Vector3(225, 0, 15), Vector3(240, 0, 0), Vector3(315, 0, -30), Vector3(345, 0, -60), {
+"settlement": 2
+}],
+"seed": 18,
+"simulation_edge": 1,
+"width": 4.0
+},
+"road_1_3": {
+"points": [{
+"settlement": 1
+}, Vector3(135, 0, -225), Vector3(135, 0, -300), Vector3(195, 0, -360), Vector3(240, 0, -360), {
+"settlement": 3
+}],
+"seed": 35,
+"simulation_edge": 2,
+"width": 4.0
+},
+"road_2_4": {
+"points": [{
+"settlement": 2
+}, Vector3(375, 0, -60), Vector3(300, 0, -30), Vector3(300, 0, -15), Vector3(315, 0, 0), Vector3(315, 0, 30), Vector3(330, 0, 45), Vector3(315, 0, 60), Vector3(315, 0, 75), Vector3(255, 0, 135), {
+"settlement": 4
+}],
+"seed": 1,
+"simulation_edge": 0,
+"width": 4.0
+},
+"road_4_5": {
+"points": [{
+"settlement": 4
+}, Vector3(105, 0, 135), Vector3(90, 0, 150), Vector3(60, 0, 150), Vector3(45, 0, 165), Vector3(-30, 0, 165), Vector3(-45, 0, 180), Vector3(-45, 0, 195), Vector3(-105, 0, 255), Vector3(-105, 0, 285), Vector3(-135, 0, 315), Vector3(-135, 0, 345), Vector3(-150, 0, 360), Vector3(-285, 0, 360), Vector3(-375, 0, 270), {
+"settlement": 5
+}],
+"seed": 52,
+"simulation_edge": 3,
+"width": 4.0
+}
+}
+crossings = {
+"ford_road_2_4_main_0": {
+"kind": "ford",
+"name": "ford_road_2_4_main_0",
+"position": Vector3(314.82135, 0, 14.630113),
+"radius": 45.49623727798462,
+"river": "main",
+"road": "road_2_4",
+"seed": 9000,
+"width": 5.0
+}
+}
+junctions = {
+"confluence": {
+"inner_radius": 42.0,
+"outer_radius": 90.0,
+"position": Vector3(114, 0, 94.169876)
+}
+}
