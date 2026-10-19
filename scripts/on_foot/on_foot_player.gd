@@ -263,7 +263,31 @@ func attack() -> bool:
 		return true
 	_attack_cooldown_left = float(def["cooldown"])
 	_attack_anim_pending = true
+	_hit_sheep_with_sword()
 	return true
+
+## The sword swing reaches a short distance in front of the player. Resolve the
+## hit once when the swing starts so a single swing cannot hit the same sheep
+## repeatedly across several physics frames.
+func _hit_sheep_with_sword() -> void:
+	var forward := -global_transform.basis.z
+	var center := global_position + Vector3.UP * 0.65 + forward * 0.95
+	var shape := SphereShape3D.new()
+	shape.radius = 0.9
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = Transform3D(Basis.IDENTITY, center)
+	query.collision_mask = 4 # Sheep only; terrain and scenery cannot consume the hit limit.
+	query.exclude = [get_rid()]
+	for result in get_world_3d().direct_space_state.intersect_shape(query, 16):
+		var sheep := result.get("collider") as OnFootSheep
+		if sheep == null or sheep.is_dead():
+			continue
+		var offset := sheep.global_position - global_position
+		offset.y = 0.0
+		if offset.length() <= 1.9 and forward.dot(offset.normalized()) >= 0.15:
+			sheep.die()
+			return
 
 ## 0..1 draw strength of the bow right now (0 when not drawing).
 func draw_fraction() -> float:
@@ -294,6 +318,7 @@ func _release_arrow(power: float) -> void:
 	var forward := -_camera.global_transform.basis.z
 	arrow.global_position = _head.global_position + forward * 0.6
 	arrow.velocity = forward * OnFootArrow.SPEED * power
+	arrow.owner_player = self
 	arrow.look_at(arrow.global_position + forward, Vector3.UP)
 
 ## How far (in metres) a bark startles animals.
