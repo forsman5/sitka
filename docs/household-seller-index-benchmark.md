@@ -25,6 +25,17 @@ At 510 businesses, the no-seller lookup total fell from 6.68 seconds to 15.23 mi
 
 The medians differ by about 4.9%, while the master sample has a wide range. This run does not show a clear valley-wide speedup; the benefit is concentrated in repeated seller lookups as the business catalog grows.
 
+## 450-day valley run
+
+`scripts/sim/harness/measure_valley_450_day_perf.gd` measures three fresh five-town simulations for 450 days each, after a one-day warmup. Setup is excluded from each timing.
+
+| Revision | Median | Mean | Range | Median per tick |
+| --- | ---: | ---: | ---: | ---: |
+| Clean master | 86,119.05 ms | 90,533.93 ms | 82,144.12-103,338.60 ms | 191.376 ms |
+| Seller index | 102,518.20 ms | 99,294.21 ms | 86,753.10-108,611.34 ms | 227.818 ms |
+
+The seller-index median is 19.0% slower. The ranges overlap substantially, so three runs suggest a possible long-run slowdown but do not establish a reliable difference. More repetitions on a quieter host would be needed to distinguish the change from host and simulation variability.
+
 ## Acceptance checks
 
 The focused `check_seller_index.gd` passes. It compares every commodity and settlement against an independent copy of the pre-index scan, across 90 small-village days, seller additions and removals, seller ordering, live meat stock changes, two settlements, and all five ValleyEconomy towns.
