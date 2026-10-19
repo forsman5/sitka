@@ -28,6 +28,7 @@ class_name OnFootPlayer extends CharacterBody3D
 signal barked(world_position: Vector3)
 
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
+const DEFAULT_THIRD_PERSON_PITCH := -0.18
 
 ## Individual barks (see assets/audio/bark/CREDITS.md). Alternatives to audition
 ## live in assets/audio/bark/options/.
@@ -114,7 +115,8 @@ var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
 var _camera_mode: int = CameraMode.THIRD_BACK
 var _orbit_yaw: float = 0.0
-var _third_person_pitch: float = -0.18
+var _third_person_pitch: float = DEFAULT_THIRD_PERSON_PITCH
+var _orbit_active: bool = false
 var _bark_player: AudioStreamPlayer3D
 var _bark_cooldown_left: float = 0.0
 var _bark_anim_left: float = 0.0
@@ -216,6 +218,7 @@ func _exit_tree() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		if _camera_mode != CameraMode.FIRST_PERSON and Input.is_key_pressed(KEY_ALT):
+			_orbit_active = true
 			_orbit_yaw = wrapf(_orbit_yaw - event.relative.x * mouse_sensitivity, -PI, PI)
 			_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
 		else:
@@ -235,6 +238,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			bark()
 	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		release_draw()
+	elif event is InputEventKey and not event.pressed and (event.keycode == KEY_ALT or event.physical_keycode == KEY_ALT):
+		if _orbit_active and _camera_mode != CameraMode.FIRST_PERSON:
+			_orbit_yaw = 0.0
+			_third_person_pitch = DEFAULT_THIRD_PERSON_PITCH
+			_arm.rotation.y = _camera_base_yaw()
+			_head.rotation.x = _third_person_pitch
+		_orbit_active = false
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			if _mounted_horse == null:
@@ -351,6 +361,7 @@ func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
 	if mode == CameraMode.FIRST_PERSON:
 		_orbit_yaw = 0.0
+		_orbit_active = false
 	# Keep the bow user visible in first person so the draw pose can be seen.
 	# Move the camera just ahead of the face; the body stays behind the view.
 	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
