@@ -5623,7 +5623,7 @@ func _b2b_entry(settlement_id: int, commodity: Commodity.Type, seller: HEBusines
 func _b2b_offer(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type, claim: float) -> float:
 	var entry := _b2b_entry(settlement_id, commodity, seller)
 	var remaining: float = maxf(0.0, entry["offer"] - entry["sold"])
-	if claim == 0.0:
+	if claim <= 0.0001:
 		return remaining
 	var household_demand := _funded_demand_for_b2b(settlement_id, commodity)
 	if claim + household_demand <= 0.0001:
