@@ -137,6 +137,16 @@ func clear_riding_pose(model: Node3D) -> void:
 		_rider_bone_indices.clear()
 		_saved_animation = ""
 
+## Stops a rider weapon animation and returns to the procedural reins pose.
+func restore_rider_pose() -> void:
+	if not is_instance_valid(_rider_model):
+		return
+	if _rider_animation != null:
+		_rider_animation.stop(true)
+	if _rider_skeleton != null:
+		_rider_skeleton.reset_bone_poses()
+		_apply_rider_bone_pose()
+
 func _process(delta: float) -> void:
 	_update_rider_anchor()
 	if is_instance_valid(_rider_model):
