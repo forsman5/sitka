@@ -122,6 +122,8 @@ var _drawing: bool = false
 var _draw_time: float = 0.0
 var _attack_cooldown_left: float = 0.0
 var _attack_anim_pending: bool = false
+var _mounted_attack_active: bool = false
+var _mounted_bow_pose_active: bool = false
 var _pitch: float = 0.0
 var _coyote_left: float = 0.0
 var _buffer_left: float = 0.0
@@ -253,7 +255,7 @@ func bark() -> bool:
 ## Left click with a weapon: swing the sword, or loose an arrow where the camera
 ## points. Returns whether an attack started.
 func attack() -> bool:
-	if _weapon == "" or _attack_cooldown_left > 0.0 or _mounted_horse != null or _drawing:
+	if _weapon == "" or _attack_cooldown_left > 0.0 or _drawing:
 		return false
 	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
 	if def.has("draw_time"):
@@ -271,9 +273,11 @@ func attack() -> bool:
 ## repeatedly across several physics frames.
 func _hit_sheep_with_sword() -> void:
 	var forward := -global_transform.basis.z
-	var center := global_position + Vector3.UP * 0.65 + forward * 0.95
+	var reach_height := 1.15 if _mounted_horse != null else 0.65
+	var reach := 1.1 if _mounted_horse != null else 0.9
+	var center := global_position + Vector3.UP * reach_height + forward * 0.95
 	var shape := SphereShape3D.new()
-	shape.radius = 0.9
+	shape.radius = reach
 	var query := PhysicsShapeQueryParameters3D.new()
 	query.shape = shape
 	query.transform = Transform3D(Basis.IDENTITY, center)
@@ -285,7 +289,7 @@ func _hit_sheep_with_sword() -> void:
 			continue
 		var offset := sheep.global_position - global_position
 		offset.y = 0.0
-		if offset.length() <= 1.9 and forward.dot(offset.normalized()) >= 0.15:
+		if offset.length() <= (2.0 if _mounted_horse != null else 1.9) and forward.dot(offset.normalized()) >= 0.15:
 			sheep.die()
 			return
 
@@ -430,6 +434,12 @@ func _process(delta: float) -> void:
 	if _bow_pose_weight <= 0.001:
 		_bow_draw_fraction = 0.0
 	_apply_bow_pose(_bow_pose_weight, _bow_draw_fraction)
+	if _mounted_horse != null:
+		if _drawing:
+			_mounted_bow_pose_active = true
+		elif _mounted_bow_pose_active and _bow_pose_weight <= 0.001:
+			_restore_mounted_rider_pose()
+			_mounted_bow_pose_active = false
 
 func _apply_bow_pose(weight: float, fraction: float) -> void:
 	apply_bow_pose_to_skeleton(_skeleton, _bow_bones, weight, fraction)
@@ -502,6 +512,32 @@ func _mounted_step(delta: float) -> void:
 	var jump := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_physical_key_pressed(KEY_SPACE)
 	_mounted_horse.ride_step(delta, direction, Input.is_physical_key_pressed(KEY_SHIFT), jump)
 	_sync_mounted_camera()
+	_update_mounted_weapon_animation()
+	if _drawing or _mounted_bow_pose_active or _mounted_attack_active:
+		_face_mounted_rider_to_aim()
+
+func _update_mounted_weapon_animation() -> void:
+	if _attack_anim_pending:
+		_attack_anim_pending = false
+		var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+		_bark_anim_left = float(def["attack_hold"])
+		_mounted_attack_active = true
+		if _anim != null:
+			_anim.play(def["attack_anim"], 0.05)
+	if _mounted_attack_active and _bark_anim_left <= 0.0:
+		_restore_mounted_rider_pose()
+		_mounted_attack_active = false
+
+func _restore_mounted_rider_pose() -> void:
+	_model.rotation.y = PI
+	if _mounted_horse != null and _mounted_horse.visual.has_method("restore_rider_pose"):
+		_mounted_horse.visual.call("restore_rider_pose")
+
+func _face_mounted_rider_to_aim() -> void:
+	if _mounted_horse == null:
+		return
+	var yaw_offset := wrapf(rotation.y - _mounted_horse.global_rotation.y, -PI, PI)
+	_model.rotation.y = PI + yaw_offset
 
 
 func _sync_mounted_camera() -> void:
@@ -514,6 +550,9 @@ func _dismount() -> void:
 	if not landing.is_finite():
 		return
 	var horse := _mounted_horse
+	_mounted_attack_active = false
+	_mounted_bow_pose_active = false
+	_attack_anim_pending = false
 	if horse.visual.has_method("clear_riding_pose"):
 		horse.visual.call("clear_riding_pose", _model)
 	_model.reparent(self, false)
