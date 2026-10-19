@@ -7,7 +7,7 @@ const SPEED := 32.0
 const MIN_POWER := 0.35
 const GRAVITY := 14.0
 const LIFETIME := 6.0
-const STUCK_LIFETIME := 4.0
+const STUCK_LIFETIME := 300.0
 
 var velocity: Vector3 = Vector3.ZERO
 var owner_player: Node3D
