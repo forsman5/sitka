@@ -79,6 +79,9 @@ func _configure_camera() -> void:
 	var size: Vector2 = _bake["size"]
 	rig.pan_limit = size * 0.5
 	rig.max_ground_height = float(_bake["height_max"])
+	# Keep the full valley comfortably in frame without letting the camera pull
+	# so far back that trees and route overlays become disconnected-looking
+	# specks against the background. The heightfield is 960x720 world units.
 	rig.zoom_min = 180.0
 	rig.zoom_max = 900.0
 	rig.zoom_step = 40.0
