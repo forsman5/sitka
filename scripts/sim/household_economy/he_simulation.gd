@@ -728,6 +728,13 @@ const CASH_RUNWAY_DANGER_DAYS := 14.0
 ## (built up on a day demand happened to be thin) actually drains rather
 ## than being carried forward at the same fraction forever.
 const SELL_PACE_HEADROOM := 1.15
+const STEWARD_HORIZON_DAYS_CAP := 360
+const COVER_MIN_DAYS := 14.0
+const COVER_MAX_DAYS := 90.0
+const SURPLUS_RELEASE_DAYS := 30.0
+const NUDGE_MAX := 0.10
+const PRICE_BAND_HIGH := 2.0
+const SELL_PACE_HEADROOM_EXTRA := 0.15
 
 const HISTORY_MAX_DAYS := 730
 ## Per-ranch history kept on HEBusiness.herd_events (see its doc comment).
@@ -3306,9 +3313,11 @@ func _business_output_commodities(b: HEBusiness) -> Array:
 ## need and the reference wage's cost of living can never drift apart.
 ## `commodity` is expressed as if it were the need's only source; goods that
 ## satisfy no need return 0.
-func _daily_need(h: HEHousehold, commodity: Commodity.Type) -> float:
+func _daily_need(h: HEHousehold, commodity: Commodity.Type, at_day: int = -1) -> float:
 	var need := HENeeds.for_commodity(commodity)
-	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (_need_scale(h, need) if need != null else 1.0)
+	var effective_day := day if at_day < 0 else at_day
+	var seasonal := need.seasonal_scale(effective_day) if need != null else 1.0
+	return float(h.headcount()) * HENeeds.units_per_person_daily(commodity) * (h.need_scale(need) if need != null else 1.0) * seasonal
 
 ## Whether `need` is part of this settlement's economy at all: always, unless
 ## the need can only be met by a dedicated business (HENeed.needs_seller) and
@@ -3338,7 +3347,9 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 		var stock := seller.stock(commodity)
 		# A ranch's home-butchered meat goes straight on sale.
 		var home_butchered: bool = seller.kind == HEBusiness.Kind.HERD and commodity == Commodity.Type.MEAT
-		if seller.has_long_cycle() and not home_butchered:
+		if seller.producer_strategy == "steward" and seller.uses_field_model() and not home_butchered:
+			local_offer = _seller_offer(seller, commodity)
+		elif seller.has_long_cycle() and not home_butchered:
 			var days_until: int = _days_until_next_supply(seller)
 			local_offer = minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 		else:
@@ -3653,7 +3664,7 @@ func _run_water_need(record: Dictionary) -> void:
 		var supplied := 0.0
 		for household_id in settlement.household_ids:
 			var h: HEHousehold = households[household_id]
-			var needed := float(h.headcount()) * need.per_person_daily
+			var needed := float(h.headcount()) * need.per_person_daily * need.seasonal_scale(day)
 			var provided := needed * coverage
 			supplied += provided
 			h.last_need_required[need.id] = needed
@@ -4133,6 +4144,8 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 	var out := {"delta": 0, "reason": "", "return_per_worker": 0.0, "wage": reference_wage, "sell_through": 1.0,
 		"target_workers": -1.0, "employed": 0.0, "sales": 0.0, "input_cost": 0.0, "taxes": 0.0,
 		"units_sold": 0.0, "units_produced": 0.0, "window": window}
+	if b.kind == HEBusiness.Kind.PRODUCTION and b.uses_field_model() and b.producer_strategy == "steward":
+		return _steward_staffing_decision(b, reference_wage, out)
 	var needed_rows: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else (window if b.has_long_cycle() else mini(window, 14))
 	var rows := b.ledger_history(window).size()
 	if rows < needed_rows:
@@ -4437,11 +4450,126 @@ func _run_market(record: Dictionary) -> void:
 ## a little SELL_PACE_HEADROOM) so a lump harvest sells down evenly until the
 ## next one. Households and input-buying businesses share this one offer.
 func _paced_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
+	if seller.producer_strategy == "steward" and seller.uses_field_model():
+		return _seller_offer(seller, commodity)
 	var stock := seller.stock(commodity)
 	if seller.has_long_cycle():
 		var days_until: int = _days_until_next_supply(seller)
 		return minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 	return stock
+
+## Steward offer: meet funded local use, release excess inventory steadily,
+## and nudge a small amount around unit cost to let price signals settle.
+func _seller_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
+	var stock := seller.stock(commodity)
+	var guard_key := "%d:%d" % [seller.id, int(commodity)]
+	if _seller_offer_in_progress.has(guard_key):
+		# Preference resolution reads offers. Treat this seller as available from
+		# its stock while its outer offer calculation is in progress.
+		return stock
+	_seller_offer_in_progress[guard_key] = true
+	var known := _known_daily_local_use(seller, commodity)
+	var demand := known
+	var funded := _household_funded_demand(seller.settlement_id, commodity) + _business_input_daily_use(seller.settlement_id, commodity, seller)
+	var need := maxf(demand, funded)
+	if need <= 0.0001:
+		_seller_offer_in_progress.erase(guard_key)
+		return minf(stock, stock / SURPLUS_RELEASE_DAYS)
+	var cover := stock / demand if demand > 0.0 else INF
+	var excess_release := 0.0
+	var max_cover_stock := COVER_MAX_DAYS * demand
+	if stock > max_cover_stock:
+		excess_release = (stock - max_cover_stock) / SURPLUS_RELEASE_DAYS
+	var offer := need * (1.0 + SELL_PACE_HEADROOM_EXTRA) + excess_release
+	var posted: float = (markets[seller.settlement_id] as HEMarket).price[commodity]
+	var reservation := _producer_cost_per_unit(seller)
+	if reservation > 0.0001 and cover > COVER_MIN_DAYS:
+		if posted < reservation:
+			offer = need * (1.0 - NUDGE_MAX) + excess_release
+		elif posted > PRICE_BAND_HIGH * reservation and stock > COVER_MIN_DAYS * demand:
+			offer = need * (1.0 + NUDGE_MAX) + excess_release
+	if stock > COVER_MIN_DAYS * demand:
+		offer = maxf(offer, need * (1.0 - NUDGE_MAX))
+	else:
+		offer = maxf(offer, need)
+	_seller_offer_in_progress.erase(guard_key)
+	return minf(stock, maxf(0.0, offer))
+
+func _producer_cost_per_unit(seller: HEBusiness) -> float:
+	var window := seller.rolling_window_days()
+	if seller.ledger_row_count() >= window:
+		var made := seller.ledger_good_average("produced", seller.output_commodity(), window)
+		if made > 0.0001:
+			return (seller.ledger_average("wages", window) + seller.ledger_average("input_consumed_value", window)) / made
+	var nominal_units_per_worker_day := seller.yield_per_area / (seller.growth_days * seller.labor_per_area_per_day) if seller.growth_days > 0 and seller.labor_per_area_per_day > 0.0 else 0.0
+	return wages.reference_wage_per_worker(seller.settlement_id) / nominal_units_per_worker_day if nominal_units_per_worker_day > 0.0 else 0.0
+
+func _steward_staffing_decision(b: HEBusiness, reference_wage: float, out: Dictionary) -> Dictionary:
+	var horizon := mini(2 * b.growth_days, STEWARD_HORIZON_DAYS_CAP)
+	var output := b.output_commodity()
+	var demand: Array = []
+	var yield_scales: Array = []
+	var exported := b.ledger_good_average("export", output, maxi(b.rolling_window_days(), SELLER_FORECAST_WINDOW_DAYS))
+	var local_demand_total := 0.0
+	for offset in range(1, horizon + 1):
+		local_demand_total += _settlement_daily_demand(b.settlement_id, output, day + offset) + _business_input_daily_use(b.settlement_id, output, b)
+	var local_average := local_demand_total / maxf(1.0, float(horizon))
+	# Recent export throughput is part of a field producer's demand signal: if a
+	# Trader regularly clears stock, capacity must plan for that outflow too.
+	var count_exports := exported > 0.0
+	for offset in range(1, horizon + 1):
+		var local_use := _settlement_daily_demand(b.settlement_id, output, day + offset) + _business_input_daily_use(b.settlement_id, output, b)
+		demand.append(local_use + exported if count_exports else local_use)
+		yield_scales.append(seasonal_yield_scale(output, day + offset))
+	var field_data: Array = []
+	for f in b.fields:
+		field_data.append({"area": f.area, "days_growing": f.days_growing, "labor_applied": f.labor_applied})
+	var avg_demand := 0.0
+	for d in demand:
+		avg_demand += float(d)
+	avg_demand /= maxf(1.0, float(demand.size()))
+	var inputs := {"stock": b.stock(output), "fields": field_data, "demand": demand, "yield_scales": yield_scales,
+		"horizon": horizon, "growth_days": b.growth_days, "land_area": b.land_area_acres,
+		"labor_per_area_per_day": b.labor_per_area_per_day, "yield_per_area": b.yield_per_area,
+		"productivity": _tool_productivity(b), "min_capacity": _capacity_floor(b), "max_capacity": b.max_capacity,
+		"current_capacity": b.capacity, "cover_min_days": COVER_MIN_DAYS, "cover_max_days": COVER_MAX_DAYS,
+		"average_demand": avg_demand}
+	var plan := HEProducerPlan.target_crew(inputs)
+	var target: int = int(plan["target"])
+	var delta := clampi(target - b.capacity, -CAPACITY_STEP_MAX_WORKERS, CAPACITY_STEP_MAX_WORKERS)
+	# Never apply a cut that breaks the projected minimum stock path.
+	if delta < 0:
+		var safe_capacity := b.capacity
+		for candidate in range(b.capacity - 1, maxi(target, b.capacity - CAPACITY_STEP_MAX_WORKERS) - 1, -1):
+			inputs["current_capacity"] = candidate
+			var candidate_projection := HEProducerPlan.project_stock(inputs, candidate)
+			if float(candidate_projection["min_stock"]) >= COVER_MIN_DAYS * avg_demand:
+				safe_capacity = candidate
+			else:
+				break
+		delta = safe_capacity - b.capacity
+	out["delta"] = delta
+	out["reason"] = str(plan["reason"]) if delta == 0 else ("plan_short" if delta > 0 else "plan_surplus")
+	out["target_workers"] = target
+	var money_window := mini(maxi(1, b.rolling_window_days()), STAFFING_RETURN_WINDOW_DAYS)
+	var avg_employed := maxf(1.0, b.ledger_average("employed", money_window))
+	var sales := 0.0
+	for key in ["sales_household", "sales_business", "sales_export", "sales_other", "trade_margin"]:
+		sales += b.ledger_average(key, money_window)
+	var input_cost := b.ledger_average("input_consumed_value", money_window)
+	var taxes := b.ledger_average("taxes", money_window)
+	out["employed"] = _business_employed_worker_count(b.id)
+	out["sales"] = sales
+	out["input_cost"] = input_cost
+	out["taxes"] = taxes
+	out["units_sold"] = b.ledger_average("units_sold", money_window)
+	out["units_produced"] = b.ledger_average("units_produced", b.rolling_window_days())
+	out["return_per_worker"] = (sales - input_cost - taxes) / avg_employed
+	var observed_wage := b.ledger_average("reference_wage", money_window)
+	if observed_wage > 0.0:
+		out["wage"] = observed_wage
+	out["plan"] = plan
+	return out
 
 ## Cash-funded household demand for `commodity` right now -- what households
 ## would ask for in today's market, used only to size a business buyer's
@@ -4619,6 +4747,7 @@ func _register_business_only_offers() -> void:
 ## commodity. Reset when input purchasing starts the day; consumed (and cleared)
 ## by _apply_price_signals once every local pass has run.
 var _price_signal_today: Dictionary = {}
+var _seller_offer_in_progress: Dictionary = {}
 
 func _price_signal_entry(settlement_id: int, commodity: Commodity.Type) -> Dictionary:
 	var by_commodity: Dictionary = _price_signal_today.get_or_add(settlement_id, {})
@@ -6390,7 +6519,7 @@ func get_treasury_summary(days: int = 30) -> Dictionary:
 ## independent of which one they happen to prefer today. (That independence
 ## also keeps this free of the market state _satisfier_cascade reads, which
 ## itself depends on reserves.)
-func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> float:
+func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type, at_day: int = -1) -> float:
 	var need := HENeeds.for_commodity(commodity)
 	var is_substitute: bool = need != null and commodity != need.baseline
 	var cascade: Array[Commodity.Type] = []
@@ -6402,7 +6531,7 @@ func _settlement_daily_demand(settlement_id: int, commodity: Commodity.Type) -> 
 		# Only households whose favourite is a substitute count toward it.
 		if is_substitute and _household_favourite(h, need, cascade) != commodity:
 			continue
-		total += _daily_need(h, commodity) + h.upkeep_per_year(commodity) / 365.0
+		total += _daily_need(h, commodity, at_day) + h.upkeep_per_year(commodity) / 365.0
 	return total
 
 func _invalidate_employment() -> void:

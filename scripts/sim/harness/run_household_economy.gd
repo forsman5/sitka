@@ -985,11 +985,12 @@ func _check_staffing_decisions() -> void:
 ## explain it. Operating return and staffing are asserted BEFORE survival, so a
 ## failure says which constraint broke rather than just "business missing".
 func _check_staffing_outcomes() -> void:
-	print("\n=== Staffing outcomes: oversupplied Woodlot sheds, viable workshop keeps its crew, unviable one closes ===")
+	print("\n=== Staffing outcomes: the Woodlot follows its plan, viable workshop keeps its crew, unviable one closes ===")
 	var wood := HEScenarioSeeds.WOODLOT_BUSINESS_ID
 	var burner_id := HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID
 
-	# 1. An oversupplied Woodlot sheds workers before debt destroys it.
+	# 1. A field producer may release surplus in bounded steps, but it must not
+	# cut beneath the forward plan's safe crew and must remain solvent.
 	var town := _new_sim("build_three_business_economy_with_bloomery")
 	var woodlot: HEBusiness = town.businesses[wood]
 	var start_crew: int = woodlot.capacity
@@ -1008,14 +1009,16 @@ func _check_staffing_outcomes() -> void:
 			shed_events += 1
 			var why: Dictionary = change.get("staffing", {})
 			var explained: bool = change["reason"] == "cash_runway" \
+				or (change["reason"] == "plan_surplus" and float(why.get("target_workers", 0.0)) <= float(change["new_capacity"])) \
 				or (change["reason"] == "low_return" and why.get("return_per_worker", 0.0) < why.get("wage", 0.0)) \
 				or (change["reason"] == "unsold_output" and why.get("target_workers", 0.0) < why.get("employed", 0.0))
 			if not explained:
 				unexplained_sheds += 1
 	print("  Woodlot crew %d -> %d at its smallest, %d shed decisions (%d unexplained by the books), lowest balance %.0f" % [start_crew, smallest_crew, shed_events, unexplained_sheds, lowest_balance])
-	_assert(shed_events > 0 and smallest_crew <= start_crew - 3, "An oversupplied Woodlot should shed workers (start %d, smallest %d)" % [start_crew, smallest_crew])
-	_assert(unexplained_sheds == 0, "Every Woodlot shed should be explained by its ledger (%d were not)" % unexplained_sheds)
-	_assert(town.businesses.has(wood) and lowest_balance > 0.0, "The Woodlot should shed before debt: survived=%s lowest balance %.0f" % [town.businesses.has(wood), lowest_balance])
+	_assert(shed_events > 0, "The Woodlot should apply a planned capacity reduction when projected cover permits it")
+	_assert(unexplained_sheds == 0, "Every Woodlot reduction should be explained by its plan or cash runway (%d were not)" % unexplained_sheds)
+	_assert(smallest_crew >= woodlot.min_capacity, "The Woodlot must stay above its configured staffing floor")
+	_assert(town.businesses.has(wood) and lowest_balance > 0.0, "The Woodlot should stay solvent: survived=%s lowest balance %.0f" % [town.businesses.has(wood), lowest_balance])
 
 	# 2. A workshop with affordable inputs and buyers retains a crew. Prices held
 	# at their intended base values are those conditions.
@@ -2756,21 +2759,17 @@ func _check_fuel_fallback() -> void:
 	_assert(worst_gap < EPSILON, "Households should top up the rest of their heat buffer with timber, worst shortfall %.4f" % worst_gap)
 	_assert(not any_unmet, "A need covered by the fallback should not be reported as unmet")
 
-	# A preferred good whose seller PACES its sales (a long-cycle business such
-	# as the Woodlot) still has most of its stock left after clearing, so having
-	# stock is not the same as being available. Fixture need: timber (4 units
-	# each, the Woodlot's paced stock) is cheaper per unit than wool (1 unit,
-	# the baseline) -- when timber's paced offer can't cover the households,
-	# they must top up with wool instead of going without.
+	# A preferred good with insufficient stock (timber is worth 4 heat, wool 1)
+	# is cheaper per heat unit than wool. The seller should offer all it has at
+	# minimum cover, then households top up with wool instead of going without.
 	var saved_needs: Array[HENeed] = HENeeds._all
 	var fixture_units: Dictionary[Commodity.Type, float] = {timber: 4.0, Commodity.Type.WOOL: 1.0}
 	var fixture_needs: Array[HENeed] = [HENeed.new(HENeed.Id.HEAT, "Fixture fuel", 0.5, fixture_units, Commodity.Type.WOOL)]
 	HENeeds._all = fixture_needs
 	var paced := _new_sim("build_economy_with_charcoal_burner")
 	var paced_settlement: int = paced.get_settlement_ids()[0]
-	paced.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 400.0}
-	# The wool seller paces its sales too, so give it enough stock that its own
-	# paced offer comfortably covers what the timber leaves over.
+	paced.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].inventory = {timber: 10.0}
+	# Give the fallback wool seller enough stock to cover what timber cannot.
 	paced._business_selling(paced_settlement, Commodity.Type.WOOL).inventory = {Commodity.Type.WOOL: 500000.0}
 	var paced_target := 0.0
 	for household_id in paced.get_household_ids():
@@ -2779,7 +2778,7 @@ func _check_fuel_fallback() -> void:
 		h.balance = 1000.0
 		paced_target += float(h.headcount()) * fixture_needs[0].per_person_daily * HESimulation.TARGET_BUFFER_DAYS
 	var timber_offer: float = paced._household_offer(paced_settlement, timber)
-	_assert(timber_offer > 0.0 and timber_offer * 4.0 < paced_target, "Test setup: timber's paced offer (%.2f units) should be unable to cover the households' %.2f heat" % [timber_offer, paced_target])
+	_assert(timber_offer > 0.0 and timber_offer * 4.0 < paced_target, "Test setup: the limited timber stock (%.2f units) should not cover the households' %.2f heat" % [timber_offer, paced_target])
 	_assert(paced._household_cascade(paced_settlement, fixture_needs[0]) == [timber, Commodity.Type.WOOL], "Test setup: timber should lead, wool behind it")
 	paced._run_market(paced._new_daily_record())
 	var paced_gap := 0.0
@@ -2788,8 +2787,8 @@ func _check_fuel_fallback() -> void:
 		paced_gap = maxf(paced_gap, float(h.headcount()) * fixture_needs[0].per_person_daily * HESimulation.TARGET_BUFFER_DAYS - fixture_needs[0].held(h))
 	var timber_left: float = paced.businesses[HEScenarioSeeds.WOODLOT_BUSINESS_ID].stock(timber)
 	HENeeds._all = saved_needs
-	print("  paced preferred seller: timber left unsold=%.1f, worst heat shortfall vs buffer=%.4f" % [timber_left, paced_gap])
-	_assert(timber_left > 1.0, "Test setup: the Woodlot should still hold stock after clearing (it paces its sales)")
+	print("  stock-limited preferred seller: timber left unsold=%.1f, worst heat shortfall vs buffer=%.4f" % [timber_left, paced_gap])
+	_assert(timber_left < EPSILON, "At minimum cover, the Woodlot should offer all available timber")
 	_assert(paced_gap < EPSILON, "Households should top up from the baseline when the preferred seller's paced offer runs short, worst shortfall %.4f" % paced_gap)
 
 	# Bloomery: only a sliver of charcoal exists. There is no household reserve,

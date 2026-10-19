@@ -31,6 +31,8 @@ Heating is the one need that follows the season (`HENeed.seasonal_curve`, `HENee
 - **The curve sets the shape, not the total.** H1's field yields and wool rate are calibrated to a yearly target, and the valley's curves average 0.875 (grain) and 0.925 (wool). The multiplier applied is `seasonal_yield_scale` = curve / its own yearly mean, so four seasons average exactly 1.0 and a year's output matches the pre-season model. Without this the town runs ~12% short of grain, grain's price climbs, wages indexed to it follow, and the Sheep Farm fails in its first autumn.
 - Only the amount added to the business's inventory changes. Each unit is still produced once, recorded in the day's `produced`, held by one business, and then sold, consumed or exported through the usual market and ledger paths.
 - Fields keep their own labor/efficiency maths; the modifier multiplies the finished harvest, after `efficiency`.
+- Heat need supports an optional normalized seasonal curve (spring/summer/autumn/winter: 1.0 / 0.4 / 1.0 / 1.8). `_settlement_daily_demand(..., at_day)` evaluates it at the requested future day, so field producer planning sees the winter peak and summer trough when a scenario supplies a curve. The producer stability harness sets the curve for seasonal runs and uses `[1, 1, 1, 1]` for flat runs.
+- Household consumption and purchase targets use the heat curve for the current day. Producer forecasts use the curve for each future day, alongside the season when each field harvest lands.
 
 ## Carrying the harvest through winter
 

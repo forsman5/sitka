@@ -247,6 +247,9 @@ var fields: Array[HEField] = []
 var growth_days: int = 0
 var yield_per_area: float = 0.0
 var labor_per_area_per_day: float = 0.0
+## Field-model staffing and selling policy. Other businesses retain their
+## existing throughput/revenue policy.
+var producer_strategy: String = ""
 
 ## Yesterday's actual sales revenue for this business's output good --
 ## today's wage payment divides this by today's employed worker count (see
