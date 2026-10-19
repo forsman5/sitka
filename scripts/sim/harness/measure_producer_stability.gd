@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Sequential five-year field producer measurement. Set STEWARD_ENABLED=false
-## for the current-master control and FLAT_HEAT=true for the flat variant.
+## Sequential five-year field producer measurement. Use --flat for the flat
+## heat variant. Compare against a run from the pre-steward revision if needed.
 const Sim = preload("res://scripts/sim/household_economy/he_simulation.gd")
 const Seeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const Needs = preload("res://scripts/sim/household_economy/data/he_needs.gd")
@@ -14,7 +14,6 @@ const YEARS := 5
 func _init() -> void:
 	var selected_presets: Array = PRESETS.duplicate()
 	var selected_seeds: Array = SEEDS.duplicate()
-	var steward_enabled := true
 	var flat_heat := false
 	var args := OS.get_cmdline_user_args()
 	for index in args.size():
@@ -24,8 +23,6 @@ func _init() -> void:
 			selected_seeds = [int(args[index + 1])]
 		elif args[index] == "--flat":
 			flat_heat = true
-		elif args[index] == "--baseline":
-			steward_enabled = false
 	var heat = Needs.for_commodity(Commodity.Type.TIMBER)
 	var curve: Array[float] = []
 	if flat_heat:
@@ -33,19 +30,15 @@ func _init() -> void:
 	else:
 		curve = [1.0, 0.4, 1.0, 1.8]
 	heat.seasonal_curve = curve
-	print("producer stability steward=%s flat_heat=%s years=%d" % [steward_enabled, flat_heat, YEARS])
+	print("producer stability flat_heat=%s years=%d" % [flat_heat, YEARS])
 	for preset in selected_presets:
 		for seed_value in selected_seeds:
-			print(_measure(preset, seed_value, steward_enabled))
+			print(_measure(preset, seed_value))
 	quit()
 
-func _measure(preset: String, seed_value: int, steward_enabled: bool) -> String:
+func _measure(preset: String, seed_value: int) -> String:
 	var builder := Callable(Seeds, "build_preset").bind(preset)
 	var sim := Sim.new(seed_value, builder)
-	if not steward_enabled:
-		for b in sim.businesses.values():
-			if b.uses_field_model():
-				b.producer_strategy = ""
 	var settlement_id: int = sim.settlements.keys()[0]
 	var timber_days := 0
 	var grain_days := 0

@@ -3347,7 +3347,7 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 		var stock := seller.stock(commodity)
 		# A ranch's home-butchered meat goes straight on sale.
 		var home_butchered: bool = seller.kind == HEBusiness.Kind.HERD and commodity == Commodity.Type.MEAT
-		if seller.producer_strategy == "steward" and seller.uses_field_model() and not home_butchered:
+		if seller.uses_field_model() and not home_butchered:
 			local_offer = _seller_offer(seller, commodity)
 		elif seller.has_long_cycle() and not home_butchered:
 			var days_until: int = _days_until_next_supply(seller)
@@ -4145,7 +4145,7 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 	var out := {"delta": 0, "reason": "", "return_per_worker": 0.0, "wage": reference_wage, "sell_through": 1.0,
 		"target_workers": -1.0, "employed": 0.0, "sales": 0.0, "input_cost": 0.0, "taxes": 0.0,
 		"units_sold": 0.0, "units_produced": 0.0, "window": window}
-	if b.kind == HEBusiness.Kind.PRODUCTION and b.uses_field_model() and b.producer_strategy == "steward":
+	if b.kind == HEBusiness.Kind.PRODUCTION and b.uses_field_model():
 		return _steward_staffing_decision(b, reference_wage, out)
 	var needed_rows: int = mini(window, STAFFING_RETURN_WINDOW_DAYS) if b.uses_field_model() else (window if b.has_long_cycle() else mini(window, 14))
 	var rows := b.ledger_history(window).size()
@@ -4451,7 +4451,7 @@ func _run_market(record: Dictionary) -> void:
 ## a little SELL_PACE_HEADROOM) so a lump harvest sells down evenly until the
 ## next one. Households and input-buying businesses share this one offer.
 func _paced_offer(seller: HEBusiness, commodity: Commodity.Type) -> float:
-	if seller.producer_strategy == "steward" and seller.uses_field_model():
+	if seller.uses_field_model():
 		return _seller_offer(seller, commodity)
 	var stock := seller.stock(commodity)
 	if seller.has_long_cycle():

@@ -280,7 +280,6 @@ static func _equip(b: HEBusiness) -> void:
 static func make_farm(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var farm := HEBusiness.new(business_id, "Farm", _farm_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	farm.type_key = "farm"
-	farm.producer_strategy = "steward"
 	_equip(farm)
 	farm.configure_land(FARM_LAND_AREA_ACRES, _make_fields(FARM_FIELD_COUNT, FARM_LAND_AREA_ACRES, field_start_days, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 	return farm
@@ -292,7 +291,6 @@ static func make_farm(business_id: int, settlement_id: int, initial_capacity: in
 static func make_woodlot(business_id: int, settlement_id: int, initial_capacity: int = 0, field_start_days: Array[int] = [0, 0, 0, 0]) -> HEBusiness:
 	var woodlot := HEBusiness.new(business_id, "Woodlot", _woodlot_recipe(), 0, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
 	woodlot.type_key = "woodlot"
-	woodlot.producer_strategy = "steward"
 	_equip(woodlot)
 	woodlot.configure_land(WOODLOT_LAND_AREA_ACRES, _make_fields(WOODLOT_FIELD_COUNT, WOODLOT_LAND_AREA_ACRES, field_start_days, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
 	return woodlot
