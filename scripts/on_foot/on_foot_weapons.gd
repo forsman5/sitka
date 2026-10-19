@@ -23,7 +23,9 @@ const DEFS := {
 		"scene": preload("res://assets/models/weapons/bow_A_withString.gltf"),
 		"position": Vector3(0.0, 0.0, 0.0),
 		"bone": "Fist.L",
-		"rotation_degrees": Vector3(-6.4, 14.4, -92.3),
+		# The hand rests at the hip between shots, so lay the bow across the ground
+		# plane. The procedural draw pose turns it upright when the player aims.
+		"rotation_degrees": Vector3(-96.4, 14.4, -92.3),
 		"scale": 0.0085,
 		# Hold to draw; release fires. No clip yet: the draw pose (left arm out, right
 		# hand pulling the string) is still to be animated.
