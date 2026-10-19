@@ -935,6 +935,13 @@ const WAREHOUSE_WAGE_RESERVE_DAYS := 3.0
 ## households clear against what's left of the same offer.
 var _b2b_today: Dictionary = {}
 
+## Cash-funded household demand during pre-market business purchasing only:
+## settlement_id -> Commodity.Type -> float. Household balances, inventories,
+## and prices stay fixed in this window; alternative availability is invalidated
+## when a purchase changes membership in a need's household cascade.
+var _funded_demand_cache_active := false
+var _funded_demand_cache: Dictionary = {}
+
 ## Trailing per-settlement, per-commodity price history, oldest first, capped to the SAME
 ## window a business's own wage is smoothed over
 ## (HEBusiness.WAGE_ROLLING_WINDOW_DAYS, referenced directly rather than
@@ -2800,8 +2807,10 @@ func _daily_tick() -> void:
 		record["trader_transactions"].append_array(_pending_valley_transactions)
 		_pending_valley_transactions.clear()
 	wages.pay_wages(record)
+	_begin_funded_demand_cache()
 	_run_input_purchasing(record)
 	_run_tool_purchasing(record)
+	_end_funded_demand_cache()
 	_run_livestock_purchasing(record)
 	_run_production(record)
 	_run_tool_wear(record)
@@ -3402,6 +3411,50 @@ func _satisfier_cascade(settlement_id: int, need: HENeed, offers: Callable, comf
 
 func _household_cascade(settlement_id: int, need: HENeed) -> Array[Commodity.Type]:
 	return _satisfier_cascade(settlement_id, need, func(c: Commodity.Type) -> float: return _household_offer(settlement_id, c), true)
+
+func _begin_funded_demand_cache() -> void:
+	_funded_demand_cache.clear()
+	_funded_demand_cache_active = true
+
+func _end_funded_demand_cache() -> void:
+	_funded_demand_cache_active = false
+	_funded_demand_cache.clear()
+
+func _funded_demand_for_b2b(settlement_id: int, commodity: Commodity.Type) -> float:
+	if not _funded_demand_cache_active:
+		return _household_funded_demand(settlement_id, commodity)
+	var settlement_cache: Dictionary = _funded_demand_cache.get(settlement_id, {})
+	if settlement_cache.has(commodity):
+		return settlement_cache[commodity]
+	var demand := _household_funded_demand(settlement_id, commodity)
+	settlement_cache[commodity] = demand
+	_funded_demand_cache[settlement_id] = settlement_cache
+	return demand
+
+func _funded_demand_cache_has_need(settlement_id: int, need: HENeed) -> bool:
+	var settlement_cache: Dictionary = _funded_demand_cache.get(settlement_id, {})
+	for satisfier in need.satisfiers():
+		if settlement_cache.has(satisfier):
+			return true
+	return false
+
+func _invalidate_need_funded_demand(settlement_id: int, need: HENeed) -> void:
+	if not _funded_demand_cache.has(settlement_id):
+		return
+	var settlement_cache: Dictionary = _funded_demand_cache[settlement_id]
+	for satisfier in need.satisfiers():
+		settlement_cache.erase(satisfier)
+	if settlement_cache.is_empty():
+		_funded_demand_cache.erase(settlement_id)
+	else:
+		_funded_demand_cache[settlement_id] = settlement_cache
+
+func _finish_funded_demand_availability_check(settlement_id: int, commodity: Commodity.Type, need: HENeed, was_available: bool) -> void:
+	if need == null or not _funded_demand_cache_active:
+		return
+	var is_available := _household_offer(settlement_id, commodity) > 0.0001
+	if is_available != was_available:
+		_invalidate_need_funded_demand(settlement_id, need)
 
 ## The order `_run_market` clears a settlement's household goods in: each
 ## need's cascade (cheapest first), then its satisfiers nobody is selling.
@@ -5570,8 +5623,10 @@ func _b2b_entry(settlement_id: int, commodity: Commodity.Type, seller: HEBusines
 func _b2b_offer(seller: HEBusiness, settlement_id: int, commodity: Commodity.Type, claim: float) -> float:
 	var entry := _b2b_entry(settlement_id, commodity, seller)
 	var remaining: float = maxf(0.0, entry["offer"] - entry["sold"])
-	var household_demand := _household_funded_demand(settlement_id, commodity)
-	if claim <= 0.0001 or claim + household_demand <= 0.0001:
+	if claim == 0.0:
+		return remaining
+	var household_demand := _funded_demand_for_b2b(settlement_id, commodity)
+	if claim + household_demand <= 0.0001:
 		return remaining
 	return minf(remaining, seller.stock(commodity)) * claim / (claim + household_demand)
 
@@ -5795,6 +5850,13 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 	var local_market: HEMarket = markets[buyer.settlement_id]
 	var price: float = local_market.price[commodity]
 	var cost: float = bought * price
+	var availability_need: HENeed = null
+	var alternative_was_available := false
+	if bought > 0.0 and _funded_demand_cache_active:
+		var candidate_need := HENeeds.for_commodity(commodity)
+		if candidate_need != null and candidate_need.unit_values.size() > 1 and commodity != candidate_need.baseline and _funded_demand_cache_has_need(buyer.settlement_id, candidate_need):
+			availability_need = candidate_need
+			alternative_was_available = _household_offer(buyer.settlement_id, commodity) > 0.0001
 	payer.balance -= cost
 	payer.last_cash_change -= cost
 	buyer.add_stock(commodity, bought)
@@ -5840,6 +5902,7 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 			trader.last_revenue += valley_net
 			trader.last_cash_change += valley_net
 			local_market.merge_clearing(commodity, offer_before, requested, bought, price)
+			_finish_funded_demand_availability_check(buyer.settlement_id, commodity, availability_need, alternative_was_available)
 			return
 		var offer_before: float = trader_import_capacity[trader.id]
 		trader_import_capacity[trader.id] -= bought
@@ -5870,6 +5933,7 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 		_import_cost_total += import_cost
 
 		local_market.merge_clearing(commodity, offer_before, requested, bought, price)
+	_finish_funded_demand_availability_check(buyer.settlement_id, commodity, availability_need, alternative_was_available)
 
 ## Runs after _run_trade, before the day's price signal: every Government
 ## Warehouse works its standing orders (set_warehouse_order) against the local
