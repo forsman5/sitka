@@ -767,6 +767,13 @@ var _employment_members: Dictionary = {}
 var _employment_dirty := true
 var _employment_rebuild_count := 0
 var businesses: Dictionary[int, HEBusiness] = {}
+
+## Derived seller membership index. _seller_first preserves the first eligible
+## business in businesses.keys() order; herd fallback lists retain the sorted
+## ID order used by _herd_business_ids(). Stock stays live and is never cached.
+var _seller_index_dirty := true
+var _seller_first: Dictionary = {} # settlement_id -> commodity -> business_id
+var _seller_herds_by_settlement: Dictionary = {} # settlement_id -> sorted Array[int]
 ## Houses, keyed by their own id space (not shared with `businesses`). Each
 ## household lives in one (HEHousehold.dwelling_id) -- see _reconcile_housing.
 var dwellings: Dictionary[int, HEHouse] = {}
@@ -1015,6 +1022,14 @@ func add_business(b: HEBusiness) -> void:
 		_trader_export_enabled[b.id] = _default_export_enabled()
 	if b.kind == HEBusiness.Kind.WATER and b.next_service_day < 0:
 		b.next_service_day = day + WATER_SERVICE_INTERVAL_DAYS
+	invalidate_seller_index()
+
+## businesses and HEBusiness eligibility fields are currently publicly mutable.
+## Call this after any direct catalog change or change to settlement_id, kind,
+## recipe outputs, or herd species. Normal simulation changes invalidate here
+## and in _fail_business().
+func invalidate_seller_index() -> void:
+	_seller_index_dirty = true
 
 ## Adds a business the player created mid-run, with a startup allowance so it
 ## can actually get going (see HEScenarioSeeds.startup_cash): a starting crew,
@@ -2940,6 +2955,7 @@ func _fail_business(business_id: int, record: Dictionary) -> void:
 	})
 	(settlements[b.settlement_id] as HESettlement).business_ids.erase(business_id)
 	businesses.erase(business_id)
+	invalidate_seller_index()
 
 ## Kind.HERD only, called from HEWages.pay_wages before its cash allowance is
 ## computed: if this ranch can't cover today's wage bill even with its
@@ -5555,17 +5571,39 @@ func _log_herd_event(b: HEBusiness, type: String, data: Dictionary) -> void:
 ## the seller it resolves here is what a Trader export draws on, and the Butcher
 ## buys from ranches directly (see _run_livestock_purchasing).
 func _business_selling(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
+	_ensure_seller_index()
+	var settlement_sellers: Dictionary = _seller_first.get(settlement_id, {})
+	var primary: HEBusiness = businesses[settlement_sellers[commodity]] if settlement_sellers.has(commodity) else null
+	return _home_butchery_seller(settlement_id, commodity, primary)
+
+func _ensure_seller_index() -> void:
+	if not _seller_index_dirty:
+		return
+	_seller_first.clear()
+	_seller_herds_by_settlement.clear()
 	for business_id in businesses.keys():
 		var b: HEBusiness = businesses[business_id]
-		if b.settlement_id != settlement_id:
-			continue
-		if b.sells(commodity):
-			return _home_butchery_seller(settlement_id, commodity, b)
-		if b.kind == HEBusiness.Kind.HERD and b.species == HEBusiness.Species.SHEEP and commodity == Commodity.Type.WOOL:
-			return b
-		if b.kind == HEBusiness.Kind.HERD and is_livestock(commodity) and b.herd_commodity() == commodity:
-			return b
-	return _home_butchery_seller(settlement_id, commodity, null)
+		var settlement_sellers: Dictionary = _seller_first.get(b.settlement_id, {})
+		if b.kind == HEBusiness.Kind.PRODUCTION and b.recipe != null:
+			for commodity in b.recipe.outputs.keys():
+				if not settlement_sellers.has(commodity):
+					settlement_sellers[commodity] = business_id
+		if b.kind == HEBusiness.Kind.HERD:
+			if b.species == HEBusiness.Species.SHEEP and not settlement_sellers.has(Commodity.Type.WOOL):
+				settlement_sellers[Commodity.Type.WOOL] = business_id
+			var live_animal := b.herd_commodity()
+			if not settlement_sellers.has(live_animal):
+				settlement_sellers[live_animal] = business_id
+			var herd_ids: Array[int] = []
+			if _seller_herds_by_settlement.has(b.settlement_id):
+				herd_ids.assign(_seller_herds_by_settlement[b.settlement_id])
+			herd_ids.append(business_id)
+			_seller_herds_by_settlement[b.settlement_id] = herd_ids
+		if not settlement_sellers.is_empty():
+			_seller_first[b.settlement_id] = settlement_sellers
+	for herd_ids in _seller_herds_by_settlement.values():
+		(herd_ids as Array).sort()
+	_seller_index_dirty = false
 
 ## A market has one seller per good, but meat can come from two places: the
 ## Butcher, or a ranch's own hardship slaughter (_hardship_butcher_if_needed).
@@ -5583,12 +5621,10 @@ func _home_butchery_seller(settlement_id: int, commodity: Commodity.Type, primar
 ## per-settlement business list in this file is sorted -- see _run_trade's
 ## herd export pass.
 func _herd_business_ids(settlement_id: int) -> Array[int]:
+	_ensure_seller_index()
 	var ids: Array[int] = []
-	for business_id in businesses.keys():
-		var b: HEBusiness = businesses[business_id]
-		if b.kind == HEBusiness.Kind.HERD and b.settlement_id == settlement_id:
-			ids.append(business_id)
-	ids.sort()
+	if _seller_herds_by_settlement.has(settlement_id):
+		ids.assign(_seller_herds_by_settlement[settlement_id])
 	return ids
 
 ## The settlement's Trader (lowest business_id if it somehow had more than

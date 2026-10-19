@@ -2879,6 +2879,7 @@ func _check_government_build_costs() -> void:
 			if (sim.businesses[business_id] as HEBusiness).type_key == type_key:
 				sim.businesses.erase(business_id)
 				settlement.business_ids.erase(business_id)
+				sim.invalidate_seller_index()
 				break
 		var treasury_before := gov.balance
 		_assert(sim.build_government_building(1, type_key), "%s should build through the Government for free" % type_key)
