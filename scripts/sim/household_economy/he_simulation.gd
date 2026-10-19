@@ -1951,7 +1951,7 @@ func get_person_summary(household_id: int, member_number: int) -> Dictionary:
 	else:
 		role = "Dependent"
 		life_stage = "Adult living at home"
-		note = "%.0f%% chance per month of leaving to found a household" % (HEHousehold.leave_home_chance(age) * 100.0)
+		note = "%.0f%% chance per month of leaving to found a household, once the home is crowded or a house is free" % (HEHousehold.leave_home_chance(age) * 100.0)
 
 	var needs: Array[Dictionary] = []
 	for need in HENeeds.felt():
@@ -3801,6 +3801,9 @@ func _evaluate_old_age(record: Dictionary) -> void:
 			continue
 		deaths += died
 		_log_event("old_age", {"household_id": household_id, "count": died})
+		var heirs := h.promote_adults(died)
+		if heirs > 0:
+			_log_event("succession", {"household_id": household_id, "count": heirs, "cause": "death"})
 		if h.worker_capacity() <= 0:
 			h.employer_business_id = -1
 			if h.demographics.dependents > 0:
@@ -3927,15 +3930,22 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 	var promotions := 0
 	var new_households: Array[HEHousehold] = []
 	var saturated: Dictionary = {}
+	# Empty houses per settlement; each split-off household takes one, so a full
+	# town only sees splits from households over HEHousehold.HOME_HEADCOUNT_CAP.
+	var free_houses: Dictionary = {}
 	for settlement_id in settlements.keys():
-		saturated[settlement_id] = get_housing_report(settlement_id)["saturated"]
+		var housing := get_housing_report(settlement_id)
+		saturated[settlement_id] = housing["saturated"]
+		free_houses[settlement_id] = maxi(int(housing["capacity"]) - int(housing["households"]), 0) if housing["modeled"] else HEHousehold.FREE_HOUSING_UNLIMITED
 	for household_id in households.keys():
 		var h: HEHousehold = households[household_id]
 		var pre_split_headcount := h.headcount()
-		var promoted := h.evaluate_aging(rng)
+		var promoted := h.evaluate_aging(rng, free_houses[h.settlement_id])
+		if free_houses[h.settlement_id] < HEHousehold.FREE_HOUSING_UNLIMITED:
+			free_houses[h.settlement_id] = maxi(free_houses[h.settlement_id] - promoted, 0)
 		for i in promoted:
 			_log_event("coming_of_age", {"household_id": household_id})
-			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i], h.last_promoted_sexes[i]))
+			new_households.append(_split_off_new_household(h, pre_split_headcount - i, h.last_promoted_member_numbers[i], h.last_promoted_sexes[i], h.last_promoted_ages[i]))
 		promotions += promoted
 		var birth_scale := HOUSING_SATURATED_BIRTH_SCALE if saturated.get(h.settlement_id, false) else 1.0
 		if h.evaluate_birth(rng, birth_scale):
@@ -3961,7 +3971,7 @@ func _evaluate_life_cycle(record: Dictionary) -> void:
 ## left, since evaluate_aging() may have promoted several at once this same
 ## period) -- a plain transfer, not a gift from nowhere, so total city
 ## money/goods are unaffected by a household splitting.
-func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int, sex: int) -> HEHousehold:
+func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int, member_number: int, sex: int, age: int) -> HEHousehold:
 	var new_id := _next_household_id
 	_next_household_id += 1
 	var share: float = 1.0 / float(max(headcount_before_leaving, 1))
@@ -3969,6 +3979,7 @@ func _split_off_new_household(parent: HEHousehold, headcount_before_leaving: int
 	var starting_balance: float = parent.balance * share
 	parent.balance -= starting_balance
 	var new_household := HEHousehold.new(new_id, 1, 0, starting_balance, parent.settlement_id)
+	new_household.seed_worker_ages([age] as Array[int])
 	new_household.seed_worker_sexes([sex] as Array[int])
 
 	for c in SUBSISTENCE_COMMODITIES:
@@ -4367,6 +4378,19 @@ func _reconcile_employment(record: Dictionary = {}) -> void:
 			var employed_workers := _workers_in(hiring_snapshot.get(business_id, []))
 			# A Butcher's capacity is its work (_livestock_crew_target), set above.
 			var business_position := _lookup_position("business", business_id)
+			# Grown children of the business's own employees fill an opening
+			# first; only what is left is hired from the unemployed pool.
+			if employed_workers < b.capacity:
+				var member_ids: Array[int] = []
+				member_ids.assign(hiring_snapshot.get(business_id, []))
+				member_ids.sort()
+				for member_id in member_ids:
+					if employed_workers >= b.capacity:
+						break
+					var joined := (households[member_id] as HEHousehold).promote_adults(b.capacity - employed_workers)
+					if joined > 0:
+						employed_workers += joined
+						_log_event("succession", {"household_id": member_id, "count": joined, "cause": "hired"})
 			while employed_workers < b.capacity and not available.is_empty():
 				var household_id: int = available.pop_at(_nearest_available_index(available, business_position, dwelling_positions))
 				var h: HEHousehold = households[household_id]

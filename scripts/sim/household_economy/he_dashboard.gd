@@ -121,6 +121,7 @@ const BLOTTER_FILTERS := [
 	{"type": "adopted", "label": "Adoptions"},
 	{"type": "split", "label": "Household founding"},
 	{"type": "coming_of_age", "label": "Coming of age"},
+	{"type": "succession", "label": "Heirs taking over"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
 	{"type": "business_failed", "label": "Business closures"},
@@ -3939,7 +3940,7 @@ func _format_age(age_days: int) -> String:
 ## adoptions); hiring/firing and herd events stay on the main blotter.
 func _is_household_event(event: Dictionary, household_id: int) -> bool:
 	match event["type"]:
-		"birth", "old_age", "emigrate":
+		"birth", "old_age", "emigrate", "succession":
 			return event["household_id"] == household_id
 		"split":
 			return event["parent_household_id"] == household_id or event["new_household_id"] == household_id
@@ -3959,6 +3960,10 @@ func _format_event(event: Dictionary) -> String:
 			var count: int = event["count"]
 			var plural := "s" if count != 1 else ""
 			return "[color=#a0a0a0]%s - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
+		"succession":
+			var heir_count: int = event["count"]
+			var heir_reason := "took a job at the family's employer" if event.get("cause", "") == "hired" else "took over a worker's place"
+			return "[color=#d9c98f]%s - Household %d: %d adult child%s %s[/color]" % [day, event["household_id"], heir_count, "ren" if heir_count != 1 else "", heir_reason]
 		"adopted":
 			var dep_count: int = event["dependents"]
 			var dep_plural := "s" if dep_count != 1 else ""
