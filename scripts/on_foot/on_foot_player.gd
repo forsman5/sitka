@@ -112,6 +112,7 @@ var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
 var _camera_mode: int = CameraMode.THIRD_BACK
+var _orbit_yaw: float = 0.0
 var _bark_player: AudioStreamPlayer3D
 var _bark_cooldown_left: float = 0.0
 var _bark_anim_left: float = 0.0
@@ -211,7 +212,11 @@ func _exit_tree() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * mouse_sensitivity)
+		if _camera_mode != CameraMode.FIRST_PERSON and Input.is_key_pressed(KEY_ALT):
+			_orbit_yaw = wrapf(_orbit_yaw - event.relative.x * mouse_sensitivity, -PI, PI)
+			_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+		else:
+			rotate_y(-event.relative.x * mouse_sensitivity)
 		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
 		_head.rotation.x = _pitch
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -335,6 +340,8 @@ func scare_radius() -> float:
 
 func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
+	if mode == CameraMode.FIRST_PERSON:
+		_orbit_yaw = 0.0
 	# Keep the bow user visible in first person so the draw pose can be seen.
 	# Move the camera just ahead of the face; the body stays behind the view.
 	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
@@ -343,7 +350,10 @@ func _set_camera_mode(mode: int) -> void:
 	_set_first_person_hair_hidden(show_bow_pose)
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
-	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
+	_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+
+func _camera_base_yaw() -> float:
+	return PI if _camera_mode == CameraMode.THIRD_FRONT else 0.0
 
 func _setup_first_person_hair() -> void:
 	_hair_mesh = _model.find_child("Body2", true, false) as MeshInstance3D
