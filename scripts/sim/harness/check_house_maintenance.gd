@@ -159,6 +159,7 @@ func _check_stone_shortage() -> void:
 		if (sim.businesses[business_id] as HEBusiness).type_key == "quarry":
 			sim.businesses.erase(business_id)
 			(sim.settlements[SID] as HESettlement).business_ids.erase(business_id)
+	sim.invalidate_seller_index()
 	for business in sim.businesses.values():
 		(business as HEBusiness).consume(Commodity.Type.STONE, (business as HEBusiness).stock(Commodity.Type.STONE))
 	var resident: HEHousehold = null

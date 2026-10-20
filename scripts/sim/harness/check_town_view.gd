@@ -5,6 +5,7 @@ extends SceneTree
 
 const HEScenarioSeeds = preload("res://scripts/sim/household_economy/data/he_scenario_seeds.gd")
 const HEFixtures = preload("res://scripts/sim/harness/he_fixtures.gd")
+const HESettlement = preload("res://scripts/sim/household_economy/records/he_settlement.gd")
 const HETownLayout = preload("res://scripts/sim/household_economy/he_town_layout.gd")
 
 var failures := 0
@@ -222,6 +223,8 @@ func _run() -> void:
 	var after_count: int = view.site_node_count()
 	var ranch_site := layout.site_of_business(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
 	dashboard._simulation.businesses.erase(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
+	(dashboard._simulation.settlements[HEScenarioSeeds.SETTLEMENT_ID] as HESettlement).business_ids.erase(HEScenarioSeeds.CATTLE_RANCH_BUSINESS_ID)
+	dashboard._simulation.invalidate_seller_index()
 	dashboard._refresh()
 	var vacated := layout.get_site(ranch_site["site_id"])
 	check(vacated["business_id"] == HETownLayout.NO_BUSINESS and vacated["built"], "A failed ranch should leave a vacant building")
