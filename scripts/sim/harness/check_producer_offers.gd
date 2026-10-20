@@ -20,7 +20,7 @@ func _init() -> void:
 	var flat_summer: float = sim._settlement_daily_demand(settlement_id, good, 100)
 	var flat_winter: float = sim._settlement_daily_demand(settlement_id, good, 300)
 	assert(is_equal_approx(flat_summer, flat_winter), "flat heat forecast should be day independent")
-	var seasonal_curve: Array[float] = [1.0, 0.4, 1.0, 1.8]
+	var seasonal_curve: Array[float] = Needs.HEAT_SEASONAL_CURVE.duplicate()
 	heat.seasonal_curve = seasonal_curve
 	var seasonal_summer: float = sim._settlement_daily_demand(settlement_id, good, 135)
 	var seasonal_winter: float = sim._settlement_daily_demand(settlement_id, good, 315)

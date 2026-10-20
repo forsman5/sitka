@@ -23,13 +23,9 @@ func _init() -> void:
 			selected_seeds = [int(args[index + 1])]
 		elif args[index] == "--flat":
 			flat_heat = true
-	var heat = Needs.for_commodity(Commodity.Type.TIMBER)
-	var curve: Array[float] = []
 	if flat_heat:
-		curve = [1.0, 1.0, 1.0, 1.0]
-	else:
-		curve = [1.0, 0.4, 1.0, 1.8]
-	heat.seasonal_curve = curve
+		var heat = Needs.for_commodity(Commodity.Type.TIMBER)
+		heat.seasonal_curve = [1.0, 1.0, 1.0, 1.0]
 	print("producer stability flat_heat=%s years=%d" % [flat_heat, YEARS])
 	for preset in selected_presets:
 		for seed_value in selected_seeds:
