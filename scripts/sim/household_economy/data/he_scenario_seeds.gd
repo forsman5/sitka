@@ -158,6 +158,7 @@ const WOODLOT_FIELD_START_DAYS: Array[int] = [0, 45, 90, 135]
 ## stay a release valve for surplus, not grow into the settlement's
 ## dominant employer. Not land-based, so it keeps a flat authored ceiling.
 const TRADER_MAX_CAPACITY := 20
+const PORT_MAX_CAPACITY := 20
 
 ## Opt-in only -- a preset with a Bloomery crew. Smaller
 ## than Farm/Woodlot's ceiling, similar in scale to the Trader: a workshop,
@@ -299,6 +300,11 @@ static func make_trader(business_id: int, settlement_id: int, initial_capacity: 
 	var trader := HEBusiness.new(business_id, "Trader", null, TRADER_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.TRADER, settlement_id)
 	trader.type_key = "trader"
 	return trader
+
+static func make_port(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var port := HEBusiness.new(business_id, "Port", null, PORT_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PORT, settlement_id)
+	port.type_key = "port"
+	return port
 
 ## Unlike a field, a herd's cull isn't a guaranteed, dated payoff (see
 ## HESimulation._hardship_butcher_if_needed's doc comment), so a ranch
@@ -505,8 +511,10 @@ static func business_types() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEBusiness: return make_farm(id, sid)},
 		{"type_key": "woodlot", "id": WOODLOT_BUSINESS_ID, "label": "Woodlot", "hint": "Grows timber.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_woodlot(id, sid)},
-		{"type_key": "trader", "id": TRADER_BUSINESS_ID, "label": "Trader", "hint": "Imports and exports surplus.",
+		{"type_key": "trader", "id": TRADER_BUSINESS_ID, "label": "Trader", "hint": "Moves goods between valley towns.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_trader(id, sid)},
+		{"type_key": "port", "id": PORT_BUSINESS_ID, "label": "Port", "hint": "Trades goods with the outside market.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_port(id, sid)},
 		{"type_key": "cattle_ranch", "id": CATTLE_RANCH_BUSINESS_ID, "label": "Cattle Ranch", "hint": "Herd; starts with no staff.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_herd(id, sid, HEBusiness.Species.CATTLE)},
 		{"type_key": "sheep_farm", "id": SHEEP_FARM_BUSINESS_ID, "label": "Sheep Farm", "hint": "Herd and wool; starts with no staff.",
@@ -696,7 +704,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 
 	var farm := make_farm(FARM_BUSINESS_ID, SETTLEMENT_ID, farm_capacity, FARM_FIELD_START_DAYS)
 	var woodlot := make_woodlot(WOODLOT_BUSINESS_ID, SETTLEMENT_ID, woodlot_capacity, WOODLOT_FIELD_START_DAYS)
-	var trader := make_trader(TRADER_BUSINESS_ID, SETTLEMENT_ID, trader_capacity)
+	var trader: HEBusiness = make_trader(TRADER_BUSINESS_ID, SETTLEMENT_ID, trader_capacity) if is_valley else null
+	var port: HEBusiness = make_port(PORT_BUSINESS_ID, SETTLEMENT_ID, trader_capacity) if not is_valley and trader_capacity > 0 else null
 	if is_valley:
 		farm.configure_land(farm_land, _make_fields(FARM_FIELD_COUNT, farm_land, FARM_FIELD_START_DAYS, FARM_LABOR_PER_AREA_PER_DAY), FARM_GROWTH_DAYS, FARM_YIELD_PER_AREA, FARM_LABOR_PER_AREA_PER_DAY)
 		woodlot.configure_land(woodlot_land, _make_fields(WOODLOT_FIELD_COUNT, woodlot_land, WOODLOT_FIELD_START_DAYS, WOODLOT_LABOR_PER_AREA_PER_DAY), WOODLOT_GROWTH_DAYS, WOODLOT_YIELD_PER_AREA, WOODLOT_LABOR_PER_AREA_PER_DAY)
@@ -712,9 +721,11 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var estimated_wage := _estimated_starting_reference_wage()
 	farm.balance = startup_cash(farm, farm_capacity)
 	woodlot.balance = startup_cash(woodlot, woodlot_capacity)
-	trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
-	if is_valley:
+	if trader != null:
+		trader.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 		trader.balance += VALLEY_TRADER_EXTRA_RUNWAY_DAYS * estimated_wage * trader_capacity
+	if port != null:
+		port.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * trader_capacity
 	butcher.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * BUTCHER_MIN_CAPACITY + startup_livestock_cash(BUTCHER_MIN_CAPACITY)
 	cattle_ranch.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
 	sheep_farm.balance = STARTING_CASH_RESERVE_DAYS * estimated_wage * RANCH_STARTING_CAPACITY
@@ -727,14 +738,20 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var businesses: Dictionary[int, HEBusiness] = {
 		FARM_BUSINESS_ID: farm,
 		WOODLOT_BUSINESS_ID: woodlot,
-		TRADER_BUSINESS_ID: trader,
 		CATTLE_RANCH_BUSINESS_ID: cattle_ranch,
 		SHEEP_FARM_BUSINESS_ID: sheep_farm,
 		BUTCHER_BUSINESS_ID: butcher,
 	}
+	if trader != null:
+		businesses[TRADER_BUSINESS_ID] = trader
+	if port != null:
+		businesses[PORT_BUSINESS_ID] = port
 	settlement.business_ids.append(FARM_BUSINESS_ID)
 	settlement.business_ids.append(WOODLOT_BUSINESS_ID)
-	settlement.business_ids.append(TRADER_BUSINESS_ID)
+	if trader != null:
+		settlement.business_ids.append(TRADER_BUSINESS_ID)
+	if port != null:
+		settlement.business_ids.append(PORT_BUSINESS_ID)
 	settlement.business_ids.append(CATTLE_RANCH_BUSINESS_ID)
 	settlement.business_ids.append(SHEEP_FARM_BUSINESS_ID)
 	settlement.business_ids.append(BUTCHER_BUSINESS_ID)
@@ -799,7 +816,7 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var quarry_workers_assigned := 0
 	var toolsmith_workers_assigned := 0
 	var charcoal_burner_workers_assigned := 0
-	var trader_workers_assigned := 0
+	var trade_workers_assigned := 0
 	for i in household_count:
 		var household_id := i + 1
 		var household := HEHousehold.new(household_id, WORKER_CAPACITY, DEPENDENTS, STARTING_BALANCE, SETTLEMENT_ID)
@@ -830,9 +847,9 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 		elif charcoal_burner != null and charcoal_burner_workers_assigned < charcoal_burner_capacity:
 			household.employer_business_id = CHARCOAL_BURNER_BUSINESS_ID
 			charcoal_burner_workers_assigned += WORKER_CAPACITY
-		elif trader_workers_assigned < trader_capacity:
-			household.employer_business_id = TRADER_BUSINESS_ID
-			trader_workers_assigned += WORKER_CAPACITY
+		elif trade_workers_assigned < trader_capacity:
+			household.employer_business_id = TRADER_BUSINESS_ID if is_valley else PORT_BUSINESS_ID
+			trade_workers_assigned += WORKER_CAPACITY
 		# else: stays unemployed (-1) -- only happens if the capacities don't
 		# cover the whole population, which a scenario may want.
 
@@ -935,7 +952,9 @@ static func add_government(settlement: HESettlement, households: Dictionary, bus
 static func build_from_spec(spec: Dictionary) -> Dictionary:
 	var crews: Dictionary = spec.get("crews", {})
 	var households: int = int(spec["households"])
-	var trader := int(crews.get("trader", 0))
+	# Format-1 saved standalone specs called this crew "trader". In a
+	# standalone town the same jobs now staff the outside-market Port.
+	var trader := int(crews.get("port", crews.get("trader", 0)))
 	var bloomery := int(crews.get("bloomery", 0))
 	var iron_mine := int(crews.get("iron_mine", 0))
 	var charcoal_burner := int(crews.get("charcoal_burner", 0))
@@ -964,7 +983,10 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 	# `include` (type_keys) drops the unlisted businesses, as the roster picker
 	# needs; absent = keep everything the world made.
 	if spec.has("include"):
-		var included: Array = spec["include"]
+		var included: Array = (spec["include"] as Array).duplicate()
+		if included.has("trader") and not included.has("port"):
+			included.erase("trader")
+			included.append("port")
 		var businesses: Dictionary = world["businesses"]
 		var settlement: HESettlement = world["settlements"][SETTLEMENT_ID]
 		for entry in business_types():
@@ -1008,8 +1030,7 @@ static func build_valley_town(_rng: RandomNumberGenerator, town_id: int) -> Dict
 	}
 	var world := build_world(farm, remainder - farm, trader, bloomery, iron_mine, charcoal_burner, toolsmith, options)
 	if town_id == ValleySeed.STAITHE:
-		var port := HEBusiness.new(PORT_BUSINESS_ID, "Port", null, 2, 2, HEBusiness.Kind.PORT, SETTLEMENT_ID)
-		port.type_key = "port"
+		var port := make_port(PORT_BUSINESS_ID, SETTLEMENT_ID, 2)
 		port.balance = STARTING_CASH_RESERVE_DAYS * _estimated_starting_reference_wage() * 2.0
 		world["businesses"][PORT_BUSINESS_ID] = port
 		world["settlements"][SETTLEMENT_ID].business_ids.append(PORT_BUSINESS_ID)

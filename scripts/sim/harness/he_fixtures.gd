@@ -96,7 +96,7 @@ static func build_lopsided_start(_rng: RandomNumberGenerator) -> Dictionary:
 ## goes to whichever one is present). Ranches self-bootstrap, so they take no
 ## day-one staff. Needs Farm or Woodlot -- nothing else makes grain or fuel.
 static func build_custom(_rng: RandomNumberGenerator, included: Array) -> Dictionary:
-	var trader: int = 8 if included.has(HEScenarioSeeds.TRADER_BUSINESS_ID) else 0
+	var trader: int = 8 if included.has(HEScenarioSeeds.PORT_BUSINESS_ID) else 0
 	var bloomery: int = 8 if included.has(HEScenarioSeeds.BLOOMERY_BUSINESS_ID) else 0
 	var iron_mine: int = 8 if included.has(HEScenarioSeeds.IRON_MINE_BUSINESS_ID) else 0
 	var charcoal_burner: int = HEScenarioSeeds.CHARCOAL_BURNER_STARTING_CREW if included.has(HEScenarioSeeds.CHARCOAL_BURNER_BUSINESS_ID) else 0

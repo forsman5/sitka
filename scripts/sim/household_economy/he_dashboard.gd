@@ -679,7 +679,7 @@ func _build_ui() -> void:
 	detail_title_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_title_bar.add_child(detail_title_spacer)
 	_trader_settings_button = Button.new()
-	_trader_settings_button.text = "Export settings"
+	_trader_settings_button.text = "Shipping settings"
 	_trader_settings_button.visible = false
 	_trader_settings_button.pressed.connect(_on_trader_settings_pressed)
 	detail_title_bar.add_child(_trader_settings_button)
@@ -845,7 +845,7 @@ func _build_ui() -> void:
 	warehouse_title.add_theme_font_size_override("font_size", 14)
 	_business_detail_warehouse_section.add_child(warehouse_title)
 	var warehouse_hint := Label.new()
-	warehouse_hint.text = "Buy up to: stock the warehouse from local sellers, else the Trader's imports (up to %.0f units a day). Sell: export what is held above Keep through the Trader at its export bid." % HESimulation.WAREHOUSE_DAILY_TRADE_CAP
+	warehouse_hint.text = "Buy up to: stock the warehouse from local sellers, else the Port's outside imports (up to %.0f units a day). Sell: export what is held above Keep through the Port." % HESimulation.WAREHOUSE_DAILY_TRADE_CAP
 	warehouse_hint.add_theme_font_size_override("font_size", 12)
 	warehouse_hint.add_theme_color_override("font_color", Color(0.65, 0.65, 0.7))
 	warehouse_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -923,8 +923,8 @@ func _build_ui() -> void:
 	# Outside _market_detail_content on purpose: that content is rebuilt on
 	# every refresh, and recreating a checkbox mid-click would swallow it.
 	var export_toggle := CheckBox.new()
-	export_toggle.text = "Count Trader export capacity as demand"
-	export_toggle.tooltip_text = "Off: exports count only what the Trader actually shipped.\nOn: exports count the Trader's remaining capacity, i.e. what it would take if the seller had the stock."
+	export_toggle.text = "Count Port export capacity as demand"
+	export_toggle.tooltip_text = "Off: exports count only what the Port actually shipped.\nOn: exports count the Port's remaining capacity, i.e. what it could take if sellers had the stock."
 	export_toggle.button_pressed = _market_chart_export_appetite
 	export_toggle.toggled.connect(_on_market_export_appetite_toggled)
 	market_detail_box.add_child(export_toggle)
@@ -2205,18 +2205,18 @@ func _on_trader_settings_pressed() -> void:
 func _update_trader_detail_page() -> void:
 	_business_detail_overview_scroll.visible = not _trader_settings_open
 	_trader_settings_scroll.visible = _trader_settings_open
-	_trader_settings_button.text = "Overview" if _trader_settings_open else "Export settings"
+	_trader_settings_button.text = "Overview" if _trader_settings_open else "Shipping settings"
 
 func _rebuild_trader_settings() -> void:
 	for child in _trader_settings_list.get_children():
 		_trader_settings_list.remove_child(child)
 		child.queue_free()
 	var title := Label.new()
-	title.text = "Goods this Trader may export"
+	title.text = "Goods this Trader may ship between towns"
 	title.add_theme_font_size_override("font_size", 16)
 	_trader_settings_list.add_child(title)
 	var note := Label.new()
-	note.text = "Changes take effect on the next day and reset when you load a scenario. Local households and businesses buy first; each seller then decides how much it can spare and the least it will take, and the Trader takes what it can use at its bid, widest spread first, until its capacity is used. The bid moves a little each day."
+	note.text = "Changes take effect on the next day and reset when you load a scenario. Enabled goods may be offered for shipment to connected valley towns. The seller's local reserve and minimum price still apply."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trader_settings_list.add_child(note)
 	_trader_settings_boxes.clear()
@@ -2235,8 +2235,7 @@ func _rebuild_trader_settings() -> void:
 
 func _trader_export_option_text(option: Dictionary) -> String:
 	var text: String = option["name"]
-	if option["reference_price"] > 0.0:
-		text += "   bid %.0f%% of %.2f = %.3f" % [option["bid_fraction"] * 100.0, option["reference_price"], option["bid_price"]]
+	text += "   min %.2f; available %.1f" % [option["seller_min_price"], option["available"]]
 	return text + "   stored %.1f" % option["stored"]
 
 ## Updates the label text in place; the checkboxes themselves are not rebuilt so
@@ -2672,7 +2671,7 @@ func _refresh_business_detail_header(report: Dictionary) -> void:
 		_business_detail_dynamic_cull_check.set_pressed_no_signal(report["dynamic_cull"])
 	_business_detail_warehouse_section.visible = report["kind"] == "warehouse"
 	_business_detail_tax_section.visible = report["kind"] == "government"
-	_business_detail_transaction_section.visible = report["kind"] == "trader"
+	_business_detail_transaction_section.visible = report["kind"] in ["trader", "port"]
 
 ## Cash tab: balance history, the money rows, the operating ledger, and the
 ## government's tax policy.
@@ -2809,8 +2808,8 @@ func _refresh_business_detail_events(report: Dictionary) -> void:
 			for i in range(herd_events.size() - 1, -1, -1):
 				herd_lines.append(_format_event(herd_events[i]))
 			_business_detail_herd_events_display.text = "\n".join(herd_lines)
-	if report["kind"] == "trader":
-		_refresh_trader_transactions()
+	if report["kind"] in ["trader", "port"]:
+		_refresh_trade_transactions()
 	_refresh_business_employment()
 
 ## Syncs the tax slider's caption and morale-effect text to the sim's rate;
@@ -2884,7 +2883,7 @@ func _refresh_warehouse_orders(report: Dictionary) -> void:
 			continue
 		(widgets["held"] as Label).text = "%.1f" % order_row["stock"]
 		(widgets["price"] as Label).text = "%.2f" % order_row["price"]
-		(widgets["buy"] as SpinBox).tooltip_text = "Buys from the local seller" if order_row["has_local_seller"] else "No local seller: bought through the Trader's imports"
+		(widgets["buy"] as SpinBox).tooltip_text = "Buys from the local seller" if order_row["has_local_seller"] else "No local seller: bought through the Port's outside imports"
 		if load_values:
 			(widgets["buy"] as SpinBox).set_value_no_signal(order_row["buy_up_to"])
 			(widgets["sell"] as CheckBox).set_pressed_no_signal(order_row["sell"])
@@ -3112,7 +3111,7 @@ func _on_linked_need_pressed(need_id: int) -> void:
 func _on_linked_market_pressed(commodity: int) -> void:
 	_open_linked(_on_market_row_selected.bind(commodity))
 
-func _refresh_trader_transactions() -> void:
+func _refresh_trade_transactions() -> void:
 	for child in _business_detail_transaction_grid.get_children():
 		_business_detail_transaction_grid.remove_child(child)
 		child.queue_free()
@@ -3125,7 +3124,7 @@ func _refresh_trader_transactions() -> void:
 		_business_detail_transaction_grid.add_child(header)
 
 	var shown := 0
-	for transaction in _simulation.get_trader_transactions(_selected_business_id, TRADER_TRANSACTION_HISTORY_DAYS):
+	for transaction in _simulation.get_trade_transactions(_selected_business_id, TRADER_TRANSACTION_HISTORY_DAYS):
 		var direction: String = transaction["direction"]
 		if _trader_transaction_filter != "both" and direction != _trader_transaction_filter:
 			continue
@@ -3348,8 +3347,12 @@ func _rebuild_business_rows() -> void:
 	for i in buildable.size():
 		var option: Dictionary = buildable[i]
 		var already_built := _simulation.has_business_of_type(_town_settlement_id(), option["type_key"])
-		create_popup.add_item("%s (already built)" % option["label"] if already_built else option["label"], i)
-		create_popup.set_item_disabled(i, already_built)
+		var valley_only: bool = option["type_key"] == "trader" and not _simulation.intertown_trading_enabled
+		var item_label: String = "Trader (valley only)" if valley_only else ("%s (already built)" % option["label"] if already_built else option["label"])
+		create_popup.add_item(item_label, i)
+		create_popup.set_item_disabled(i, already_built or valley_only)
+		if valley_only:
+			create_popup.set_item_tooltip(i, "Traders carry goods between valley towns. Standalone towns use a Port for outside trade.")
 	create_popup.id_pressed.connect(_on_create_business_pressed)
 	create_button.visible = GameState.dev_mode
 	_create_business_button = create_button
@@ -3463,6 +3466,8 @@ func _town_settlement_id() -> int:
 
 func _on_create_business_pressed(index: int) -> void:
 	var option: Dictionary = HEScenarioSeeds.business_types()[index]
+	if option["type_key"] == "trader" and not _simulation.intertown_trading_enabled:
+		return
 	var settlement_id := _town_settlement_id()
 	if _simulation.has_business_of_type(settlement_id, option["type_key"]):
 		return

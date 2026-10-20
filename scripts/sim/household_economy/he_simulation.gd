@@ -32,7 +32,7 @@ extends RefCounted
 ##   get_clock_summary(), get_household_summary(id),
 ##   get_settlement_summary(id), get_business_reports(settlement_id),
 ##   get_market_summary(settlement_id), get_market_report(settlement_id, commodity),
-##   get_daily_history(days), get_trader_transactions(business_id, days),
+##   get_daily_history(days), get_trade_transactions(business_id, days),
 ##   get_business_employment_events(business_id, event_type, limit),
 ##   get_event_log(limit), get_event_log_days(days)
 
@@ -92,7 +92,7 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.STONE: 4.0, # authored placeholder, not yet tuned
 	## Priced high enough that the Bloomery clears the reference wage even
 	## though EVERY unit it sells goes through the Trader's discounted
-	## export channel (TRADER_BUY_PRICE_FRACTION) -- unlike Farm/Woodlot,
+	## Port's outside export channel -- unlike Farm/Woodlot,
 	## which sell most of their output to local households at full price and
 	## only route surplus through that same discount. See he_scenario_
 	## seeds.gd's _bloomery_recipe doc comment for the worked-out numbers.
@@ -194,20 +194,10 @@ static func _default_export_enabled() -> Dictionary:
 const MIGRATION_PRESSURE_EVAL_INTERVAL_DAYS := 7
 const EMIGRATION_EVAL_INTERVAL_DAYS := 30 # matches Simulation's cadence choice
 
-## Standalone mode: _run_trade clears a single town's excess into an outside
-## market. Its low bid protects local buyers; the reference-price spread pays
-## the Trader. Valley mode skips that routine (external_trade_enabled = false).
-## ValleyEconomy instead matches two real towns and pays the seller from the
-## destination's price opportunity. Its seller floor still protects local use.
-const TRADER_BUY_PRICE_FRACTION := 0.5 # authored placeholder, not yet tuned
-## Export bids, as a fraction of a good's reference price (_export_reference_price).
-## A Trader starts every good at the old fixed half and moves it by TRADER_BID_STEP
-## a day between TRADER_BID_FRACTION_MIN and a ceiling that still pays a wage per
-## unit of capacity (_trader_max_bid_fraction). TRADER_BUY_PRICE_FRACTION still
-## prices the IMPORT side and values held livestock.
-const TRADER_STARTING_BID_FRACTION := 0.5
-const TRADER_BID_FRACTION_MIN := 0.3
-const TRADER_BID_STEP := 0.02
+## Standalone towns trade with the outside market through a Port. In valley
+## mode, Traders additionally carry goods between towns; they never trade
+## with the outside market.
+const PORT_BUY_PRICE_FRACTION := 0.5 # Port's outside purchase bid; authored placeholder, not yet tuned
 ## A seller's export decision (_seller_trade_offer). Local use is forecast from its
 ## last SELLER_FORECAST_WINDOW_DAYS of ledger once it has SELLER_FORECAST_MIN_ROWS
 ## days of it; stock beyond SELLER_SALVAGE_COVER_DAYS more days of routine use is
@@ -221,7 +211,7 @@ const SELLER_SALVAGE_COVER_DAYS := 30.0
 const SELLER_STARTING_COST_RATIO := 0.5
 const SELLER_COST_RATIO_CAP := 2.0
 ## Fully utilized, a Trader's margin per worker is
-## TRADER_CAPACITY_PER_WORKER * price * (1 - TRADER_BUY_PRICE_FRACTION) --
+## TRADER_CAPACITY_PER_WORKER * price * (1 - PORT_BUY_PRICE_FRACTION) --
 ## i.e. just `price` at the 0.5 fraction above. That has to clear the
 ## reference wage with real room to spare even once oversupply has pushed
 ## price all the way down to its floor, or the Trader never grows past a
@@ -232,9 +222,18 @@ const TRADER_CAPACITY_PER_WORKER := 8.0
 ## Valley shipments are booked every two days, so a Trader can handle two
 ## days of freight per dispatch without changing the standalone daily market.
 const VALLEY_TRADER_CAPACITY_PER_WORKER := TRADER_CAPACITY_PER_WORKER * 2.0
-## The port clears finished and industrial goods to an off-map market. Food
-## and fuel still follow household demand in the connected valley.
-const PORT_GOODS: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.TOOLS, Commodity.Type.CHARCOAL, Commodity.Type.WOOL, Commodity.Type.LEATHER, Commodity.Type.STONE]
+## Outside demand is unlimited for every current market good; Port staffing is
+## the throughput constraint. Keep the original port goods first, then add all
+## remaining goods, so the expanded list preserves established capacity order.
+static var PORT_GOODS: Array[Commodity.Type] = _build_port_goods()
+
+static func _build_port_goods() -> Array[Commodity.Type]:
+	var out: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.TOOLS,
+		Commodity.Type.CHARCOAL, Commodity.Type.WOOL, Commodity.Type.LEATHER, Commodity.Type.STONE]
+	for commodity in _build_export_priority():
+		if not out.has(commodity):
+			out.append(commodity)
+	return out
 
 ## Herds: two more workplace kinds (he_business.gd's HEBusiness.Kind.HERD),
 ## a Cattle Ranch and a Sheep Farm, whose live herd_size grows/thins on its
@@ -503,7 +502,7 @@ const WOOL_PER_HEAD_PER_INTERVAL := 0.75
 ## worker (before herd_max_capacity() and husbandry made staffing pay).
 ## Raised until a fully-staffed ranch's export income can actually clear
 ## the reference wage -- verified empirically, not just priced up
-## arbitrarily. See _run_trade's herd export pass.
+## arbitrarily. See _run_port_trade's herd export pass.
 const HERD_EXPORT_PRICE: Dictionary[HEBusiness.Species, float] = {
 	HEBusiness.Species.CATTLE: 60.0,
 	HEBusiness.Species.SHEEP: 3.0,
@@ -537,8 +536,8 @@ static func livestock_species(commodity: Commodity.Type) -> HEBusiness.Species:
 ## The prices a head of livestock is quoted at, all off one posted price:
 ## POSTED is the good's price (HERD_EXPORT_PRICE), the analogue of another good's
 ## market price -- what its row shows, and what an export is worth to the closed
-## system; TRADER_BID is what the Trader pays a ranch, the same
-## TRADER_BUY_PRICE_FRACTION of the posted price it pays for every export; and
+## system; TRADER_BID is what the Port pays a ranch, the same
+## PORT_BUY_PRICE_FRACTION of the posted price it pays for every export; and
 ## BUTCHER_PURCHASE is what the Butcher pays a ranch locally. This is the one
 ## place that turns a species into a price.
 enum LivestockQuote { POSTED, TRADER_BID, BUTCHER_PURCHASE }
@@ -547,7 +546,7 @@ static func livestock_quote(species: HEBusiness.Species, quote: LivestockQuote) 
 	var posted: float = HERD_EXPORT_PRICE[species]
 	match quote:
 		LivestockQuote.TRADER_BID:
-			return posted * TRADER_BUY_PRICE_FRACTION
+			return posted * PORT_BUY_PRICE_FRACTION
 		LivestockQuote.BUTCHER_PURCHASE:
 			return posted * BUTCHERY_PURCHASE_PRICE_FRACTION
 	return posted
@@ -556,7 +555,7 @@ static func livestock_quote(species: HEBusiness.Species, quote: LivestockQuote) 
 ## settlement's ranches and turns each into MEAT and LEATHER. A local sale
 ## replaces the Trader's discounted raw export, so the ranch is paid
 ## BUTCHERY_PURCHASE_PRICE_FRACTION of HERD_EXPORT_PRICE: more than the
-## Trader's TRADER_BUY_PRICE_FRACTION, less than the full reference price,
+## Trader's PORT_BUY_PRICE_FRACTION, less than the full reference price,
 ## which leaves the Butcher the margin for the value it adds (meat that feeds
 ## households, leather that clothes them).
 ##
@@ -565,7 +564,7 @@ static func livestock_quote(species: HEBusiness.Species, quote: LivestockQuote) 
 ## cattle first. Yields are authored placeholders, not yet tuned: a cow gives
 ## roughly ten times a sheep's meat, while a hide is a small amount of
 ## leather either way.
-# TODO: 0.75 is arbitrary -- only "above the Trader's TRADER_BUY_PRICE_FRACTION, below
+# TODO: 0.75 is arbitrary -- only "above the Trader's PORT_BUY_PRICE_FRACTION, below
 # the full posted price" is justified, and the Butcher's margin is large enough
 # (a cow is ~120 meat + 6 leather for ~45) that nothing pins this value. Revisit
 # when the Butcher's economics get tuned: derive it from the value the Butcher
@@ -652,7 +651,7 @@ const HARDSHIP_BUTCHER_MIN_HERD: Dictionary[HEBusiness.Species, float] = {
 }
 
 ## _run_input_purchasing reuses TRADER_CAPACITY_PER_WORKER and
-## TRADER_BUY_PRICE_FRACTION for the Trader's IMPORT side too (buy outside
+## PORT_BUY_PRICE_FRACTION for the Trader's IMPORT side too (buy outside
 ## at that same fraction of the local price, resell locally at full local
 ## price -- the same margin shape as export, just run in reverse), but
 ## tracks import capacity as its OWN pool for the day rather than sharing
@@ -797,8 +796,9 @@ var position_lookup: Callable = Callable()
 ## Lets a scenario prove accounting with fixed quotes first before
 ## exercising the bounded price-drift rule.
 var price_adjustment_enabled: bool = true
-## Valley mode routes exports through transport edges instead of the standalone outside market.
-var external_trade_enabled: bool = true
+## True only for economies coordinated by ValleyEconomy. Standalone trade
+## goes through a Port, while these towns can also stock intertown Trader goods.
+var intertown_trading_enabled: bool = false
 ## Inventory committed to an agreed onward sale while a shipment passes
 ## through this Trader. It remains real stock but is unavailable locally.
 var _valley_reserved_stock: Dictionary = {}
@@ -2048,8 +2048,15 @@ func get_business_reports(settlement_id: int = -1, include_detail: bool = true, 
 			report["stock"] = 0.0 # exports convert straight to money; the Trader never holds inventory
 		elif b.kind == HEBusiness.Kind.PORT:
 			report["recipe_id"] = "port"
-			report["output_commodity"] = "Outside exports"
-			report["stock"] = 0.0
+			report["output_commodity"] = "Outside trade"
+			var port_inventory: Dictionary = {}
+			var total_port_stock := 0.0
+			for commodity in b.inventory:
+				var units: float = b.stock(commodity)
+				port_inventory[Commodity.name_of(commodity)] = units
+				total_port_stock += units
+			report["inventory"] = port_inventory
+			report["stock"] = total_port_stock
 		elif b.kind == HEBusiness.Kind.GOVERNMENT:
 			# Same keys the production branch fills, so detail pages that
 			# read them need no government special case.
@@ -2321,7 +2328,7 @@ func _livestock_active(settlement_id: int, commodity: Commodity.Type) -> bool:
 
 ## The price a livestock good's row shows: its posted price, the analogue of
 ## another good's market price. Like every other good, the Trader pays a fraction
-## of it (TRADER_BUY_PRICE_FRACTION), and the Butcher pays its own, without
+## of it (PORT_BUY_PRICE_FRACTION), and the Butcher pays its own, without
 ## either becoming a second price on the row -- leather's households and Trader
 ## differ the same way.
 func _livestock_price(commodity: Commodity.Type) -> float:
@@ -2438,10 +2445,8 @@ func _market_need_report(settlement_id: int, commodity: Commodity.Type) -> Dicti
 		"provided_history": provided_history,
 	}
 
-## One row per good this Trader could export, in EXPORT_PRIORITY order. Goods
-## nothing in the Trader's settlement sells are left out -- a checkbox for them
-## would do nothing -- but the order of the rest never changes, and the hidden
-## goods keep their stored setting for when a seller appears.
+## One row per good this valley Trader may ship, in fixed priority order.
+## Standalone Ports trade every good automatically and do not use this setting.
 func get_trader_export_settings(business_id: int) -> Array:
 	var out: Array = []
 	if not _trader_export_enabled.has(business_id):
@@ -2450,11 +2455,10 @@ func get_trader_export_settings(business_id: int) -> Array:
 	for commodity in EXPORT_PRIORITY:
 		if _business_selling(trader.settlement_id, commodity) == null:
 			continue
-		var reference := _export_reference_price(trader.settlement_id, commodity)
-		var fraction := _trader_bid_fraction(trader, commodity)
+		var offer := _seller_trade_offer(_business_selling(trader.settlement_id, commodity), commodity)
 		out.append({"commodity_id": commodity, "name": Commodity.name_of(commodity),
 			"enabled": _trader_export_enabled[business_id].get(commodity, false),
-			"reference_price": reference, "bid_fraction": fraction, "bid_price": reference * fraction,
+			"seller_min_price": offer["min_price"], "available": offer["quantity"],
 			"stored": _town_stored(trader.settlement_id, commodity)})
 	return out
 
@@ -2516,19 +2520,27 @@ func get_market_detail(settlement_id: int, commodity: Commodity.Type) -> Diction
 				buyers.append({"owner": b.name, "business_id": b.id, "requested": desired,
 					"funded": minf(desired, maxf(0.0, b.balance / price)) if price > 0.0 else 0.0,
 					"stock": stock})
-	var trader := _settlement_trader(settlement_id)
-	if trader != null:
-		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
-		if _business_selling(settlement_id, commodity) == null and not buyers.is_empty():
-			sellers.append({"owner": "%s (imports)" % trader.name, "business_id": trader.id,
-				"kind": "import", "capacity": capacity})
-		elif _trader_export_enabled[trader.id].get(commodity, false) and _business_selling(settlement_id, commodity) != null:
-			var export_seller := _business_selling(settlement_id, commodity)
-			var view := _trader_offer_view(trader, export_seller, commodity)
-			buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
-				"capacity": capacity, "available": minf(capacity, view["eligible"]),
-				"reference_price": view["reference"], "bid_fraction": view["fraction"], "bid_price": view["bid"],
-				"seller_min_price": view["offer"]["min_price"]})
+	var local_seller := _business_selling(settlement_id, commodity)
+	var trader := _settlement_trader(settlement_id) if intertown_trading_enabled else null
+	var trader_stock := maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)) if trader != null else 0.0
+	var port := _settlement_port(settlement_id)
+	if local_seller == null and not buyers.is_empty():
+		if trader_stock > 0.0001:
+			sellers.append({"owner": "%s (valley stock)" % trader.name, "business_id": trader.id,
+				"kind": "import", "capacity": trader_stock})
+		elif port != null and _business_employed_worker_count(port.id) > 0:
+			var port_capacity := float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER
+			sellers.append({"owner": "%s (outside import)" % port.name, "business_id": port.id,
+				"kind": "import", "capacity": port_capacity})
+	if local_seller != null and port != null and _business_employed_worker_count(port.id) > 0:
+		var offer := _seller_trade_offer(local_seller, commodity)
+		var outside_price := _port_outside_price(settlement_id, commodity)
+		var port_bid := maxf(outside_price * PORT_BUY_PRICE_FRACTION, float(offer["min_price"]))
+		buyers.append({"owner": "Port (outside market)", "business_id": port.id, "kind": "export",
+			"capacity": float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER,
+			"available": offer["quantity"] if port_bid <= outside_price * 0.9 else 0.0,
+			"reference_price": outside_price, "bid_price": port_bid,
+			"seller_min_price": offer["min_price"]})
 	report["buyers"] = buyers
 	report["sellers"] = sellers
 	report["holdings"] = holdings
@@ -2609,15 +2621,19 @@ func _livestock_market_detail(settlement_id: int, commodity: Commodity.Type) -> 
 			var affordable: float = maxf(0.0, b.balance + BUTCHERY_CREDIT_LIMIT) / price
 			buyers.append({"owner": b.name, "business_id": b.id, "kind": "local", "requested": requested,
 				"funded": minf(requested, affordable), "stock": holding["quantity"]})
-	# The Trader is an export buyer while its checkbox for this good is on, as
-	# for any good.
-	var trader := _settlement_trader(settlement_id)
-	if trader != null and not sellers.is_empty() and _trader_export_enabled[trader.id].get(commodity, false):
-		var capacity: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
+	# The Port buys every supported good outside; valley Traders only buy
+	# livestock when that intertown shipment is enabled.
+	var port := _settlement_port(settlement_id)
+	var trader := _settlement_trader(settlement_id) if intertown_trading_enabled else null
+	var outside_enabled := port != null and _business_employed_worker_count(port.id) > 0
+	var valley_enabled: bool = trader != null and bool(_trader_export_enabled[trader.id].get(commodity, false))
+	if not sellers.is_empty() and (outside_enabled or valley_enabled):
+		var buyer: HEBusiness = port if outside_enabled else trader
+		var capacity: float = float(_business_employed_worker_count(buyer.id)) * TRADER_CAPACITY_PER_WORKER
 		var offered := 0.0
 		for seller in sellers:
 			offered += seller["stock"]
-		buyers.append({"owner": "%s (exports)" % trader.name, "business_id": trader.id, "kind": "export",
+		buyers.append({"owner": "%s (exports)" % buyer.name, "business_id": buyer.id, "kind": "export",
 			"capacity": capacity, "available": minf(capacity, offered)})
 	report["buyers"] = buyers
 	report["sellers"] = sellers
@@ -2721,12 +2737,12 @@ func get_daily_history(days: int) -> Array:
 		out.append((_history[i] as Dictionary).duplicate(true))
 	return out
 
-## This Trader's imports and exports from up to the last `days` daily
-## records, newest first. Each transaction is copied so callers cannot
-## mutate simulation history through the query result.
-func get_trader_transactions(business_id: int, days: int = 30) -> Array:
+## This Trader's intertown shipments or this Port's outside transactions from
+## up to the last `days` daily records, newest first. Each transaction is
+## copied so callers cannot mutate simulation history through the query result.
+func get_trade_transactions(business_id: int, days: int = 30) -> Array:
 	assert(businesses.has(business_id), "Unknown business id %d" % business_id)
-	assert((businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER, "Business %d is not a Trader" % business_id)
+	assert((businesses[business_id] as HEBusiness).kind in [HEBusiness.Kind.TRADER, HEBusiness.Kind.PORT], "Business %d has no trade transactions" % business_id)
 	var start: int = max(0, _history.size() - days)
 	var out: Array = []
 	for record_index in range(_history.size() - 1, start - 1, -1):
@@ -2736,6 +2752,11 @@ func get_trader_transactions(business_id: int, days: int = 30) -> Array:
 			if transaction["business_id"] == business_id:
 				out.append(transaction.duplicate(true))
 	return out
+
+## Compatibility alias for existing valley callers. Ports and Traders share
+## this transaction feed; new code should use get_trade_transactions.
+func get_trader_transactions(business_id: int, days: int = 30) -> Array:
+	return get_trade_transactions(business_id, days)
 
 ## Up to `limit` hiring/firing events for any business, newest first. A type
 ## filter is applied before the limit; "both" includes hires and firings.
@@ -2798,7 +2819,7 @@ func _daily_tick() -> void:
 		(market as HEMarket).last_clearing.clear()
 		(market as HEMarket).clear_daily_export()
 	var record := _new_daily_record()
-	if not external_trade_enabled:
+	if intertown_trading_enabled:
 		for business in businesses.values():
 			var trader_business: HEBusiness = business
 			if trader_business.kind == HEBusiness.Kind.TRADER:
@@ -2806,6 +2827,13 @@ func _daily_tick() -> void:
 				trader_business.last_imported = {}
 		record["trader_transactions"].append_array(_pending_valley_transactions)
 		_pending_valley_transactions.clear()
+	for business in businesses.values():
+		var trade_business: HEBusiness = business
+		if trade_business.kind == HEBusiness.Kind.PORT:
+			trade_business.last_exported = {}
+			trade_business.last_imported = {}
+			trade_business.last_actual_units = 0.0
+			trade_business.last_planned_units = float(_business_employed_worker_count(trade_business.id)) * TRADER_CAPACITY_PER_WORKER
 	wages.pay_wages(record)
 	_begin_funded_demand_cache()
 	_run_input_purchasing(record)
@@ -2815,12 +2843,9 @@ func _daily_tick() -> void:
 	_run_production(record)
 	_run_tool_wear(record)
 	_run_market(record)
-	if not external_trade_enabled:
-		_run_port_trade()
 	_register_business_only_offers()
-	if external_trade_enabled:
-		_run_trade(record)
 	_run_warehouse_orders(record)
+	_run_port_trade(record)
 	_run_water_maintenance(record)
 	_run_house_maintenance(record)
 	_apply_price_signals()
@@ -3010,7 +3035,9 @@ func _livestock_has_outlet(settlement_id: int, commodity: Commodity.Type) -> boo
 			continue
 		if other.processes_livestock:
 			return true
-		if other.kind == HEBusiness.Kind.TRADER and _trader_export_enabled[business_id].get(commodity, false):
+		if other.kind == HEBusiness.Kind.PORT:
+			return true
+		if intertown_trading_enabled and other.kind == HEBusiness.Kind.TRADER and _trader_export_enabled[business_id].get(commodity, false):
 			return true
 	return false
 
@@ -3294,9 +3321,8 @@ func _close_business_ledger(b: HEBusiness, reference_wage: float) -> void:
 	if b.kind == HEBusiness.Kind.TRADER or b.kind == HEBusiness.Kind.PORT:
 		for c in b.last_exported.keys():
 			sold += b.last_exported[c]
-		if b.kind == HEBusiness.Kind.TRADER:
-			for c in b.last_imported.keys():
-				sold += b.last_imported[c]
+		for c in b.last_imported.keys():
+			sold += b.last_imported[c]
 	b.ledger_today["reference_wage"] = reference_wage
 	b.close_ledger_day(prices, outputs, sold, produced)
 
@@ -3352,7 +3378,7 @@ func _household_offer(settlement_id: int, commodity: Commodity.Type) -> float:
 			local_offer = minf(stock, stock / float(days_until) * SELL_PACE_HEADROOM)
 		else:
 			local_offer = stock
-	if not external_trade_enabled:
+	if intertown_trading_enabled:
 		var trader := _settlement_trader(settlement_id)
 		if trader != null:
 			local_offer += maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0))
@@ -3368,16 +3394,26 @@ func _business_offer(settlement_id: int, commodity: Commodity.Type, trader_impor
 	var seller := _business_selling(settlement_id, commodity)
 	if seller != null:
 		var local_offer := _b2b_offer(seller, settlement_id, commodity, claim)
-		if external_trade_enabled or local_offer > 0.0001:
+		if local_offer > 0.0001:
 			return local_offer
-	var trader := _settlement_trader(settlement_id)
-	if not allow_import or trader == null:
+		if not intertown_trading_enabled:
+			return 0.0
+	if intertown_trading_enabled:
+		var trader := _settlement_trader(settlement_id)
+		if trader != null:
+			var valley_stock := maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0))
+			if valley_stock > 0.0001:
+				return valley_stock
+	var port := _settlement_port(settlement_id)
+	if not allow_import or port == null:
 		return 0.0
-	if not external_trade_enabled:
-		return maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0))
-	if not trader_import_capacity.has(trader.id):
-		trader_import_capacity[trader.id] = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER
-	return trader_import_capacity[trader.id]
+	if not trader_import_capacity.has(port.id):
+		var already_imported := 0.0
+		for imported in port.last_imported.values():
+			already_imported += float(imported)
+		trader_import_capacity[port.id] = maxf(0.0,
+			float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER - already_imported)
+	return trader_import_capacity[port.id]
 
 ## The satisfiers a buyer can actually draw on today, cheapest per need-unit
 ## first. `offers` maps a satisfier to how much of it THIS kind of buyer can
@@ -4105,6 +4141,11 @@ func _evaluate_business_capacity(record: Dictionary) -> void:
 			continue
 		if b.processes_livestock:
 			continue # crew set by _livestock_crew_target in _reconcile_employment
+		# Valley Ports are fixed-capacity outside terminals. Their staffed
+		# throughput is authored by the town seed; only standalone Ports use
+		# the Trader throughput controller below.
+		if intertown_trading_enabled and b.kind == HEBusiness.Kind.PORT:
+			continue
 		# A business is never tuned down to zero: it keeps its last worker and
 		# can only go away by exhausting its credit (see _fail_business), so
 		# there is no idle zombie and no trial rehire to bring one back.
@@ -4239,7 +4280,7 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 	# TRADER_CAPACITY_PER_WORKER units a day, and what it earns is a spread on the
 	# units it actually moves, which the goods on offer (not its crew) decide. So
 	# the crew follows throughput, and it only grows while it is nearly full.
-	if b.kind == HEBusiness.Kind.TRADER:
+	if b.kind in [HEBusiness.Kind.TRADER, HEBusiness.Kind.PORT]:
 		var traded := b.ledger_average("units_sold", window)
 		var trader_target := traded * (1.0 + STAFFING_HEADROOM) / TRADER_CAPACITY_PER_WORKER
 		# Judged against the slots authorized, not just the ones filled: with labor
@@ -4308,7 +4349,7 @@ func _staffing_decision(b: HEBusiness, reference_wage: float) -> Dictionary:
 ## grows its cadence with its production lag (roughly a sixth of its growth
 ## cycle) so step changes do not compound before output responds.
 func _capacity_eval_interval_days(b: HEBusiness) -> int:
-	if b.kind == HEBusiness.Kind.TRADER:
+	if b.kind in [HEBusiness.Kind.TRADER, HEBusiness.Kind.PORT]:
 		return TRADER_CAPACITY_EVAL_INTERVAL_DAYS
 	# uses_field_model(), not has_long_cycle() -- only a field is guaranteed to
 	# pay off within its growth cycle.
@@ -4546,7 +4587,7 @@ func _clear_market_for(settlement_id: int, commodity: Commodity.Type, record: Di
 	var local_market: HEMarket = markets[settlement_id]
 	var price: float = local_market.price[commodity]
 	var seller: HEBusiness = _business_selling(settlement_id, commodity)
-	var importer: HEBusiness = _settlement_trader(settlement_id) if not external_trade_enabled else null
+	var importer: HEBusiness = _settlement_trader(settlement_id) if intertown_trading_enabled else null
 	var total_offer := _household_offer(settlement_id, commodity)
 	var imported_offer: float = maxf(0.0, importer.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)) if importer != null else 0.0
 	var local_offer: float = maxf(0.0, total_offer - imported_offer)
@@ -4871,11 +4912,13 @@ func get_valley_port_buy_price(commodity: Commodity.Type) -> float:
 	var port := _settlement_port(settlement_id)
 	if not PORT_GOODS.has(commodity) or port == null or _business_employed_worker_count(port.id) <= 0:
 		return 0.0
-	return 0.5 * _port_outside_price(settlement_id, commodity)
+	return PORT_BUY_PRICE_FRACTION * _port_outside_price(settlement_id, commodity)
 
 ## The outside market has a stable reference price even when a local glut
 ## drives Staithe's household quote to its floor.
 func _port_outside_price(settlement_id: int, commodity: Commodity.Type) -> float:
+	if is_livestock(commodity):
+		return _export_reference_price(settlement_id, commodity)
 	return maxf(BASE_PRICE[commodity], (markets[settlement_id] as HEMarket).price[commodity])
 
 ## A town without an outside Port buys iron and ore for its staffed workshops,
@@ -4885,64 +4928,118 @@ func get_valley_workshop_import_need(commodity: Commodity.Type, in_transit: floa
 	var daily_use := _business_input_daily_use(settlement_id, commodity, null)
 	return maxf(0.0, daily_use * 30.0 - _town_stored(settlement_id, commodity) - in_transit)
 
-## A staffed port buys residual goods at half the outside quote and sells them
-## off-map for the full quote. Imported Trader stock goes first so the Trader
-## recovers its shipment cost; local businesses keep their normal reserve.
-func _run_port_trade() -> void:
+## A staffed Port buys whatever local sellers can spare and sells it to an
+## unlimited outside market. Port staffing limits daily throughput.
+func _run_port_trade(record: Dictionary) -> void:
 	for settlement_id in settlements.keys():
 		var port := _settlement_port(settlement_id)
 		if port == null:
 			continue
 		var capacity: float = float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER
-		var remaining := capacity
-		var trader := _settlement_trader(settlement_id)
-		port.last_exported = {}
+		var remaining := maxf(0.0, capacity - port.last_actual_units)
 		for commodity in PORT_GOODS:
 			if remaining <= 0.0001:
 				break
+			var handling_available := remaining
+			var exported_for_good := 0.0
 			var market_price := _port_outside_price(settlement_id, commodity)
-			var buy_price := market_price * 0.5
-			var sellers: Array[HEBusiness] = []
-			if trader != null:
-				sellers.append(trader)
-			var local_seller := _business_selling(settlement_id, commodity)
-			if local_seller != null:
-				sellers.append(local_seller)
-			for seller in sellers:
-				var quantity := minf(remaining, seller.stock(commodity))
-				var seller_buy_price := buy_price
-				if seller == trader:
-					quantity = minf(quantity, maxf(0.0, seller.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)))
-					var local_use := _settlement_daily_demand(settlement_id, commodity) + _business_input_daily_use(settlement_id, commodity, null)
-					quantity = minf(quantity, maxf(0.0, seller.stock(commodity) - local_use * 30.0))
-				else:
-					var offer := _seller_trade_offer(seller, commodity)
-					# Keep the usual half-price bid, but a staffed producer can
-					# negotiate up to its cost floor while the Port still clears a
-					# margin. Otherwise a temporary output glut can cut off its only
-					# buyer and turn into a permanent business failure.
-					seller_buy_price = maxf(buy_price, offer["min_price"])
-					if seller_buy_price > market_price * 0.9:
-						continue
-					quantity = minf(quantity, offer["quantity"])
-				if quantity <= 0.0001:
-					continue
-				seller.consume(commodity, quantity)
-				seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
-				seller.balance += quantity * seller_buy_price
-				seller.ledger_add("sales_export" if seller != trader else "sales_business", quantity * seller_buy_price)
-				seller.last_revenue += quantity * seller_buy_price
-				if seller == trader:
-					trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + quantity
-				port.balance += quantity * (market_price - seller_buy_price)
-				port.ledger_add("trade_margin", quantity * (market_price - seller_buy_price))
-				port.ledger_add_good("export", commodity, quantity)
-				port.last_revenue += quantity * (market_price - seller_buy_price)
-				port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + quantity
-				_export_revenue_total += quantity * market_price
-				remaining -= quantity
+			var offered := 0.0
+			var port_stock := port.stock(commodity)
+			if port_stock > 0.0001:
+				offered += port_stock
+				var imported_quantity := minf(remaining, port_stock)
+				var imported_revenue := imported_quantity * market_price
+				port.consume(commodity, imported_quantity)
+				port.add_flow(HEBusiness.FLOW_SOLD, commodity, imported_quantity)
+				port.balance += imported_revenue
+				port.ledger_add("sales_export", imported_revenue)
+				port.ledger_add_good("export", commodity, imported_quantity)
+				port.last_revenue += imported_revenue
+				port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + imported_quantity
+				port.last_actual_units += imported_quantity
+				exported_for_good += imported_quantity
+				var imported_name := Commodity.name_of(commodity)
+				record["exported"][imported_name] = record["exported"].get(imported_name, 0.0) + imported_quantity
+				record["export_revenue"] += imported_revenue
+				record["trader_transactions"].append({"day": day + 1, "business_id": port.id,
+					"settlement_id": settlement_id, "direction": "export", "commodity": imported_name,
+					"quantity": imported_quantity, "unit_price": market_price,
+					"paid_price": market_price * PORT_BUY_PRICE_FRACTION,
+					"local_value": imported_revenue, "route": "Outside"})
+				if is_livestock(commodity):
+					_livestock_market_today(record, commodity)["exported"] += imported_quantity
+				_export_revenue_total += imported_revenue
+				remaining -= imported_quantity
+			var seller := _business_selling(settlement_id, commodity)
+			if seller != null:
+				var offer := _seller_trade_offer(seller, commodity)
+				offered += float(offer["quantity"])
+				var outside_bid := market_price * PORT_BUY_PRICE_FRACTION
+				var seller_meets_floor := outside_bid + 0.00001 >= float(offer["min_price"]) \
+					and maxf(outside_bid, float(offer["min_price"])) <= market_price * 0.9
+				var seller_bid := maxf(outside_bid, float(offer["min_price"])) if seller_meets_floor else outside_bid
+				var eligible: float = float(offer["quantity"]) if seller_meets_floor else float(offer["salvage_quantity"])
+				if seller_meets_floor:
+					var quantity := minf(remaining, eligible)
+					if quantity > 0.0001:
+						seller.consume(commodity, quantity)
+						seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
+						seller.balance += quantity * seller_bid
+						seller.ledger_add("sales_export", quantity * seller_bid)
+						seller.ledger_add_good("export", commodity, quantity)
+						seller.last_revenue += quantity * seller_bid
+						var margin := quantity * (market_price - seller_bid)
+						port.balance += margin
+						port.ledger_add("trade_margin", margin)
+						port.ledger_add_good("export", commodity, quantity)
+						port.last_revenue += margin
+						port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + quantity
+						port.last_actual_units += quantity
+						exported_for_good += quantity
+						var name := Commodity.name_of(commodity)
+						record["exported"][name] = record["exported"].get(name, 0.0) + quantity
+						record["export_revenue"] += quantity * market_price
+						record["trader_transactions"].append({"day": day + 1, "business_id": port.id,
+							"settlement_id": settlement_id, "direction": "export", "commodity": name,
+							"seller_id": seller.id, "quantity": quantity, "unit_price": market_price,
+							"paid_price": seller_bid, "local_value": quantity * market_price})
+						if is_livestock(commodity):
+							_livestock_market_today(record, commodity)["exported"] += quantity
+						_export_revenue_total += quantity * market_price
+						remaining -= quantity
+				elif not seller_meets_floor:
+					var salvage_quantity := minf(remaining, eligible)
+					if salvage_quantity > 0.0001:
+						seller.consume(commodity, salvage_quantity)
+						seller.add_flow(HEBusiness.FLOW_SOLD, commodity, salvage_quantity)
+						seller.balance += salvage_quantity * seller_bid
+						seller.ledger_add("sales_export", salvage_quantity * seller_bid)
+						seller.ledger_add_good("export", commodity, salvage_quantity)
+						seller.last_revenue += salvage_quantity * seller_bid
+						var salvage_margin := salvage_quantity * (market_price - seller_bid)
+						port.balance += salvage_margin
+						port.ledger_add("trade_margin", salvage_margin)
+						port.ledger_add_good("export", commodity, salvage_quantity)
+						port.last_revenue += salvage_margin
+						port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + salvage_quantity
+						port.last_actual_units += salvage_quantity
+						exported_for_good += salvage_quantity
+						var salvage_name := Commodity.name_of(commodity)
+						record["exported"][salvage_name] = record["exported"].get(salvage_name, 0.0) + salvage_quantity
+						record["export_revenue"] += salvage_quantity * market_price
+						record["trader_transactions"].append({"day": day + 1, "business_id": port.id,
+							"settlement_id": settlement_id, "direction": "export", "commodity": salvage_name,
+							"seller_id": seller.id, "quantity": salvage_quantity, "unit_price": market_price,
+							"paid_price": seller_bid, "local_value": salvage_quantity * market_price})
+						if is_livestock(commodity):
+							_livestock_market_today(record, commodity)["exported"] += salvage_quantity
+						_export_revenue_total += salvage_quantity * market_price
+						remaining -= salvage_quantity
+			var local_market: HEMarket = markets[settlement_id]
+			local_market.record_export(commodity, handling_available, exported_for_good)
+			if not SUBSISTENCE_COMMODITIES.has(commodity) and not is_livestock(commodity):
+				local_market.merge_clearing(commodity, offered, offered, exported_for_good, market_price)
 		port.last_planned_units = capacity
-		port.last_actual_units = capacity - remaining
 
 func get_valley_market_prices() -> Dictionary:
 	var settlement_id := _resolve_settlement_id(-1)
@@ -5010,9 +5107,31 @@ func pay_for_valley_shipment(commodity: Commodity.Type, quantity: float, unit_pr
 		trader.balance -= quantity * unit_price
 		_import_cost_total += quantity * unit_price
 
-func receive_valley_shipment(commodity: Commodity.Type, quantity: float, relay_destination: int = -1, unit_cost: float = 0.0) -> void:
+func receive_valley_shipment(commodity: Commodity.Type, quantity: float, relay_destination: int = -1, unit_cost: float = 0.0, port_terminal: bool = false) -> void:
 	var trader := _settlement_trader(_resolve_settlement_id(-1))
-	if trader != null:
+	var port := _settlement_port(_resolve_settlement_id(-1))
+	if port_terminal and trader != null and port != null:
+		var settlement_id := _resolve_settlement_id(-1)
+		var unit_price := get_valley_port_buy_price(commodity)
+		var gross := quantity * unit_price
+		var tax := _collect_sales_tax(settlement_id, gross)
+		trader.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
+		trader.balance += gross - tax
+		trader.ledger_add("sales_business", gross)
+		trader.ledger_add("taxes", tax)
+		trader.last_revenue += gross - tax
+		trader.last_cash_change += gross - tax
+		port.add_stock(commodity, quantity)
+		port.add_flow(HEBusiness.FLOW_BOUGHT, commodity, quantity)
+		port.balance -= gross
+		port.ledger_add("input_local", gross)
+		port.last_imported[commodity] = port.last_imported.get(commodity, 0.0) + quantity
+		var name := Commodity.name_of(commodity)
+		var transaction := {"day": day + 1, "business_id": port.id, "direction": "import",
+			"commodity": name, "quantity": quantity, "unit_price": unit_price,
+			"local_value": gross, "route": "Valley Trader"}
+		_pending_valley_transactions.append(transaction)
+	elif trader != null:
 		trader.add_stock(commodity, quantity)
 		if relay_destination >= 0:
 			var previous_quantity: float = _valley_reserved_stock.get(commodity, 0.0)
@@ -5040,193 +5159,11 @@ func record_valley_transaction(direction: String, commodity: Commodity.Type, qua
 	else:
 		(_history.back() as Dictionary)["trader_transactions"].append(transaction)
 
-## Standalone outside-market export, in three steps that each belong to someone:
-##   1. Every enabled good with a local seller gets a SELLER's offer: how much
-##      stock it can spare after its own forecast of local use, and the least it
-##      will take (_seller_trade_offer).
-##   2. The TRADER posts a bid per good, a fraction of that good's reference
-##      price (_export_reference_price), and takes the offers it can use in order
-##      of its own margin per unit of capacity (higher spread first), until its
-##      handling capacity is spent. A seller whose floor is above the bid keeps
-##      its stock; one holding more than its cover period will take any bid.
-##   3. The Trader adjusts each bid for tomorrow (_adjust_trader_bids).
-## Local households and businesses have already bought today (_run_market and
-## _run_input_purchasing run first), so the Trader only ever takes leftovers; no
-## reserve is held for it to respect, because the seller decides what is spare.
-## The export cash entering the closed system is booked at the reference price
-## whatever the bid, so the bid only splits that value between the seller and
-## the Trader's spread. A good no household or business buys (iron) has no local
-## use to protect, so its seller offers everything it makes.
-## Culled cattle and sheep go through this same path; their reference price has
-## no household market behind it and comes from _export_reference_price (the
-## posted HERD_EXPORT_PRICE). The Butcher needs no reserve: it buys first
-## (_run_livestock_purchasing runs earlier in the tick) and pays more than the
-## Trader bids, so only what it leaves is offered.
-func _run_trade(record: Dictionary) -> void:
-	var trader_ids: Array[int] = []
-	for business_id in businesses.keys():
-		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER:
-			trader_ids.append(business_id)
-	trader_ids.sort()
-
-	for trader_id in trader_ids:
-		var trader: HEBusiness = businesses[trader_id]
-		trader.last_exported = {}
-		var capacity_limit: float = float(_business_employed_worker_count(trader_id)) * TRADER_CAPACITY_PER_WORKER
-		var remaining_capacity := capacity_limit
-		var total_exported := 0.0
-		var local_market: HEMarket = markets[trader.settlement_id]
-
-		# 1 + 2a. Offers against bids.
-		var offers: Array[Dictionary] = []
-		for commodity in EXPORT_PRIORITY:
-			if not _trader_export_enabled[trader_id].get(commodity, false):
-				continue
-			var seller := _trade_seller(trader.settlement_id, commodity)
-			if seller == null:
-				continue
-			offers.append(_trader_offer_view(trader, seller, commodity))
-
-		# 2b. Capacity goes to the widest Trader margin per unit first; ties keep
-		# the commodity order, so the allocation is deterministic.
-		offers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			if absf(a["margin"] - b["margin"]) > 0.00001:
-				return a["margin"] > b["margin"]
-			return a["commodity"] < b["commodity"])
-		for offer in offers:
-			var commodity: Commodity.Type = offer["commodity"]
-			var quantity: float = minf(offer["eligible"], remaining_capacity)
-			offer["accepted"] = quantity
-			# Appetite is recorded even on a day nothing ships, so the market
-			# chart can show demand the seller's stock didn't cover.
-			local_market.record_export(commodity, remaining_capacity,
-				quantity if not SUBSISTENCE_COMMODITIES.has(commodity) and not is_livestock(commodity) and quantity > 0.0001 else 0.0)
-			if quantity <= 0.0001:
-				continue
-			_execute_export(trader, offer["seller"], commodity, quantity, offer["reference"], offer["bid"], record)
-			total_exported += quantity
-			remaining_capacity -= quantity
-			# SUBSISTENCE_COMMODITIES already get a full last_clearing entry from
-			# _clear_market_for's household-facing pass; a good like iron that
-			# households never buy has no other clearing source, so this is the
-			# only place its market grid row gets real offered/traded numbers.
-			if not SUBSISTENCE_COMMODITIES.has(commodity) and not is_livestock(commodity):
-				local_market.merge_clearing(commodity, offer["offer"]["quantity"], quantity, quantity, offer["reference"])
-
-		# 3. Tomorrow's bids.
-		_adjust_trader_bids(trader, offers, capacity_limit, remaining_capacity)
-		trader.last_planned_units = capacity_limit
-		trader.last_actual_units = total_exported
-
-## The seller a Trader buys `commodity` from: whichever business sells it
-## locally (_business_selling resolves a livestock good to the ranch holding
-## culled head, and meat to a Butcher or a ranch's home slaughter).
-## ASSUMPTION: one seller per good per settlement (buildings are unique today).
-## _business_selling returns the first match, so a second ranch or workshop of the
-## same kind would have its stock stranded. When placeable buildings allow
-## duplicates, _run_trade should collect offers per seller and allocate capacity
-## across them.
-func _trade_seller(settlement_id: int, commodity: Commodity.Type) -> HEBusiness:
-	return _business_selling(settlement_id, commodity)
-
-## A good's value for splitting shared costs among co-products and for cost
-## estimates: its base price (stable, unlike today's), or the ranch reference
-## for an animal.
+## A good's value for splitting costs among co-products and estimating seller costs.
 func _good_reference_value(commodity: Commodity.Type) -> float:
 	if is_livestock(commodity):
 		return livestock_quote(livestock_species(commodity), LivestockQuote.POSTED)
 	return BASE_PRICE.get(commodity, 0.0)
-
-func _trader_bid_fraction(trader: HEBusiness, commodity: Commodity.Type) -> float:
-	return trader.bid_fraction.get(commodity, TRADER_STARTING_BID_FRACTION)
-
-## The highest share of the reference price a Trader may bid: it must keep at
-## least a wage's worth per unit of handling capacity as its spread (capped at
-## half the price, so a very cheap good still has a sensible ceiling).
-func _trader_max_bid_fraction(settlement_id: int, reference_price: float) -> float:
-	if reference_price <= 0.0:
-		return TRADER_BID_FRACTION_MIN
-	var spread_floor := minf(wages.liquidity_scale(settlement_id) / TRADER_CAPACITY_PER_WORKER, reference_price * 0.5)
-	return maxf(TRADER_BID_FRACTION_MIN, 1.0 - spread_floor / reference_price)
-
-## One good's offer against the Trader's bid, as the day's allocation and the
-## market detail both need it: {commodity, seller, offer, reference, fraction,
-## bid, margin, eligible}. `eligible` is what the seller would sell at this bid:
-## all it can spare if the bid reaches its floor, otherwise only the units it
-## holds beyond its cover period.
-func _trader_offer_view(trader: HEBusiness, seller: HEBusiness, commodity: Commodity.Type) -> Dictionary:
-	var offer := _seller_trade_offer(seller, commodity)
-	var reference := _export_reference_price(trader.settlement_id, commodity)
-	var fraction := clampf(_trader_bid_fraction(trader, commodity), TRADER_BID_FRACTION_MIN, _trader_max_bid_fraction(trader.settlement_id, reference))
-	var bid := reference * fraction
-	var eligible: float = offer["quantity"] if bid + 0.00001 >= offer["min_price"] else offer["salvage_quantity"]
-	return {"commodity": commodity, "seller": seller, "offer": offer, "reference": reference,
-		"fraction": fraction, "bid": bid, "margin": reference - bid, "eligible": eligible, "accepted": 0.0}
-
-## Books one export: the seller is paid the bid, the Trader keeps the spread, and
-## the reference value enters the closed economy as new money.
-func _execute_export(trader: HEBusiness, seller: HEBusiness, commodity: Commodity.Type, quantity: float, reference_price: float, bid_price: float, record: Dictionary) -> void:
-	seller.consume(commodity, quantity)
-	seller.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
-	# Adds to whatever seller.last_revenue this same tick's earlier steps
-	# (_run_input_purchasing, local market clearing) already contributed --
-	# tomorrow's wage for THIS business is funded by every channel it sold through
-	# today together.
-	seller.balance += quantity * bid_price
-	seller.ledger_add("sales_export", quantity * bid_price)
-	seller.ledger_add_good("export", commodity, quantity)
-	seller.last_revenue += quantity * bid_price
-
-	var margin: float = quantity * (reference_price - bid_price)
-	trader.balance += margin
-	trader.ledger_add("trade_margin", margin)
-	trader.last_revenue += margin
-
-	_accumulate(trader.last_exported, commodity, quantity)
-	var name := Commodity.name_of(commodity)
-	_accumulate(record["exported"], name, quantity)
-	record["trader_transactions"].append({
-		"day": day + 1,
-		"business_id": trader.id,
-		"settlement_id": trader.settlement_id,
-		"direction": "export",
-		"commodity": name,
-		"seller_id": seller.id,
-		"quantity": quantity,
-		"unit_price": reference_price,
-		"paid_price": bid_price,
-		"local_value": quantity * reference_price,
-	})
-	if is_livestock(commodity):
-		_livestock_market_today(record, commodity)["exported"] += quantity
-	# New money entering the closed system, valued at the reference price -- see
-	# _export_revenue_total's doc comment.
-	var revenue: float = quantity * reference_price
-	record["export_revenue"] += revenue
-	_export_revenue_total += revenue
-
-## Moves each bid a small step toward whatever would fill the Trader's capacity
-## with offers it can actually take, never beyond what the offers allow:
-##  - offers the sellers would accept exceed capacity: the Trader can afford a
-##    wider spread on the goods it turned away, so it lowers their bids;
-##  - offers were refused for being under the seller's floor while capacity is
-##    spare: it raises the bid, up to the ceiling that still pays a wage;
-##  - otherwise (nothing on offer, or everything taken) the bid stays put, so an
-##    idle Trader with no offers does not talk its own price into a loop.
-func _adjust_trader_bids(trader: HEBusiness, offers: Array[Dictionary], capacity_limit: float, remaining_capacity: float) -> void:
-	var eligible_total := 0.0
-	for offer in offers:
-		eligible_total += offer["eligible"]
-	var capacity_binding := capacity_limit > 0.0 and eligible_total > capacity_limit + 0.0001
-	for offer in offers:
-		var commodity: Commodity.Type = offer["commodity"]
-		var fraction: float = offer["fraction"]
-		var refused: bool = offer["offer"]["quantity"] > offer["eligible"] + 0.0001
-		if capacity_binding and offer["eligible"] > offer["accepted"] + 0.0001:
-			fraction -= TRADER_BID_STEP
-		elif refused and capacity_limit > 0.0 and remaining_capacity > 0.0001:
-			fraction += TRADER_BID_STEP
-		trader.bid_fraction[commodity] = clampf(fraction, TRADER_BID_FRACTION_MIN, _trader_max_bid_fraction(trader.settlement_id, offer["reference"]))
 
 ## A seller's decision about what to export: stock it can spare after its own
 ## forecast of local use until its next supply, and the least it will take.
@@ -5273,7 +5210,16 @@ func _routine_local_use(seller: HEBusiness, commodity: Commodity.Type) -> float:
 func _known_daily_local_use(seller: HEBusiness, commodity: Commodity.Type) -> float:
 	if is_livestock(commodity):
 		return 0.0
-	return _settlement_daily_demand(seller.settlement_id, commodity) + _business_input_daily_use(seller.settlement_id, commodity, seller)
+	var use := _settlement_daily_demand(seller.settlement_id, commodity) + _business_input_daily_use(seller.settlement_id, commodity, seller)
+	if commodity == Commodity.Type.GRAIN:
+		# Herd fodder is bought in a short autumn window but consumed once per
+		# winter. Include its annual average in the seller's baseline forecast so
+		# a Port cannot export the grain that ranches will need later in the year.
+		for business_id in businesses.keys():
+			var herd: HEBusiness = businesses[business_id]
+			if herd.settlement_id == seller.settlement_id and herd.kind == HEBusiness.Kind.HERD:
+				use += herd.herd_size * FODDER_PER_HEAD_PER_WINTER[herd.species] / float(DAYS_PER_YEAR)
+	return use
 
 ## Funded requests today's local clearing could not fill (counted once, not per
 ## day to the next supply: it is a backlog, not a rate). Zero for a good with no
@@ -5331,7 +5277,7 @@ func _seller_cost_ratio(seller: HEBusiness) -> float:
 	return clampf(cost / value, 0.0, SELLER_COST_RATIO_CAP)
 
 ## The price an export of `commodity` is valued at, and that the Trader's bid
-## (TRADER_BUY_PRICE_FRACTION of it) is a fraction of: the settlement's market
+## (PORT_BUY_PRICE_FRACTION of it) is a fraction of: the settlement's market
 ## price, or for livestock -- which has no household market -- its posted price.
 func _export_reference_price(settlement_id: int, commodity: Commodity.Type) -> float:
 	if is_livestock(commodity):
@@ -5668,7 +5614,7 @@ func _b2b_offer(seller: HEBusiness, settlement_id: int, commodity: Commodity.Typ
 ## its stock, sharing the seller's offer with local households pro rata
 ## (_b2b_offer) rather than behind a household reserve. An input nothing local produces (iron ore)
 ## has no such seller; the settlement's Trader supplies it instead,
-## importing it from outside on the spot at TRADER_BUY_PRICE_FRACTION of
+## importing it from outside on the spot at PORT_BUY_PRICE_FRACTION of
 ## the local price and reselling it at that same local price -- it never
 ## actually holds ore in its own inventory even for an instant, just
 ## pockets the spread as margin (see TRADER_CAPACITY_PER_WORKER's doc
@@ -5686,8 +5632,9 @@ func _run_input_purchasing(record: Dictionary) -> void:
 	_b2b_today = {}
 	_price_signal_today = {}
 	for business_id in businesses.keys():
-		if (businesses[business_id] as HEBusiness).kind == HEBusiness.Kind.TRADER:
-			(businesses[business_id] as HEBusiness).last_imported = {}
+		var trade_business: HEBusiness = businesses[business_id]
+		if trade_business.kind in [HEBusiness.Kind.TRADER, HEBusiness.Kind.PORT]:
+			trade_business.last_imported = {}
 
 	for business_id in businesses.keys():
 		var buyer: HEBusiness = businesses[business_id]
@@ -5889,8 +5836,8 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 	record["traded_quantity"][name] = record["traded_quantity"].get(name, 0.0) + bought
 
 	var seller := _business_selling(buyer.settlement_id, commodity)
-	var trader := _settlement_trader(buyer.settlement_id)
-	if seller != null and not external_trade_enabled and _b2b_offer(seller, buyer.settlement_id, commodity, bought) <= 0.0001:
+	var local_offer := _b2b_offer(seller, buyer.settlement_id, commodity, bought) if seller != null else 0.0
+	if local_offer <= 0.0001:
 		seller = null
 	if seller != null:
 		var b2b: Dictionary = _b2b_entry(buyer.settlement_id, commodity, seller)
@@ -5912,9 +5859,11 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 		# good's market shows 0 supplied / 0 requested.
 		var offer_before_sale: float = b2b["offer"]
 		local_market.merge_clearing(commodity, offer_before_sale, requested, bought, price)
-	elif trader != null:
-		if not external_trade_enabled:
-			var offer_before: float = trader.stock(commodity)
+	else:
+		var trader := _settlement_trader(buyer.settlement_id) if intertown_trading_enabled else null
+		var trader_stock := maxf(0.0, trader.stock(commodity) - _valley_reserved_stock.get(commodity, 0.0)) if trader != null else 0.0
+		if trader != null and trader_stock > 0.0001:
+			var offer_before: float = trader_stock
 			trader.consume(commodity, bought)
 			trader.add_flow(HEBusiness.FLOW_SOLD, commodity, bought)
 			var valley_tax := _collect_sales_tax(buyer.settlement_id, cost)
@@ -5928,25 +5877,36 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 			local_market.merge_clearing(commodity, offer_before, requested, bought, price)
 			_finish_funded_demand_availability_check(buyer.settlement_id, commodity, availability_need, alternative_was_available)
 			return
-		var offer_before: float = trader_import_capacity[trader.id]
-		trader_import_capacity[trader.id] -= bought
-		var import_cost: float = cost * TRADER_BUY_PRICE_FRACTION
-		# The sale to the local buyer is taxed; the Trader, as seller,
+		var port := _settlement_port(buyer.settlement_id)
+		if port == null:
+			local_market.merge_clearing(commodity, 0.0, requested, 0.0, price)
+			return
+		if not trader_import_capacity.has(port.id):
+			var already_imported := 0.0
+			for imported in port.last_imported.values():
+				already_imported += float(imported)
+			trader_import_capacity[port.id] = maxf(0.0,
+				float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER - already_imported)
+		var offer_before: float = trader_import_capacity[port.id]
+		trader_import_capacity[port.id] = maxf(0.0, offer_before - bought)
+		var import_cost: float = cost * PORT_BUY_PRICE_FRACTION
+		# The sale to the local buyer is taxed; the Port, as seller,
 		# bears it out of its import margin (never out of import_cost,
 		# which leaves the closed system).
 		var import_tax := _collect_sales_tax(buyer.settlement_id, cost)
 		var margin: float = cost - import_cost - import_tax
-		trader.balance += margin
-		trader.ledger_add("trade_margin", cost - import_cost)
-		trader.ledger_add("taxes", import_tax)
+		port.balance += margin
+		port.ledger_add("trade_margin", cost - import_cost)
+		port.ledger_add("taxes", import_tax)
 		payer.ledger_add("input_import", cost)
-		trader.last_revenue += margin
-		trader.last_cash_change += margin
-		trader.last_imported[commodity] = trader.last_imported.get(commodity, 0.0) + bought
+		port.last_revenue += margin
+		port.last_cash_change += margin
+		port.last_imported[commodity] = port.last_imported.get(commodity, 0.0) + bought
+		port.last_actual_units += bought
 		record["imported"][name] = record["imported"].get(name, 0.0) + bought
 		record["trader_transactions"].append({
 			"day": day + 1,
-			"business_id": trader.id,
+			"business_id": port.id,
 			"direction": "import",
 			"commodity": name,
 			"quantity": bought,
@@ -5955,7 +5915,6 @@ func _settle_purchase(buyer: HEBusiness, payer: HEBusiness, commodity: Commodity
 		})
 		record["import_cost"] += import_cost
 		_import_cost_total += import_cost
-
 		local_market.merge_clearing(commodity, offer_before, requested, bought, price)
 	_finish_funded_demand_availability_check(buyer.settlement_id, commodity, availability_need, alternative_was_available)
 
@@ -5989,15 +5948,15 @@ func _run_warehouse_orders(record: Dictionary) -> void:
 			continue
 		var settlement_id := warehouse.settlement_id
 		var local_market: HEMarket = markets[settlement_id]
-		var trader := _settlement_trader(settlement_id)
+		var port := _settlement_port(settlement_id)
 		# What is left of the Trader's daily import capacity after today's
-		# recipe-input purchases (their `last_imported`).
+		# recipe-input purchases (the Port's `last_imported`).
 		var import_capacity: Dictionary = {}
-		if trader != null:
+		if port != null:
 			var used := 0.0
-			for imported in trader.last_imported.values():
+			for imported in port.last_imported.values():
 				used += imported
-			import_capacity[trader.id] = maxf(0.0, float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER - used)
+			import_capacity[port.id] = maxf(0.0, float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER - used)
 		var wage_reserve: float = WAREHOUSE_WAGE_RESERVE_DAYS * wages.liquidity_scale(settlement_id) \
 			* float(_business_employed_worker_count(treasury.id) + _business_employed_worker_count(warehouse.id))
 
@@ -6021,13 +5980,13 @@ func _run_warehouse_orders(record: Dictionary) -> void:
 					if bought > 0.0001:
 						_settle_purchase(warehouse, treasury, commodity, funded, bought, funded, record, import_capacity)
 
-			if order["sell"] and trader != null and external_trade_enabled:
+			if order["sell"] and port != null:
 				var sellable: float = warehouse.stock(commodity) - order["keep"]
-				var capacity_left: float = float(_business_employed_worker_count(trader.id)) * TRADER_CAPACITY_PER_WORKER - trader.last_actual_units
+				var capacity_left: float = float(_business_employed_worker_count(port.id)) * TRADER_CAPACITY_PER_WORKER - port.last_actual_units
 				var quantity := minf(minf(sellable, WAREHOUSE_DAILY_TRADE_CAP), capacity_left)
 				if quantity > 0.0001:
 					var local_price := _export_reference_price(settlement_id, commodity)
-					var pay_price := local_price * TRADER_BUY_PRICE_FRACTION
+					var pay_price := local_price * PORT_BUY_PRICE_FRACTION
 					warehouse.consume(commodity, quantity)
 					warehouse.add_flow(HEBusiness.FLOW_SOLD, commodity, quantity)
 					treasury.balance += quantity * pay_price
@@ -6035,16 +5994,16 @@ func _run_warehouse_orders(record: Dictionary) -> void:
 					treasury.last_cash_change += quantity * pay_price
 					treasury.ledger_add("sales_export", quantity * pay_price)
 					var margin := quantity * (local_price - pay_price)
-					trader.balance += margin
-					trader.ledger_add("trade_margin", margin)
-					trader.last_revenue += margin
-					trader.last_actual_units += quantity
-					trader.last_exported[commodity] = trader.last_exported.get(commodity, 0.0) + quantity
+					port.balance += margin
+					port.ledger_add("trade_margin", margin)
+					port.last_revenue += margin
+					port.last_actual_units += quantity
+					port.last_exported[commodity] = port.last_exported.get(commodity, 0.0) + quantity
 					var name := Commodity.name_of(commodity)
 					record["exported"][name] = record["exported"].get(name, 0.0) + quantity
 					record["trader_transactions"].append({
 						"day": day + 1,
-						"business_id": trader.id,
+						"business_id": port.id,
 						"settlement_id": settlement_id,
 						"direction": "export",
 						"commodity": name,
