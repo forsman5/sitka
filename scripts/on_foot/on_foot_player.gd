@@ -202,7 +202,7 @@ func _ready() -> void:
 		if holder != null:
 			_weapon = selected_weapon
 			if _weapon == "bow":
-				for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
+				for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R", "Torso"]:
 					_bow_bones[bone_name] = _skeleton.find_bone(bone_name)
 
 	_bark_player = AudioStreamPlayer3D.new()
@@ -350,6 +350,9 @@ func _release_arrow(power: float) -> void:
 	# The model turns to face its movement direction while strafing. Its +Z
 	# axis is the bow's forward direction; camera orbit must not steer the shot.
 	var forward := _model.global_transform.basis.z.normalized()
+	# In first person the camera pitch is the aim (third person stays level).
+	if _camera_mode == CameraMode.FIRST_PERSON:
+		forward = forward.rotated(forward.cross(Vector3.UP).normalized(), _pitch)
 	arrow.global_position = _head.global_position + forward * 0.6
 	arrow.velocity = forward * OnFootArrow.SPEED * power
 	arrow.owner_player = self
@@ -485,6 +488,21 @@ func _process(delta: float) -> void:
 
 func _apply_bow_pose(weight: float, fraction: float) -> void:
 	apply_bow_pose_to_skeleton(_skeleton, _bow_bones, weight, fraction)
+	# In first person the camera pitch is the aim, so tilt the bow arms with it.
+	if _camera_mode == CameraMode.FIRST_PERSON:
+		apply_aim_pitch_to_skeleton(_skeleton, _bow_bones.get("Torso", -1), _pitch * weight)
+
+## Tilts the torso (and so both arms and the bow) up by `pitch` radians. Call
+## after the animation and bow pose have set the bone rotations for this frame.
+static func apply_aim_pitch_to_skeleton(skeleton: Skeleton3D, torso_index: int, pitch: float) -> void:
+	if skeleton == null or torso_index < 0 or is_zero_approx(pitch):
+		return
+	# Skeleton space: X is lateral, -Y forward, +Z up, so a positive rotation
+	# about X tips the arms down; negate to look up.
+	var parent_basis := skeleton.get_bone_global_pose(skeleton.get_bone_parent(torso_index)).basis
+	var tilt := Basis(Vector3.RIGHT, -pitch)
+	var local_tilt := (parent_basis.inverse() * tilt * parent_basis).get_rotation_quaternion()
+	skeleton.set_bone_pose_rotation(torso_index, local_tilt * skeleton.get_bone_pose_rotation(torso_index))
 
 static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, weight: float, fraction: float) -> void:
 	if skeleton == null:

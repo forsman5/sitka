@@ -11,11 +11,14 @@ func _capture() -> void:
 	var output_path := "user://weapons.png"
 	var anim_mode := "idle"
 	var draw_fraction := -1.0
+	var aim_pitch := 0.0
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--output="):
 			output_path = argument.trim_prefix("--output=")
 		elif argument.begins_with("--anim="):
 			anim_mode = argument.trim_prefix("--anim=")
+		elif argument.begins_with("--pitch="):
+			aim_pitch = deg_to_rad(float(argument.trim_prefix("--pitch=")))
 		elif argument.begins_with("--draw="):
 			draw_fraction = clampf(float(argument.trim_prefix("--draw=")), 0.0, 1.0)
 
@@ -83,9 +86,10 @@ func _capture() -> void:
 		if weapon == "bow" and draw_fraction >= 0.0:
 			var skeleton := model.find_child("Skeleton3D", true, false) as Skeleton3D
 			var bones := {}
-			for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
+			for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R", "Torso"]:
 				bones[bone_name] = skeleton.find_bone(bone_name)
 			OnFootPlayer.apply_bow_pose_to_skeleton(skeleton, bones, 1.0, draw_fraction)
+			OnFootPlayer.apply_aim_pitch_to_skeleton(skeleton, bones["Torso"], aim_pitch)
 			OnFootWeapons.apply_bow_draw_pose(model, holder, draw_fraction, 1.0)
 		if "--fp" in "".join(OS.get_cmdline_user_args()):
 			_hide_hair(model)
