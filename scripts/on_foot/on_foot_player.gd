@@ -33,6 +33,7 @@ const FIRST_PERSON_BOW_EYE_DROP := 0.27
 const FIRST_PERSON_BOW_CAMERA_Z := -0.08
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
 const DEFAULT_THIRD_PERSON_PITCH := -0.18
+const THIRD_PERSON_BOW_MAX_PITCH := 0.6
 
 ## Individual barks (see assets/audio/bark/CREDITS.md). Alternatives to audition
 ## live in assets/audio/bark/options/.
@@ -233,7 +234,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			# Negative pitch places the camera above the low pivot and looks down
 			# across the body. Keep it from swinging beneath the ground plane.
-			_third_person_pitch = clampf(_third_person_pitch - event.relative.y * mouse_sensitivity, -0.9, 0.08)
+			# A bow aims with this pitch, so let it look well above the default.
+			var max_pitch := THIRD_PERSON_BOW_MAX_PITCH if _weapon == "bow" else 0.08
+			_third_person_pitch = clampf(_third_person_pitch - event.relative.y * mouse_sensitivity, -0.9, max_pitch)
 			_head.rotation.x = _third_person_pitch
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		if _weapon != "":
@@ -350,9 +353,7 @@ func _release_arrow(power: float) -> void:
 	# The model turns to face its movement direction while strafing. Its +Z
 	# axis is the bow's forward direction; camera orbit must not steer the shot.
 	var forward := _model.global_transform.basis.z.normalized()
-	# In first person the camera pitch is the aim (third person stays level).
-	if _camera_mode == CameraMode.FIRST_PERSON:
-		forward = forward.rotated(forward.cross(Vector3.UP).normalized(), _pitch)
+	forward = forward.rotated(forward.cross(Vector3.UP).normalized(), _aim_pitch())
 	arrow.global_position = _head.global_position + forward * 0.6
 	arrow.velocity = forward * OnFootArrow.SPEED * power
 	arrow.owner_player = self
@@ -488,9 +489,14 @@ func _process(delta: float) -> void:
 
 func _apply_bow_pose(weight: float, fraction: float) -> void:
 	apply_bow_pose_to_skeleton(_skeleton, _bow_bones, weight, fraction)
-	# In first person the camera pitch is the aim, so tilt the bow arms with it.
+	apply_aim_pitch_to_skeleton(_skeleton, _bow_bones.get("Torso", -1), _aim_pitch() * weight)
+
+## Radians the bow aims above level: the view pitch in first person, and in
+## third person the orbit pitch relative to its (slightly downward) default.
+func _aim_pitch() -> float:
 	if _camera_mode == CameraMode.FIRST_PERSON:
-		apply_aim_pitch_to_skeleton(_skeleton, _bow_bones.get("Torso", -1), _pitch * weight)
+		return _pitch
+	return _third_person_pitch - DEFAULT_THIRD_PERSON_PITCH
 
 ## Tilts the torso (and so both arms and the bow) up by `pitch` radians. Call
 ## after the animation and bow pose have set the bone rotations for this frame.
