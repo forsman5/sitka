@@ -490,7 +490,8 @@ static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, 
 		{"bone": "UpperArm.L", "child": "LowerArm.L", "direction": Vector3(0.0, -0.90, 0.42)},
 		{"bone": "LowerArm.L", "child": "Fist.L", "direction": Vector3(0.0, -0.98, 0.18)},
 		{"bone": "UpperArm.R", "child": "LowerArm.R", "direction": Vector3(0.30, -0.91, elbow_up)},
-		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(0.22 - fraction * 0.12, hand_back, 0.42)},
+		# Move the string hand outside the cheek silhouette so it remains visible.
+		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(lerpf(0.22, 0.42, fraction), hand_back, 0.48)},
 	]
 	for segment in poses:
 		var bone_index := int(bones.get(segment["bone"], -1))

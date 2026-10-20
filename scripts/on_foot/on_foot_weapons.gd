@@ -69,9 +69,16 @@ static func apply_bow_draw_pose(model: Node3D, holder: Node3D, fraction: float, 
 		return
 	var forward := model.global_transform.basis.z.normalized()
 	weapon.global_position = holder.global_position + forward * 0.06 * clampf(pose_weight, 0.0, 1.0)
-	var mesh_instance := weapon.find_child("MeshInstance3D", true, false) as MeshInstance3D
-	if mesh_instance == null or mesh_instance.mesh == null:
+	var mesh_instances := weapon.find_children("*", "MeshInstance3D", true, false)
+	if mesh_instances.is_empty():
 		return
-	var draw_shape: int = mesh_instance.mesh.find_blend_shape_by_name("Draw")
+	var mesh_instance := mesh_instances[0] as MeshInstance3D
+	if mesh_instance.mesh == null:
+		return
+	var draw_shape := -1
+	for shape_index in mesh_instance.mesh.get_blend_shape_count():
+		if mesh_instance.mesh.get_blend_shape_name(shape_index) == "Draw":
+			draw_shape = shape_index
+			break
 	if draw_shape >= 0:
 		mesh_instance.set_blend_shape_value(draw_shape, clampf(fraction * pose_weight, 0.0, 1.0))
