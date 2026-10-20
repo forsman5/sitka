@@ -5086,6 +5086,74 @@ func _run_port_trade() -> void:
 		port.last_planned_units = capacity
 		port.last_actual_units = capacity - remaining
 
+## Valley migration: whole households move between towns, carrying their
+## people, money and goods (nothing is written off). ValleyEconomy decides when.
+var _migrated_in_total := 0
+var _migrated_out_total := 0
+
+## Inputs to a town's attractiveness: how much of the town is short of food or
+## work, and how many free homes it has.
+func get_migration_signals() -> Dictionary:
+	var settlement_id := _resolve_settlement_id(-1)
+	var summary := get_settlement_summary(settlement_id)
+	var housing := get_housing_report(settlement_id)
+	var count: int = summary["household_count"]
+	return {"households": count, "population": summary["population"],
+		"short_share": float(summary["households_short_of_goods"]) / float(maxi(1, count)),
+		"unemployed_share": float(summary["unemployed_household_count"]) / float(maxi(1, count)),
+		"free_homes": (int(housing["capacity"]) - count) if housing["modeled"] else 99,
+		"migrated_in_total": _migrated_in_total, "migrated_out_total": _migrated_out_total}
+
+## An unemployed or food-stressed household, or -1. The least attached leave first.
+func pick_migrant_household(pick_rng: RandomNumberGenerator) -> int:
+	var candidates: Array[int] = []
+	for household_id in get_household_ids(_resolve_settlement_id(-1)):
+		var h: HEHousehold = households[household_id]
+		if not h.is_employed() or h.demographics.food_stress >= 0.3:
+			candidates.append(household_id)
+	if candidates.is_empty():
+		return -1
+	candidates.sort()
+	return candidates[pick_rng.randi() % candidates.size()]
+
+func extract_migrant(household_id: int) -> Dictionary:
+	var h: HEHousehold = households[household_id]
+	var inventory := {}
+	for c in SUBSISTENCE_COMMODITIES:
+		inventory[c] = h.stock(c)
+	var snapshot := {"balance": h.balance, "inventory": inventory,
+		"worker_ages": h.worker_ages(), "worker_sexes": h.worker_sexes(),
+		"dependent_ages": h.dependent_ages(), "dependent_sexes": h.dependent_sexes()}
+	(settlements[h.settlement_id] as HESettlement).household_ids.erase(household_id)
+	households.erase(household_id)
+	_invalidate_employment()
+	_migrated_out_total += 1
+	_log_event("migrate_out", {"household_id": household_id, "headcount": snapshot["worker_ages"].size() + snapshot["dependent_ages"].size()})
+	_reconcile_all_housing()
+	return snapshot
+
+func accept_migrant(snapshot: Dictionary) -> int:
+	var settlement_id := _resolve_settlement_id(-1)
+	var worker_ages: Array[int] = []
+	worker_ages.assign(snapshot["worker_ages"])
+	var dependent_ages: Array[int] = []
+	dependent_ages.assign(snapshot["dependent_ages"])
+	var h := HEHousehold.new(_next_household_id, worker_ages.size(), dependent_ages.size(), snapshot["balance"], settlement_id)
+	_next_household_id += 1
+	h.seed_worker_ages(worker_ages)
+	h.seed_worker_sexes(snapshot["worker_sexes"])
+	h.seed_dependent_ages(dependent_ages)
+	h.seed_dependent_sexes(snapshot["dependent_sexes"])
+	for c in snapshot["inventory"]:
+		h.add_stock(c, snapshot["inventory"][c])
+	households[h.id] = h
+	(settlements[settlement_id] as HESettlement).household_ids.append(h.id)
+	_invalidate_employment()
+	_migrated_in_total += 1
+	_log_event("migrate_in", {"household_id": h.id, "headcount": h.headcount()})
+	_reconcile_all_housing()
+	return h.id
+
 func get_valley_market_prices() -> Dictionary:
 	var settlement_id := _resolve_settlement_id(-1)
 	var prices := {}
