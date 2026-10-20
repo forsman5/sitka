@@ -29,9 +29,15 @@ const FOOD_GRAIN_MORALE := -0.40
 ## What an affluent household adds to its 0.2 subsistence points a day (0.5 in
 ## all), eaten as bread or meat only (HENeed.luxury_per_person_daily).
 const FOOD_LUXURY_PER_PERSON := 0.3
+## Heating through the year, spring / summer / autumn / winter (the shape only;
+## HENeed.seasonal_scale normalises it): winter needs 4.5x summer's fuel.
+const HEAT_SEASONAL_CURVE: Array[float] = [1.0, 0.4, 1.0, 1.8]
 
 static func all() -> Array[HENeed]:
 	if _all.is_empty():
+		var heat := HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.CHARCOAL: 4.0, Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER, false, 0.25,
+			"Cold wears down health and morale. Winter needs far more fuel than summer. Reporting only: does not (yet) cause emigration.")
+		heat.seasonal_curve = HEAT_SEASONAL_CURVE.duplicate()
 		_all = [
 			# Hunger points: bread 4, meat 1, flour 1, grain 0.5 (densest first).
 			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
@@ -45,8 +51,7 @@ static func all() -> Array[HENeed]:
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the
 			# cheaper way to heat a house. Densest first: charcoal burns first.
-			HENeed.new(HENeed.Id.HEAT, "Heat", 0.1, {Commodity.Type.CHARCOAL: 4.0, Commodity.Type.TIMBER: 1.0}, Commodity.Type.TIMBER, false, 0.25,
-				"Cold wears down health and morale. Reporting only: does not (yet) cause emigration."),
+			heat,
 			# Matches Simulation.WOOL_PER_PERSON_PER_DAY.
 			# Leather and wool are interchangeable one-for-one; households buy
 			# whichever posts the lower price (see _satisfier_cascade).

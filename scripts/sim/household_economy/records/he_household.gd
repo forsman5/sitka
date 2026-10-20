@@ -85,12 +85,19 @@ const BIRTH_STRESS_THRESHOLD := 0.1
 ## into a worker) at once -- a soft brake on growth rate, not a cap on the
 ## household's eventual total size.
 const MAX_PENDING_DEPENDENTS := 6
-## Crowding. A household with more than this many adults (its workers plus
-## dependents past AGING_THRESHOLD_DAYS who haven't left yet) pushes the extras
-## out faster: each adult beyond the cap has its monthly leave-home chance
-## multiplied by CROWDED_LEAVE_MULTIPLIER.
-const CROWDED_ADULT_COUNT := 4
-const CROWDED_LEAVE_MULTIPLIER := 3.0
+## Staying home. A grown dependent only rolls to leave when the household is
+## over this headcount (workers + all dependents) -- the extra people push the
+## eldest out one by one as younger siblings are born -- or when the town has a
+## free house for them (evaluate_aging's `free_housing`). With neither they stay
+## on as adult dependents, so a full town does not mint homeless one-person
+## households. The workers are the household's heads: they never leave.
+const HOME_HEADCOUNT_CAP := 4
+## The first workers listed are the household's heads (head and spouse): they
+## never leave. Any worker beyond them -- a grown child who took a job at home
+## -- can found their own household like a grown dependent.
+const HEAD_COUNT := 2
+## evaluate_aging's `free_housing` when housing is not modeled.
+const FREE_HOUSING_UNLIMITED := 1 << 30
 
 ## Reused pooled record: worker_capacity, dependents, food_stress,
 ## apply_daily_fulfillment(), update_migration_pressure(),
@@ -204,6 +211,8 @@ var _members_made: int = 0
 ## Sexes of whoever the last evaluate_aging() promoted, parallel to
 ## last_promoted_member_numbers.
 var last_promoted_sexes: Array[int] = []
+## Ages (days) of the same leavers, so each founds a household at their real age.
+var last_promoted_ages: Array[int] = []
 
 ## Member numbers (see the household detail's "Member N" list) of whoever the
 ## last evaluate_aging() promoted, in the order they left. Placeholder until
@@ -419,55 +428,92 @@ func remove_member_for_emigration() -> void:
 		_worker_ages.pop_back()
 		_worker_sexes.pop_back()
 
-## Monthly: removes every dependent whose age has crossed
-## AGING_THRESHOLD_DAYS from THIS household and returns how many. Jobs are
-## sticky to whichever household already holds them -- a newly-adult member
-## doesn't inherit a parent's job for free, so this does NOT add them to
-## worker_capacity here. HESimulation is responsible for spinning each one
-## off into its own brand-new, unemployed, one-worker household (see
-## he_simulation.gd._evaluate_life_cycle/_split_off_new_household) that then
-## has to find its own job through the normal hiring pool like anyone else.
-## This is also what keeps a household's WORKER count fixed at whatever it
-## was seeded with for its whole life -- dependents (0..MAX_PENDING_
-## DEPENDENTS) are the only thing that fluctuates -- so there's no separate
-## household-size cap to author: growth becomes more, smaller households
-## instead of a few unboundedly large ones.
+## Monthly: removes every member who leaves to found their own household and
+## returns how many. HESimulation spins each leaver off into a brand-new,
+## unemployed, one-worker household (see he_simulation.gd._evaluate_life_cycle/
+## _split_off_new_household) that has to find its own job through the normal
+## hiring pool. A grown dependent only becomes a worker when their household's
+## employer has an open slot (promote_adults, from _reconcile_employment).
 ##
 ## Reaching AGING_THRESHOLD_DAYS only makes a dependent ELIGIBLE to leave:
-## each monthly check they go with leave_home_chance(age), so they stay on
-## as an adult dependent for a few months on average. `rng` is the
+## each monthly check they go with leave_home_chance(age). `rng` is the
 ## simulation's, so runs stay deterministic.
-func evaluate_aging(rng: RandomNumberGenerator) -> int:
-	var promoted := 0
-	var remaining: Array[int] = []
-	var remaining_sexes: Array[int] = []
+##
+## Only an adult in a household over HOME_HEADCOUNT_CAP, or one that can take
+## one of the town's `free_housing` empty houses, rolls at all. Dependents are
+## kept oldest first, so the eldest sibling goes first, and the headcount drops
+## as each one leaves. A leaver uses a free house if one is left; a household
+## over the cap pushes one out even with none (they start homeless).
+##
+## Workers beyond the first HEAD_COUNT (a grown child who took a job at home)
+## are candidates too; the head and spouse never leave.
+func evaluate_aging(rng: RandomNumberGenerator, free_housing: int = FREE_HOUSING_UNLIMITED) -> int:
 	last_promoted_member_numbers.clear()
 	last_promoted_sexes.clear()
-	var adult_slots := CROWDED_ADULT_COUNT - _worker_ages.size()
-	var adults_seen := 0
+	last_promoted_ages.clear()
+	var candidates: Array[Dictionary] = []
 	for i in _dependent_ages.size():
-		var age: int = _dependent_ages[i]
-		var chance := 0.0
-		if age >= AGING_THRESHOLD_DAYS:
-			chance = leave_home_chance(age)
-			if adults_seen >= adult_slots:
-				chance = minf(1.0, chance * CROWDED_LEAVE_MULTIPLIER)
-			adults_seen += 1
-		if age >= AGING_THRESHOLD_DAYS and rng.randf() < chance:
-			promoted += 1
-			# 1-based position in the member list (workers first, then
-			# dependents) as of just before promotion.
-			last_promoted_member_numbers.append(_worker_ages.size() + i + 1)
-			last_promoted_sexes.append(_dependent_sexes[i])
-		else:
-			remaining.append(age)
-			remaining_sexes.append(_dependent_sexes[i])
-	if promoted == 0:
+		if _dependent_ages[i] >= AGING_THRESHOLD_DAYS:
+			candidates.append({"worker": false, "i": i, "age": _dependent_ages[i]})
+	for i in range(HEAD_COUNT, _worker_ages.size()):
+		candidates.append({"worker": true, "i": i, "age": _worker_ages[i]})
+	if candidates.is_empty():
 		return 0
-	_dependent_ages = remaining
-	_dependent_sexes = remaining_sexes
-	demographics.dependents -= promoted
-	return promoted
+	# Eldest first; ties fall to workers, then the lower slot, so it is deterministic.
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a["age"] != b["age"]:
+			return a["age"] > b["age"]
+		if a["worker"] != b["worker"]:
+			return a["worker"]
+		return a["i"] < b["i"])
+	var headcount_now := headcount()
+	var houses_left := free_housing
+	var leaving_dependents: Dictionary = {}
+	var leaving_workers: Dictionary = {}
+	var worker_count := _worker_ages.size()
+	for candidate in candidates:
+		if headcount_now <= HOME_HEADCOUNT_CAP and houses_left <= 0:
+			break
+		if rng.randf() >= leave_home_chance(candidate["age"]):
+			continue
+		headcount_now -= 1
+		houses_left = maxi(houses_left - 1, 0)
+		var i: int = candidate["i"]
+		# Member numbers are 1-based positions in the member list (workers
+		# first, then dependents) as of just before anyone left.
+		if candidate["worker"]:
+			leaving_workers[i] = true
+			last_promoted_member_numbers.append(i + 1)
+			last_promoted_sexes.append(_worker_sexes[i])
+		else:
+			leaving_dependents[i] = true
+			last_promoted_member_numbers.append(worker_count + i + 1)
+			last_promoted_sexes.append(_dependent_sexes[i])
+		last_promoted_ages.append(candidate["age"])
+	var left := leaving_dependents.size() + leaving_workers.size()
+	if left == 0:
+		return 0
+	if not leaving_dependents.is_empty():
+		var remaining: Array[int] = []
+		var remaining_sexes: Array[int] = []
+		for i in _dependent_ages.size():
+			if not leaving_dependents.has(i):
+				remaining.append(_dependent_ages[i])
+				remaining_sexes.append(_dependent_sexes[i])
+		_dependent_ages = remaining
+		_dependent_sexes = remaining_sexes
+		demographics.dependents -= leaving_dependents.size()
+	if not leaving_workers.is_empty():
+		var staying: Array[int] = []
+		var staying_sexes: Array[int] = []
+		for i in _worker_ages.size():
+			if not leaving_workers.has(i):
+				staying.append(_worker_ages[i])
+				staying_sexes.append(_worker_sexes[i])
+		_worker_ages = staying
+		_worker_sexes = staying_sexes
+		demographics.worker_capacity -= leaving_workers.size()
+	return left
 
 ## Monthly chance that a dependent of `age` days leaves to found their own
 ## household: LEAVE_HOME_CHANCE_START at AGING_THRESHOLD_DAYS, rising
@@ -507,6 +553,40 @@ func evaluate_old_age_death() -> int:
 	_worker_sexes = remaining_sexes
 	demographics.worker_capacity -= died
 	return died
+
+## Grown dependents at home who could take a job.
+func adult_dependent_count() -> int:
+	var count := 0
+	for age in _dependent_ages:
+		if age >= AGING_THRESHOLD_DAYS:
+			count += 1
+	return count
+
+## Adult dependents still at home become workers, at most `count`, eldest
+## first. Used when a worker dies of old age (so a house keeps its family and
+## its job) and when the household's employer has room to hire (see
+## HESimulation._reconcile_employment). They keep their age, so their own
+## lifespan clock is unchanged. Returns how many stepped up; worker_capacity
+## grows by that many.
+func promote_adults(count: int) -> int:
+	var promoted := 0
+	var remaining: Array[int] = []
+	var remaining_sexes: Array[int] = []
+	for i in _dependent_ages.size():
+		if promoted < count and _dependent_ages[i] >= AGING_THRESHOLD_DAYS:
+			_worker_ages.append(_dependent_ages[i])
+			_worker_sexes.append(_dependent_sexes[i])
+			promoted += 1
+		else:
+			remaining.append(_dependent_ages[i])
+			remaining_sexes.append(_dependent_sexes[i])
+	if promoted == 0:
+		return 0
+	_dependent_ages = remaining
+	_dependent_sexes = remaining_sexes
+	demographics.dependents -= promoted
+	demographics.worker_capacity += promoted
+	return promoted
 
 ## Monthly, called after evaluate_aging so a just-freed pipeline slot counts
 ## this same period: a household that's been prosperous for at least

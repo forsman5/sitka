@@ -10,6 +10,9 @@ const MODEL_SCENE := preload("res://assets/models/animals/Sheep.fbx")
 ## young to breed.
 const ADULT_AGE := 2
 const LAMB_SCALE := 0.6
+const DEATH_FALL_TIME := 0.35
+
+signal noise_emitted(world_position: Vector3)
 
 @export var flee_speed: float = 5.5
 ## Flee speed scales with distance from the player: full speed inside
@@ -57,6 +60,7 @@ const LAMB_SCALE := 0.6
 @export_group("")
 
 var age_days: int = ADULT_AGE
+var dead: bool = false
 
 ## True once the pen has claimed this sheep; it then ignores the player.
 var penned: bool = false
@@ -64,6 +68,9 @@ var _slot_pos := Vector3.ZERO
 var _slot_yaw: float = 0.0
 var _pen_walk_left: float = 0.0
 var _frozen: bool = false
+var _death_fall_left: float = 0.0
+var _death_start_rotation: float = 0.0
+var _death_start_y: float = 0.0
 
 var _model: Node3D
 var _anim: AnimationPlayer
@@ -92,7 +99,8 @@ static var _snap: Array = []
 
 func _ready() -> void:
 	add_to_group("on_foot_sheep")
-	collision_mask = 1 | 2  # World objects plus the island terrain (layer 2).
+	collision_layer = 4 # Dedicated layer so sword and arrow queries can target sheep only.
+	collision_mask = 1 | 2 | 4 # World objects, island terrain, and other sheep.
 	_terrain = get_tree().get_first_node_in_group("heightmap_terrain")
 	_gravity = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 
@@ -117,6 +125,35 @@ func _ready() -> void:
 
 func is_adult() -> bool:
 	return age_days >= ADULT_AGE
+
+func is_dead() -> bool:
+	return dead
+
+## Permanently marks this sheep dead, emits a flock alarm and tips the model
+## onto its side. Dead sheep stay in the scene as a visible body.
+func die() -> void:
+	if dead:
+		return
+	dead = true
+	penned = true
+	_frozen = true
+	velocity = Vector3.ZERO
+	collision_layer = 0
+	collision_mask = 0
+	_death_fall_left = DEATH_FALL_TIME
+	_death_start_rotation = _model.rotation.z
+	_death_start_y = _model.position.y
+	noise_emitted.emit(global_position)
+
+## Nearby sheep hear the death cry and startle once.
+func hear_noise(noise_pos: Vector3) -> void:
+	if dead or penned:
+		return
+	var offset := global_position - noise_pos
+	offset.y = 0.0
+	if offset.length() <= 12.0:
+		_startled_left = maxf(_startled_left, startle_time_min)
+		_react_delay_left = maxf(_react_delay_left, randf_range(react_delay_min, react_delay_max))
 
 ## Called by the pen when this sheep enters: walk to the slot, then stand still.
 func pen_in(slot_pos: Vector3, yaw: float) -> void:
@@ -150,6 +187,12 @@ func _penned_step(delta: float) -> void:
 	_face_and_animate(delta, horiz)
 
 func _physics_process(delta: float) -> void:
+	if dead:
+		_death_fall_left = maxf(_death_fall_left - delta, 0.0)
+		var t := 1.0 - _death_fall_left / DEATH_FALL_TIME
+		_model.rotation.z = lerpf(_death_start_rotation, PI * 0.5, t)
+		_model.position.y = lerpf(_death_start_y, 0.0, t)
+		return
 	if penned:
 		_penned_step(delta)
 		return

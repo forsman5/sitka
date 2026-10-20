@@ -75,6 +75,15 @@ var shortfall_label: String = ""
 ## (<= 0 = the shared Household.STRESS_GAIN_PER_SHORTAGE / STRESS_RECOVERY_PER_DAY).
 var stress_gain: float = -1.0
 var stress_recovery: float = -1.0
+## How much of the per-person requirement applies across the year: one value
+## per season (spring, summer, autumn, winter), empty = flat. Only the shape
+## matters: seasonal_scale() normalises it so a year averages exactly 1.0, which
+## keeps the yearly requirement (and the cost-of-living basket) unchanged.
+var seasonal_curve: Array[float] = []
+
+## Days in one season and seasons in a year (HESimulation.DAYS_PER_SEASON and
+## SEASONS_PER_YEAR; a harness check keeps them equal).
+const DAYS_PER_SEASON := 90
 
 func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: Dictionary[Commodity.Type, float],
 		p_baseline: Commodity.Type, p_drives_lifecycle: bool = false, p_health_weight: float = 0.0, p_effect_text: String = "",
@@ -91,6 +100,23 @@ func _init(p_id: Id, p_label: String, p_per_person_daily: float, p_unit_values: 
 	needs_seller = p_needs_seller
 	morale_bonus = p_morale_bonus
 	comfort = p_comfort
+
+## The multiplier on this need's per-person requirement on `p_day`: the curve
+## through the four season midpoints, interpolated so the requirement glides
+## between seasons instead of stepping at the boundary, and divided by the
+## curve's mean so a year averages 1.0. 1.0 for a need with no curve.
+func seasonal_scale(p_day: int) -> float:
+	var seasons := seasonal_curve.size()
+	if seasons == 0:
+		return 1.0
+	var total := 0.0
+	for value in seasonal_curve:
+		total += value
+	var span := float(DAYS_PER_SEASON)
+	var position := fposmod(float(p_day) - span * 0.5, span * seasons) / span
+	var index := int(floor(position))
+	var fraction := position - float(index)
+	return lerpf(seasonal_curve[index % seasons], seasonal_curve[(index + 1) % seasons], fraction) * float(seasons) / total
 
 ## A need no good satisfies (water: met by a town's water sources). It has no
 ## satisfiers, market or price, and `baseline` is unused.

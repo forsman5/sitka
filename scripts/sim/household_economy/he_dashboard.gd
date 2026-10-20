@@ -121,6 +121,7 @@ const BLOTTER_FILTERS := [
 	{"type": "adopted", "label": "Adoptions"},
 	{"type": "split", "label": "Household founding"},
 	{"type": "coming_of_age", "label": "Coming of age"},
+	{"type": "succession", "label": "Heirs taking over"},
 	{"type": "job", "label": "Hiring"},
 	{"type": "fired", "label": "Firing / layoffs"},
 	{"type": "business_failed", "label": "Business closures"},
@@ -2342,8 +2343,12 @@ func _refresh_need_detail() -> void:
 	for name in detail["met_by"].keys():
 		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
+	if absf(float(detail.get("season_scale", 1.0)) - 1.0) > 0.02:
+		_add_need_detail_line("   %s: demand is x%.2f the yearly average." % [detail["season_name"], detail["season_scale"]])
 	# What homes spared households (a stone house keeps heat in): not a good, so
 	# shown beside the goods as another way the need was covered.
+	if absf(float(detail["season_scale"]) - 1.0) > 0.02:
+		_add_need_detail_line("   %s: demand is x%.2f the yearly average." % [detail["season_name"], detail["season_scale"]])
 	var saved: float = detail["saved"]
 	var saving_shown: bool = saved > 0.0001 or (detail["saved_history"] as Array).any(func(v): return float(v) > 0.0001)
 	if saved > 0.0001:
@@ -3171,6 +3176,10 @@ func _refresh_business_employment() -> void:
 					reason = "Revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
 				"cash_runway":
 					reason = "Cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				"plan_surplus":
+					reason = "Producer plan released surplus; target %d workers" % event["new_capacity"]
+				"plan_short":
+					reason = "Producer plan increased supply; target %d workers" % event["new_capacity"]
 				_:
 					reason = "Target capacity %d to %d" % [event["old_capacity"], event["new_capacity"]]
 		var values := [
@@ -3939,7 +3948,7 @@ func _format_age(age_days: int) -> String:
 ## adoptions); hiring/firing and herd events stay on the main blotter.
 func _is_household_event(event: Dictionary, household_id: int) -> bool:
 	match event["type"]:
-		"birth", "old_age", "emigrate":
+		"birth", "old_age", "emigrate", "succession":
 			return event["household_id"] == household_id
 		"split":
 			return event["parent_household_id"] == household_id or event["new_household_id"] == household_id
@@ -3959,6 +3968,10 @@ func _format_event(event: Dictionary) -> String:
 			var count: int = event["count"]
 			var plural := "s" if count != 1 else ""
 			return "[color=#a0a0a0]%s - Household %d: %d worker%s died of old age[/color]" % [day, event["household_id"], count, plural]
+		"succession":
+			var heir_count: int = event["count"]
+			var heir_reason := "took a job at the family's employer" if event.get("cause", "") == "hired" else "took over a worker's place"
+			return "[color=#d9c98f]%s - Household %d: %d adult child%s %s[/color]" % [day, event["household_id"], heir_count, "ren" if heir_count != 1 else "", heir_reason]
 		"adopted":
 			var dep_count: int = event["dependents"]
 			var dep_plural := "s" if dep_count != 1 else ""
@@ -3999,6 +4012,10 @@ func _format_event(event: Dictionary) -> String:
 					reason = "revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
 				"cash_runway":
 					reason = "cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				"plan_surplus":
+					reason = "producer plan released surplus"
+				"plan_short":
+					reason = "producer plan increased supply"
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
 			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]

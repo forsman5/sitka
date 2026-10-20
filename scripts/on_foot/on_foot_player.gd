@@ -18,6 +18,7 @@ class_name OnFootPlayer extends CharacterBody3D
 @export var bob_amount: float = 0.04
 @export var bob_frequency: float = 2.2
 @export var third_person_distance: float = 3.2
+@export var third_person_pivot_height: float = 0.8
 @export var bark_cooldown: float = 0.45
 ## A bark carries this many times farther than the normal scare radius.
 @export var bark_range_multiplier: float = 2.0
@@ -27,6 +28,7 @@ class_name OnFootPlayer extends CharacterBody3D
 signal barked(world_position: Vector3)
 
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
+const DEFAULT_THIRD_PERSON_PITCH := -0.18
 
 ## Individual barks (see assets/audio/bark/CREDITS.md). Alternatives to audition
 ## live in assets/audio/bark/options/.
@@ -44,6 +46,10 @@ static var selected_character: String = "person"
 ## chooser scene while validating; hide that field before release.
 static var sheep_repro_percent: float = 10.0
 
+## Weapon the person spawns holding ("sword", "bow", or "" for bare hands); set
+## by the combat chooser scene. Ignored for the dog.
+static var selected_weapon: String = ""
+
 ## Sheep in the flock at the start of a fresh run (set from the chooser scene).
 ## The pen grows to fit.
 static var start_sheep_count: int = 25
@@ -57,7 +63,7 @@ const CHARACTERS := {
 		"capsule_radius": 0.35,
 		"capsule_height": 1.8,
 		"eye_height": 1.65,
-		"third_person_distance": 3.2,
+		"third_person_distance": 4.2,
 		"walk_speed": 5.0,
 		"sprint_speed": 8.5,
 		"jump_height": 1.2,
@@ -97,15 +103,32 @@ var _arm: SpringArm3D
 var _camera: Camera3D
 var _model: Node3D
 var _anim: AnimationPlayer
+var _skeleton: Skeleton3D
+var _bow_bones: Dictionary = {}
+var _bow_pose_weight: float = 0.0
+var _bow_draw_fraction: float = 0.0
+var _hair_mesh: MeshInstance3D
+var _hair_surface_index: int = -1
+var _hidden_hair_material: StandardMaterial3D
 var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
 var _foot_camera_mode: int = CameraMode.THIRD_BACK
 var _camera_mode: int = CameraMode.THIRD_BACK
+var _orbit_yaw: float = 0.0
+var _third_person_pitch: float = DEFAULT_THIRD_PERSON_PITCH
+var _orbit_active: bool = false
 var _bark_player: AudioStreamPlayer3D
 var _bark_cooldown_left: float = 0.0
 var _bark_anim_left: float = 0.0
 var _bark_anim_pending: bool = false
 var _last_bark: int = -1
+var _weapon: String = ""
+var _drawing: bool = false
+var _draw_time: float = 0.0
+var _attack_cooldown_left: float = 0.0
+var _attack_anim_pending: bool = false
+var _mounted_attack_active: bool = false
+var _mounted_bow_pose_active: bool = false
 var _pitch: float = 0.0
 var _coyote_left: float = 0.0
 var _buffer_left: float = 0.0
@@ -151,6 +174,7 @@ func _ready() -> void:
 	_arm.shape = SphereShape3D.new()
 	(_arm.shape as SphereShape3D).radius = 0.2
 	_arm.margin = 0.1
+	_arm.collision_mask = 1 | 2
 	_arm.add_excluded_object(get_rid())
 	_head.add_child(_arm)
 
@@ -166,6 +190,16 @@ func _ready() -> void:
 	if selected_character == "person":
 		SkinTones.apply_random(_model)
 	_anim = _model.get_node_or_null("AnimationPlayer") as AnimationPlayer
+	if selected_character == "person" and selected_weapon != "":
+		_skeleton = _model.find_child("Skeleton3D", true, false) as Skeleton3D
+		if selected_weapon == "bow":
+			_setup_first_person_hair()
+		var holder := OnFootWeapons.attach(_model, selected_weapon)
+		if holder != null:
+			_weapon = selected_weapon
+			if _weapon == "bow":
+				for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
+					_bow_bones[bone_name] = _skeleton.find_bone(bone_name)
 
 	_bark_player = AudioStreamPlayer3D.new()
 	_bark_player.position.y = eye_height * 0.8
@@ -176,17 +210,41 @@ func _ready() -> void:
 	_set_camera_mode(_camera_mode)
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	set_process_priority(100)
 
 func _exit_tree() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * mouse_sensitivity)
-		_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
-		_head.rotation.x = _pitch
+		if _camera_mode != CameraMode.FIRST_PERSON and Input.is_key_pressed(KEY_ALT):
+			_orbit_active = true
+			_orbit_yaw = wrapf(_orbit_yaw - event.relative.x * mouse_sensitivity, -PI, PI)
+			_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+		else:
+			rotate_y(-event.relative.x * mouse_sensitivity)
+		if _camera_mode == CameraMode.FIRST_PERSON:
+			_pitch = clampf(_pitch - event.relative.y * mouse_sensitivity, -PI * 0.495, PI * 0.495)
+			_head.rotation.x = _pitch
+		else:
+			# Negative pitch places the camera above the low pivot and looks down
+			# across the body. Keep it from swinging beneath the ground plane.
+			_third_person_pitch = clampf(_third_person_pitch - event.relative.y * mouse_sensitivity, -0.9, 0.08)
+			_head.rotation.x = _third_person_pitch
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT 			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		bark()
+		if _weapon != "":
+			attack()
+		else:
+			bark()
+	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		release_draw()
+	elif event is InputEventKey and not event.pressed and (event.keycode == KEY_ALT or event.physical_keycode == KEY_ALT):
+		if _orbit_active and _camera_mode != CameraMode.FIRST_PERSON:
+			_orbit_yaw = 0.0
+			_third_person_pitch = DEFAULT_THIRD_PERSON_PITCH
+			_arm.rotation.y = _camera_base_yaw()
+			_head.rotation.x = _third_person_pitch
+		_orbit_active = false
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_SPACE:
 			if _mounted_horse == null:
@@ -218,6 +276,81 @@ func bark() -> bool:
 	barked.emit(global_position)
 	return true
 
+## Left click with a weapon: swing the sword, or loose an arrow where the camera
+## points. Returns whether an attack started.
+func attack() -> bool:
+	if _weapon == "" or _attack_cooldown_left > 0.0 or _drawing:
+		return false
+	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+	if def.has("draw_time"):
+		# Bow: start drawing; letting go of the button fires (see release_draw).
+		_drawing = true
+		_draw_time = 0.0
+		return true
+	_attack_cooldown_left = float(def["cooldown"])
+	_attack_anim_pending = true
+	_hit_sheep_with_sword()
+	return true
+
+## The sword swing reaches a short distance in front of the player. Resolve the
+## hit once when the swing starts so a single swing cannot hit the same sheep
+## repeatedly across several physics frames.
+func _hit_sheep_with_sword() -> void:
+	var forward := -global_transform.basis.z
+	var reach_height := 1.15 if _mounted_horse != null else 0.65
+	var reach := 1.1 if _mounted_horse != null else 0.9
+	var center := global_position + Vector3.UP * reach_height + forward * 0.95
+	var shape := SphereShape3D.new()
+	shape.radius = reach
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = Transform3D(Basis.IDENTITY, center)
+	query.collision_mask = 4 # Sheep only; terrain and scenery cannot consume the hit limit.
+	query.exclude = [get_rid()]
+	for result in get_world_3d().direct_space_state.intersect_shape(query, 16):
+		var sheep := result.get("collider") as OnFootSheep
+		if sheep == null or sheep.is_dead():
+			continue
+		var offset := sheep.global_position - global_position
+		offset.y = 0.0
+		if offset.length() <= (2.0 if _mounted_horse != null else 1.9) and forward.dot(offset.normalized()) >= 0.15:
+			sheep.die()
+			return
+
+## 0..1 draw strength of the bow right now (0 when not drawing).
+func draw_fraction() -> float:
+	if not _drawing:
+		return 0.0
+	return clampf(_draw_time / float(OnFootWeapons.DEFS[_weapon]["draw_time"]), 0.0, 1.0)
+
+## Left button released: loose the arrow with power scaled by how long it was
+## drawn (full power after draw_time). A tap shorter than min_draw cancels.
+func release_draw() -> void:
+	if not _drawing:
+		return
+	var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+	var fraction := draw_fraction()
+	var held := _draw_time
+	_drawing = false
+	_draw_time = 0.0
+	if held < float(def["min_draw"]):
+		return
+	_attack_cooldown_left = float(def["cooldown"])
+	_release_arrow(lerpf(OnFootArrow.MIN_POWER, 1.0, fraction))
+
+func _release_arrow(power: float) -> void:
+	if not is_inside_tree():
+		return
+	var arrow := OnFootArrow.new()
+	get_parent().add_child(arrow)
+	# The model turns to face its movement direction while strafing. Its +Z
+	# axis is the bow's forward direction; camera orbit must not steer the shot.
+	var forward := _model.global_transform.basis.z.normalized()
+	arrow.global_position = _head.global_position + forward * 0.6
+	arrow.velocity = forward * OnFootArrow.SPEED * power
+	arrow.owner_player = self
+	arrow.look_at(arrow.global_position + forward, Vector3.UP)
+
 ## How far (in metres) a bark startles animals.
 func bark_radius() -> float:
 	return scare_radius() * bark_range_multiplier
@@ -228,14 +361,47 @@ func scare_radius() -> float:
 
 func _set_camera_mode(mode: int) -> void:
 	_camera_mode = mode
-	_model.visible = mode != CameraMode.FIRST_PERSON
+	if mode == CameraMode.FIRST_PERSON:
+		_orbit_yaw = 0.0
+		_orbit_active = false
+	# Keep the bow user visible in first person so the draw pose can be seen.
+	# Move the camera just ahead of the face; the body stays behind the view.
+	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
+	_model.visible = mode != CameraMode.FIRST_PERSON or show_bow_pose
+	_head.position.z = -0.24 if show_bow_pose else 0.0
+	_set_first_person_hair_hidden(show_bow_pose)
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
-	_arm.rotation.y = PI if mode == CameraMode.THIRD_FRONT else 0.0
+	_arm.rotation.y = _camera_base_yaw() + _orbit_yaw
+	_head.rotation.x = _pitch if mode == CameraMode.FIRST_PERSON else _third_person_pitch
+
+func _camera_base_yaw() -> float:
+	return PI if _camera_mode == CameraMode.THIRD_FRONT else 0.0
+
+func _setup_first_person_hair() -> void:
+	_hair_mesh = _model.find_child("Body2", true, false) as MeshInstance3D
+	if _hair_mesh == null or _hair_mesh.mesh == null:
+		return
+	for surface_index in _hair_mesh.mesh.get_surface_count():
+		if _hair_mesh.mesh.surface_get_name(surface_index) == "Hair":
+			_hair_surface_index = surface_index
+			break
+	_hidden_hair_material = StandardMaterial3D.new()
+	_hidden_hair_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_hidden_hair_material.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
+	_hidden_hair_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+
+func _set_first_person_hair_hidden(hidden: bool) -> void:
+	if _hair_mesh == null or _hair_surface_index < 0:
+		return
+	_hair_mesh.set_surface_override_material(_hair_surface_index, _hidden_hair_material if hidden else null)
 
 func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
 	_bark_anim_left = maxf(_bark_anim_left - delta, 0.0)
+	_attack_cooldown_left = maxf(_attack_cooldown_left - delta, 0.0)
+	if _drawing:
+		_draw_time += delta
 	if _mounted_horse != null:
 		_mounted_step(delta)
 		return
@@ -292,6 +458,56 @@ func _physics_process(delta: float) -> void:
 	_update_camera(delta)
 	_update_animation()
 
+func _process(delta: float) -> void:
+	if _weapon != "bow" or _skeleton == null:
+		return
+	if _drawing:
+		_bow_draw_fraction = draw_fraction()
+	_bow_pose_weight = move_toward(_bow_pose_weight, 1.0 if _drawing else 0.0, delta * (7.0 if _drawing else 5.0))
+	if _bow_pose_weight <= 0.001:
+		_bow_draw_fraction = 0.0
+	_apply_bow_pose(_bow_pose_weight, _bow_draw_fraction)
+	var bow_holder := _model.find_child("WeaponHand", true, false) as Node3D
+	OnFootWeapons.apply_bow_draw_pose(_model, bow_holder, _bow_draw_fraction, _bow_pose_weight)
+	if _mounted_horse != null:
+		if _drawing:
+			_mounted_bow_pose_active = true
+		elif _mounted_bow_pose_active and _bow_pose_weight <= 0.001:
+			_restore_mounted_rider_pose()
+			_mounted_bow_pose_active = false
+
+func _apply_bow_pose(weight: float, fraction: float) -> void:
+	apply_bow_pose_to_skeleton(_skeleton, _bow_bones, weight, fraction)
+
+static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, weight: float, fraction: float) -> void:
+	if skeleton == null:
+		return
+	# Imported armature axes: -Y is forward, +Z is up. Segment vectors are in
+	# Skeleton3D space; solve rotations from each bone's actual rest segment.
+	var hand_back := lerpf(0.12, 0.72, fraction)
+	var elbow_up := lerpf(0.34, 0.49, fraction)
+	var poses := [
+		{"bone": "UpperArm.L", "child": "LowerArm.L", "direction": Vector3(0.0, -0.90, 0.42)},
+		{"bone": "LowerArm.L", "child": "Fist.L", "direction": Vector3(0.0, -0.98, 0.18)},
+		{"bone": "UpperArm.R", "child": "LowerArm.R", "direction": Vector3(0.30, -0.91, elbow_up)},
+		# Move the string hand outside the cheek silhouette so it remains visible.
+		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(lerpf(0.22, 0.42, fraction), hand_back, 0.48)},
+	]
+	for segment in poses:
+		var bone_index := int(bones.get(segment["bone"], -1))
+		var child_index := skeleton.find_bone(segment["child"])
+		if bone_index < 0 or child_index < 0:
+			continue
+		var rest := skeleton.get_bone_global_rest(bone_index)
+		var child_rest := skeleton.get_bone_global_rest(child_index)
+		var local_segment: Vector3 = rest.basis.inverse() * (child_rest.origin - rest.origin)
+		var animated_rotation := skeleton.get_bone_pose_rotation(bone_index)
+		skeleton.set_bone_pose_rotation(bone_index, Quaternion.IDENTITY)
+		var parent_basis := skeleton.get_bone_global_pose(bone_index).basis
+		var target_local: Vector3 = parent_basis.inverse() * segment["direction"]
+		var target_rotation := Quaternion(local_segment.normalized(), target_local.normalized())
+		skeleton.set_bone_pose_rotation(bone_index, animated_rotation.slerp(target_rotation, weight))
+
 
 func _try_mount() -> void:
 	for node in get_tree().get_nodes_in_group("on_foot_horse"):
@@ -302,6 +518,7 @@ func _try_mount() -> void:
 		if Vector2(offset.x, offset.z).length() > 3.0 or absf(offset.y) > 1.5:
 			continue
 		_mounted_horse = horse
+		_drawing = false
 		horse.rider = self
 		horse.stop()
 		_foot_camera_mode = _camera_mode
@@ -331,6 +548,32 @@ func _mounted_step(delta: float) -> void:
 	var jump := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_physical_key_pressed(KEY_SPACE)
 	_mounted_horse.ride_step(delta, direction, Input.is_physical_key_pressed(KEY_SHIFT), jump)
 	_sync_mounted_camera()
+	_update_mounted_weapon_animation()
+	if _drawing or _mounted_bow_pose_active or _mounted_attack_active:
+		_face_mounted_rider_to_aim()
+
+func _update_mounted_weapon_animation() -> void:
+	if _attack_anim_pending:
+		_attack_anim_pending = false
+		var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+		_bark_anim_left = float(def["attack_hold"])
+		_mounted_attack_active = true
+		if _anim != null:
+			_anim.play(def["attack_anim"], 0.05)
+	if _mounted_attack_active and _bark_anim_left <= 0.0:
+		_restore_mounted_rider_pose()
+		_mounted_attack_active = false
+
+func _restore_mounted_rider_pose() -> void:
+	_model.rotation.y = PI
+	if _mounted_horse != null and _mounted_horse.visual.has_method("restore_rider_pose"):
+		_mounted_horse.visual.call("restore_rider_pose")
+
+func _face_mounted_rider_to_aim() -> void:
+	if _mounted_horse == null:
+		return
+	var yaw_offset := wrapf(rotation.y - _mounted_horse.global_rotation.y, -PI, PI)
+	_model.rotation.y = PI + yaw_offset
 
 
 func _sync_mounted_camera() -> void:
@@ -343,6 +586,9 @@ func _dismount() -> void:
 	if not landing.is_finite():
 		return
 	var horse := _mounted_horse
+	_mounted_attack_active = false
+	_mounted_bow_pose_active = false
+	_attack_anim_pending = false
 	if horse.visual.has_method("clear_riding_pose"):
 		horse.visual.call("clear_riding_pose", _model)
 	_model.reparent(self, false)
@@ -412,13 +658,20 @@ func _update_camera(delta: float) -> void:
 		_bob_t += delta * bob_frequency * horiz_speed
 		bob = sin(_bob_t) * bob_amount * clampf(horiz_speed / walk_speed, 0.0, 1.5)
 	_land_dip = move_toward(_land_dip, 0.0, delta * 0.6)
-	var target_y := eye_height + bob - _land_dip
+	var pivot_height := eye_height if _camera_mode == CameraMode.FIRST_PERSON else third_person_pivot_height
+	var target_y := pivot_height + bob - _land_dip
 	_head.position.y = lerpf(_head.position.y, target_y, clampf(delta * 25.0, 0.0, 1.0))
 
 func _update_animation() -> void:
 	if _anim == null or not _model.visible:
 		_bark_anim_pending = false
+		_attack_anim_pending = false
 		return
+	if _attack_anim_pending:
+		_attack_anim_pending = false
+		var def: Dictionary = OnFootWeapons.DEFS[_weapon]
+		_bark_anim_left = float(def["attack_hold"])
+		_anim.play(def["attack_anim"], 0.05)
 	# One-shot bark pose; hold it briefly before returning to locomotion.
 	if _bark_anim_pending:
 		_bark_anim_pending = false
