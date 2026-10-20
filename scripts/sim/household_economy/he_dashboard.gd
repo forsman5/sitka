@@ -2342,8 +2342,12 @@ func _refresh_need_detail() -> void:
 	for name in detail["met_by"].keys():
 		_add_need_met_by_line(name, "%.2f (%s)" % [detail["met_by"][name], _percent_of(detail["met_by"][name], required)])
 	_add_need_detail_line("   Unmet: %.2f (%s)" % [detail["unmet"], _percent_of(detail["unmet"], required)])
+	if absf(float(detail.get("season_scale", 1.0)) - 1.0) > 0.02:
+		_add_need_detail_line("   %s: demand is x%.2f the yearly average." % [detail["season_name"], detail["season_scale"]])
 	# What homes spared households (a stone house keeps heat in): not a good, so
 	# shown beside the goods as another way the need was covered.
+	if absf(float(detail["season_scale"]) - 1.0) > 0.02:
+		_add_need_detail_line("   %s: demand is x%.2f the yearly average." % [detail["season_name"], detail["season_scale"]])
 	var saved: float = detail["saved"]
 	var saving_shown: bool = saved > 0.0001 or (detail["saved_history"] as Array).any(func(v): return float(v) > 0.0001)
 	if saved > 0.0001:
@@ -3171,6 +3175,10 @@ func _refresh_business_employment() -> void:
 					reason = "Revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
 				"cash_runway":
 					reason = "Cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				"plan_surplus":
+					reason = "Producer plan released surplus; target %d workers" % event["new_capacity"]
+				"plan_short":
+					reason = "Producer plan increased supply; target %d workers" % event["new_capacity"]
 				_:
 					reason = "Target capacity %d to %d" % [event["old_capacity"], event["new_capacity"]]
 		var values := [
@@ -4009,6 +4017,10 @@ func _format_event(event: Dictionary) -> String:
 					reason = "revenue/worker %.3f below reference %.3f" % [event["average_revenue_per_worker"], event["reference_wage_per_worker"]]
 				"cash_runway":
 					reason = "cash runway %.1fd below required %.1fd" % [event["cash_runway_days"], event["required_runway_days"]]
+				"plan_surplus":
+					reason = "producer plan released surplus"
+				"plan_short":
+					reason = "producer plan increased supply"
 				_:
 					reason = "target reduced to %d workers" % event["new_capacity"]
 			return "[color=#e09a8d]%s - Household %d: laid off by %s (%s; target %d→%d)[/color]" % [day, event["household_id"], employer, reason, event["old_capacity"], event["new_capacity"]]

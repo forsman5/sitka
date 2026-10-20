@@ -4,6 +4,7 @@ extends Node3D
 @export var rotation_speed: float = 75.0  # degrees per second while holding Q/E
 @export var zoom_min: float = 5.0
 @export var zoom_max: float = 40.0
+@export var zoom_step: float = 2.0     # orthographic size change per wheel click
 @export var tilt_sensitivity: float = 0.3  # degrees per pixel of vertical mouse movement
 @export var tilt_min: float = 20.0         # most angled allowed (degrees above horizon)
 @export var pivot_height: float = 20.0     # camera altitude above the rig's ground anchor;
@@ -71,10 +72,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		match event.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
-				_camera.size = clampf(_camera.size - 2.0, zoom_min, zoom_max)
+				_camera.size = clampf(_camera.size - zoom_step, zoom_min, zoom_max)
 				_clamp_to_pan_limit()
 			MOUSE_BUTTON_WHEEL_DOWN:
-				_camera.size = clampf(_camera.size + 2.0, zoom_min, zoom_max)
+				_camera.size = clampf(_camera.size + zoom_step, zoom_min, zoom_max)
 				_clamp_to_pan_limit()
 			MOUSE_BUTTON_MIDDLE:
 				_dragging = event.pressed

@@ -2,7 +2,7 @@ extends SceneTree
 
 ## Renders the person holding each weapon (needs a real renderer, so run
 ## without --headless):
-##   godot --path . --script res://scripts/on_foot/harness/capture_weapons.gd -- --output=C:/tmp/weapons.png [--anim=attack]
+##   godot --path . --script res://scripts/on_foot/harness/capture_weapons.gd -- --output=C:/tmp/weapons.png [--anim=attack] [--draw=1.0] [--fp=x,y,z] [--only=bow]
 
 func _init() -> void:
 	call_deferred("_capture")
@@ -48,10 +48,16 @@ func _capture() -> void:
 		for r in sweep_rots:
 			jobs.append([sweep_weapon, r])
 	else:
+		var only := ""
+		for argument in OS.get_cmdline_user_args():
+			if argument.begins_with("--only="):
+				only = argument.trim_prefix("--only=")
 		for weapon in OnFootWeapons.DEFS:
-			jobs.append([weapon, null])
+			if only == "" or weapon == only:
+				jobs.append([weapon, null])
 
 	var side := "--side" in OS.get_cmdline_user_args()
+	var oblique := "--oblique" in OS.get_cmdline_user_args()
 	var step := 1.3 if side else 2.4
 	var x := -step * (jobs.size() - 1) * 0.5
 	for job in jobs:
@@ -80,10 +86,19 @@ func _capture() -> void:
 			for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
 				bones[bone_name] = skeleton.find_bone(bone_name)
 			OnFootPlayer.apply_bow_pose_to_skeleton(skeleton, bones, 1.0, draw_fraction)
+			OnFootWeapons.apply_bow_draw_pose(model, holder, draw_fraction, 1.0)
+		if "--fp" in "".join(OS.get_cmdline_user_args()):
+			_hide_hair(model)
+			_print_bow_points(model, holder)
 		x += step
 
 	var cam := Camera3D.new()
-	cam.position = Vector3(4.2 + 2.0 * jobs.size(), 1.1, 0) if side else Vector3(0, 1.1, -4.2 if "--front" in OS.get_cmdline_user_args() else 4.2)
+	var fp_pos := Vector3.INF
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--fp="):
+			var v := argument.trim_prefix("--fp=").split(",")
+			fp_pos = Vector3(float(v[0]), float(v[1]), float(v[2]))
+	cam.position = Vector3(4.2 + 2.0 * jobs.size(), 1.1, 0) if side else Vector3(3.1, 1.6, -4.2) if oblique else Vector3(0, 1.1, -4.2 if "--front" in OS.get_cmdline_user_args() else 4.2)
 	cam.look_at_from_position(cam.position, Vector3(0, 0.95, 0))
 	cam.fov = 40.0 + 12.0 * maxf(jobs.size() - 2, 0.0)
 	if side:
@@ -91,6 +106,12 @@ func _capture() -> void:
 		cam.size = 2.6
 		cam.position = Vector3(6.0, 0.7, 0.0)
 		cam.look_at_from_position(cam.position, Vector3(0, 0.7, 0))
+	if fp_pos != Vector3.INF:
+		# First-person view from the player's camera position (x,y,z; the model faces -Z).
+		cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+		cam.fov = 80.0
+		cam.position = fp_pos
+		cam.rotation = Vector3.ZERO
 	world.add_child(cam)
 	cam.current = true
 
@@ -101,3 +122,28 @@ func _capture() -> void:
 	var error := root.get_texture().get_image().save_png(output_path)
 	print("saved %s (%s)" % [output_path, error_string(error)])
 	quit(0 if error == OK else 1)
+
+
+## Mirrors OnFootPlayer's first-person hair hiding so the capture matches the game.
+func _hide_hair(model: Node3D) -> void:
+	var hair := model.find_child("Body2", true, false) as MeshInstance3D
+	if hair == null or hair.mesh == null:
+		return
+	var invisible := StandardMaterial3D.new()
+	invisible.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	invisible.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
+	invisible.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	for i in hair.mesh.get_surface_count():
+		if hair.mesh.surface_get_name(i) in ["Hair", "Face"]:
+			hair.set_surface_override_material(i, invisible)
+
+func _print_bow_points(model: Node3D, holder: Node3D) -> void:
+	var skeleton := model.find_child("Skeleton3D", true, false) as Skeleton3D
+	if skeleton == null:
+		return
+	for bone_name in ["Head", "Fist.L", "Fist.R"]:
+		var index := skeleton.find_bone(bone_name)
+		if index >= 0:
+			print("%s %s" % [bone_name, skeleton.to_global(skeleton.get_bone_global_pose(index).origin)])
+	if holder != null:
+		print("holder %s" % holder.global_position)
