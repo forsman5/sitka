@@ -52,6 +52,7 @@ func _capture() -> void:
 			jobs.append([weapon, null])
 
 	var side := "--side" in OS.get_cmdline_user_args()
+	var oblique := "--oblique" in OS.get_cmdline_user_args()
 	var step := 1.3 if side else 2.4
 	var x := -step * (jobs.size() - 1) * 0.5
 	for job in jobs:
@@ -80,10 +81,11 @@ func _capture() -> void:
 			for bone_name in ["UpperArm.L", "LowerArm.L", "UpperArm.R", "LowerArm.R"]:
 				bones[bone_name] = skeleton.find_bone(bone_name)
 			OnFootPlayer.apply_bow_pose_to_skeleton(skeleton, bones, 1.0, draw_fraction)
+			OnFootWeapons.apply_bow_draw_pose(model, holder, draw_fraction, 1.0)
 		x += step
 
 	var cam := Camera3D.new()
-	cam.position = Vector3(4.2 + 2.0 * jobs.size(), 1.1, 0) if side else Vector3(0, 1.1, -4.2 if "--front" in OS.get_cmdline_user_args() else 4.2)
+	cam.position = Vector3(4.2 + 2.0 * jobs.size(), 1.1, 0) if side else Vector3(3.1, 1.6, -4.2) if oblique else Vector3(0, 1.1, -4.2 if "--front" in OS.get_cmdline_user_args() else 4.2)
 	cam.look_at_from_position(cam.position, Vector3(0, 0.95, 0))
 	cam.fov = 40.0 + 12.0 * maxf(jobs.size() - 2, 0.0)
 	if side:

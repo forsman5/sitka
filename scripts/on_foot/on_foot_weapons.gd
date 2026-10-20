@@ -26,7 +26,7 @@ const DEFS := {
 		# The hand rests at the hip between shots, so lay the bow across the ground
 		# plane. The procedural draw pose turns it upright when the player aims.
 		"rotation_degrees": Vector3(-96.4, 14.4, -92.3),
-		"scale": 0.0085,
+		"scale": 0.0093,
 		# Hold to draw; release fires. No clip yet: the draw pose (left arm out, right
 		# hand pulling the string) is still to be animated.
 		"draw_time": 1.0,
@@ -58,3 +58,27 @@ static func attach(model: Node3D, weapon: String) -> Node3D:
 	node.scale = Vector3.ONE * float(def["scale"])
 	holder.add_child(node)
 	return holder
+
+## The bow mesh has a Draw blend shape for its string. Match it to the procedural
+## arm pose so the string moves back with the drawing hand.
+static func apply_bow_draw_pose(model: Node3D, holder: Node3D, fraction: float, pose_weight: float) -> void:
+	if model == null or holder == null:
+		return
+	var weapon := holder.get_node_or_null("Weapon") as Node3D
+	if weapon == null:
+		return
+	var forward := model.global_transform.basis.z.normalized()
+	weapon.global_position = holder.global_position + forward * 0.06 * clampf(pose_weight, 0.0, 1.0)
+	var mesh_instances := weapon.find_children("*", "MeshInstance3D", true, false)
+	if mesh_instances.is_empty():
+		return
+	var mesh_instance := mesh_instances[0] as MeshInstance3D
+	if mesh_instance.mesh == null:
+		return
+	var draw_shape := -1
+	for shape_index in mesh_instance.mesh.get_blend_shape_count():
+		if mesh_instance.mesh.get_blend_shape_name(shape_index) == "Draw":
+			draw_shape = shape_index
+			break
+	if draw_shape >= 0:
+		mesh_instance.set_blend_shape_value(draw_shape, clampf(fraction * pose_weight, 0.0, 1.0))

@@ -467,6 +467,8 @@ func _process(delta: float) -> void:
 	if _bow_pose_weight <= 0.001:
 		_bow_draw_fraction = 0.0
 	_apply_bow_pose(_bow_pose_weight, _bow_draw_fraction)
+	var bow_holder := _model.find_child("WeaponHand", true, false) as Node3D
+	OnFootWeapons.apply_bow_draw_pose(_model, bow_holder, _bow_draw_fraction, _bow_pose_weight)
 	if _mounted_horse != null:
 		if _drawing:
 			_mounted_bow_pose_active = true
@@ -482,13 +484,14 @@ static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, 
 		return
 	# Imported armature axes: -Y is forward, +Z is up. Segment vectors are in
 	# Skeleton3D space; solve rotations from each bone's actual rest segment.
-	var hand_back := lerpf(0.12, 0.62, fraction)
+	var hand_back := lerpf(0.12, 0.72, fraction)
 	var elbow_up := lerpf(0.34, 0.49, fraction)
 	var poses := [
 		{"bone": "UpperArm.L", "child": "LowerArm.L", "direction": Vector3(0.0, -0.90, 0.42)},
 		{"bone": "LowerArm.L", "child": "Fist.L", "direction": Vector3(0.0, -0.98, 0.18)},
 		{"bone": "UpperArm.R", "child": "LowerArm.R", "direction": Vector3(0.30, -0.91, elbow_up)},
-		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(0.22 - fraction * 0.12, hand_back, 0.42)},
+		# Move the string hand outside the cheek silhouette so it remains visible.
+		{"bone": "LowerArm.R", "child": "Fist.R", "direction": Vector3(lerpf(0.22, 0.42, fraction), hand_back, 0.48)},
 	]
 	for segment in poses:
 		var bone_index := int(bones.get(segment["bone"], -1))
