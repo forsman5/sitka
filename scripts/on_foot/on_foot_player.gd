@@ -493,16 +493,17 @@ func _apply_bow_pose(weight: float, fraction: float) -> void:
 		apply_aim_pitch_to_skeleton(_skeleton, _bow_bones.get("Torso", -1), _pitch * weight)
 
 ## Tilts the torso (and so both arms and the bow) up by `pitch` radians. Call
-## after the animation and bow pose have set the bone rotations for this frame.
+## after the bow pose has set the arm rotations for this frame. It uses a
+## one-frame global pose override built from the unmodified local pose, so it
+## never accumulates (a ridden character's pose is not rewritten every frame).
 static func apply_aim_pitch_to_skeleton(skeleton: Skeleton3D, torso_index: int, pitch: float) -> void:
 	if skeleton == null or torso_index < 0 or is_zero_approx(pitch):
 		return
 	# Skeleton space: X is lateral, -Y forward, +Z up, so a positive rotation
 	# about X tips the arms down; negate to look up.
-	var parent_basis := skeleton.get_bone_global_pose(skeleton.get_bone_parent(torso_index)).basis
-	var tilt := Basis(Vector3.RIGHT, -pitch)
-	var local_tilt := (parent_basis.inverse() * tilt * parent_basis).get_rotation_quaternion()
-	skeleton.set_bone_pose_rotation(torso_index, local_tilt * skeleton.get_bone_pose_rotation(torso_index))
+	var base := skeleton.get_bone_global_pose(skeleton.get_bone_parent(torso_index)) * skeleton.get_bone_pose(torso_index)
+	var tilted := Transform3D(Basis(Vector3.RIGHT, -pitch) * base.basis, base.origin)
+	skeleton.set_bone_global_pose_override(torso_index, tilted, 1.0)
 
 static func apply_bow_pose_to_skeleton(skeleton: Skeleton3D, bones: Dictionary, weight: float, fraction: float) -> void:
 	if skeleton == null:
