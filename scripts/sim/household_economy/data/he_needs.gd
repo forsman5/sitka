@@ -7,17 +7,28 @@ const HENeed = preload("res://scripts/sim/household_economy/records/he_need.gd")
 ## each day. Authored here, next to the other tuning data, rather than in
 ## HESimulation so adding a satisfier is a data edit.
 ##
-## Every need has two satisfiers: FOOD takes meat (twice grain's food value) or
-## grain, HEAT takes charcoal (four times timber's heat) or timber, and
-## CLOTHING takes leather (a one-for-one alternative to wool) or wool. Planned
-## addition is a one-line entry: cloth for CLOTHING (wool stays as the
-## raw-fibre stand-in until a tailor exists).
+## FOOD takes bread (4 hunger points), meat (1), flour (1) or grain (0.5); HEAT
+## takes charcoal (four times timber's heat) or timber; CLOTHING takes leather
+## (a one-for-one alternative to wool) or wool. Planned addition is a one-line
+## entry: cloth for CLOTHING (wool stays as the raw-fibre stand-in until a tailor
+## exists).
 static var _all: Array[HENeed] = []
 static var _water: HENeed = null
 
 ## Morale a household gains from eating only meat (scaled by the meat share of
 ## its food). Morale above 100% raises output, so a better table pays back.
 const FOOD_MEAT_MORALE := 0.08
+## Likewise for bread: a household that can afford it eats it for the table, not
+## just because it is cheaper per hunger point.
+const FOOD_BREAD_MORALE := 0.05
+## Survival food: a diet of only flour (gruel) costs 20% morale, only grain 40%
+## (scaled by the share each supplies). Negative comfort, so a household that can
+## afford bread or meat has a reason to leave these.
+const FOOD_FLOUR_MORALE := -0.20
+const FOOD_GRAIN_MORALE := -0.40
+## What an affluent household adds to its 0.2 subsistence points a day (0.5 in
+## all), eaten as bread or meat only (HENeed.luxury_per_person_daily).
+const FOOD_LUXURY_PER_PERSON := 0.3
 ## Heating through the year, spring / summer / autumn / winter (the shape only;
 ## HENeed.seasonal_scale normalises it): winter needs 4.5x summer's fuel.
 const HEAT_SEASONAL_CURVE: Array[float] = [1.0, 0.4, 1.0, 1.8]
@@ -28,12 +39,15 @@ static func all() -> Array[HENeed]:
 			"Cold wears down health and morale. Winter needs far more fuel than summer. Reporting only: does not (yet) cause emigration.")
 		heat.seasonal_curve = HEAT_SEASONAL_CURVE.duplicate()
 		_all = [
-			# Grain per person matches Simulation.GRAIN_PER_PERSON_PER_DAY.
+			# Hunger points: bread 4, meat 1, flour 1, grain 0.5 (densest first).
+			# 0.2 points/person/day keeps a grain-only diet at 0.4 grain per
+			# person -- Simulation.GRAIN_PER_PERSON_PER_DAY -- exactly as when
+			# grain was worth 1.0 and the need was 0.4.
 			# Food is the one need whose shortfall drives starvation.
-			# Meat packs twice grain's food into each unit, so it burns first.
-			HENeed.new(HENeed.Id.FOOD, "Food", 0.4, {Commodity.Type.MEAT: 2.0, Commodity.Type.GRAIN: 1.0}, Commodity.Type.GRAIN, true, 0.6,
+			# Meat is worth twice grain's food (1.0 vs 0.5 here); densest burns first.
+			HENeed.new(HENeed.Id.FOOD, "Food", 0.2, {Commodity.Type.BREAD: 4.0, Commodity.Type.MEAT: 1.0, Commodity.Type.FLOUR: 1.0, Commodity.Type.GRAIN: 0.5}, Commodity.Type.GRAIN, true, 0.6,
 				"Hunger wears down health and morale; sustained shortfall drives migration pressure, emigration and stops births.",
-				false, 0.0, {Commodity.Type.MEAT: FOOD_MEAT_MORALE}),
+				false, 0.0, {Commodity.Type.BREAD: FOOD_BREAD_MORALE, Commodity.Type.MEAT: FOOD_MEAT_MORALE, Commodity.Type.FLOUR: FOOD_FLOUR_MORALE, Commodity.Type.GRAIN: FOOD_GRAIN_MORALE}),
 			# Authored placeholder, not yet tuned. One timber is 1 heat; charcoal
 			# packs 4 into a unit, so it can cost more per unit and still be the
 			# cheaper way to heat a house. Densest first: charcoal burns first.
@@ -52,6 +66,9 @@ static func all() -> Array[HENeed]:
 			HENeed.new(HENeed.Id.TOOLS, "Tools", 0.005, {Commodity.Type.TOOLS: 1.0}, Commodity.Type.TOOLS, false, 0.0,
 				"Good tools lift morale; going without costs no health. Morale above 100% raises output at the workplace.", true, 0.1),
 		]
+		for need in _all:
+			if need.id == HENeed.Id.FOOD:
+				need.luxury_per_person_daily = FOOD_LUXURY_PER_PERSON
 	return _all
 
 ## Water: a service need, met by a town's wells and river intakes rather than

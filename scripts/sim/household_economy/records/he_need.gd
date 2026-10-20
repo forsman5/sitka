@@ -51,12 +51,20 @@ var needs_seller: bool
 ## side, for wants whose absence isn't harmful but whose presence is welcome
 ## (tools). It offsets penalties -- morale still tops out at 100%.
 var morale_bonus: float
+## Negative values are survival foods instead: morale lost when that satisfier
+## supplies ALL of the need (grain, flour).
 ## Satisfiers a household takes as a step up rather than just a cheaper way to
 ## meet the need: satisfier -> morale gained when that satisfier supplies ALL of
 ## the need (scaled by the share it actually supplies). Affluent households
 ## weigh them above their price (HESimulation._household_favourite); everyone
 ## else buys the cheapest satisfier as before.
 var comfort: Dictionary[Commodity.Type, float]
+## Extra units per person per day an affluent household eats on top of
+## per_person_daily, from `comfort` satisfiers only (0 = none). Scaled by the
+## household's affluence (HESimulation._household_affluence) and never counted
+## as a shortfall: going without it costs nothing, it is only demand a better
+## table adds.
+var luxury_per_person_daily: float = 0.0
 
 ## Morale a household loses at full stress from this need. A need with a value
 ## here is left out of the pooled "Unmet needs" morale penalty and shown under
@@ -124,6 +132,22 @@ func satisfiers() -> Array[Commodity.Type]:
 ## Morale a full supply of `commodity` adds to this need (0 if it is no comfort).
 func comfort_of(commodity: Commodity.Type) -> float:
 	return comfort.get(commodity, 0.0)
+
+## Burns up to `amount` need units from the comfort satisfiers alone.
+func burn_comfort(owner, amount: float) -> Dictionary:
+	var provided := 0.0
+	var burned := {}
+	for commodity in unit_values.keys():
+		var remaining := amount - provided
+		if remaining <= 0.0:
+			break
+		if comfort_of(commodity) <= 0.0:
+			continue
+		var units: float = owner.consume(commodity, remaining / unit_values[commodity])
+		if units > 0.0:
+			burned[commodity] = units
+			provided += units * unit_values[commodity]
+	return {"provided": provided, "burned": burned}
 
 func is_satisfied_by(commodity: Commodity.Type) -> bool:
 	return unit_values.has(commodity)

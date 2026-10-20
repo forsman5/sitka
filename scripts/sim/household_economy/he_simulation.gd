@@ -86,6 +86,12 @@ const BASE_PRICE: Dictionary[Commodity.Type, float] = {
 	Commodity.Type.CHARCOAL: 3.8,
 	Commodity.Type.WOOL: 2.0, # matches Simulation.BASE_PRICE[WOOL]
 	Commodity.Type.IRON_ORE: 2.0, # authored placeholder, not yet tuned
+	## Households pick the cheapest satisfier per hunger point (grain 1.0/0.5
+	## = 2.0, flour 1.8/1 = 1.8, bread 6.0/4 = 1.5), so processed food wins
+	## once it is on sale. See he_scenario_seeds.gd's _mill_recipe/_bakery_recipe
+	## for the margins these prices leave the businesses.
+	Commodity.Type.FLOUR: 1.8,
+	Commodity.Type.BREAD: 6.0,
 	## Heavy and low-value: one unit per worker-day exported at the Trader's
 	## half-price bid still clears the reference wage (~1.0). Its buyers are the
 	## Government Warehouse (construction) and the Trader's export.
@@ -146,7 +152,7 @@ const PRICE_MULTIPLIER_MAX := 4.0
 ## exactly that early window, well before its own weekly capacity
 ## self-tuning gets a fair read -- see he_scenario_seeds.gd's
 ## build_three_business_economy_with_bloomery.
-const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.STONE, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
+const EXPORT_COMMODITIES: Array[Commodity.Type] = [Commodity.Type.IRON, Commodity.Type.GRAIN, Commodity.Type.TIMBER, Commodity.Type.CHARCOAL, Commodity.Type.STONE, Commodity.Type.BREAD, Commodity.Type.CATTLE, Commodity.Type.SHEEP]
 ## Goods that jump the queue for shared Trader capacity, in order. Everything
 ## else exportable follows in Commodity.ALL order, then EXPORT_PINNED_LAST. Only
 ## goods whose place matters belong here: iron first (see above), and culled
@@ -3499,12 +3505,11 @@ func _market_clearing_order(settlement_id: int) -> Array[Commodity.Type]:
 const HOUSEHOLD_TASTE_SPREAD := 0.35
 
 ## Affluence: how far above subsistence a household's savings sit, from 0
-## (comfort goods judged at their posted price, like anything else) to 1 (they
-## look AFFLUENCE_PRICE_TOLERANCE cheaper). Measured in days of a basic basket
+## (foods judged at their posted price, like anything else) to 1 (their morale
+## effect fully counts, see MORALE_PRICE_WEIGHT). Measured in days of a basic basket
 ## for the household, priced at BASE_PRICE so it does not swing with the market.
 const AFFLUENCE_MIN_DAYS := 60.0
 const AFFLUENCE_FULL_DAYS := 240.0
-const AFFLUENCE_PRICE_TOLERANCE := 0.75
 
 ## One person's daily basic basket (every need that needs no dedicated seller,
 ## via its baseline satisfier) at base prices.
@@ -3520,6 +3525,16 @@ func _household_affluence(h: HEHousehold) -> float:
 	var basket := basket_cost_per_person() * float(maxi(h.headcount(), 1))
 	return smoothstep(AFFLUENCE_MIN_DAYS, AFFLUENCE_FULL_DAYS, h.balance / basket)
 
+## 0..1: how much of its luxury food tier (HENeed.luxury_per_person_daily) a
+## household can afford, from savings in days of basic basket. A lower ramp than
+## affluence: a table a little above subsistence needs a cushion, not wealth.
+const LUXURY_MIN_DAYS := 10.0
+const LUXURY_FULL_DAYS := 40.0
+
+func _household_luxury_means(h: HEHousehold) -> float:
+	var basket := basket_cost_per_person() * float(maxi(h.headcount(), 1))
+	return smoothstep(LUXURY_MIN_DAYS, LUXURY_FULL_DAYS, h.balance / basket)
+
 ## A household's fixed, deterministic taste in [-1, 1) -- derived from its id
 ## rather than drawn from the sim's RNG, so it neither perturbs other random
 ## draws nor changes between runs.
@@ -3534,19 +3549,27 @@ func _household_taste(h: HEHousehold) -> float:
 func _household_favourite(h: HEHousehold, need: HENeed, cascade: Array[Commodity.Type]) -> Commodity.Type:
 	var local_market: HEMarket = markets[h.settlement_id]
 	var taste := _household_taste(h) * HOUSEHOLD_TASTE_SPREAD
-	var affluence := _household_affluence(h) if not need.comfort.is_empty() else 0.0
+	var means := maxf(_household_affluence(h), _household_luxury_means(h)) if not need.comfort.is_empty() else 0.0
 	var best := need.baseline
-	var best_cost: float = local_market.price[best] / need.value_of(best)
+	var best_cost := _morale_priced_cost(local_market.price[best] / need.value_of(best), need.comfort_of(best), means)
 	for c in cascade:
 		if c == need.baseline:
 			continue
-		var cost: float = local_market.price[c] / need.value_of(c) * (1.0 + taste)
-		if need.comfort_of(c) > 0.0:
-			cost *= 1.0 - AFFLUENCE_PRICE_TOLERANCE * affluence
+		var cost := _morale_priced_cost(local_market.price[c] / need.value_of(c) * (1.0 + taste), need.comfort_of(c), means)
 		if cost < best_cost - 0.0001:
 			best = c
 			best_cost = cost
 	return best
+
+## What a household treats as a satisfier's price per need-unit once its morale
+## effect is counted: a comfort (bread, meat) looks cheaper and a survival food
+## (grain, flour; negative comfort) dearer, by `comfort * MORALE_PRICE_WEIGHT *
+## means`. `means` (0..1) is how much a household can afford to care, so a
+## household with no savings just buys the cheapest posted price.
+const MORALE_PRICE_WEIGHT := 4.0
+
+static func _morale_priced_cost(cost: float, comfort: float, means: float) -> float:
+	return cost * maxf(1.0 - comfort * MORALE_PRICE_WEIGHT * means, 0.1)
 
 ## How much of `commodity` a household asks for today. The buffer is
 ## measured in the need's units across every satisfier already held --
@@ -3574,7 +3597,10 @@ func _desired_purchase(h: HEHousehold, commodity: Commodity.Type, shared_cascade
 			return maxf(0.0, upkeep - h.stock(commodity))
 		if cascade.find(commodity) < cascade.find(_household_favourite(h, need, cascade)):
 			return maxf(0.0, upkeep - h.stock(commodity))
-	var target := float(h.headcount()) * need.per_person_daily * _need_scale(h, need) * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
+	var daily := need.per_person_daily * _need_scale(h, need)
+	if need.comfort_of(commodity) > 0.0:
+		daily += need.luxury_per_person_daily * _household_luxury_means(h)
+	var target := float(h.headcount()) * daily * TARGET_BUFFER_DAYS + upkeep * need.value_of(commodity)
 	return maxf(0.0, target - need.held(h)) / need.value_of(commodity)
 
 ## A household whose need shortfall is below this counts as having met it.
@@ -3750,6 +3776,12 @@ func _consume_need(h: HEHousehold, need: HENeed, record: Dictionary) -> void:
 	var result := need.burn(h, needed)
 	var provided: float = result["provided"]
 	var burned: Dictionary = result["burned"]
+	if need.luxury_per_person_daily > 0.0:
+		# The affluent add a richer table on top; it is not part of what the
+		# household requires, so it never shows up as a shortfall.
+		var luxury := need.burn_comfort(h, float(h.headcount()) * need.luxury_per_person_daily * _household_luxury_means(h))
+		for c in luxury["burned"]:
+			burned[c] = burned.get(c, 0.0) + luxury["burned"][c]
 	h.last_need_required[need.id] = needed
 	h.last_need_provided[need.id] = provided
 

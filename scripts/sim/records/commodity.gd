@@ -1,12 +1,12 @@
 class_name Commodity
 extends RefCounted
 
-enum Type { GRAIN, CATTLE, SHEEP, WOOL, TIMBER, CHARCOAL, IRON, TOOLS, IRON_ORE, MEAT, LEATHER, STONE }
+enum Type { GRAIN, CATTLE, SHEEP, WOOL, TIMBER, CHARCOAL, IRON, TOOLS, IRON_ORE, MEAT, LEATHER, STONE, FLOUR, BREAD }
 
 const ALL: Array[Type] = [
 	Type.GRAIN, Type.CATTLE, Type.SHEEP, Type.WOOL,
 	Type.TIMBER, Type.CHARCOAL, Type.IRON, Type.TOOLS, Type.IRON_ORE,
-	Type.MEAT, Type.LEATHER, Type.STONE,
+	Type.MEAT, Type.LEATHER, Type.STONE, Type.FLOUR, Type.BREAD,
 ]
 
 ## Single source of truth for per-good display data: every dashboard, tooltip
@@ -28,6 +28,8 @@ const DATA: Dictionary = {
 	Type.MEAT: {"name": "Meat", "icon": "meat.svg", "color": Color("c4524a")},
 	Type.LEATHER: {"name": "Leather", "icon": "leather.svg", "color": Color("8a5a3a")},
 	Type.STONE: {"name": "Stone", "icon": "stone.svg", "color": Color("9c9a94")},
+	Type.FLOUR: {"name": "Flour", "icon": "flour.svg", "color": Color("efe6d2")},
+	Type.BREAD: {"name": "Bread", "icon": "bread.svg", "color": Color("c98a45")},
 }
 
 ## Gold is the player's currency (GameState.player_gold), not a tradable

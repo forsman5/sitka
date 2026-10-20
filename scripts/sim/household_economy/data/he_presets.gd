@@ -12,7 +12,7 @@ extends RefCounted
 ##   settlement_name String
 ##   households    int     starting households (4 people each)
 ##   crews         {type_key: int}  starting workers: trader, bloomery,
-##                 iron_mine, quarry, charcoal_burner, toolsmith. Farm and Woodlot take
+##                 iron_mine, quarry, mill, bakery, charcoal_burner, toolsmith. Farm and Woodlot take
 ##                 the rest, split by farm_share. Ranches and the Butcher always
 ##                 exist and staff themselves.
 ##   farm_share    float   share of the remaining workers on the Farm (0..1)
@@ -63,6 +63,20 @@ const PRESETS := {
 		"warehouse": {"stock": {"timber": 300, "stone": 200}},
 		"water": {"wells": 3},
 	},
+	"bakery_village": {
+		"format": FORMAT,
+		"key": "bakery_village",
+		"label": "Bakery village",
+		"blurb": "30 households with a mill and bakery: grain is milled, baked and eaten as bread; surplus leaves by the trader.",
+		"settlement_name": "Bakery Village",
+		"households": 30,
+		"crews": {"trader": 8, "charcoal_burner": 2, "mill": 4, "bakery": 4},
+		"farm_share": 0.6,
+		"housing": {"houses": 36, "tenements": 0},
+		"treasury_bonus": 150.0,
+		"warehouse": {"stock": {"timber": 300, "stone": 100}},
+		"water": {"wells": 3},
+	},
 	"large_village": {
 		"format": FORMAT,
 		"key": "large_village",
@@ -80,11 +94,11 @@ const PRESETS := {
 }
 
 ## Display order on the setup page.
-const ORDER := ["small_village", "mining_village", "large_village"]
+const ORDER := ["small_village", "mining_village", "bakery_village", "large_village"]
 const DEFAULT_KEY := "small_village"
 
 ## Starting crews a Custom roster gives each trade it includes.
-const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_burner": 2, "toolsmith": 12, "quarry": 6}
+const CUSTOM_CREWS := {"trader": 8, "bloomery": 8, "iron_mine": 8, "charcoal_burner": 2, "toolsmith": 12, "quarry": 6, "mill": 4, "bakery": 4}
 ## Farm and Woodlot are the only food and fuel makers; a roster needs one.
 const CUSTOM_REQUIRED_ANY := ["farm", "woodlot"]
 const CUSTOM_MIN_HOUSEHOLDS := 10

@@ -51,6 +51,18 @@ static func build_economy_with_bloomery_and_iron_mine(_rng: RandomNumberGenerato
 	var half := (remainder / HEScenarioSeeds.WORKER_CAPACITY / 2) * HEScenarioSeeds.WORKER_CAPACITY
 	return HEScenarioSeeds.build_world(half, remainder - half, trader, bloomery, iron_mine)
 
+## Food-chain variant: Farm grain is milled into flour, which the Bakery
+## (with heat from charcoal or timber) turns into bread. Households switch to
+## whichever of grain/flour/bread is cheapest per hunger point (see HENeeds).
+static func build_economy_with_mill_and_bakery(_rng: RandomNumberGenerator) -> Dictionary:
+	var trader := 8
+	var mill := 4
+	var bakery := 4
+	var charcoal_burner := HEScenarioSeeds.CHARCOAL_BURNER_STARTING_CREW
+	var remainder := HEScenarioSeeds.HOUSEHOLD_COUNT * HEScenarioSeeds.WORKER_CAPACITY - trader - mill - bakery - charcoal_burner
+	var half := (remainder / HEScenarioSeeds.WORKER_CAPACITY / 2) * HEScenarioSeeds.WORKER_CAPACITY
+	return HEScenarioSeeds.build_world(half, remainder - half, trader, 0, 0, charcoal_burner, 0, {"mill_capacity": mill, "bakery_capacity": bakery})
+
 ## A town with a Toolsmith and no iron production of its own: no local seller
 ## of iron exists, so the Trader imports it (see HESimulation's
 ## _run_input_purchasing), as the valley's Staithe smithy gets its iron from

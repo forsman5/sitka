@@ -48,6 +48,8 @@ const WAREHOUSE_BUSINESS_ID := 12
 ## Opt-in extractor like the Iron Mine; its stone is mostly construction
 ## material (see TENEMENT_BUILD_STONE).
 const QUARRY_BUSINESS_ID := 13
+const MILL_BUSINESS_ID := 15
+const BAKERY_BUSINESS_ID := 16
 ## Government Warehouse: built from the treasury, staffed by a fixed admin crew
 ## whose wages the treasury also pays. See HEBusiness.Kind.WAREHOUSE.
 const WAREHOUSE_BUILD_COST := 100.0
@@ -213,6 +215,26 @@ const IRON_MINE_MAX_CAPACITY := EXTRACTOR_MAX_CAPACITY
 const QUARRY_MAX_CAPACITY := EXTRACTOR_MAX_CAPACITY
 const QUARRY_OUTPUT_PER_WORKER_DAY := 2.0
 
+## Opt-in food-processing chain (Farm -> Mill -> Bakery), same shape as the
+## Bloomery/Iron Mine pair: compact legacy production sites.
+const MILL_MAX_CAPACITY := 8
+const BAKERY_MAX_CAPACITY := 8
+## Households sit on a ~10-day seeded food buffer, so a new Mill/Bakery's
+## first sales trickle in late; without a grace period the capacity tuner
+## reads that quiet first week as "unprofitable" and fires the crew on day 7
+## (see HESimulation._evaluate_business_capacity's protected_until_day).
+const PROCESSOR_STARTUP_GRACE_DAYS := 30
+## Flour per Mill worker-day, and the days of inputs a new Mill/Bakery starts
+## holding: without them the Bakery and the households bid flour and fuel up
+## before the Mill's first output lands, and the Bakery is broke before its
+## bread has found a price.
+## Mill and Bakery never tune to zero: with the seasonal grain supply either
+## shrinks to nothing in a lean winter and takes the other down with it, and
+## bread is a staple the town keeps buying.
+const PROCESSOR_MIN_CAPACITY := 2
+const MILL_FLOUR_PER_WORKER_DAY := 4.0
+const PROCESSOR_STARTING_STOCK_DAYS := 10.0
+
 const STARTING_BALANCE := 20.0
 ## A short cushion, not a permanent living -- these scenarios exist to
 ## exercise the wage-driven labor market and starvation, not to prove a
@@ -366,6 +388,20 @@ static func make_charcoal_burner(business_id: int, settlement_id: int, initial_c
 	# harvest has landed, so its startup cash must outlast that whole cycle.
 	burner.startup_cycle_days = WOODLOT_GROWTH_DAYS
 	return burner
+
+static func make_mill(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var mill := HEBusiness.new(business_id, "Mill", _mill_recipe(), MILL_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	mill.type_key = "mill"
+	mill.min_capacity = PROCESSOR_MIN_CAPACITY
+	return mill
+
+static func make_bakery(business_id: int, settlement_id: int, initial_capacity: int = 0) -> HEBusiness:
+	var bakery := HEBusiness.new(business_id, "Bakery", _bakery_recipe(), BAKERY_MAX_CAPACITY, initial_capacity, HEBusiness.Kind.PRODUCTION, settlement_id)
+	bakery.type_key = "bakery"
+	bakery.min_capacity = PROCESSOR_MIN_CAPACITY
+	# Its timber input is the oven's heat, which any heat fuel can supply.
+	bakery.need_inputs = {Commodity.Type.TIMBER: HENeed.Id.HEAT}
+	return bakery
 
 static func make_warehouse(business_id: int, settlement_id: int) -> HEBusiness:
 	var warehouse := HEBusiness.new(business_id, "Government Warehouse", null, WAREHOUSE_WORKERS, WAREHOUSE_WORKERS, HEBusiness.Kind.WAREHOUSE, settlement_id)
@@ -521,6 +557,10 @@ static func business_types() -> Array[Dictionary]:
 			"make": func(id: int, sid: int) -> HEBusiness: return make_quarry(id, sid)},
 		{"type_key": "charcoal_burner", "id": CHARCOAL_BURNER_BUSINESS_ID, "label": "Charcoal Burner", "hint": "Turns timber into charcoal, a denser fuel for heating.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_charcoal_burner(id, sid)},
+		{"type_key": "mill", "id": MILL_BUSINESS_ID, "label": "Mill", "hint": "Grinds grain into flour.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_mill(id, sid)},
+		{"type_key": "bakery", "id": BAKERY_BUSINESS_ID, "label": "Bakery", "hint": "Bakes bread from flour and heat.",
+			"make": func(id: int, sid: int) -> HEBusiness: return make_bakery(id, sid)},
 		{"type_key": "toolsmith", "id": TOOLSMITH_BUSINESS_ID, "label": "Toolsmith", "hint": "Forges tools from iron; imports it unless a Bloomery supplies it.",
 			"make": func(id: int, sid: int) -> HEBusiness: return make_toolsmith(id, sid)},
 	]
@@ -592,6 +632,22 @@ static func _toolsmith_recipe() -> Recipe:
 ## to run to roughly 1.5 before the workshop loses money.
 static func _charcoal_burner_recipe() -> Recipe:
 	return Recipe.new("charcoal_burner", {Commodity.Type.TIMBER: 2.5}, {Commodity.Type.CHARCOAL: 1.5})
+
+## Grain -> flour: MILL_FLOUR_PER_WORKER_DAY flour per grain. Flour sits at its
+## price floor (0.45) whenever the Bakery is stocked, so the Mill only clears a
+## wage at a high yield: 4 flour sold at the floor is ~1.8 against ~0.25 of
+## grain, versus a reference wage of roughly 0.7-1.0. Households can eat flour
+## as gruel, but it costs morale (HENeeds.FOOD_FLOUR_MORALE).
+static func _mill_recipe() -> Recipe:
+	return Recipe.new("mill", {Commodity.Type.GRAIN: 1.0}, {Commodity.Type.FLOUR: MILL_FLOUR_PER_WORKER_DAY})
+
+## Flour + heat -> bread: 2 flour and 1 heat unit per loaf (a bread is 4
+## hunger points). Heat is a need-input slot (see _build_world), so timber or
+## charcoal fills it. Per worker per day: 1.0 bread sold at 3.5-6 minus ~1-4 of
+## flour and 1 of heat; households that can afford it pay for bread over grain
+## (HENeed.comfort), and the Trader exports the rest.
+static func _bakery_recipe() -> Recipe:
+	return Recipe.new("bakery", {Commodity.Type.FLOUR: 2.0, Commodity.Type.TIMBER: 1.0}, {Commodity.Type.BREAD: 1.0})
 
 ## A field's labor_applied is seeded as if it had been fully staffed for
 ## every day it's already grown before day 0 -- otherwise a field seeded
@@ -780,6 +836,27 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 		businesses[QUARRY_BUSINESS_ID] = quarry
 		settlement.business_ids.append(QUARRY_BUSINESS_ID)
 
+	var mill: HEBusiness = null
+	var mill_capacity := int(options.get("mill_capacity", 0))
+	if mill_capacity > 0:
+		mill = make_mill(MILL_BUSINESS_ID, SETTLEMENT_ID, mill_capacity)
+		mill.balance = startup_cash(mill, mill_capacity)
+		mill.startup_grace_until_day = PROCESSOR_STARTUP_GRACE_DAYS
+		mill.add_stock(Commodity.Type.FLOUR, float(mill_capacity) * MILL_FLOUR_PER_WORKER_DAY * PROCESSOR_STARTING_STOCK_DAYS)
+		businesses[MILL_BUSINESS_ID] = mill
+		settlement.business_ids.append(MILL_BUSINESS_ID)
+
+	var bakery: HEBusiness = null
+	var bakery_capacity := int(options.get("bakery_capacity", 0))
+	if bakery_capacity > 0:
+		bakery = make_bakery(BAKERY_BUSINESS_ID, SETTLEMENT_ID, bakery_capacity)
+		bakery.balance = startup_cash(bakery, bakery_capacity)
+		bakery.startup_grace_until_day = PROCESSOR_STARTUP_GRACE_DAYS
+		bakery.add_stock(Commodity.Type.FLOUR, float(bakery_capacity) * 2.0 * PROCESSOR_STARTING_STOCK_DAYS)
+		bakery.add_stock(Commodity.Type.TIMBER, float(bakery_capacity) * PROCESSOR_STARTING_STOCK_DAYS)
+		businesses[BAKERY_BUSINESS_ID] = bakery
+		settlement.business_ids.append(BAKERY_BUSINESS_ID)
+
 	var toolsmith: HEBusiness = null
 	if toolsmith_capacity > 0:
 		toolsmith = make_toolsmith(TOOLSMITH_BUSINESS_ID, SETTLEMENT_ID, toolsmith_capacity)
@@ -797,6 +874,8 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 	var bloomery_workers_assigned := 0
 	var iron_mine_workers_assigned := 0
 	var quarry_workers_assigned := 0
+	var mill_workers_assigned := 0
+	var bakery_workers_assigned := 0
 	var toolsmith_workers_assigned := 0
 	var charcoal_burner_workers_assigned := 0
 	var trader_workers_assigned := 0
@@ -824,6 +903,12 @@ static func build_world(farm_capacity: int, woodlot_capacity: int, trader_capaci
 		elif quarry != null and quarry_workers_assigned < quarry_capacity:
 			household.employer_business_id = QUARRY_BUSINESS_ID
 			quarry_workers_assigned += WORKER_CAPACITY
+		elif mill != null and mill_workers_assigned < mill_capacity:
+			household.employer_business_id = MILL_BUSINESS_ID
+			mill_workers_assigned += WORKER_CAPACITY
+		elif bakery != null and bakery_workers_assigned < bakery_capacity:
+			household.employer_business_id = BAKERY_BUSINESS_ID
+			bakery_workers_assigned += WORKER_CAPACITY
 		elif toolsmith != null and toolsmith_workers_assigned < toolsmith_capacity:
 			household.employer_business_id = TOOLSMITH_BUSINESS_ID
 			toolsmith_workers_assigned += WORKER_CAPACITY
@@ -941,7 +1026,9 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 	var charcoal_burner := int(crews.get("charcoal_burner", 0))
 	var toolsmith := int(crews.get("toolsmith", 0))
 	var quarry := int(crews.get("quarry", 0))
-	var remainder := households * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith - quarry
+	var mill := int(crews.get("mill", 0))
+	var bakery := int(crews.get("bakery", 0))
+	var remainder := households * WORKER_CAPACITY - trader - bloomery - iron_mine - charcoal_burner - toolsmith - quarry - mill - bakery
 	var farm := (int(round(remainder * float(spec.get("farm_share", 0.5)))) / WORKER_CAPACITY) * WORKER_CAPACITY
 	var options := {
 		"households": households,
@@ -950,6 +1037,8 @@ static func build_from_spec(spec: Dictionary) -> Dictionary:
 		"tenements": int(spec.get("housing", {}).get("tenements", 0)),
 		"treasury_bonus": float(spec.get("treasury_bonus", 0.0)),
 		"quarry_capacity": quarry,
+		"mill_capacity": mill,
+		"bakery_capacity": bakery,
 		"wells": int(spec.get("water", {}).get("wells", 0)),
 		"river_intakes": int(spec.get("water", {}).get("river_intakes", 0)),
 	}
