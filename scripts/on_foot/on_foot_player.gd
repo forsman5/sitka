@@ -27,6 +27,10 @@ class_name OnFootPlayer extends CharacterBody3D
 
 signal barked(world_position: Vector3)
 
+## The person model's eyes sit well below eye_height, so the first-person bow
+## camera drops to them; otherwise the bow arm is far below the view.
+const FIRST_PERSON_BOW_EYE_DROP := 0.27
+const FIRST_PERSON_BOW_CAMERA_Z := -0.08
 enum CameraMode { FIRST_PERSON, THIRD_BACK, THIRD_FRONT }
 const DEFAULT_THIRD_PERSON_PITCH := -0.18
 
@@ -108,7 +112,7 @@ var _bow_bones: Dictionary = {}
 var _bow_pose_weight: float = 0.0
 var _bow_draw_fraction: float = 0.0
 var _hair_mesh: MeshInstance3D
-var _hair_surface_index: int = -1
+var _hair_surface_indices: Array[int] = []
 var _hidden_hair_material: StandardMaterial3D
 var _collision_shape: CollisionShape3D
 var _mounted_horse: OnFootHorse
@@ -365,10 +369,11 @@ func _set_camera_mode(mode: int) -> void:
 		_orbit_yaw = 0.0
 		_orbit_active = false
 	# Keep the bow user visible in first person so the draw pose can be seen.
-	# Move the camera just ahead of the face; the body stays behind the view.
+	# The camera sits at the model's eyes (see _update_camera), just ahead of the
+	# face, so the bow arm and string are in frame.
 	var show_bow_pose := mode == CameraMode.FIRST_PERSON and _weapon == "bow"
 	_model.visible = mode != CameraMode.FIRST_PERSON or show_bow_pose
-	_head.position.z = -0.24 if show_bow_pose else 0.0
+	_head.position.z = FIRST_PERSON_BOW_CAMERA_Z if show_bow_pose else 0.0
 	_set_first_person_hair_hidden(show_bow_pose)
 	_arm.spring_length = 0.0 if mode == CameraMode.FIRST_PERSON else third_person_distance
 	# Rotating the arm half a turn puts the camera in front, looking back at us.
@@ -382,19 +387,21 @@ func _setup_first_person_hair() -> void:
 	_hair_mesh = _model.find_child("Body2", true, false) as MeshInstance3D
 	if _hair_mesh == null or _hair_mesh.mesh == null:
 		return
+	# The camera sits inside the head, so hair and the face (eyes, brows) would
+	# float in front of it.
 	for surface_index in _hair_mesh.mesh.get_surface_count():
-		if _hair_mesh.mesh.surface_get_name(surface_index) == "Hair":
-			_hair_surface_index = surface_index
-			break
+		if _hair_mesh.mesh.surface_get_name(surface_index) in ["Hair", "Face"]:
+			_hair_surface_indices.append(surface_index)
 	_hidden_hair_material = StandardMaterial3D.new()
 	_hidden_hair_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_hidden_hair_material.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
 	_hidden_hair_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 
 func _set_first_person_hair_hidden(hidden: bool) -> void:
-	if _hair_mesh == null or _hair_surface_index < 0:
+	if _hair_mesh == null:
 		return
-	_hair_mesh.set_surface_override_material(_hair_surface_index, _hidden_hair_material if hidden else null)
+	for surface_index in _hair_surface_indices:
+		_hair_mesh.set_surface_override_material(surface_index, _hidden_hair_material if hidden else null)
 
 func _physics_process(delta: float) -> void:
 	_bark_cooldown_left = maxf(_bark_cooldown_left - delta, 0.0)
@@ -659,6 +666,8 @@ func _update_camera(delta: float) -> void:
 		bob = sin(_bob_t) * bob_amount * clampf(horiz_speed / walk_speed, 0.0, 1.5)
 	_land_dip = move_toward(_land_dip, 0.0, delta * 0.6)
 	var pivot_height := eye_height if _camera_mode == CameraMode.FIRST_PERSON else third_person_pivot_height
+	if _camera_mode == CameraMode.FIRST_PERSON and _weapon == "bow":
+		pivot_height -= FIRST_PERSON_BOW_EYE_DROP
 	var target_y := pivot_height + bob - _land_dip
 	_head.position.y = lerpf(_head.position.y, target_y, clampf(delta * 25.0, 0.0, 1.0))
 
