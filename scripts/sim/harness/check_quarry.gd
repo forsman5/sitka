@@ -51,12 +51,8 @@ func _quarry_sim() -> HESimulation:
 func _check_quarry_survives_on_exports() -> void:
 	var sim := _quarry_sim()
 	_assert(sim.businesses.has(HEScenarioSeeds.QUARRY_BUSINESS_ID), "The mining village has a Quarry")
-	var trader_id := HEScenarioSeeds.TRADER_BUSINESS_ID
-	var setting_on := false
-	for setting in sim.get_trader_export_settings(trader_id):
-		if setting["commodity_id"] == Commodity.Type.STONE:
-			setting_on = bool(setting["enabled"])
-	_assert(setting_on, "The Trader exports stone out of the box")
+	var port: HEBusiness = sim.businesses.get(HEScenarioSeeds.PORT_BUSINESS_ID)
+	_assert(port != null and port.kind == HEBusiness.Kind.PORT and HESimulation.PORT_GOODS.has(Commodity.Type.STONE), "The Port buys stone for the outside market")
 	var early_crew := 0
 	var late_crew := 0
 	for d in RUN_DAYS:

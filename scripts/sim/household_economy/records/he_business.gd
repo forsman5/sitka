@@ -13,12 +13,13 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 ## `max_capacity` is a hard land/facility ceiling that tuning can never
 ## exceed, mirroring the pooled model's target_labor.
 ##
-## Kind.TRADER (the "Trader" business) is the odd one out: it has no
-## recipe and produces nothing. Instead it draws down whichever PRODUCTION
-## business's stock has grown past a comfortable reserve, converting it to
-## money at a deliberately low price -- see he_simulation.gd's _run_trade.
-## It uses the same hiring and wage rules, but its capacity decision uses a
-## longer revenue window and review interval to span supplier harvests.
+## Kind.TRADER (the "Trader" business) has no recipe and produces nothing.
+## In valley mode it buys goods from local sellers or a neighboring Trader,
+## carries them between towns, and sells to the destination Trader. It never
+## trades with the outside market.
+## Kind.PORT (the "Port" business) also has no recipe. It buys eligible local
+## surplus or imported valley cargo, and trades those goods with the unlimited
+## outside market at staffed throughput.
 ##
 ## Kind.HERD (a "Cattle Ranch" or "Sheep Farm") is a second odd one out, in
 ## the opposite direction from Kind.TRADER: it has no recipe and no fields.
@@ -34,9 +35,9 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 ## culling. WOOL is an ordinary local household good (see he_simulation.gd's
 ## SUBSISTENCE_COMMODITIES and _business_selling) sold through the same
 ## local market Farm/Woodlot use; the culled animal itself (herd_commodity())
-## has no local buyer and is Trader-export-only at a flat reference price
-## (see he_simulation.gd's HERD_EXPORT_PRICE and _run_trade's herd export
-## pass). It DOES hire and pay wages like any other business -- `growth_days`
+## has no local buyer and is exported through the outside Port or a valley
+## Trader at a flat reference price (see he_simulation.gd's HERD_EXPORT_PRICE).
+## It DOES hire and pay wages like any other business -- `growth_days`
 ## is set to HERD_EVAL_INTERVAL_DAYS (see he_scenario_seeds.gd) purely so it
 ## gets the same cycle-aware treatment (has_long_cycle(), revenue smoothed over its own cycle rather than a flat week) a
 ## field-model business gets, even though it has no `fields` of its own --
@@ -55,7 +56,7 @@ extends "res://scripts/sim/household_economy/records/he_building.gd"
 ## iron ore -> iron) are bought business-to-business and retained in its
 ## inventory until production consumes them. An input nothing local
 ## produces is supplied by the settlement's Trader, importing it from
-## outside the settlement; see he_simulation.gd's _run_input_purchasing.
+## outside the settlement through its Port; see he_simulation.gd's _run_input_purchasing.
 ##
 ## Kind.GOVERNMENT (the settlement's "Government") is a fourth odd one out:
 ## no recipe, no stock, no sales. Its `balance` is the town treasury, filled
@@ -344,20 +345,10 @@ var last_actual_units: float = 0.0
 var last_output_produced: Dictionary[Commodity.Type, float] = {}
 var last_wage_per_worker: float = 0.0
 
-## Kind.TRADER only: units of each commodity exported today, for reporting
-## -- see he_simulation.gd._run_trade. Always empty for a PRODUCTION
-## business.
+## Kind.TRADER or Kind.PORT: quantities moved by this business today.
 var last_exported: Dictionary[Commodity.Type, float] = {}
 
-## Kind.TRADER only: the share of each good's reference price this Trader bids
-## for export, moved a step a day by he_simulation.gd's _adjust_trader_bids. A
-## good not listed bids TRADER_STARTING_BID_FRACTION.
-var bid_fraction: Dictionary[Commodity.Type, float] = {}
-
-## Kind.TRADER only: units of each commodity imported (from outside the
-## settlement, on behalf of a local buyer) today, for reporting -- see
-## he_simulation.gd._run_input_purchasing. Always empty for a PRODUCTION
-## business.
+## Kind.TRADER or Kind.PORT: units received today, for reporting.
 var last_imported: Dictionary[Commodity.Type, float] = {}
 
 ## PRODUCTION only: how much of this business's labor-implied planned
@@ -669,7 +660,7 @@ func days_until_next_harvest() -> int:
 func rolling_window_days() -> int:
 	if has_long_cycle():
 		return growth_days
-	if kind == Kind.TRADER:
+	if kind in [Kind.TRADER, Kind.PORT]:
 		return TRADER_REVENUE_WINDOW_DAYS
 	return WAGE_ROLLING_WINDOW_DAYS
 
