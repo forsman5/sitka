@@ -19,12 +19,14 @@ var _slice_start := 0
 
 ## Coroutine. Returns the scene root, or null when cancelled. Progress runs from
 ## `from_fraction` to 1.
-func build(bake: Dictionary, tree: SceneTree, progress: Callable, from_fraction := 0.78) -> Node3D:
+func build(bake: Dictionary, tree: SceneTree, progress: Callable, from_fraction := 0.78, parent: Node3D = null) -> Node3D:
 	_tree = tree
 	_progress = progress
 	_slice_start = Time.get_ticks_msec()
 	var root := Node3D.new()
 	root.name = "BakedValley"
+	if parent != null:
+		parent.add_child(root)
 	var w: int = bake["w"]
 	var h: int = bake["h"]
 	var step: float = bake["step"]
@@ -216,7 +218,11 @@ func _add_buildings(root: Node3D, bake: Dictionary, height_at: Callable) -> void
 	for building in bake["buildings"] as Array[Dictionary]:
 		var path: String = building["model"]
 		if not cache.has(path):
-			cache[path] = load(path) as PackedScene
+			var packed := load(path) as PackedScene
+			if packed == null:
+				push_error("Could not load baked building model: %s" % path)
+				continue
+			cache[path] = packed
 		var model := (cache[path] as PackedScene).instantiate() as Node3D
 		root.add_child(model)
 		model.rotation.y = deg_to_rad(float(building["yaw"]))
@@ -247,7 +253,14 @@ func _add_labels(root: Node3D, bake: Dictionary) -> void:
 ## Each mesh in a model with its transform relative to the model root.
 static func _mesh_parts(path: String) -> Array:
 	var parts: Array = []
-	var model := (load(path) as PackedScene).instantiate() as Node3D
+	var packed := load(path) as PackedScene
+	if packed == null:
+		push_error("Could not load baked vegetation model: %s" % path)
+		return parts
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		push_error("Could not instantiate baked vegetation model: %s" % path)
+		return parts
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		var xf := Transform3D()

@@ -18,6 +18,7 @@ const ROLE_TO_SETTLEMENT_ID := {
 
 var _bake: Dictionary = {}
 var _baked_world: Node3D
+var _bake_status: Label
 
 func _ready() -> void:
 	set_process(false)
@@ -25,22 +26,51 @@ func _ready() -> void:
 	_bake = Bake.load_dir(BAKE_DIR)
 	if _bake.is_empty():
 		push_error("Could not load the approved valley bake at %s" % BAKE_DIR)
-		set_process(false)
+		_show_bake_error("Could not load the approved valley bake.")
 		return
+	map_definition = _map_for_economy(_bake["map"])
+	# Create the live HUD and economy before the detailed scene is built. The
+	# terrain renderer can take several seconds on the Web export at this scale.
+	super._ready()
+	_bake_status = Label.new()
+	_bake_status.position = Vector2(18.0, 82.0)
+	_bake_status.add_theme_font_size_override("font_size", 18)
+	_valley_canvas.add_child(_bake_status)
 	var builder := BakeScene.new()
-	_baked_world = await builder.build(_bake, get_tree(), Callable())
+	_baked_world = await builder.build(_bake, get_tree(), Callable(self, "_update_bake_status"), 0.78, self)
 	if _baked_world == null:
 		push_error("Could not build the approved valley bake scene")
-		set_process(false)
+		_show_bake_error("Could not build the approved valley terrain.")
 		return
 	# The bake preview uses generator names. The live simulation owns the visible
 	# settlement names, so replace those labels when the parent builds its UI.
 	for label in _baked_world.find_children("*", "Label3D", true, false):
 		label.free()
-	map_definition = _map_for_economy(_bake["map"])
-	super._ready()
+	if _bake_status != null:
+		_bake_status.queue_free()
+		_bake_status = null
+	_build_landscape()
 	set_process(true)
 	set_process_unhandled_input(true)
+
+func _update_bake_status(fraction: float, message: String) -> void:
+	if _bake_status != null:
+		_bake_status.text = "%s  %d%%" % [message, roundi(fraction * 100.0)]
+
+func _show_bake_error(message: String) -> void:
+	var canvas := _valley_canvas
+	if canvas == null:
+		canvas = CanvasLayer.new()
+		add_child(canvas)
+	var label := Label.new()
+	label.text = message
+	label.position = Vector2(24.0, 24.0)
+	label.add_theme_font_size_override("font_size", 22)
+	label.add_theme_color_override("font_color", Color("fff0d0"))
+	label.add_theme_color_override("font_shadow_color", Color("18212a"))
+	label.add_theme_constant_override("shadow_offset_x", 2)
+	label.add_theme_constant_override("shadow_offset_y", 2)
+	canvas.add_child(label)
 
 
 func _map_for_economy(source: Resource):
@@ -93,7 +123,10 @@ func _configure_camera() -> void:
 	rig.center_on(Vector3.ZERO)
 
 func _build_landscape() -> void:
-	add_child(_baked_world)
+	if _baked_world == null:
+		return
+	if _baked_world.get_parent() == null:
+		add_child(_baked_world)
 	for river_id in map_definition.rivers:
 		var river: Dictionary = map_definition.rivers[river_id]
 		var outline := TerrainRibbonBuilder.footprint(map_definition.river_path(river_id), float(river["width"]))

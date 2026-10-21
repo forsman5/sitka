@@ -10,7 +10,7 @@ func _run() -> void:
 	var view = packed.instantiate()
 	root.add_child(view)
 	var frame_count := 0
-	while view.get("_economy") == null and frame_count < 3000:
+	while (view.get("_economy") == null or view.get("_baked_world") == null) and frame_count < 3000:
 		await process_frame
 		frame_count += 1
 	var failures := 0
