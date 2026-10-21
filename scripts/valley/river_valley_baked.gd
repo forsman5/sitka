@@ -25,8 +25,7 @@ func _ready() -> void:
 	set_process_unhandled_input(false)
 	_bake = Bake.load_dir(BAKE_DIR)
 	if _bake.is_empty():
-		push_error("Could not load the approved valley bake at %s" % BAKE_DIR)
-		_show_bake_error("Could not load the approved valley bake.")
+		_show_bake_error("Could not load the approved valley bake: %s" % Bake.last_load_error)
 		return
 	map_definition = _map_for_economy(_bake["map"])
 	# Create the live HUD and economy before the detailed scene is built. The
