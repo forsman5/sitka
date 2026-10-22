@@ -55,6 +55,9 @@ static var sheep_repro_percent: float = 10.0
 ## by the combat chooser scene. Ignored for the dog.
 static var selected_weapon: String = ""
 
+## Number of human fighters selected on the combat chooser screen.
+static var start_enemy_count: int = 2
+
 ## Sheep in the flock at the start of a fresh run (set from the chooser scene).
 ## The pen grows to fit.
 static var start_sheep_count: int = 25
