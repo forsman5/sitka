@@ -4,29 +4,38 @@ extends RefCounted
 ## Read-only loader and height queries for a saved valley bake. This runtime
 ## contract deliberately does not parse generator specs or depend on tooling.
 
+static var last_load_error := ""
+
 ## Reads a bake written by the valley generator. Returns {} when required data
-## is missing or malformed.
+## is missing or malformed, with the reason available for the UI and export check.
 static func load_dir(dir: String) -> Dictionary:
+	last_load_error = ""
 	var meta_text := FileAccess.get_file_as_string("%s/bake.json" % dir)
 	if meta_text.is_empty():
-		return {}
+		return _load_failure("Could not read %s/bake.json" % dir)
 	var parsed: Variant = JSON.parse_string(meta_text)
 	if not parsed is Dictionary:
-		return {}
+		return _load_failure("%s/bake.json is not a JSON object" % dir)
 	var meta: Dictionary = parsed
 	for key in ["scale", "step", "height_scale", "size", "w", "h", "has_sea", "height_max", "stats", "sites", "buildings"]:
 		if not meta.has(key):
-			return {}
+			return _load_failure("%s/bake.json is missing '%s'" % [dir, key])
 	var width := int(meta["w"])
 	var height := int(meta["h"])
 	if width < 2 or height < 2:
-		return {}
-	var heights := FileAccess.get_file_as_bytes("%s/heights.bin" % dir).to_float32_array()
+		return _load_failure("%s/bake.json has invalid dimensions %dx%d" % [dir, width, height])
+	var heights_bytes := FileAccess.get_file_as_bytes("%s/heights.bin" % dir)
+	if heights_bytes.is_empty():
+		return _load_failure("Could not read %s/heights.bin" % dir)
+	var heights := heights_bytes.to_float32_array()
 	if heights.size() != width * height:
-		return {}
-	var trees := FileAccess.get_file_as_bytes("%s/trees.bin" % dir).to_float32_array()
+		return _load_failure("%s/heights.bin has %d values; expected %d" % [dir, heights.size(), width * height])
+	var trees_bytes := FileAccess.get_file_as_bytes("%s/trees.bin" % dir)
+	if trees_bytes.is_empty():
+		return _load_failure("Could not read %s/trees.bin" % dir)
+	var trees := trees_bytes.to_float32_array()
 	if trees.size() % 5 != 0:
-		return {}
+		return _load_failure("%s/trees.bin has an invalid record length" % dir)
 	var color_path := "%s/colors.png" % dir
 	var colors: Image
 	if dir.begins_with("res://"):
@@ -35,10 +44,10 @@ static func load_dir(dir: String) -> Dictionary:
 	else:
 		colors = Image.load_from_file(color_path)
 	if colors.is_empty() or colors.get_width() != width or colors.get_height() != height:
-		return {}
+		return _load_failure("Could not load %s/colors.png at %dx%d" % [dir, width, height])
 	var map := ResourceLoader.load("%s/map.tres" % dir) as ValleyMapDefinition
 	if map == null:
-		return {}
+		return _load_failure("Could not load %s/map.tres as ValleyMapDefinition" % dir)
 	return {
 		"scale": float(meta["scale"]), "step": float(meta["step"]), "height_scale": float(meta["height_scale"]),
 		"size": Vector2(float(meta["size"][0]), float(meta["size"][1])), "w": width, "h": height,
@@ -46,6 +55,11 @@ static func load_dir(dir: String) -> Dictionary:
 		"heights": heights, "trees": trees, "colors": colors, "map": map,
 		"sites": _sites_from_plain(meta["sites"]), "buildings": _buildings_from_plain(meta["buildings"]),
 	}
+
+static func _load_failure(reason: String) -> Dictionary:
+	last_load_error = reason
+	push_error("Valley bake load failed: %s" % reason)
+	return {}
 
 static func _sites_from_plain(plain: Array) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

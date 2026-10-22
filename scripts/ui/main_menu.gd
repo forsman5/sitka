@@ -30,7 +30,10 @@ func _on_large_valleys_sim_pressed() -> void:
 	Dashboard.pending_graph_path = LARGE_VALLEYS_GRAPH
 	get_tree().change_scene_to_file("res://scenes/sim/dashboard.tscn")
 
-func _on_river_valley_view_pressed() -> void:
+func _on_river_valley_baked_pressed() -> void:
+	get_tree().change_scene_to_file("res://scenes/valley/river_valley_baked.tscn")
+
+func _on_river_valley_legacy_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/valley/river_valley.tscn")
 
 func _on_on_foot_pressed() -> void:

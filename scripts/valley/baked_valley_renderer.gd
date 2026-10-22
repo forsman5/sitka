@@ -11,6 +11,9 @@ const Ribbon = preload("res://scripts/valley/terrain_ribbon_builder.gd")
 const CHUNK_CELLS := 80
 const TREE_MODELS := ["res://assets/models/nature/tree_single_A.gltf", "res://assets/models/nature/tree_single_B.gltf"]
 const SLICE_MS := 12
+const TREE_SATURATION := 0.72
+
+static var _tree_texture_cache: Dictionary = {}
 
 var cancelled := false
 var _tree: SceneTree
@@ -19,12 +22,14 @@ var _slice_start := 0
 
 ## Coroutine. Returns the scene root, or null when cancelled. Progress runs from
 ## `from_fraction` to 1.
-func build(bake: Dictionary, tree: SceneTree, progress: Callable, from_fraction := 0.78) -> Node3D:
+func build(bake: Dictionary, tree: SceneTree, progress: Callable, from_fraction := 0.78, parent: Node3D = null) -> Node3D:
 	_tree = tree
 	_progress = progress
 	_slice_start = Time.get_ticks_msec()
 	var root := Node3D.new()
 	root.name = "BakedValley"
+	if parent != null:
+		parent.add_child(root)
 	var w: int = bake["w"]
 	var h: int = bake["h"]
 	var step: float = bake["step"]
@@ -216,7 +221,11 @@ func _add_buildings(root: Node3D, bake: Dictionary, height_at: Callable) -> void
 	for building in bake["buildings"] as Array[Dictionary]:
 		var path: String = building["model"]
 		if not cache.has(path):
-			cache[path] = load(path) as PackedScene
+			var packed := load(path) as PackedScene
+			if packed == null:
+				push_error("Could not load baked building model: %s" % path)
+				continue
+			cache[path] = packed
 		var model := (cache[path] as PackedScene).instantiate() as Node3D
 		root.add_child(model)
 		model.rotation.y = deg_to_rad(float(building["yaw"]))
@@ -247,17 +256,46 @@ func _add_labels(root: Node3D, bake: Dictionary) -> void:
 ## Each mesh in a model with its transform relative to the model root.
 static func _mesh_parts(path: String) -> Array:
 	var parts: Array = []
-	var model := (load(path) as PackedScene).instantiate() as Node3D
+	var packed := load(path) as PackedScene
+	if packed == null:
+		push_error("Could not load baked vegetation model: %s" % path)
+		return parts
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		push_error("Could not instantiate baked vegetation model: %s" % path)
+		return parts
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
+		var muted_mesh := mi.mesh.duplicate(true) as Mesh
+		for surface in muted_mesh.get_surface_count():
+			var material := muted_mesh.surface_get_material(surface) as BaseMaterial3D
+			if material == null or material.albedo_texture == null:
+				continue
+			material.albedo_texture = _desaturated_tree_texture(material.albedo_texture)
 		var xf := Transform3D()
 		var n: Node = mi
 		while n != model and n != null:
 			xf = (n as Node3D).transform * xf
 			n = n.get_parent()
-		parts.append({"mesh": mi.mesh, "transform": xf})
+		parts.append({"mesh": muted_mesh, "transform": xf})
 	model.free()
 	return parts
+
+## Tree atlas colors are deliberately vivid. Desaturate a cached copy for this
+## baked view only, keeping the original tree materials used elsewhere intact.
+static func _desaturated_tree_texture(texture: Texture2D) -> Texture2D:
+	var cache_key := texture.resource_path if not texture.resource_path.is_empty() else str(texture.get_instance_id())
+	if _tree_texture_cache.has(cache_key):
+		return _tree_texture_cache[cache_key]
+	var image := texture.get_image()
+	if image == null or image.is_empty():
+		return texture
+	if image.is_compressed() and image.decompress() != OK:
+		return texture
+	image.adjust_bcs(1.0, 1.0, TREE_SATURATION)
+	var muted_texture := ImageTexture.create_from_image(image)
+	_tree_texture_cache[cache_key] = muted_texture
+	return muted_texture
 
 static func _bounds(model: Node3D) -> AABB:
 	var merged := AABB()

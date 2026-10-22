@@ -16,12 +16,17 @@ const REQUIRED_MODELS: PackedStringArray = [
 	"res://assets/models/nature/tree_single_A.gltf",
 	"res://assets/models/nature/tree_single_B.gltf",
 ]
+const Bake = preload("res://scripts/valley/valley_bake_data.gd")
 
 func _initialize() -> void:
 	call_deferred("_check")
 
 func _check() -> void:
 	var failures := 0
+	var bake := Bake.load_dir("res://data/valley_bakes/river_valley_1")
+	if bake.is_empty():
+		push_error("Approved baked valley is missing from the Web export: %s" % Bake.last_load_error)
+		failures += 1
 	for path in REQUIRED_MODELS:
 		var scene := ResourceLoader.load(path, "PackedScene") as PackedScene
 		if scene == null:
