@@ -11,6 +11,9 @@ const Ribbon = preload("res://scripts/valley/terrain_ribbon_builder.gd")
 const CHUNK_CELLS := 80
 const TREE_MODELS := ["res://assets/models/nature/tree_single_A.gltf", "res://assets/models/nature/tree_single_B.gltf"]
 const SLICE_MS := 12
+const TREE_SATURATION := 0.72
+
+static var _tree_texture_cache: Dictionary = {}
 
 var cancelled := false
 var _tree: SceneTree
@@ -263,14 +266,36 @@ static func _mesh_parts(path: String) -> Array:
 		return parts
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
+		var muted_mesh := mi.mesh.duplicate(true) as Mesh
+		for surface in muted_mesh.get_surface_count():
+			var material := muted_mesh.surface_get_material(surface) as BaseMaterial3D
+			if material == null or material.albedo_texture == null:
+				continue
+			material.albedo_texture = _desaturated_tree_texture(material.albedo_texture)
 		var xf := Transform3D()
 		var n: Node = mi
 		while n != model and n != null:
 			xf = (n as Node3D).transform * xf
 			n = n.get_parent()
-		parts.append({"mesh": mi.mesh, "transform": xf})
+		parts.append({"mesh": muted_mesh, "transform": xf})
 	model.free()
 	return parts
+
+## Tree atlas colors are deliberately vivid. Desaturate a cached copy for this
+## baked view only, keeping the original tree materials used elsewhere intact.
+static func _desaturated_tree_texture(texture: Texture2D) -> Texture2D:
+	var cache_key := texture.resource_path if not texture.resource_path.is_empty() else str(texture.get_instance_id())
+	if _tree_texture_cache.has(cache_key):
+		return _tree_texture_cache[cache_key]
+	var image := texture.get_image()
+	if image == null or image.is_empty():
+		return texture
+	if image.is_compressed() and image.decompress() != OK:
+		return texture
+	image.adjust_bcs(1.0, 1.0, TREE_SATURATION)
+	var muted_texture := ImageTexture.create_from_image(image)
+	_tree_texture_cache[cache_key] = muted_texture
+	return muted_texture
 
 static func _bounds(model: Node3D) -> AABB:
 	var merged := AABB()
