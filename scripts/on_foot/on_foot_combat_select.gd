@@ -35,6 +35,23 @@ func _ready() -> void:
 		b.pressed.connect(_start.bind(weapon))
 		row.add_child(b)
 
+	var enemy_count_label := Label.new()
+	enemy_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(enemy_count_label)
+
+	var enemy_count_slider := HSlider.new()
+	enemy_count_slider.min_value = 0
+	enemy_count_slider.max_value = 10
+	enemy_count_slider.step = 1
+	enemy_count_slider.value = OnFootPlayer.start_enemy_count
+	enemy_count_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	enemy_count_slider.value_changed.connect(func(value: float) -> void:
+		OnFootPlayer.start_enemy_count = int(value)
+		enemy_count_label.text = "Enemies: %d" % int(value)
+	)
+	box.add_child(enemy_count_slider)
+	enemy_count_label.text = "Enemies: %d" % OnFootPlayer.start_enemy_count
+
 	var hint := Label.new()
 	hint.text = "Left click to swing or shoot"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
